@@ -1,12 +1,16 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 329
-type rows preserve 365 populated values and 1,460 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 331
+type rows preserve 367 populated values and 1,468 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
+<<<<<<< HEAD
+`ee93acbddab4069f2b38e0c9687af9bf99c5a0e140f3425f7fa06216e50961dd`.
+=======
 `c7a0e0f06c43820de8941a363fb420e694cb00dbfaa1b5bf203b303d2f4b2d91`.
+>>>>>>> origin/optimizations
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -123,6 +127,17 @@ on-chain penalty exists to cancel. The merged first-release inventory retains 33
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
+<<<<<<< HEAD
+The current capture contains 331 rows, 367 populated cases and 1,468 frame forms.
+Earlier dated counts and checksums above describe only their original candidates.
+
+The current scoped-artifact candidate recaptures the six artifact lifecycle records
+with an explicit full-width dataspace and adds the two private-root registration
+and anchor records. `print_scoped_artifact_instruction_identity_frames` produces
+all eight typed rows and verifies their root, vector, option and map roundtrips.
+Private-root payloads in this structural codec fixture are opaque sample bytes;
+authentication is covered by the separate native registration and anchor tests.
+=======
 On 2026-09-30, the checksum assertion was reconciled with the checked-in current
 329-row capture. The collection retains 365 populated cases and 1,460 frame
 forms. The current typed registry contains 390 instructions: 21 governance
@@ -145,3 +160,4 @@ error-type schema field; all other 323 current rows remain byte for byte.
 The typed maintenance printer decoded and exactly re-encoded all four frame
 forms before publication. No retired bare-hash instruction decoder or implicit
 dataspace fallback was added, and the 329-record/365-case inventory is retained.
+>>>>>>> origin/optimizations

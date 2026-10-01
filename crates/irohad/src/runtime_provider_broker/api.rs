@@ -556,12 +556,11 @@ mod governance_service_registry_tests {
             Slot::ReputationJournalCheckpoint,
             Slot::ModerationCheckpointStore,
             Slot::EvidenceViewerTransparencyPublisher,
-            Slot::StreamTokenGatewayAdmission,
             Slot::ModerationPanelNotificationArchive,
         ];
-        assert_eq!(slots.len(), 54);
-        for (index, slot) in slots.into_iter().enumerate() {
-            assert_eq!(usize::from(slot.wire_id()), index + 1);
+        assert_eq!(slots.len(), 53);
+        for (expected, slot) in (1_u16..=54).filter(|id| *id != 53).zip(slots) {
+            assert_eq!(slot.wire_id(), expected);
             assert!(stock_runtime_provider_slot_is_supported(slot));
         }
     }
@@ -839,9 +838,6 @@ define_runtime_provider_backends_v1! {
         optional stream_token_signer_client: Arc<dyn iroha_torii::sorafs::StreamTokenSignerClientV1> => pub fn with_stream_token_signer_client(client);
         /// Attach the separately routed, independently authenticated finalized-state observer.
         optional stream_token_state_observer: Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1> => pub fn with_stream_token_state_observer(observer);
-        /// Attach the deployment-owned stream-token quota, sealed-sequence, and
-        /// ordered callback-outbox provider.
-        optional stream_token_gateway_admission: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1> => pub fn with_stream_token_gateway_admission(provider);
         /// Attach one independently administered appeal-finance transaction signer.
         ///
         /// Call this once for every configured signer handle. Server startup

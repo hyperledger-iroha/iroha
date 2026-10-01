@@ -2022,7 +2022,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     )
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-    world: World,
+    mut world: World,
     iso: Option<iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
@@ -2031,6 +2031,21 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     network_id: NetworkId,
     intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
 ) -> SharedAppState {
+    // These synthetic routing fixtures model a Global root unless their caller explicitly
+    // supplied another root (or malformed metadata for a rejection test). An absent root
+    // must never gain Global authority in production routing.
+    #[cfg(feature = "app_api")]
+    if !world
+        .view()
+        .parameters()
+        .custom()
+        .contains_key(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
+    {
+        crate::private_account_routing_tests::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+    }
     // Minimal core state
     let _ = &push;
     let query_handle = LiveQueryStore::start_test();

@@ -16,7 +16,12 @@ fn current_record() -> StreamTokenGatewayAdmissionRecordV1 {
     let quota = request.quota.as_mut().unwrap();
     quota.observed_at_epoch = now / 1_000;
     quota.expires_at_epoch = now / 1_000 + 600;
-    capture.admit(&request).unwrap()
+    capture
+        .admit(
+            &request,
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap()
 }
 
 #[test]

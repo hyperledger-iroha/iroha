@@ -6365,6 +6365,90 @@
         ],
         "type": "object"
       },
+      "ContractArtifactBytesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/ContractArtifactId"
+          },
+          "code_b64": {
+            "description": "Canonical padded base64 of the complete admitted artifact; decoded size is at most 16 MiB. Recompute its contract content hash before use.",
+            "format": "byte",
+            "maxLength": 22369624,
+            "type": "string"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          }
+        },
+        "required": [
+          "network_id",
+          "artifact_id",
+          "code_b64"
+        ],
+        "type": "object"
+      },
+      "ContractArtifactId": {
+        "additionalProperties": false,
+        "description": "Exact full-width dataspace and complete contract content identity. Equal bytes in different dataspaces remain separate artifacts.",
+        "properties": {
+          "code_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dataspace_id",
+          "code_hash"
+        ],
+        "type": "object"
+      },
+      "ContractArtifactManifestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "abi_hash": {
+            "description": "Optional convenience projection; must equal manifest.abi_hash.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "artifact_id": {
+            "$ref": "#/components/schemas/ContractArtifactId"
+          },
+          "code_bytes": {
+            "description": "Optional canonical padded base64 artifact bytes; not a byte count. Verify the contract content hash when present.",
+            "format": "byte",
+            "maxLength": 22369624,
+            "type": "string"
+          },
+          "code_hash": {
+            "description": "Optional convenience projection; must equal artifact_id.code_hash.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "manifest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            ],
+            "description": "Canonical typed ContractManifest; code_hash must equal artifact_id.code_hash and abi_hash is required. Decode with the matching native model."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          }
+        },
+        "required": [
+          "network_id",
+          "artifact_id",
+          "manifest"
+        ],
+        "type": "object"
+      },
       "ContractCallBatchBindingItemV1": {
         "additionalProperties": false,
         "properties": {
@@ -52881,7 +52965,7 @@
         "x-iroha-bearer-token-pattern": "^[A-Za-z0-9_-]+$"
       },
       "IrohaApiToken": {
-        "description": "Deployment-configured Torii API token. Whether it is required is selected by node configuration.",
+        "description": "Deployment-configured Torii API token. Immutable private roots require their owner token on every route; global roots apply the listener configuration.",
         "in": "header",
         "name": "X-API-Token",
         "type": "apiKey"
@@ -60677,29 +60761,30 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes": {
+<<<<<<< HEAD
+    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}": {
       "get": {
-        "description": "Fetch the canonical base64 contract artifact by its exact dataspace and code hash. Canonical account request signing is required.",
-        "operationId": "contractArtifactBytesGet",
+        "description": "Fetch the complete canonical ContractManifest and optional derived hash conveniences by exact dataspace and content hash. Canonical account signing and current dataspace visibility are required. Private roots additionally require the owner listener API token. The response binds the exact network and artifact identity; manifest code_hash must match artifact_id.code_hash.",
+        "operationId": "contractArtifactManifestGet",
         "parameters": [
           {
-            "description": "Exact owning dataspace identifier.",
+            "description": "Exact full-width dataspace identifier as canonical unsigned decimal; no leading zeroes.",
             "in": "path",
             "name": "dataspace_id",
             "required": true,
             "schema": {
-              "format": "uint64",
-              "maximum": 18446744073709551615,
-              "minimum": 0,
-              "type": "integer"
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "type": "string"
             }
           },
           {
-            "description": "Contract code hash (hex).",
+            "description": "Exact lowercase 64-digit hexadecimal contract content hash.",
             "in": "path",
             "name": "code_hash",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             }
           },
@@ -60754,7 +60839,269 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ContractArtifactManifestResponse"
+                }
+              }
+            },
+            "description": "The exact scoped contract manifest and network binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The dataspace or contract content hash is not canonical.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for contract artifact metadata.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for contract artifact reads.",
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_required"
+                  ],
+                  "example": "canonical_authentication_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller cannot read this dataspace, or the artifact is outside the immutable private root.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No registered artifact exists in the exact requested dataspace.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Contract artifact read rate exceeded.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Fetch scoped contract metadata.",
+        "tags": [
+          "Contracts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes": {
+      "get": {
+        "description": "Fetch the canonical base64 contract artifact by exact dataspace and content hash. Canonical account signing and current dataspace visibility are required. Private roots additionally require the owner listener API token. The response binds the network and complete artifact identity; callers must verify both and the artifact content hash.",
+        "operationId": "contractCodeBytesGet",
+        "parameters": [
+          {
+            "description": "Exact full-width dataspace identifier as canonical unsigned decimal; no leading zeroes.",
+=======
+    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes": {
+      "get": {
+        "description": "Fetch the canonical base64 contract artifact by its exact dataspace and code hash. Canonical account request signing is required.",
+        "operationId": "contractArtifactBytesGet",
+        "parameters": [
+          {
+            "description": "Exact owning dataspace identifier.",
+>>>>>>> origin/optimizations
+            "in": "path",
+            "name": "dataspace_id",
+            "required": true,
+            "schema": {
+<<<<<<< HEAD
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact lowercase 64-digit hexadecimal contract content hash.",
+=======
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contract code hash (hex).",
+>>>>>>> origin/optimizations
+            "in": "path",
+            "name": "code_hash",
+            "required": true,
+            "schema": {
+<<<<<<< HEAD
+              "pattern": "^[0-9a-f]{64}$",
+=======
+>>>>>>> origin/optimizations
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+<<<<<<< HEAD
+                  "$ref": "#/components/schemas/ContractArtifactBytesResponse"
+=======
                   "$ref": "#/components/schemas/JsonValue"
+>>>>>>> origin/optimizations
                 }
               }
             },
@@ -60778,7 +61125,11 @@
                 }
               }
             },
+<<<<<<< HEAD
+            "description": "The dataspace or contract content hash is not canonical.",
+=======
             "description": "The contract code hash is invalid.",
+>>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -60827,6 +61178,29 @@
               }
             }
           },
+<<<<<<< HEAD
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The caller cannot read this dataspace, or the artifact is outside the immutable private root.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+=======
+>>>>>>> origin/optimizations
           "404": {
             "content": {
               "application/json": {
@@ -60835,7 +61209,11 @@
                 }
               }
             },
+<<<<<<< HEAD
+            "description": "No registered artifact exists in the exact requested dataspace.",
+=======
             "description": "No contract artifact exists for the code hash.",
+>>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -60879,7 +61257,11 @@
             "IrohaCanonicalWitness": []
           }
         ],
+<<<<<<< HEAD
+        "summary": "Fetch contract code bytes.",
+=======
         "summary": "Fetch scoped contract artifact bytes.",
+>>>>>>> origin/optimizations
         "tags": [
           "Contracts"
         ],
@@ -111481,6 +111863,168 @@
           "stableRouteId": "sorafs.storage_token.issue"
         },
         "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/sorafs/storage/token/account": {
+      "post": {
+        "description": "Request a storage read token using a fresh exact-network canonical account signature. The account must currently exist and the provider must have an active finalized registered_account_read capability; absent, expired or revoked admission denies issuance. The existing native StreamToken custody issuer enforces the admitted limits. Issuance quota binds the exact network and canonical account; X-SoraFS-Client is diagnostic only. The current policy is rechecked after signing before any token is released.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account in single-signature mode; optional when the witness identifies its subject.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the canonical signature.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the canonical signature.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness used instead of the single-signature header set.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
+            "in": "header",
+            "name": "X-SoraFS-Client",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]{1,128}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required visible-ASCII correlation nonce echoed in the response.",
+            "in": "header",
+            "name": "X-SoraFS-Nonce",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]{1,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Request admitted account storage read token.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.storage_account_token.issue"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/transparency/cycles": {

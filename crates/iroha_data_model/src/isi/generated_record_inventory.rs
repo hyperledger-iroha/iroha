@@ -999,6 +999,16 @@ record!(
     "iroha_data_model::isi::settlement::SettleFxCorridor"
 );
 record!(
+    private_dataspace_anchor_private_dataspace,
+    crate::isi::private_dataspace::AnchorPrivateDataspace,
+    "iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace"
+);
+record!(
+    private_dataspace_register_private_dataspace,
+    crate::isi::private_dataspace::RegisterPrivateDataspace,
+    "iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace"
+);
+record!(
     smart_contract_code_accept_contract_ownership,
     crate::isi::smart_contract_code::AcceptContractOwnership,
     "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership"

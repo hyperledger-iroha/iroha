@@ -1,11 +1,11 @@
 //! Production stream-token admission for SoraFS serving routes.
 use super::*;
+use crate::sorafs::stream_token_cleanup::ExternalStreamTokenLeaseV1;
 #[cfg(test)]
 use crate::sorafs::{StreamTokenConcurrencyPermit, StreamTokenQuotaError};
-use crate::sorafs::{
+use iroha_data_model::sorafs::stream_token_gateway::{
     StreamTokenGatewayAdmissionErrorV1, StreamTokenGatewayAdmissionRecordV1,
     StreamTokenGatewayAdmissionRequestV1, StreamTokenGatewayQuotaRequestV1,
-    stream_token_cleanup::ExternalStreamTokenLeaseV1,
 };
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -15,7 +15,8 @@ use iroha_data_model::sorafs::{
         StreamTokenViolationKindV1,
     },
 };
-use sorafs_manifest::StreamTokenBodyV1;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use sorafs_manifest::{StreamTokenBodyV1, token::STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1};
 /// An immutable lifetime bound derived from the authenticated accepted record.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RangeFetchLeaseWindow {
@@ -155,8 +156,24 @@ fn requested_bytes(route: StreamTokenRequestRouteV1) -> u64 {
         StreamTokenRequestRouteV1::Chunk(chunk) => chunk.stored_length,
     }
 }
+fn new_serving_attempt_id() -> Result<[u8; 32], StreamTokenGatewayAdmissionErrorV1> {
+    serving_attempt_id_with_rng(&mut OsRng)
+}
+fn serving_attempt_id_with_rng<R: TryCryptoRng>(
+    rng: &mut R,
+) -> Result<[u8; 32], StreamTokenGatewayAdmissionErrorV1> {
+    let mut id = [0; 32];
+    rng.try_fill_bytes(&mut id)
+        .map_err(|_| StreamTokenGatewayAdmissionErrorV1::Unavailable)?;
+    if id == [0; 32] {
+        return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+    }
+    Ok(id)
+}
 fn capture_terminal(
     state: &SharedAppState,
+    deadline: Option<std::time::Instant>,
+    serving_attempt_id: [u8; 32],
     context: &StreamTokenValidationRequestContextV1,
     validated_at_unix_ms: u64,
     status: StreamTokenValidationStatusV1,
@@ -186,6 +203,7 @@ fn capture_terminal(
         observed_at_epoch: validated_at_unix_ms / 1_000,
     });
     let request = StreamTokenGatewayAdmissionRequestV1 {
+        serving_attempt_id,
         context: context.clone(),
         token_body_digest: material.map(|material| material.body_digest),
         token_key_version: material.map(|material| material.body.token_pk_version),
@@ -203,8 +221,11 @@ fn capture_terminal(
     } else {
         None
     };
+    let deadline = deadline.ok_or_else(|| {
+        external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+    })?;
     let record = capture
-        .admit(&request)
+        .admit(&request, deadline)
         .map_err(external_admission_unavailable)?;
     // Capture can commit then fail callback/acknowledgement without returning a record. That
     // path retains its durable reconciliation/expiry semantics; no release is fabricated here.
@@ -217,13 +238,23 @@ fn capture_terminal(
 }
 fn capture_then_reject(
     state: &SharedAppState,
+    deadline: Option<std::time::Instant>,
+    serving_attempt_id: [u8; 32],
     context: &StreamTokenValidationRequestContextV1,
     validated_at_unix_ms: u64,
     status: StreamTokenValidationStatusV1,
     material: Option<DecodedAdmissionMaterial<'_>>,
     response: Response,
 ) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
-    let _ = capture_terminal(state, context, validated_at_unix_ms, status, material)?;
+    let _ = capture_terminal(
+        state,
+        deadline,
+        serving_attempt_id,
+        context,
+        validated_at_unix_ms,
+        status,
+        material,
+    )?;
     Err(response)
 }
 fn retry_response(
@@ -311,14 +342,41 @@ pub(super) async fn enforce_stream_token_for_request(
     request_nonce: &str,
     route: StreamTokenRequestRouteV1,
 ) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
+    // Queue latency belongs to the same admission attempt as verification and callback work.
+    let deadline = state
+        .stream_token_admission_capture()
+        .map(|capture| capture.begin_operation())
+        .transpose()
+        .map_err(external_admission_unavailable)?;
     let worker_state = Arc::clone(state);
     let headers = headers.clone();
     let manifest = manifest.clone();
     let request_nonce = request_nonce.to_owned();
     sorafs_heavy_blocking_task(state, "SoraFS stream-token admission", move || {
-        enforce_stream_token_in_worker(&worker_state, &headers, &manifest, &request_nonce, route)
+        enforce_stream_token_in_worker(
+            &worker_state,
+            &headers,
+            &manifest,
+            &request_nonce,
+            route,
+            deadline,
+        )
     })
     .await
+}
+// Queue time and local validation consume the same admission budget. Check before invoking
+// the signer observer as well as at worker entry; only explicit test-local enforcement has no
+// native gateway deadline.
+#[allow(clippy::result_large_err)]
+fn ensure_admission_operation_live(deadline: Option<std::time::Instant>) -> Result<(), Response> {
+    match deadline {
+        Some(deadline) if std::time::Instant::now() < deadline => Ok(()),
+        #[cfg(test)]
+        None => Ok(()),
+        _ => Err(external_admission_unavailable(
+            StreamTokenGatewayAdmissionErrorV1::Unavailable,
+        )),
+    }
 }
 #[allow(clippy::result_large_err)]
 fn enforce_stream_token_in_worker(
@@ -327,7 +385,9 @@ fn enforce_stream_token_in_worker(
     manifest: &StoredManifest,
     request_nonce: &str,
     route: StreamTokenRequestRouteV1,
+    deadline: Option<std::time::Instant>,
 ) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
+    ensure_admission_operation_live(deadline)?;
     let Some(issuer) = state.stream_token_issuer() else {
         return Err(feature_disabled(
             "stream token enforcement is not enabled on this node",
@@ -353,6 +413,8 @@ fn enforce_stream_token_in_worker(
                     "stream token provider identity is not configured",
                 )
             })?;
+    // One physical HTTP worker owns this identity; provider retries retain its complete request.
+    let serving_attempt_id = new_serving_attempt_id().map_err(external_admission_unavailable)?;
     let monotonic_anchor = std::time::Instant::now();
     let validated_at_unix_ms = u64::try_from(
         SystemTime::now()
@@ -388,6 +450,8 @@ fn enforce_stream_token_in_worker(
     let Some(token_header) = token_header else {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::MissingToken),
@@ -403,6 +467,8 @@ fn enforce_stream_token_in_worker(
         Err(_) => {
             return capture_then_reject(
                 state,
+                deadline,
+                serving_attempt_id,
                 &context,
                 validated_at_unix_ms,
                 StreamTokenValidationStatusV1::Excluded(
@@ -419,6 +485,8 @@ fn enforce_stream_token_in_worker(
     if token_str.is_empty() {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::MalformedEncoding),
@@ -432,6 +500,8 @@ fn enforce_stream_token_in_worker(
     if token_str.len() > MAX_STREAM_TOKEN_BASE64_BYTES {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::MalformedEncoding),
@@ -472,6 +542,8 @@ fn enforce_stream_token_in_worker(
             };
             return capture_then_reject(
                 state,
+                deadline,
+                serving_attempt_id,
                 &context,
                 validated_at_unix_ms,
                 StreamTokenValidationStatusV1::Excluded(
@@ -500,6 +572,8 @@ fn enforce_stream_token_in_worker(
         error!(?error, "stream token signature verification failed");
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::InvalidSignature),
@@ -510,6 +584,8 @@ fn enforce_stream_token_in_worker(
     if token.body.token_pk_version != issuer.key_version() {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::Excluded(
@@ -523,9 +599,11 @@ fn enforce_stream_token_in_worker(
         );
     }
     let now = validated_at_unix_ms / 1_000;
-    if token.body.issued_at > now.saturating_add(MAX_TOKEN_FUTURE_SKEW_SECS) {
+    if token.body.issued_at > now.saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1) {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::ProviderViolation(
@@ -541,6 +619,8 @@ fn enforce_stream_token_in_worker(
     if token.body.manifest_cid.as_slice() != manifest.manifest_cid() {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::ProviderViolation(
@@ -556,6 +636,8 @@ fn enforce_stream_token_in_worker(
     if token.body.profile_handle != manifest.chunk_profile_handle() {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::ProviderViolation(
@@ -568,6 +650,8 @@ fn enforce_stream_token_in_worker(
     if token.body.provider_id != authoritative_provider {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::ProviderViolation(
@@ -580,6 +664,8 @@ fn enforce_stream_token_in_worker(
     if now >= token.body.ttl_epoch {
         return capture_then_reject(
             state,
+            deadline,
+            serving_attempt_id,
             &context,
             validated_at_unix_ms,
             StreamTokenValidationStatusV1::ProviderViolation(StreamTokenViolationKindV1::Expired),
@@ -589,6 +675,7 @@ fn enforce_stream_token_in_worker(
     }
     // Each new admission has its own challenged current-custody observation. The driver resamples
     // trusted time after observer I/O and local finality, including token issue/expiry checks.
+    ensure_admission_operation_live(deadline)?;
     let validated_at_unix_ms = match issuer.before_admission(&token.body) {
         Ok(validated_at) => validated_at,
         Err(error) => {
@@ -598,6 +685,8 @@ fn enforce_stream_token_in_worker(
             );
             return capture_then_reject(
                 state,
+                deadline,
+                serving_attempt_id,
                 &context,
                 validated_at_unix_ms,
                 StreamTokenValidationStatusV1::Excluded(
@@ -610,6 +699,8 @@ fn enforce_stream_token_in_worker(
     };
     if let Some((record, lease)) = capture_terminal(
         state,
+        deadline,
+        serving_attempt_id,
         &context,
         validated_at_unix_ms,
         StreamTokenValidationStatusV1::Accepted,
@@ -734,3 +825,7 @@ fn enforce_test_local_admission(
 #[cfg(test)]
 #[path = "stream_token_lease_window_tests.rs"]
 mod lease_window_tests;
+
+#[cfg(test)]
+#[path = "stream_token_attempt_tests.rs"]
+mod attempt_tests;

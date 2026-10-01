@@ -447,6 +447,9 @@ pub(super) struct Directory {
     links: Vec<Arc<Link>>,
 }
 
+#[path = "windows/private_files.rs"]
+mod private_files;
+
 impl Directory {
     pub(super) fn open(path: &Path, create: bool) -> io::Result<Self> {
         Self::open_with_policy(path, create, true)
@@ -712,7 +715,12 @@ impl Directory {
         self.revalidate()?;
         let file = open_file(
             &self.path().join(name),
-            GENERIC_READ | if create_new { GENERIC_WRITE } else { 0 },
+            GENERIC_READ
+                | if create_new {
+                    GENERIC_WRITE | WRITE_DAC | DELETE
+                } else {
+                    0
+                },
             FILE_SHARE_READ,
             if create_new {
                 CREATE_NEW
@@ -730,6 +738,8 @@ impl Directory {
             before,
             private: private || create_new,
             writable: create_new,
+            read_only: false,
+            publishable: create_new,
         };
         retained.revalidate()?;
         if create_new {
@@ -871,6 +881,88 @@ impl Directory {
         }
         self.sync()?;
         Ok(file)
+    }
+
+    pub(super) fn open_exact_lock(&self, name: &OsStr, create_new: bool) -> io::Result<File> {
+        self.revalidate()?;
+        let file = open_file(
+            &self.path().join(name),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            if create_new {
+                CREATE_NEW
+            } else {
+                OPEN_EXISTING
+            },
+            false,
+            true,
+        )?;
+        snapshot(&file, true, false)?;
+        if create_new {
+            file.sync_all()?;
+            self.sync()?;
+        }
+        self.revalidate()?;
+        Ok(file)
+    }
+
+    pub(super) fn remove_empty(mut self) -> io::Result<()> {
+        self.revalidate()?;
+        if self.links.len() < 2 {
+            return Err(denied("filesystem root cannot be removed"));
+        }
+        if Arc::strong_count(self.links.last().ok_or_else(changed)?) != 1 {
+            return Err(denied("directory removal has live descendant handles"));
+        }
+        let current =
+            Arc::try_unwrap(self.links.pop().ok_or_else(changed)?).map_err(|_| changed())?;
+        let id = identity(&current.file)?;
+        // Keep the original object alive while transferring namespace custody to a DELETE
+        // handle. A substitution cannot recycle that identity while this handle is retained.
+        let retained = open_file(
+            &current.path,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            OPEN_EXISTING,
+            true,
+            false,
+        )?;
+        if identity(&retained)? != id {
+            return Err(changed());
+        }
+        let Link {
+            path,
+            file,
+            private,
+        } = current;
+        drop(file);
+        let removing = open_file(
+            &path,
+            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+            true,
+            false,
+        )?;
+        if identity(&removing)? != id {
+            return Err(changed());
+        }
+        snapshot(&removing, private, true)?;
+        self.revalidate()?;
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: disposition addresses the exact retained no-reparse directory. Windows
+        // refuses a nonempty directory; no recursive or path-based deletion occurs.
+        unsafe {
+            win_ok(SetFileInformationByHandle(
+                removing.as_raw_handle(),
+                FileDispositionInfo,
+                from_ref(&disposition).cast(),
+                native_size::<FILE_DISPOSITION_INFO>()?,
+            ))?;
+        }
+        drop(removing);
+        drop(retained);
+        self.sync()
     }
 
     pub(super) fn open_ownership_lock(&self, name: &OsStr) -> io::Result<File> {
@@ -1048,6 +1140,8 @@ pub(super) struct RetainedFile {
     before: Snapshot,
     private: bool,
     writable: bool,
+    read_only: bool,
+    publishable: bool,
 }
 
 impl RetainedFile {
@@ -1080,13 +1174,16 @@ impl RetainedFile {
     pub(super) fn revalidate(&self) -> io::Result<()> {
         self.directory.revalidate()?;
         let after = snapshot(&self.file, self.private, false)?;
+        if self.read_only {
+            private_files::validate_read_only(&self.file)?;
+        }
         if after.id != self.before.id || (!self.writable && after != self.before) {
             return Err(changed());
         }
         let named = open_file(
             &self.directory.path().join(&self.name),
             FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             OPEN_EXISTING,
             false,
             false,

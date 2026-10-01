@@ -110,6 +110,7 @@ pub use router::{
 };
 pub(crate) use router::{
     matchers_match_with_world, native_execution_target, native_instruction_execution_target,
+    private_genesis_instruction_target,
 };
 #[cfg(test)]
 use std::sync::Barrier;

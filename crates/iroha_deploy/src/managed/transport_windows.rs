@@ -141,7 +141,7 @@ impl Connection {
         decode(&bytes)
     }
 
-    pub(crate) fn reply(&mut self, status: &ManagedStatus) -> Result<()> {
+    pub(crate) fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
         let bytes = encode(status)?;
         self.runtime
             .block_on(async {
@@ -151,10 +151,10 @@ impl Connection {
     }
 }
 
-pub(crate) fn request(
+pub(crate) fn request_as<T: JsonDeserialize>(
     directory: &PrivateDirectory,
     request: &ControlRequest,
-) -> Result<ManagedStatus> {
+) -> Result<T> {
     let runtime = runtime()?;
     let mut stream = {
         let _entered = runtime.enter();

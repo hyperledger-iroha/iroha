@@ -5,6 +5,13 @@ use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
 use std::{fs, time::Duration};
 use tempfile::tempdir;
 #[test]
+fn registered_account_read_has_its_exact_capability_label() {
+    assert_eq!(
+        capability_label(CapabilityType::RegisteredAccountRead),
+        "registered_account_read"
+    );
+}
+#[test]
 fn normalize_tls_host_guards_whitespace() {
     assert_eq!(
         normalize_tls_host("Docs.Sora.GW.Sora.Name").expect("normalize lowercase"),

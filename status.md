@@ -14,7 +14,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Native private-file custody and release-signed checkpoint authentication have component coverage. | Desktop cutover, matching installed-binary startup/deployment/restart, independent private dataspace execution and parent admission, official checkpoint publication, native OS matrices and latency targets remain under qualification. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Unsigned macOS ARM64 installed-release diagnostics pass config-free local startup, all three deployment inputs and restart recovery, plus four-parent/four-private attachment, paid namespace provisioning, verified anchoring and bounded payload-isolation checks. | Cold registry dependencies, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency targets remain under qualification. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
@@ -50,6 +50,17 @@ selection has scoped coverage and Torii's unit-test target compiles. Full Node
 and production qualification remain open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
+
+Native stream-token gateway admission combines protected consensus quotas, leases and
+callback history with challenged readbacks, daemon software custody and a final serving
+publication fence. Broker-supplied gateway authority and the generic local token-reputation
+producer are retired. Native admissions own exact reputation append intents; certified current
+readbacks and committed terminal dispositions govern callback completion. The token issuer uses
+one bounded private receipt journal over shared Unix/Windows filesystem custody;
+native Windows execution and release qualification remain open. Combined candidate
+validation, native service closure and multi-replica recovery remain open. Component
+coverage does not qualify cold registry fetches, the complete 64 MiB fetch-process RSS
+bound, signed native releases or reference-host p95 latency.
 
 The private-settlement five-second proof-through-settlement target is unmet.
 Current-source repeated settlement, fault and leakage campaigns are unqualified;

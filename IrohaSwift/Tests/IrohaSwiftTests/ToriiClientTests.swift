@@ -16005,7 +16005,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "d", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
             "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "B", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
             "{\(identity)\"manifest\":\(manifest),\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
-            "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\",\"code_bytes\":null}",
         ]
         for payload in invalid {
             XCTAssertThrowsError(
@@ -16016,6 +16015,23 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "accepted inconsistent manifest response: \(payload)"
             )
         }
+    }
+
+    func testContractManifestOptionalBytesAreCanonicalBoundedAndDigestBound() throws {
+        let bytes = Data([0])
+        let hash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased()
+        let literal = try XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: hash))
+        let prefix = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":17,\"code_hash\":\"\(literal)\"},\"manifest\":{\"code_hash\":\"\(literal)\",\"abi_hash\":\"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071\"},\"code_hash\":\"\(hash)\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\""
+        func decode(_ suffix: String) throws -> ToriiContractManifestRecord {
+            try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data("{\(prefix)\(suffix)}".utf8))
+        }
+        XCTAssertNil(try decode("").codeBytes)
+        XCTAssertNil(try decode(",\"code_bytes\":null").codeBytes)
+        XCTAssertEqual(try decode(",\"code_bytes\":\"AA==\"").codeBytes, "AA==")
+        for invalid in ["AB==", "AA", "AAAA", "", " AA==", String(repeating: "A", count: ((16 * 1_024 * 1_024 + 2) / 3) * 4)] {
+            XCTAssertThrowsError(try decode(",\"code_bytes\":\"\(invalid)\""))
+        }
+        XCTAssertThrowsError(try decode(",\"code_bytes\":1"))
     }
 
     func testContractManifestPreservesExactV1InterfaceShape() throws {

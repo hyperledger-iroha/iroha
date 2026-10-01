@@ -1,6 +1,10 @@
 //! Exact purpose ceilings and private journal ownership without a software signing path.
 use super::*;
-use std::fs;
+use std::fs::Permissions;
+use std::{
+    fs,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+};
 
 fn private_directory() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("temporary private directory");
@@ -74,7 +78,7 @@ fn one_injected_pool_admits_every_purpose_and_refuses_before_path_io() {
         .filter(|part| matches!(part, Component::Normal(_)))
         .count();
     let pool =
-        SignerJournalInventoryPoolV1::for_test(16 * 1024 * 1024, 300_000, (depth + 2) as u64);
+        SignerJournalInventoryPoolV1::for_test(16 * 1024 * 1024, 1_000_000, (depth + 6) as u64);
     let first =
         SignerReceiptJournalV1::open(&first_path, SignerReceiptPurposeV1::ReleaseManifest, &pool)
             .expect("first purpose owns the shared descriptor credits");
@@ -88,7 +92,7 @@ fn one_injected_pool_admits_every_purpose_and_refuses_before_path_io() {
         .expect("released credits admit another purpose");
 
     let absent = second_path.join("not-opened");
-    let refused = SignerJournalInventoryPoolV1::for_test(0, 300_000, 100);
+    let refused = SignerJournalInventoryPoolV1::for_test(0, 1_000_000, 100);
     assert_eq!(
         SignerReceiptJournalV1::open(
             &absent,
@@ -190,7 +194,7 @@ fn every_purpose_enforces_exact_stage_recovery_and_inventory_byte_ceiling() {
             Err(SignerReceiptJournalErrorV1::Unavailable)
         ));
         assert_eq!(
-            fs::read_dir(&path).unwrap().count(),
+            crate::signer_operation::journal::test_record_count(&path),
             0,
             "invalid admission must not create a tombstone"
         );
@@ -212,7 +216,7 @@ fn every_purpose_enforces_exact_stage_recovery_and_inventory_byte_ceiling() {
         ));
         assert_eq!(journal.recover(operation).unwrap().bytes(), bytes);
         assert_eq!(
-            fs::read_dir(&path).unwrap().count(),
+            crate::signer_operation::journal::test_record_count(&path),
             1,
             "duplicate staging cannot create a second record"
         );

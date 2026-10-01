@@ -133,6 +133,51 @@ fn signer_tables(fields: &[(&str, String)]) -> String {
     }
     source
 }
+fn native_gateway_credential(name: &str) -> String {
+    let root = if cfg!(windows) {
+        "C:/runtime/gateway"
+    } else {
+        "/runtime/gateway"
+    };
+    format!("{root}/{name}")
+}
+fn native_gateway_bindings() -> String {
+    let account = |seed| {
+        AccountId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("test key")
+                .public_key()
+                .clone(),
+        )
+        .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+        .expect("test account")
+    };
+    let fee = norito::json::to_json(&iroha_data_model::transaction::FeePaymentIntent::authority(
+        Vec::new(),
+        None,
+    ))
+    .expect("fee JSON");
+    format!(
+        r#"
+[sorafs.storage.stream_tokens.admission_native]
+operator = "{}"
+operator_credential = "{operator_credential}"
+observer = "{}"
+observer_credential = "{observer_credential}"
+reputation_recorder = "{}"
+reputation_recorder_credential = "{reputation_recorder_credential}"
+fee_payment_json = '{}'
+clock_uncertainty_ms = 100
+"#,
+        account(0x71),
+        account(0x72),
+        account(0x73),
+        fee,
+        operator_credential = native_gateway_credential("operator.key"),
+        observer_credential = native_gateway_credential("observer.key"),
+        reputation_recorder_credential = native_gateway_credential("recorder.key"),
+    )
+}
 fn enabled_with_fields(fields: &[(&str, String)]) -> String {
     format!(
         r#"
@@ -148,7 +193,7 @@ admission_provider_policy_digest_hex = "{}"
 "#,
         "a5".repeat(32),
         signer_tables(fields),
-        native_signer_bindings()
+        format!("{}{}", native_signer_bindings(), native_gateway_bindings())
     )
 }
 fn enabled_overlay() -> String {
@@ -364,3 +409,188 @@ fn sorafs_configuration_has_no_production_environment_bindings() {
 
 #[path = "sorafs_stream_token_runtime_signer/production_identity_tests.rs"]
 mod production_identity_tests;
+
+#[test]
+fn gateway_native_configuration_preserves_exact_public_pins_and_default_deadline() {
+    let actual = parse_overlay(&enabled_overlay()).expect("complete native gateway");
+    let tokens = &actual.torii.sorafs_storage.stream_tokens;
+    assert_eq!(tokens.admission_operation_timeout_ms, 30_000);
+    assert_eq!(tokens.admission_reconcile_interval_ms, 1_000);
+    let native = tokens.admission_native.as_ref().expect("native required");
+    assert_ne!(native.operator, native.observer);
+    assert_ne!(native.operator, native.reputation_recorder);
+    assert_ne!(native.observer, native.reputation_recorder);
+    assert_eq!(
+        native.reputation_recorder_credential,
+        PathBuf::from(native_gateway_credential("recorder.key"))
+    );
+    assert_eq!(native.clock_uncertainty_ms, 100);
+    assert_eq!(
+        native.operator_credential,
+        PathBuf::from(native_gateway_credential("operator.key"))
+    );
+    assert_eq!(
+        native.observer_credential,
+        PathBuf::from(native_gateway_credential("observer.key"))
+    );
+    assert_eq!(
+        native.fee_payment,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+    );
+}
+#[test]
+fn gateway_native_configuration_rejects_missing_partial_or_disabled_custody() {
+    let base = enabled_overlay();
+    rejects(
+        &base.replace(&native_gateway_bindings(), ""),
+        "admission_native is required",
+    );
+    for line in [
+        format!(
+            "operator_credential = \"{}\"\n",
+            native_gateway_credential("operator.key")
+        ),
+        "clock_uncertainty_ms = 100\n".to_owned(),
+    ] {
+        rejects(&base.replace(&line, ""), "admission_native is required");
+    }
+    rejects(&native_gateway_bindings(), "admission_native is forbidden");
+}
+#[test]
+fn gateway_native_configuration_rejects_shared_or_relative_credentials_and_bad_clock() {
+    let base = enabled_overlay();
+    let bindings = native_gateway_bindings();
+    let operator = bindings
+        .lines()
+        .find_map(|line| line.strip_prefix("operator = "))
+        .unwrap();
+    let observer_line = bindings
+        .lines()
+        .find(|line| line.starts_with("observer = "))
+        .unwrap();
+    rejects(
+        &base.replace(observer_line, &format!("observer = {operator}")),
+        "admission_native is required",
+    );
+    for source in [
+        base.replace(
+            &native_gateway_credential("observer.key"),
+            &native_gateway_credential("operator.key"),
+        ),
+        base.replace(&native_gateway_credential("observer.key"), "observer.key"),
+        base.replace(
+            &native_gateway_credential("observer.key"),
+            &native_gateway_credential("../observer.key"),
+        ),
+        base.replace("clock_uncertainty_ms = 100", "clock_uncertainty_ms = 5001"),
+        base.replace("fee_payment_json = '", "fee_payment_json = 'malformed"),
+    ] {
+        rejects(&source, "admission_native is required");
+    }
+}
+#[test]
+fn gateway_operation_deadline_is_bounded_independently_of_lease_lifetime() {
+    for value in [0, 60_001] {
+        rejects(
+            &enabled_overlay().replace(
+                "admission_provider_revision = 7",
+                &format!(
+                    "admission_provider_revision = 7\nadmission_operation_timeout_ms = {value}"
+                ),
+            ),
+            "admission_operation_timeout_ms must be within",
+        );
+    }
+    for value in [1, 60_000] {
+        let actual = parse_overlay(&enabled_overlay().replace(
+            "admission_provider_revision = 7",
+            &format!("admission_provider_revision = 7\nadmission_operation_timeout_ms = {value}"),
+        ))
+        .expect("bounded deadline");
+        assert_eq!(
+            actual
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .admission_operation_timeout_ms,
+            value
+        );
+    }
+}
+
+#[test]
+fn native_reputation_recorder_custody_is_required_independent_and_absolute() {
+    let base = enabled_overlay();
+    let bindings = native_gateway_bindings();
+    let recorder_line = bindings
+        .lines()
+        .find(|line| line.starts_with("reputation_recorder = "))
+        .unwrap();
+    let credential_line = bindings
+        .lines()
+        .find(|line| line.starts_with("reputation_recorder_credential = "))
+        .unwrap();
+    for line in [recorder_line, credential_line] {
+        rejects(&base.replace(line, ""), "admission_native is required");
+    }
+    for role in ["operator", "observer"] {
+        let value = bindings
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{role} = ")))
+            .unwrap();
+        rejects(
+            &base.replace(recorder_line, &format!("reputation_recorder = {value}")),
+            "admission_native is required",
+        );
+        rejects(
+            &base.replace(
+                &native_gateway_credential("recorder.key"),
+                &native_gateway_credential(&format!("{role}.key")),
+            ),
+            "admission_native is required",
+        );
+    }
+    for replacement in [
+        "recorder.key".to_owned(),
+        native_gateway_credential("../recorder.key"),
+    ] {
+        rejects(
+            &base.replace(&native_gateway_credential("recorder.key"), &replacement),
+            "admission_native is required",
+        );
+    }
+    rejects(
+        &format!("[sorafs.storage.stream_tokens.admission_native]\n{credential_line}\n"),
+        "admission_native is forbidden",
+    );
+}
+
+#[test]
+fn native_delivery_reconcile_interval_has_a_finite_independent_bound() {
+    for value in [0, 60_001] {
+        rejects(
+            &enabled_overlay().replace(
+                "admission_provider_revision = 7",
+                &format!(
+                    "admission_provider_revision = 7\nadmission_reconcile_interval_ms = {value}"
+                ),
+            ),
+            "admission_reconcile_interval_ms must be within",
+        );
+    }
+    for value in [1, 60_000] {
+        let source = enabled_overlay().replace(
+            "admission_provider_revision = 7",
+            &format!("admission_provider_revision = 7\nadmission_reconcile_interval_ms = {value}"),
+        );
+        let config = parse_overlay(&source).expect("bounded native delivery interval");
+        assert_eq!(
+            config
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .admission_reconcile_interval_ms,
+            value
+        );
+    }
+}

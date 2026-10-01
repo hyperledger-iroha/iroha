@@ -67,6 +67,7 @@ use iroha_data_model::{
     },
     parameter::system::ConsensusMode,
     sumeragi::epoch::ValidatorEpochContextV1,
+    sumeragi_finality::EpochValidationScope,
     transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::{
@@ -367,6 +368,16 @@ pub(crate) fn read_frame(
     block: Arc<SignedBlock>,
     height: u64,
 ) -> Result<CommittedBlock, ChainReadError> {
+    read_frame_with_validation(block, height, &mut EpochValidationScope::new())
+}
+
+// Shape-validation reuse is private to this exact reader. The complete immutable context must
+// match; this scope never stores source, authority, availability or certificate verdicts.
+fn read_frame_with_validation(
+    block: Arc<SignedBlock>,
+    height: u64,
+    validation: &mut EpochValidationScope,
+) -> Result<CommittedBlock, ChainReadError> {
     #[cfg(test)]
     relation_counts::frame(height);
     let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -411,8 +422,11 @@ pub(crate) fn read_frame(
         (Some(header), core_hash)
     };
     let result = result_of_preimage(certificate.result_preimage());
-    let commitment = ExecutionResultCommitment::decode(certificate.result_preimage())
-        .map_err(|error| malformed(error.to_string()))?;
+    let commitment = ExecutionResultCommitment::decode_with_validation(
+        certificate.result_preimage(),
+        validation,
+    )
+    .map_err(|error| malformed(error.to_string()))?;
     if let Some(header) = &header {
         super::epoch_beacon::control::verify_result(
             &header.control_witness,
@@ -428,7 +442,8 @@ pub(crate) fn read_frame(
         }) {
             return Err(ChainReadError::HeaderMismatch { height });
         }
-        let epoch = schedule::core_epoch(&commitment.schedule.current)
+        let epoch = validation
+            .core_epoch(&commitment.schedule.current)
             .map_err(|error| malformed(error.to_string()))?;
         if header.epoch != epoch.id || (commitment.schedule.boundary.is_some() && !header.attest) {
             return Err(ChainReadError::HeaderMismatch { height });
@@ -559,6 +574,12 @@ struct VerifiedAuthority {
 }
 
 impl VerifiedAuthority {
+<<<<<<< HEAD
+    fn new(
+        material: ValidatorEpochContextV1,
+        height: u64,
+        validation: &mut EpochValidationScope,
+=======
     fn new(material: ValidatorEpochContextV1, height: u64) -> Result<Self, ChainReadError> {
         Self::with_crypto(material, height, BlsCrypto::new())
     }
@@ -567,9 +588,11 @@ impl VerifiedAuthority {
         material: ValidatorEpochContextV1,
         height: u64,
         crypto: BlsCrypto,
+>>>>>>> origin/optimizations
     ) -> Result<Self, ChainReadError> {
         let malformed = |reason: String| ChainReadError::Committee { height, reason };
-        let epoch = schedule::core_epoch(&material)
+        let epoch = validation
+            .core_epoch(&material)
             .map_err(|error| malformed(error.to_string()))?
             .id;
         let keys = material
@@ -603,6 +626,8 @@ struct VerifiedPrefix {
     tip: CommittedBlock,
     schedule: schedule::ConsensusSchedule,
     authority: Arc<VerifiedAuthority>,
+    // Bounded exact-value structural reuse ends when this cursor is reset or dropped.
+    validation: EpochValidationScope,
 }
 
 /// One crypto context for both random pinned reads and one-pass externally streamed evidence.
@@ -630,7 +655,11 @@ impl PrefixVerifierContext<'_> {
         let authority = if scheduled.epoch == prefix.authority.material {
             Arc::clone(&prefix.authority)
         } else {
-            Arc::new(VerifiedAuthority::new(scheduled.epoch.clone(), height)?)
+            Arc::new(VerifiedAuthority::new(
+                scheduled.epoch.clone(),
+                height,
+                &mut prefix.validation,
+            )?)
         };
         if committed.commitment.schedule.current != authority.material {
             return Err(malformed(
@@ -638,13 +667,13 @@ impl PrefixVerifierContext<'_> {
             ));
         }
         let config = scheduled
-            .height_config()
+            .height_config_with_validation(&mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
         let certified = self.verify_certificate(committed, &authority, Some(&config), artifacts)?;
         verify_boundary_source(&certified, &prefix.tip, &authority)?;
         let schedule = prefix
             .schedule
-            .advanced(&certified.commitment.schedule)
+            .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
         prefix.tip = certified.committed.clone();
         prefix.schedule = schedule;
@@ -936,6 +965,7 @@ fn verify_availability(
 fn make_genesis_prefix(
     tip: CommittedBlock,
     material: ValidatorEpochContextV1,
+    mut validation: EpochValidationScope,
 ) -> Result<VerifiedPrefix, ChainReadError> {
     if tip.commitment.schedule.current != material {
         return Err(ChainReadError::Committee {
@@ -943,16 +973,24 @@ fn make_genesis_prefix(
             reason: "genesis result context differs from its signed body".into(),
         });
     }
-    let schedule = schedule::ConsensusSchedule::from_genesis_outcome(&tip.commitment.schedule)
-        .map_err(|error| ChainReadError::Committee {
-            height: GENESIS_HEIGHT,
-            reason: error.to_string(),
-        })?;
-    let authority = Arc::new(VerifiedAuthority::new(material, GENESIS_HEIGHT)?);
+    let schedule = schedule::ConsensusSchedule::from_genesis_outcome_with_validation(
+        &tip.commitment.schedule,
+        &mut validation,
+    )
+    .map_err(|error| ChainReadError::Committee {
+        height: GENESIS_HEIGHT,
+        reason: error.to_string(),
+    })?;
+    let authority = Arc::new(VerifiedAuthority::new(
+        material,
+        GENESIS_HEIGHT,
+        &mut validation,
+    )?);
     Ok(VerifiedPrefix {
         tip,
         schedule,
         authority,
+        validation,
     })
 }
 
@@ -1022,11 +1060,12 @@ impl CertifiedPrefix {
         genesis: Arc<SignedBlock>,
     ) -> Result<Self, ChainReadError> {
         let (epoch, instance) = authenticate_genesis(&genesis, &network, chain_id)?;
-        let tip = read_frame(genesis, GENESIS_HEIGHT)?;
+        let mut validation = EpochValidationScope::new();
+        let tip = read_frame_with_validation(genesis, GENESIS_HEIGHT, &mut validation)?;
         Ok(Self {
             network,
             instance,
-            prefix: make_genesis_prefix(tip, epoch)?,
+            prefix: make_genesis_prefix(tip, epoch, validation)?,
         })
     }
 
@@ -1064,7 +1103,7 @@ impl CertifiedPrefix {
         if self.prefix.tip.height.checked_add(1) != Some(height) {
             return Err(ChainReadError::Discontinuous { height });
         }
-        let committed = read_frame(block, height)?;
+        let committed = read_frame_with_validation(block, height, &mut self.prefix.validation)?;
         let genesis = (self.prefix.tip.height == GENESIS_HEIGHT).then(|| self.prefix.tip.clone());
         let current = PrefixVerifierContext {
             instance: self.instance,
@@ -1304,7 +1343,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// The committed read fails, the certificate does not certify the stored header and result,
     /// names another instance, or does not verify under the committee of its height.
     pub fn certified(&self, height: u64) -> Result<CertifiedBlock, ChainReadError> {
-        self.check_certificate(read_frame(self.source.block(height)?, height)?)
+        self.check_certificate(self.source.block(height)?, height)
     }
 
     /// The exact authenticated epoch committee and its original proofs of possession.
@@ -1362,19 +1401,22 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     /// Derive authority exclusively from signed genesis, then check the result graph against it.
     /// The graph's execution/parameter data is not independently final until a successor signs Rg.
     fn genesis_prefix(&self) -> Result<VerifiedPrefix, ChainReadError> {
-        make_genesis_prefix(
-            read_frame(self.source.block(GENESIS_HEIGHT)?, GENESIS_HEIGHT)?,
-            self.genesis_epoch.clone(),
-        )
+        let mut validation = EpochValidationScope::new();
+        let tip = read_frame_with_validation(
+            self.source.block(GENESIS_HEIGHT)?,
+            GENESIS_HEIGHT,
+            &mut validation,
+        )?;
+        make_genesis_prefix(tip, self.genesis_epoch.clone(), validation)
     }
 
     /// Verify the complete prefix with a bounded working set. Sequential reads reuse its
     /// cursor; an earlier-height read restarts at genesis instead of trusting an unbounded cache.
     fn check_certificate(
         &self,
-        committed: CommittedBlock,
+        block: Arc<SignedBlock>,
+        height: u64,
     ) -> Result<CertifiedBlock, ChainReadError> {
-        let height = committed.height;
         let mut cursor = self.prefix.lock();
         if cursor
             .as_ref()
@@ -1383,6 +1425,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             *cursor = Some(self.genesis_prefix()?);
         }
         let prefix = cursor.as_mut().ok_or(ChainReadError::ForeignGenesis)?;
+        let committed = read_frame_with_validation(block, height, &mut prefix.validation)?;
         if height == GENESIS_HEIGHT {
             if committed.core_hash != prefix.tip.core_hash || committed.result != prefix.tip.result
             {
@@ -1402,9 +1445,18 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .is_some_and(|next| next < height)
         {
             let next_height = prefix.tip.height + 1;
+<<<<<<< HEAD
+            let next = read_frame_with_validation(
+                self.source.block(next_height)?,
+                next_height,
+                &mut prefix.validation,
+            )?;
+            self.verification_context().advance_prefix(prefix, next)?;
+=======
             let next = read_frame(self.source.block(next_height)?, next_height)?;
             self.verification_context()
                 .advance_prefix(prefix, next, None)?;
+>>>>>>> origin/optimizations
         }
         self.verification_context()
             .advance_prefix(prefix, committed, None)

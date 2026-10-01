@@ -29,6 +29,7 @@ fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
     ] {
         let seed = format!("private-profile-sns-bootstrap-{}", case.alias);
         let opts = LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: Some(case.profile),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -447,8 +448,10 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
         (SoraProfile::PrivateCbuae, "cbuae", 49_080, 53_337),
         (SoraProfile::PrivateBpng, "bpng", 29_080, 33_337),
     ] {
-        let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("create private-profile signing directory");
+        let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+            .expect("create private-profile signing directory");
         let opts = LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: Some(profile),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -530,8 +533,10 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
 
 #[test]
 fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("create BPNG output parent");
+    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        .expect("create BPNG output parent");
     let mut opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::PrivateBpng),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),

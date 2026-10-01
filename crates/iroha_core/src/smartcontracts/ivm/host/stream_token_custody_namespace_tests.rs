@@ -11,15 +11,59 @@ fn custody_namespace_paths() -> Vec<StatePath> {
         key_path(provider, true, ALICE_KEYPAIR.public_key()).expect("signer first-use key"),
         key_path(provider, false, BOB_KEYPAIR.public_key()).expect("attester first-use key"),
     ];
+    use crate::query::stream_token_authority as authority;
+    paths.extend([
+        authority::head_key(provider),
+        authority::record_key(provider, 131072),
+        authority::slot_key(provider, [31; 32]),
+        authority::admission_key(provider, [31; 32]),
+    ]);
+    use crate::query::stream_token_gateway::{
+        rows::{GatewayExpiryKeyV1, GatewayExpiryTargetV1, GatewayRowKey},
+        storage as gateway,
+    };
+    let gateway_id = [39; 32];
+    paths.extend([
+        gateway::STATE_ROOT.parse().unwrap(),
+        format!("{}/descendant", gateway::STATE_ROOT)
+            .parse()
+            .unwrap(),
+        format!("{}_future", gateway::STATE_ROOT).parse().unwrap(),
+        gateway::policy_head_path(gateway_id).unwrap(),
+        gateway::policy_record_path(gateway_id, 8194).unwrap(),
+        gateway::head_path(gateway_id).unwrap(),
+        gateway::mutation_path(gateway_id, 131072).unwrap(),
+    ]);
+    for row in [
+        GatewayRowKey::Admission(8194),
+        GatewayRowKey::Acknowledgement(8194),
+        GatewayRowKey::Context([31; 32]),
+        GatewayRowKey::TokenIdentity([31; 32]),
+        GatewayRowKey::QuotaLifecycle([31; 32]),
+        GatewayRowKey::Quota([31; 32]),
+        GatewayRowKey::Lease([31; 32]),
+        GatewayRowKey::LeaseTerminal([31; 32]),
+        GatewayRowKey::Expiry(GatewayExpiryKeyV1 {
+            at_unix_ms: 131072,
+            target: GatewayExpiryTargetV1::Lease([31; 32]),
+        }),
+        GatewayRowKey::Expiry(GatewayExpiryKeyV1 {
+            at_unix_ms: 131072,
+            target: GatewayExpiryTargetV1::Quota([31; 32]),
+        }),
+    ] {
+        paths.push(gateway::row_path(gateway_id, &row).unwrap());
+    }
+    use iroha_data_model::sorafs::provider_admission::history::AdmissionHistoryPathV1;
     // Admission policy, counters, immutable revisions and revocation tombstones are native-only.
     for subject in [None, Some(provider)] {
         for suffix in [
-            "head",
-            "history/1",
-            "history/1024",
-            "provider_count",
-            "history_bytes",
-            "revocation_bytes",
+            AdmissionHistoryPathV1::Head,
+            AdmissionHistoryPathV1::Revision(1),
+            AdmissionHistoryPathV1::Revision(1024),
+            AdmissionHistoryPathV1::ProviderCount,
+            AdmissionHistoryPathV1::HistoryBytes,
+            AdmissionHistoryPathV1::RevocationBytes,
         ] {
             paths.push(crate::query::provider_admission::path(subject, suffix));
         }
@@ -88,18 +132,18 @@ fn custody_namespace_scoped_host() -> CoreHost {
 }
 
 fn custody_namespace_vm(paths: &[StatePath]) -> IVM {
-    let program = build_authenticated_test_contract_program_with_states(
-        &[],
-        0,
-        false,
-        paths
-            .iter()
-            .map(|path| ivm::EmbeddedStateDescriptor {
-                name: path.to_string(),
-                ty: ivm::EmbeddedStateType::Bytes,
-            })
-            .collect(),
-    );
+    let mut source = String::from("seiyaku CustodyNamespaceShadows {\n");
+    for path in paths {
+        source.push_str(&format!("state bytes {path};\n"));
+    }
+    source.push_str("hajimari() {\n");
+    for path in paths {
+        source.push_str(&format!("{path} = b\"\";\n"));
+    }
+    source.push_str("}\nkotoage fn main() -> int authorize(\"WriteState\") { return 1; }\n}");
+    let (program, _) = kotodama_lang::compiler::Compiler::new()
+        .compile_source_with_manifest(&source)
+        .expect("compile every declarable native-key shadow and user control");
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&program).expect("declared-state contract");
     vm
@@ -160,6 +204,9 @@ fn stream_token_custody_namespace_reserves_exact_root_and_all_native_key_familie
         "sorafs_stream_token_custody_v1",
         "sorafs_stream_token_custody_v1/descendant",
         "sorafs_stream_token_custody_v1_future",
+        "sorafs_stream_token_operation_v1",
+        "sorafs_stream_token_operation_v1/descendant",
+        "sorafs_stream_token_operation_v1_future",
         "sorafs_final_promotion_authority_v1",
         "sorafs_final_promotion_authority_v1/descendant",
         "sorafs_final_promotion_authority_v1_future",
@@ -176,6 +223,12 @@ fn stream_token_custody_namespace_reserves_exact_root_and_all_native_key_familie
         "sorafs_stream_token_custody_v1x",
         "sorafs_stream_token_custody_v10",
         "sorafs_stream_token_custody_v1x/entry",
+        "sorafs_stream_token_operation_v1x",
+        "sorafs_stream_token_gateway_v1x",
+        "sorafs_stream_token_gateway_v10",
+        "sorafs_stream_token_gateway_v1x/entry",
+        "sorafs_stream_token_operation_v10",
+        "sorafs_stream_token_operation_v1x/entry",
         "sorafs_final_promotion_authority_v1x",
         "sorafs_final_promotion_authority_v10",
         "sorafs_final_promotion_authority_v1x/entry",
@@ -276,6 +329,36 @@ fn stream_token_custody_debug_syscalls_cannot_mutate_delete_or_disclose_native_s
 fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_typed_values() {
     let paths = custody_namespace_paths();
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
+<<<<<<< HEAD
+    // Slash descendants are namespace probes, not valid Kotodama declaration identifiers.
+    // Keep their real syscall denials below without building an invalid CNTR declaration.
+    let namespace_descendants: BTreeSet<_> = paths
+        .iter()
+        .filter(|path| path.as_ref().contains('/'))
+        .cloned()
+        .collect();
+    assert!(
+        namespace_descendants.contains(
+            &"sorafs_final_promotion_account_custody_v1/descendant"
+                .parse::<StatePath>()
+                .unwrap()
+        )
+    );
+    assert!(
+        namespace_descendants
+            .iter()
+            .any(|path| path.as_ref().starts_with("sorafs/provider_admission/"))
+    );
+    let mut declarations = paths
+        .iter()
+        .filter(|path| !namespace_descendants.contains(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations.len() + namespace_descendants.len(),
+        paths.len()
+    );
+=======
     // Slash paths are real native namespace probes, but cannot be scalar CNTR
     // declarations. Prove admission rejects every such program before testing
     // all original paths at the real syscall boundary with a valid interface.
@@ -316,13 +399,18 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(declarations.len() + namespace_only.len(), paths.len());
+>>>>>>> origin/optimizations
     declarations.push(user.clone());
     let value = custody_namespace_bytes_record();
     let mut vm = custody_namespace_vm(&declarations);
     let mut host = custody_namespace_scoped_host();
     for path in &paths {
         let typed_value = ivm::host::validate_declared_state_value_payload(&vm, path, &value);
+<<<<<<< HEAD
+        if namespace_descendants.contains(path) {
+=======
         if namespace_only.contains(path) {
+>>>>>>> origin/optimizations
             assert_eq!(
                 typed_value,
                 Err(ivm::VMError::NoritoInvalid),
@@ -350,7 +438,11 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
             vm.set_register(11, value_ptr);
             // Reads validate declarations first; writes apply the namespace guard first.
             // Every declarable native key must reach the opaque namespace denial instead.
+<<<<<<< HEAD
+            let expected = if namespace_descendants.contains(path)
+=======
             let expected = if namespace_only.contains(path)
+>>>>>>> origin/optimizations
                 && matches!(
                     syscall,
                     ivm_sys::SYSCALL_STATE_GET
@@ -369,7 +461,11 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         }
         vm.set_register(10, path_ptr);
         let count = host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm);
+<<<<<<< HEAD
+        if namespace_descendants.contains(path) {
+=======
         if namespace_only.contains(path) {
+>>>>>>> origin/optimizations
             assert_eq!(count, Err(ivm::VMError::NoritoInvalid));
         } else {
             assert!(count.is_ok());

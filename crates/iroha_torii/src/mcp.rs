@@ -8342,8 +8342,14 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
+<<<<<<< HEAD
+// The authored first-release scoped descriptors occupy about 144 KiB. Keep a finite
+// reviewed envelope for this embedded asset and validate its exact record count below.
+const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 192 * 1024;
+=======
 // Includes the fully typed account-onboarding receipt schemas in the embedded catalog.
 const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
+>>>>>>> origin/optimizations
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
@@ -10649,6 +10655,18 @@ mod tests {
 #[cfg(test)]
 mod contract_artifact_route_tests {
     use super::*;
+
+    #[test]
+    fn embedded_manual_descriptors_fit_the_reviewed_bound_and_excess_is_rejected() {
+        assert_eq!(
+            parse_manual_static_tool_descriptors(MANUAL_STATIC_TOOL_ASSET).len(),
+            MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT,
+        );
+        let oversized = vec![b' '; MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1];
+        assert!(
+            std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err()
+        );
+    }
     #[test]
     fn artifact_tools_require_exact_full_width_scope() {
         let hash = hex::encode(iroha_crypto::Hash::new(b"MCP artifact").as_ref());

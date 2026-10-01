@@ -161,6 +161,9 @@ fn standard_security_requirements(authentication: AuthenticationPolicy) -> Optio
             {},
             { "IrohaApiToken": [] }
         ])),
+        AuthenticationPolicy::PrivateRootOwnerToken => {
+            Some(norito::json!([{ "IrohaApiToken": [] }]))
+        }
         AuthenticationPolicy::OnboardingToken => {
             Some(norito::json!([{ "IrohaOnboardingToken": [] }]))
         }
@@ -195,7 +198,7 @@ fn ensure_catalog_security_schemes(document: &mut Value) {
         (
             "IrohaApiToken",
             "X-API-Token",
-            "Deployment-configured Torii API token. Whether it is required is selected by node configuration.",
+            "Deployment-configured Torii API token. Immutable private roots require their owner token on every route; global roots apply the listener configuration.",
         ),
         (
             "IrohaOnboardingToken",

@@ -46,6 +46,8 @@ pub mod repair_source;
 pub mod reputation;
 /// Reserve + rent policy and lifecycle quoting.
 pub mod reserve;
+/// Canonical stream-token gateway quota, lease, sequence, and callback records.
+pub mod stream_token_gateway;
 /// Transparency ledger entries, cycle headers, and inclusion proofs.
 pub mod transparency;
 /// Re-export commonly used `SoraFS` types.

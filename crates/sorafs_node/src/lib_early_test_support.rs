@@ -103,14 +103,14 @@ struct RecordingReputationAdmission {
     >,
     calls: AtomicU64,
 }
-impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingReputationAdmission {
+impl reputation::runtime::PorTerminalReputationAdmissionV1 for RecordingReputationAdmission {
     fn activation_state(
         &self,
     ) -> Result<
-        reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+        reputation::runtime::PorTerminalReputationAdmissionStateV1,
         reputation::runtime::ReputationRuntimeError,
     > {
-        Ok(reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+        Ok(reputation::runtime::PorTerminalReputationAdmissionStateV1::Active)
     }
     fn record_por_terminal(
         &self,
@@ -142,15 +142,5 @@ impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingRep
             }
             Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
         }
-    }
-    fn record_authenticated_stream_token_validation(
-        &self,
-        _provider_id: ProviderId,
-        _outcome: iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1,
-    ) -> Result<
-        reputation::runtime::StreamTokenReputationAdmissionOutcomeV1,
-        reputation::runtime::ReputationRuntimeError,
-    > {
-        Err(reputation::runtime::ReputationRuntimeError::RuntimeBindingMismatch)
     }
 }

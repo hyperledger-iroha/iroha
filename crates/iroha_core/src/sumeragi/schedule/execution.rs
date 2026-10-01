@@ -383,6 +383,12 @@ pub(crate) fn validate_executed_genesis(
 ) -> Result<(), ScheduleError> {
     use iroha_data_model::{consensus::ConsensusKeyRole, parameter::system::ConsensusMode};
     context.validate().map_err(ScheduleError::Epoch)?;
+    crate::executor::private_fees::policy(world).map_err(|error| {
+        ScheduleError::Epoch(format!(
+            "executed genesis fee policy is invalid: {}",
+            error.reason()
+        ))
+    })?;
     if context.authorization.epoch != 0 || context.authorization.first_height != 1 {
         return Err(ScheduleError::Epoch(
             "executed genesis has a non-genesis epoch".into(),

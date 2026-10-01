@@ -1,6 +1,7 @@
 //! Challenge-bound, data-only complete World publication at the native applied cut.
 
 use super::*;
+use crate::native_projection_response::encode;
 use iroha_core::{
     state::{AllocationBudget, StateReadOnly},
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
@@ -9,7 +10,6 @@ use iroha_data_model::asset::AssetDefinitionId;
 use iroha_torii_shared::kagemusha_state::{
     KAGEMUSHA_AUTHORITY_STATE_MAX_BYTES_V1, KagemushaAuthorityStateRefV1,
 };
-use norito::json::{BoundedJsonError, JsonSerialize as _, JsonWriteSink};
 
 const ROUTE: &str = "/v1/kagemusha/authority-state/{asset_definition_id}";
 
@@ -134,7 +134,7 @@ async fn handle(
                             incarnation,
                             registry,
                         );
-                        encode(&payload, format, max_response, &budget)
+                        encode(&payload, format, max_response, &budget, unavailable)
                             .map_err(|_| "native authority state serialization refused".to_owned())
                     },
                 )
@@ -175,6 +175,8 @@ pub(super) fn capacity() -> Error {
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
     ))
 }
+<<<<<<< HEAD
+=======
 
 pub(super) struct EncodedBody {
     bytes: iroha_allocation::ChargedBuffer<u8>,
@@ -750,3 +752,4 @@ mod resource_names_route_tests {
         assert!(native_committee_original_bytes(usize::MAX, std::iter::empty()).is_err());
     }
 }
+>>>>>>> origin/optimizations

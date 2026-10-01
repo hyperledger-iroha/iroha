@@ -922,7 +922,10 @@ mod tests {
                 SignedQuery::decode_all_versioned(request.body_ref()).is_ok_and(|query| {
                     query.authority() == &*BOB_ID
                         && query.payload.network_id() == crate::torii::test_network_id()
+<<<<<<< HEAD
+=======
                         && query.verify_signature().is_ok()
+>>>>>>> origin/optimizations
                 })
             });
             then.status(200).body(to_bytes(&output).unwrap());

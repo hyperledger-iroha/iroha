@@ -178,6 +178,14 @@ fn deployment(name: &'static str) -> Value {
     if name == "CommitContractDeployment" {
         fields(&mut payload).insert("code_hash".into(), hash());
     } else {
+<<<<<<< HEAD
+        fields(&mut payload).insert(
+            "artifact_id".into(),
+            object([
+                ("dataspace_id", Value::String(u64::MAX.to_string())),
+                ("code_hash", hash()),
+            ]),
+=======
         let address = parse_model(contract_address(), "fixture contract address").unwrap();
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
             &address,
@@ -187,6 +195,7 @@ fn deployment(name: &'static str) -> Value {
         fields(&mut payload).insert(
             "artifact_id".into(),
             render_artifact_id(&artifact_id).unwrap(),
+>>>>>>> origin/optimizations
         );
     }
     named(name, payload)

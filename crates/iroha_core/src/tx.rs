@@ -9602,8 +9602,11 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
+<<<<<<< HEAD
+=======
             // Use a height-two component overlay with synthetic Global scope metadata.
             // This fixture does not apply signed genesis or establish Network finality.
+>>>>>>> origin/optimizations
             let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
@@ -9728,7 +9731,14 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
+<<<<<<< HEAD
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+=======
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+>>>>>>> origin/optimizations
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -9839,6 +9849,8 @@ pub mod tests {
             Json::new(manifest),
         );
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
@@ -9954,7 +9966,14 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x5A;
         tx1.world.contract_manifests.insert(
+<<<<<<< HEAD
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+=======
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+>>>>>>> origin/optimizations
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -10172,7 +10191,14 @@ pub mod tests {
         }
         .signed(&fixture.keypair);
         tx1.world.contract_manifests.insert(
+<<<<<<< HEAD
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+=======
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+>>>>>>> origin/optimizations
             manifest.clone(),
         );
         tx1.apply();
@@ -10196,6 +10222,8 @@ pub mod tests {
             ),
         );
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,

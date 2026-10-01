@@ -757,6 +757,58 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
     assert!(matches!(err, ChallengeVerifyError::RevocationStore(_)));
 }
 #[tokio::test(flavor = "current_thread")]
+async fn outbound_search_mints_canonical_transcript_bound_replay_protected_tickets() {
+    for capacity in [1, 3] {
+        let mut config = in_memory_puzzle_replay_config();
+        Arc::get_mut(&mut config)
+            .expect("test owns its configuration")
+            .puzzle_work_admission = Arc::new(SoranetPuzzleWorkAdmission::new(
+            NonZeroUsize::new(capacity).expect("nonzero capacity"),
+            NonZeroUsize::new(1).expect("nonzero verification capacity"),
+        ));
+        let transcript = test_admission_transcript();
+        let minted = mint_handshake_challenge(
+            Arc::clone(&config),
+            transcript,
+            StdRng::from_seed([0x64; 32]),
+        )
+        .await
+        .expect("bounded searches mint a valid ticket");
+        assert_eq!(minted.admission.puzzle, *config.puzzle_params);
+        assert_eq!(minted.admission.ticket_ttl, config.effective_ticket_ttl());
+        let ticket = PowTicket::parse(&minted.credential).expect("canonical ticket bytes");
+        assert!(
+            puzzle::verify_at(
+                &ticket,
+                &config.puzzle_binding(&[0x99; 32]),
+                config.puzzle_params.as_ref(),
+                SystemTime::now(),
+            )
+            .is_err()
+        );
+        verify_handshake_challenge(
+            Arc::clone(&config),
+            SensitiveHandshakeFrame::from(minted.credential.clone()),
+            transcript,
+        )
+        .await
+        .expect("unchanged verifier accepts the exact transcript");
+        assert!(matches!(
+            config.verify_challenge_ticket(&minted.credential, &transcript),
+            Err(ChallengeVerifyError::Replay)
+        ));
+        let gate = config.puzzle_work_admission.outbound_mint_gate();
+        let all = tokio::time::timeout(
+            Duration::from_secs(5),
+            gate.acquire_many(u32::try_from(capacity).expect("test capacity")),
+        )
+        .await
+        .expect("losing evaluations exit")
+        .expect("open gate");
+        drop(all);
+    }
+}
+#[tokio::test(flavor = "current_thread")]
 async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},

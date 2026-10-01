@@ -14747,7 +14747,7 @@ impl NodeHandle {
     /// must return `ExactReplay`, after which the node durably advances its cursor.
     pub fn reconcile_next_por_reputation_terminal(
         &self,
-        admission: &dyn reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
+        admission: &dyn reputation::runtime::PorTerminalReputationAdmissionV1,
     ) -> Result<PorReputationReconcileOutcomeV1, PorReputationReconcileErrorV1> {
         let Some(work) = self.next_por_reputation_terminal_work()? else {
             return Ok(PorReputationReconcileOutcomeV1::Idle);

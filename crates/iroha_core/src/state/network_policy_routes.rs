@@ -118,6 +118,7 @@ impl CapturedNetworkPolicyRoute {
                     &state.world,
                     &accepted,
                     state.block_unix_timestamp_ms(),
+                    scope,
                 )
                 .and_then(|route| match scope {
                     // The authenticated global genesis provisions child dataspaces before

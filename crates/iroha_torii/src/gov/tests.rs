@@ -2641,7 +2641,17 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
         .view()
         .world()
         .contract_manifests()
+<<<<<<< HEAD
+        .get(
+            &iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &contract_address,
+                code_hash,
+            )
+            .unwrap(),
+        )
+=======
         .get(&artifact_id)
+>>>>>>> origin/optimizations
         .cloned()
         .expect("registered manifest");
     manifest.provenance = None;
@@ -2651,7 +2661,18 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     transaction
         .world_mut_for_testing()
         .contract_manifests_mut_for_testing()
+<<<<<<< HEAD
+        .insert(
+            iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &contract_address,
+                code_hash,
+            )
+            .unwrap(),
+            manifest,
+        );
+=======
         .insert(artifact_id, manifest);
+>>>>>>> origin/optimizations
     transaction.apply();
     block
         .commit_world_overlay_for_testing()

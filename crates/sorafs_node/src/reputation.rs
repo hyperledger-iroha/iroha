@@ -3975,6 +3975,7 @@ mod tests {
             por_recorder_authority: account(9),
             dispute_recorder_authority: account(10),
             token_recorder_authority: account(11),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }

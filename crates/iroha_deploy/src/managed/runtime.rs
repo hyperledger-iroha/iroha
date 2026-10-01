@@ -1,8 +1,6 @@
 //! Native process owner and honest readiness checks for a retained four-peer generation.
 
 use super::*;
-use iroha::blocking::Client;
-use iroha_data_model::{Level, isi::Log, transaction::FeePaymentIntent};
 use iroha_fs::{PrivateDirectory, PublishMode};
 use std::{
     fs::File,
@@ -16,6 +14,8 @@ use std::{
     time::Instant,
 };
 
+mod readiness;
+
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
 ///
 /// The CLI dispatches its internal `_managed-worker` entry point here. The worker retains the
@@ -26,6 +26,7 @@ use std::{
 /// Invalid custody or metadata, competing ownership, changed executables, process failure or
 /// readiness failure. Every failure stops only the children this invocation actually created.
 pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -> Result<()> {
+    let started = Instant::now();
     transport::supported()?;
     if startup_timeout.is_zero() || startup_timeout > Duration::from_secs(600) {
         return Err(Error::Invalid(
@@ -34,8 +35,13 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
     }
     let directory = store.directory(name)?;
     let ownership = store::acquire(&directory, "runtime.lock", name)?;
-    let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
-    store::validate_prepared(name, directory.path(), &retained.prepared)?;
+    let retained = generation::read(&directory)?;
+    store::validate_prepared(
+        name,
+        directory.path(),
+        &retained.prepared,
+        &retained.root_kind,
+    )?;
     store::verify_binary(&retained.launcher)?;
     store::verify_binary(&retained.daemon)?;
     let current = store::pin_binary(&std::env::current_exe()?)?;
@@ -44,6 +50,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
             "worker executable does not match the retained launcher".into(),
         ));
     }
+    startup_remaining(started, startup_timeout)?;
     let listener = transport::Listener::bind(&directory)?;
     let worker = WorkerRecord {
         token: store::random_token(),
@@ -65,15 +72,33 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         return Err(Error::Invalid(status.failure.unwrap_or_default()));
     }
     status.running_peers = processes.children.len();
+    if let Err(error) = startup_remaining(started, startup_timeout) {
+        processes.stop()?;
+        status.phase = ManagedPhase::Failed;
+        status.running_peers = 0;
+        status.failure = Some("startup deadline expired before readiness".into());
+        publish(&directory, &status)?;
+        return Err(error);
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let readiness_cancelled = Arc::clone(&cancelled);
     let prepared = retained.prepared;
+    let readiness_prepared = prepared.clone();
+    let progress = Arc::new(readiness::Progress::default());
+    let readiness_progress = Arc::clone(&progress);
     let (sender, receiver) = mpsc::sync_channel(1);
-    let started = Instant::now();
     thread::spawn(move || {
-        let result = prove_readiness(&prepared, startup_timeout, &readiness_cancelled);
+        let result = readiness::prove(
+            &readiness_prepared,
+            started,
+            startup_timeout,
+            &readiness_cancelled,
+            &readiness_progress,
+        );
         let _ = sender.send(result);
     });
+    let mut attachment: Option<remote::AttachmentWorker> = None;
+    let mut attachment_attempted = false;
     loop {
         if let Some(mut connection) = listener.accept()? {
             if let Ok(request) = connection.receive()
@@ -83,6 +108,40 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                     "status" => {
                         let _ = connection.reply(&status);
                     }
+                    "attachment_start" => {
+                        if status.phase == ManagedPhase::Ready
+                            && attachment
+                                .as_ref()
+                                .is_none_or(remote::AttachmentWorker::is_finished)
+                        {
+                            attachment = remote::AttachmentWorker::start(
+                                store,
+                                name,
+                                &prepared,
+                                Arc::clone(&cancelled),
+                            )
+                            .ok()
+                            .flatten();
+                            attachment_attempted = true;
+                        }
+                        let _ = connection.reply(&status);
+                    }
+                    "attachment_status" => {
+                        let observation = attachment
+                            .as_ref()
+                            .map(remote::AttachmentWorker::status)
+                            .or_else(|| {
+                                remote::inactive_status(store, name, &prepared)
+                                    .ok()
+                                    .flatten()
+                            });
+                        if let Some(attachment) = observation {
+                            let _ = connection.reply(&ManagedDataspaceStatus {
+                                local: status.clone(),
+                                attachment,
+                            });
+                        }
+                    }
                     "down" => {
                         cancelled.store(true, Ordering::Release);
                         processes.stop()?;
@@ -91,6 +150,18 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                         publish(&directory, &status)?;
                         let _ = connection.reply(&status);
                         return Ok(());
+                    }
+                    "startup_expired" => {
+                        // The foreground budget starts before this worker is spawned. Its
+                        // authenticated expiry must retain the last safe phase rather than
+                        // converting an unproved attempt into an ordinary user-requested stop.
+                        let failure = progress.deadline();
+                        cancelled.store(true, Ordering::Release);
+                        processes.stop()?;
+                        expire_startup_status(&mut status, failure);
+                        publish(&directory, &status)?;
+                        let _ = connection.reply(&status);
+                        return Err(Error::Invalid(status.failure.unwrap_or_default()));
                     }
                     _ => {}
                 }
@@ -106,32 +177,31 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
             return Err(Error::Invalid(status.failure.unwrap_or_default()));
         }
         if status.phase == ManagedPhase::Starting {
-            match receiver.try_recv() {
-                Ok(Ok(())) => {
-                    status.phase = ManagedPhase::Ready;
-                    publish(&directory, &status)?;
-                }
-                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                    cancelled.store(true, Ordering::Release);
-                    processes.stop()?;
-                    status.phase = ManagedPhase::Failed;
-                    status.running_peers = 0;
-                    status.failure =
-                        Some("signed readiness was not confirmed on all four validators".into());
-                    publish(&directory, &status)?;
-                    return Err(Error::Invalid(status.failure.unwrap_or_default()));
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-            if started.elapsed() >= startup_timeout {
+            // Deadline wins over a proof queued just before the worker observed it. Never
+            // publish a transient Ready after the original startup budget was exhausted.
+            let result = observe_readiness(&receiver, &progress, started, startup_timeout);
+            if let Some(Err(failure)) = result {
                 cancelled.store(true, Ordering::Release);
                 processes.stop()?;
                 status.phase = ManagedPhase::Failed;
                 status.running_peers = 0;
-                status.failure = Some("startup readiness deadline expired".into());
+                status.failure = Some(failure.message());
                 publish(&directory, &status)?;
-                return Err(Error::Timeout(startup_timeout));
+                return Err(Error::Invalid(status.failure.unwrap_or_default()));
             }
+            if let Some(Ok(())) = result {
+                status.phase = ManagedPhase::Ready;
+                publish(&directory, &status)?;
+            }
+        }
+        if status.phase == ManagedPhase::Ready && !attachment_attempted {
+            // Parent custody and transport failures cannot change private execution readiness.
+            // A later authenticated activation can retry a previously absent binding.
+            attachment =
+                remote::AttachmentWorker::start(store, name, &prepared, Arc::clone(&cancelled))
+                    .ok()
+                    .flatten();
+            attachment_attempted = true;
         }
         thread::sleep(POLL);
     }
@@ -140,6 +210,30 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
 fn publish(directory: &PrivateDirectory, status: &ManagedStatus) -> Result<()> {
     directory.write_atomic(STATUS, &encode(status)?, PublishMode::Replace)?;
     Ok(())
+}
+
+fn expire_startup_status(status: &mut ManagedStatus, failure: readiness::Failure) {
+    status.phase = ManagedPhase::Failed;
+    status.running_peers = 0;
+    status.failure = Some(failure.message());
+}
+
+fn observe_readiness(
+    receiver: &mpsc::Receiver<std::result::Result<(), readiness::Failure>>,
+    progress: &readiness::Progress,
+    started: Instant,
+    timeout: Duration,
+) -> Option<std::result::Result<(), readiness::Failure>> {
+    let observed = match receiver.try_recv() {
+        Ok(result) => Some(result),
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
+        Err(mpsc::TryRecvError::Empty) => None,
+    };
+    if started.elapsed() >= timeout {
+        Some(Err(progress.deadline()))
+    } else {
+        observed
+    }
 }
 
 fn same_token(left: &str, right: &str) -> bool {
@@ -166,15 +260,12 @@ impl PeerProcesses {
     ) -> Result<()> {
         for (index, peer) in retained.prepared.peers.iter().enumerate() {
             let log = directory.open_append(&peer.log_name)?;
-            let mut command = Command::new(&retained.daemon.path);
+            let mut command = daemon_command(
+                &retained.daemon.path,
+                &peer.config_path,
+                &retained.root_kind,
+            )?;
             command
-                .arg("--config")
-                .arg(&peer.config_path)
-                .current_dir(
-                    peer.config_path
-                        .parent()
-                        .ok_or_else(|| Error::Invalid("node configuration has no parent".into()))?,
-                )
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
@@ -231,6 +322,25 @@ impl PeerProcesses {
     }
 }
 
+fn daemon_command(
+    daemon: &std::path::Path,
+    config: &std::path::Path,
+    root_kind: &RootKind,
+) -> Result<Command> {
+    let mut command = Command::new(daemon);
+    if matches!(root_kind, RootKind::Private { .. }) {
+        // The native daemon requires this profile for any explicitly scoped Nexus topology,
+        // including a single private lane. The signed root identity still owns its scope.
+        command.arg("--sora");
+    }
+    command.arg("--config").arg(config).current_dir(
+        config
+            .parent()
+            .ok_or_else(|| Error::Invalid("node configuration has no parent".into()))?,
+    );
+    Ok(command)
+}
+
 fn spawn_with_launch_fence(
     directory: &PrivateDirectory,
     index: usize,
@@ -272,78 +382,8 @@ impl Drop for PeerProcesses {
     }
 }
 
-fn prove_readiness(
-    prepared: &PreparedLocalnet,
-    timeout: Duration,
-    cancelled: &AtomicBool,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut config = prepared.context.load_client_config()?;
-    config.torii_request_timeout = Duration::from_millis(750);
-    config.transaction_status_timeout = timeout;
-    config.transaction_ttl = timeout.max(Duration::from_secs(60));
-    let mut clients = Vec::with_capacity(4);
-    for peer in &prepared.peers {
-        let mut peer_config = config.clone();
-        peer_config.torii_api_url = peer
-            .torii_url
-            .parse()
-            .map_err(|_| Error::Invalid("invalid peer URL".into()))?;
-        clients.push(
-            Client::new(peer_config)
-                .map_err(|_| Error::Invalid("cannot construct managed readiness client".into()))?,
-        );
-    }
-    loop {
-        remaining(started, timeout, cancelled)?;
-        if clients.iter().all(|client| {
-            client
-                .status()
-                .get()
-                .is_ok_and(|status| status.blocks > 0 && status.peers >= 3)
-        }) {
-            break;
-        }
-        thread::sleep(POLL);
-    }
-    // Exactly one attempt. Ambiguous submission never produces a replacement transaction.
-    let budget = remaining(started, timeout, cancelled)?;
-    config.transaction_status_timeout = budget;
-    let submitter = Client::new(config)
-        .map_err(|_| Error::Invalid("cannot construct readiness signer".into()))?;
-    let hash = submitter
-        .submit(
-            Log::new(
-                Level::INFO,
-                format!("managed localnet readiness {}", store::random_token()),
-            ),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .map_err(|_| Error::Invalid("readiness transaction was not confirmed".into()))?;
-    for client in clients {
-        let budget = remaining(started, timeout, cancelled)?;
-        client
-            .wait_for_transaction_applied(
-                hash,
-                iroha::client::TransactionWaitOptions {
-                    timeout: budget,
-                    poll_interval: POLL,
-                },
-            )
-            .map_err(|_| {
-                Error::Invalid(
-                    "readiness transaction was not applied on every managed validator".into(),
-                )
-            })?;
-    }
-    remaining(started, timeout, cancelled)?;
-    Ok(())
-}
-
-fn remaining(started: Instant, timeout: Duration, cancelled: &AtomicBool) -> Result<Duration> {
-    if cancelled.load(Ordering::Acquire) {
-        return Err(Error::Invalid("readiness was cancelled".into()));
-    }
+/// Charge every startup phase to the same finite budget, including custody and binary checks.
+pub(super) fn startup_remaining(started: Instant, timeout: Duration) -> Result<Duration> {
     timeout
         .checked_sub(started.elapsed())
         .filter(|remaining| !remaining.is_zero())
@@ -355,6 +395,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn private_daemon_uses_the_explicit_nexus_profile_without_changing_global_launch() {
+        let temporary = tempfile::tempdir().unwrap();
+        let daemon = temporary.path().join("iroha3d");
+        let config = temporary.path().join("peer0.toml");
+        let global = daemon_command(&daemon, &config, &RootKind::Global).unwrap();
+        assert_eq!(
+            global.get_args().collect::<Vec<_>>(),
+            ["--config".as_ref(), config.as_os_str()]
+        );
+        let private = daemon_command(
+            &daemon,
+            &config,
+            &RootKind::Private {
+                spec: super::super::tests::private_spec(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            private.get_args().collect::<Vec<_>>(),
+            ["--sora".as_ref(), "--config".as_ref(), config.as_os_str()]
+        );
+        assert_eq!(private.get_current_dir(), Some(temporary.path()));
+    }
+
+    #[test]
     fn control_authentication_rejects_short_and_different_tokens() {
         assert!(same_token(&"a".repeat(64), &"a".repeat(64)));
         assert!(!same_token("", ""));
@@ -363,12 +428,59 @@ mod tests {
     }
 
     #[test]
-    fn readiness_deadline_and_cancellation_fail_closed() {
-        let cancelled = AtomicBool::new(false);
-        assert!(remaining(Instant::now(), Duration::from_secs(1), &cancelled).is_ok());
-        assert!(remaining(Instant::now(), Duration::ZERO, &cancelled).is_err());
-        cancelled.store(true, Ordering::Release);
-        assert!(remaining(Instant::now(), Duration::from_secs(1), &cancelled).is_err());
+    fn startup_budget_charges_foreground_and_worker_verification_before_readiness() {
+        let original = Duration::from_secs(100);
+        let foreground_started = Instant::now() - Duration::from_secs(90);
+        let transferred = startup_remaining(foreground_started, original).unwrap();
+        assert!(transferred <= Duration::from_secs(10));
+        let worker_started = Instant::now() - Duration::from_secs(7);
+        let readiness = startup_remaining(worker_started, transferred).unwrap();
+        assert!(readiness <= Duration::from_secs(3));
+        assert!(matches!(
+            startup_remaining(Instant::now() - Duration::from_secs(101), original),
+            Err(Error::Timeout(value)) if value == original
+        ));
+        assert!(matches!(
+            startup_remaining(Instant::now() - Duration::from_secs(11), transferred),
+            Err(Error::Timeout(value)) if value == transferred
+        ));
+    }
+
+    #[test]
+    fn queued_success_after_original_deadline_is_a_retained_failure() {
+        let progress = readiness::Progress::default();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(())).unwrap();
+        let failure = observe_readiness(
+            &receiver,
+            &progress,
+            Instant::now() - Duration::from_secs(2),
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(failure, progress.deadline());
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let (_, directory, prepared) =
+            super::super::tests::fixture(&temporary.path().join("managed"), "local");
+        // A caller's earlier budget can expire just after the worker proved readiness.
+        // Cleanup must not preserve that late Ready or erase the phase as a normal stop.
+        for phase in [ManagedPhase::Starting, ManagedPhase::Ready] {
+            let mut status = ManagedStatus {
+                context: prepared.context.clone(),
+                phase,
+                running_peers: 4,
+                failure: None,
+            };
+            expire_startup_status(&mut status, failure);
+            publish(&directory, &status).unwrap();
+            let retained: ManagedStatus =
+                decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+            assert_eq!(retained.phase, ManagedPhase::Failed);
+            assert_eq!(retained.running_peers, 0);
+            assert_eq!(retained.failure, Some(progress.deadline().message()));
+        }
     }
 
     #[test]

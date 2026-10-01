@@ -536,6 +536,17 @@ impl VerifiedWorldStateSnapshotV1 {
         self.verify_native_table_keys_complete("world.smart_contract_state", keys)
     }
 
+    /// Prove an exact canonical native state path is absent at this complete certified cut.
+    /// The caller must independently select the qualified schema and fresh decision.
+    /// # Errors
+    /// The key exists, cannot be encoded, or the canonical field has another kind.
+    pub fn verify_smart_contract_state_absent(
+        &self,
+        key: &iroha_model_base::state_path::StatePath,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent("world.smart_contract_state", key)
+    }
+
     /// Authenticate every key original of the fixed canonical `world.fee_sponsor_programs` table.
     /// Values and interpretation require their separate exact native preimages.
     /// # Errors

@@ -1287,7 +1287,7 @@ fn preexecute_genesis_on_current_thread(
     let genesis_account_entry =
         Account::new(effective_genesis_account.clone()).build(&effective_genesis_account);
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
-    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, &nexus.dataspace_catalog);
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, &nexus.dataspace_catalog)?;
     let mut state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
     if let Some(pipeline_config) = runtime_config
         .map(|config| &config.pipeline)

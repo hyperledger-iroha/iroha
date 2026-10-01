@@ -12,7 +12,7 @@
 //! the private runtime must exclude those demands before this profile can anchor every block.
 //! Parent admission binds the registry to active SNS ownership and chain policy. Core persists it
 //! as canonical World state and certified ordinary writes. TODO: Complete private-node export,
-//! parent proof transport and relaying; component verification does not establish network privacy.
+//! relaying and complete runtime qualification; component verification does not establish network privacy.
 
 use iroha_model_base::{chain::ChainId, topology::DataSpaceId};
 use iroha_schema::IntoSchema;
@@ -340,6 +340,14 @@ impl PrivateDataspaceAnchor {
         .map_err(failure)?;
         anchor.public_parts()?;
         Ok(anchor)
+    }
+
+    /// Read the bounded public header's claimed height without authenticating its certificate.
+    ///
+    /// # Errors
+    /// Rejects malformed or oversized public parts and private-body/control witnesses.
+    pub fn height(&self) -> Result<u64, PrivateDataspaceAnchorError> {
+        Ok(self.public_parts()?.0.height)
     }
 
     fn public_parts(

@@ -2,6 +2,59 @@
 use super::*;
 use norito::json::Value;
 #[test]
+fn mochi_bundle_rejects_local_release_profile_during_argument_parsing() {
+    let result = parse_command(
+        ["xtask", "mochi-bundle", "--profile", "local-release"]
+            .into_iter()
+            .map(String::from),
+    );
+    assert!(result.is_err_and(|error| error.to_string().contains("local-release")));
+}
+#[test]
+fn mochi_bundle_profiles_require_one_explicit_installer_artifact() {
+    let input = std::env::temp_dir().join("installer-profile.nrt");
+    let path = input.to_string_lossy();
+    let command = parse_command(
+        ["xtask", "mochi-bundle", "--network-profiles", path.as_ref()]
+            .into_iter()
+            .map(String::from),
+    )
+    .unwrap();
+    assert!(
+        matches!(command, CommandKind::MochiBundle { network_profiles: Some(selected), .. } if selected == input)
+    );
+    assert!(matches!(
+        parse_command(["xtask", "mochi-bundle"].into_iter().map(String::from)).unwrap(),
+        CommandKind::MochiBundle {
+            network_profiles: None,
+            ..
+        }
+    ));
+    assert!(
+        parse_command(
+            ["xtask", "mochi-bundle", "--network-profiles"]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err()
+    );
+    assert!(
+        parse_command(
+            [
+                "xtask",
+                "mochi-bundle",
+                "--network-profiles",
+                path.as_ref(),
+                "--network-profiles",
+                path.as_ref()
+            ]
+            .into_iter()
+            .map(String::from)
+        )
+        .is_err()
+    );
+}
+#[test]
 fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
     assert!(
         parse_command(

@@ -446,6 +446,14 @@ trust_min_score = -20              # drop trust gossip at or below this score
   completes address validation, before the connection waits for global
   pre-authentication capacity.
   Successful peers are governed only by `idle_timeout_ms` after authentication.
+- Mandatory Argon2 work uses separate process-wide outbound mint and inbound
+  verification limits. Each outbound handshake admits one primary search;
+  additional searches use spare outbound permits and independent random streams.
+  Helpers yield before or after an Argon2 evaluation when another primary is
+  waiting. A winning credential or handshake cancellation stops the other searches,
+  but each running evaluation retains its permit and admission owner until it
+  exits. This preserves the configured memory bound across cancellation and
+  runtime teardown; puzzle parameters and authentication deadlines are unchanged.
 - Each authenticated connection admits a burst of two remote `Ping` requests
   and refills one request credit every `idle_timeout_ms / 2`. Excess requests
   receive no response and do not refresh liveness. An authenticated `Pong` must

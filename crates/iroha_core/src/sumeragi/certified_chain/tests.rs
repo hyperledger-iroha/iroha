@@ -225,7 +225,7 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).expect("reader");
     let original = frame(&chain, 4);
-    let certify = |frame: Arc<SignedBlock>| reader.check_certificate(read_frame(frame, 4).unwrap());
+    let certify = |frame: Arc<SignedBlock>| reader.check_certificate(frame, 4);
     certify(Arc::clone(&original)).expect("the stored certificate verifies");
     // A preimage whose `R` is not the certified one (its executed wire is unchanged).
     let other_result = with_parts(&original, |_, _, preimage| {
@@ -301,7 +301,7 @@ fn certified_reader_rejects_missing_foreign_and_corrupt_signed_availability() {
     let original = frame(&chain, 3);
     let certificate = original.commit_certificate().unwrap();
     reader
-        .check_certificate(read_frame(original.clone(), 3).unwrap())
+        .check_certificate(original.clone(), 3)
         .expect("original signed rows and exact quorum verify together");
     let other = frame(&chain, 4);
     let mut corrupted = certificate.availability().to_vec();
@@ -323,9 +323,7 @@ fn certified_reader_rejects_missing_foreign_and_corrupt_signed_availability() {
             ),
         )));
         assert!(
-            read_frame(changed, 3)
-                .and_then(|frame| reader.check_certificate(frame))
-                .is_err(),
+            reader.check_certificate(changed, 3).is_err(),
             "table custody is independently mandatory even under the unchanged valid QC",
         );
     }
@@ -358,7 +356,7 @@ fn two_valid_certificates_of_one_block_give_one_consensus_receipt() {
     for committed in [left, right] {
         assert_eq!(
             reader
-                .check_certificate(committed)
+                .check_certificate(committed.block, committed.height)
                 .expect("both certificates verify")
                 .verification(),
             QcVerification::Verified

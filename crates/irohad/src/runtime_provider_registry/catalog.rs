@@ -72,11 +72,6 @@ struct RuntimeProviderBindingWireV1 {
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
     stream_token_signer_binding: Option<StreamTokenSignerRuntimeBindingV1>,
-    stream_token_gateway_admission_qualification:
-        Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
-    stream_token_gateway_admission_max_pending: Option<u32>,
-    stream_token_gateway_admission_max_tracked_tokens: Option<u32>,
-    stream_token_gateway_admission_reconcile_max_items: Option<u32>,
     appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>,
     appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>,
     appeal_finance_checkpoint_max_bytes: Option<u64>,
@@ -695,14 +690,6 @@ impl RuntimeProviderBindingWireV1 {
             revision: binding.revision(),
             policy_digest: binding.policy_digest(),
             stream_token_signer_binding: binding.stream_token_signer_binding().cloned(),
-            stream_token_gateway_admission_qualification: binding
-                .stream_token_gateway_admission_qualification(),
-            stream_token_gateway_admission_max_pending: binding
-                .stream_token_gateway_admission_max_pending(),
-            stream_token_gateway_admission_max_tracked_tokens: binding
-                .stream_token_gateway_admission_max_tracked_tokens(),
-            stream_token_gateway_admission_reconcile_max_items: binding
-                .stream_token_gateway_admission_reconcile_max_items(),
             appeal_finance_signer_binding: binding.appeal_finance_signer_binding().map(|signer| {
                 AppealFinanceSignerBindingWireV1 {
                     authority: signer.authority.clone(),
@@ -830,20 +817,6 @@ impl RuntimeProviderBindingWireV1 {
             IrohaRuntimeProviderSlotV1::StreamTokenSigner => {
                 binding = IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
                     self.stream_token_signer_binding
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                )
-                .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
-            }
-            IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission => {
-                binding = IrohaRuntimeProviderBindingV1::try_new_stream_token_gateway_admission(
-                    self.handle.clone(),
-                    self.stream_token_gateway_admission_qualification
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                    self.stream_token_gateway_admission_max_pending
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                    self.stream_token_gateway_admission_max_tracked_tokens
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                    self.stream_token_gateway_admission_reconcile_max_items
                         .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
                 )
                 .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;

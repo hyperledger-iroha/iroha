@@ -1,6 +1,10 @@
 //! Build and inspect a complete native developer runtime bundle.
 
 use crate::workspace_root;
+use iroha_deploy::{
+    bootstrap::InstalledNetworkProfiles,
+    managed::{NativeBundleLayout, macos_info_plist},
+};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,7 +18,7 @@ use std::{
 };
 use walkdir::WalkDir;
 mod developer_smoke;
-#[cfg(test)]
+pub(crate) mod latency;
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
 const MOCHI_HELP_HEADER: &str = "Usage: mochi [--workspace <DIRECTORY>]";
@@ -33,7 +37,12 @@ pub(crate) fn bundle_mochi(
     output_root: &Path,
     profile: &str,
     archive: bool,
+    network_profiles: Option<&Path>,
 ) -> Result<MochiBundleResult, Box<dyn Error>> {
+    validate_bundle_profile(profile)?;
+    // Independently supplied installation authority is validated before a build or any bundle
+    // replacement. No queried network can supply a profile, and absent input installs none.
+    let network_profiles = load_network_profiles(network_profiles)?;
     build_runtime(profile)?;
     if !output_root.exists() {
         fs::create_dir_all(output_root)?;
@@ -44,12 +53,14 @@ pub(crate) fn bundle_mochi(
     if bundle_root.exists() {
         fs::remove_dir_all(&bundle_root)?;
     }
-    fs::create_dir_all(bundle_root.join("bin"))?;
+    fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle_root))?;
     fs::create_dir_all(bundle_root.join("docs"))?;
     copy_runtime_binaries(
         &cargo_target_dir().join(profile_directory(profile)),
         &bundle_root,
     )?;
+    stage_application_metadata(&bundle_root)?;
+    stage_network_profiles(network_profiles.as_ref(), &bundle_root)?;
     copy_into_bundle("LICENSE", &bundle_root.join("LICENSE"))?;
     copy_into_bundle(
         "mochi/BUNDLE_README.md",
@@ -75,11 +86,58 @@ pub(crate) fn bundle_mochi(
         archive_path,
     })
 }
+
+/// Refuse the workspace's explicitly non-packaging profile before doing any work.
+pub(crate) fn validate_bundle_profile(profile: &str) -> Result<(), &'static str> {
+    if profile == "local-release" {
+        return Err(
+            "local-release is only for local runnable builds; it cannot package or qualify a developer runtime",
+        );
+    }
+    Ok(())
+}
+
+fn load_network_profiles(
+    source: Option<&Path>,
+) -> Result<Option<InstalledNetworkProfiles>, Box<dyn Error>> {
+    source
+        .map(InstalledNetworkProfiles::load)
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn stage_application_metadata(bundle_root: &Path) -> Result<(), Box<dyn Error>> {
+    if NativeBundleLayout::current() == NativeBundleLayout::MacOs {
+        let source = fs::read_to_string(mochi_ui_manifest_path())?;
+        let manifest: toml::Value = toml::from_str(&source)?;
+        let version = manifest
+            .get("package")
+            .and_then(|package| package.get("version"))
+            .and_then(toml::Value::as_str)
+            .ok_or("Mochi package has no explicit release version")?;
+        fs::create_dir_all(NativeBundleLayout::MacOs.resources_directory(bundle_root))?;
+        fs::write(
+            bundle_root.join("Mochi.app/Contents/Info.plist"),
+            macos_info_plist(version)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn stage_network_profiles(
+    profiles: Option<&InstalledNetworkProfiles>,
+    bundle_root: &Path,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(profiles) = profiles {
+        let bytes = profiles.encode_installation()?;
+        let path = NativeBundleLayout::current().profiles_path(bundle_root);
+        fs::create_dir_all(path.parent().ok_or("profiles have no parent")?)?;
+        fs::write(path, bytes)?;
+    }
+    Ok(())
+}
 pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn Error>> {
-    let mochi_bin = result
-        .bundle_root
-        .join("bin")
-        .join(format!("mochi{}", env::consts::EXE_SUFFIX));
+    let mochi_bin = NativeBundleLayout::current().executable(&result.bundle_root, "mochi");
     if !mochi_bin.exists() {
         return Err(format!("missing mochi binary at {}", mochi_bin.display()).into());
     }
@@ -103,10 +161,7 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
             .into());
         }
         developer_smoke::run(
-            &result
-                .bundle_root
-                .join("bin")
-                .join(format!("kagami{}", env::consts::EXE_SUFFIX)),
+            &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )
     }
 }
@@ -239,11 +294,13 @@ pub(crate) fn stage_bundle(
     Ok(())
 }
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> {
-    for entry in WalkDir::new(source).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(source).follow_root_links(false) {
+        let entry = entry?;
         let path = entry.path();
-        let Ok(relative) = path.strip_prefix(source) else {
-            continue;
-        };
+        if !entry.file_type().is_dir() && !entry.file_type().is_file() {
+            return Err("bundle staging requires only direct files and directories".into());
+        }
+        let relative = path.strip_prefix(source)?;
         if relative.as_os_str().is_empty() {
             continue;
         }
@@ -260,6 +317,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error
     Ok(())
 }
 fn build_runtime(profile: &str) -> Result<(), Box<dyn Error>> {
+    validate_bundle_profile(profile)?;
     let mut command = Command::new("cargo");
     command.args(runtime_build_args(profile));
     command.current_dir(workspace_root());
@@ -295,7 +353,6 @@ fn runtime_build_args(profile: &str) -> Vec<OsString> {
     ]);
     args
 }
-#[cfg(test)]
 fn mochi_ui_manifest_path() -> PathBuf {
     workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
@@ -321,20 +378,23 @@ fn copy_runtime_binaries(source: &Path, bundle_root: &Path) -> Result<(), Box<dy
             .into());
         }
     }
-    fs::create_dir_all(bundle_root.join("bin"))?;
+    fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle_root))?;
     for name in RUNTIME_BINARIES {
         let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
         fs::copy(
             source.join(&filename),
-            bundle_root.join("bin").join(filename),
+            NativeBundleLayout::current()
+                .runtime_directory(bundle_root)
+                .join(filename),
         )?;
     }
     Ok(())
 }
 fn copy_into_bundle(source_rel: &str, destination: &Path) -> Result<(), Box<dyn Error>> {
     let source = workspace_root().join(source_rel);
-    if !source.exists() {
-        return Err(format!("missing bundle asset {source_rel}").into());
+    let metadata = fs::symlink_metadata(&source)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!("bundle asset {source_rel} must be a direct regular file").into());
     }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
@@ -356,11 +416,14 @@ fn cargo_target_dir() -> PathBuf {
 }
 fn generate_manifest_json(bundle_root: &Path, profile: &str) -> Result<Value, Box<dyn Error>> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(bundle_root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-    {
+    for entry in WalkDir::new(bundle_root).follow_root_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            return Err("bundle inventory requires only direct files and directories".into());
+        }
         let path = entry.path();
         let relative = path.strip_prefix(bundle_root)?;
         let data = fs::read(path)?;
@@ -444,12 +507,36 @@ fn create_archive(
 #[cfg(test)]
 mod tests {
     use super::{
-        MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_UI_MANIFEST_REL, RUNTIME_BINARIES,
-        copy_runtime_binaries, create_archive, mochi_ui_manifest_path, runtime_build_args,
+        MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_UI_MANIFEST_REL, RUNTIME_BINARIES, copy_directory,
+        copy_runtime_binaries, create_archive, generate_manifest_json, mochi_ui_manifest_path,
+        runtime_build_args, sha256_hex, stage_application_metadata, stage_network_profiles,
         validate_mochi_help_output,
     };
-    use std::{ffi::OsString, fs, process::Command};
+    use iroha_deploy::{
+        bootstrap::InstalledNetworkProfiles,
+        managed::{NativeBundleLayout, macos_info_plist},
+    };
+    use std::{env, ffi::OsString, fs, path::Path, process::Command};
     use tempfile::tempdir;
+    #[test]
+    fn local_release_is_rejected_before_build_profile_input_or_output_mutation() {
+        let root = tempdir().unwrap();
+        let existing = root.path().join("kept");
+        fs::write(&existing, b"existing bundle").unwrap();
+        let error = super::bundle_mochi(
+            root.path(),
+            "local-release",
+            false,
+            Some(&root.path().join("missing-network-profiles.nrt")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("local-release"));
+        assert_eq!(fs::read(&existing).unwrap(), b"existing bundle");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        assert!(super::build_runtime("local-release").is_err());
+        assert!(super::validate_bundle_profile("release").is_ok());
+        assert!(super::validate_bundle_profile("debug").is_ok());
+    }
     #[test]
     fn mochi_ui_manifest_path_declares_packaged_binary() {
         let manifest_path = mochi_ui_manifest_path();
@@ -535,15 +622,120 @@ mod tests {
         copy_runtime_binaries(&source, &bundle).expect("complete runtime");
         for name in RUNTIME_BINARIES {
             assert_eq!(
-                fs::read(
-                    bundle
-                        .join("bin")
-                        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
-                )
-                .unwrap(),
+                fs::read(NativeBundleLayout::current().executable(&bundle, name)).unwrap(),
                 name.as_bytes()
             );
         }
+        if NativeBundleLayout::current() == NativeBundleLayout::MacOs {
+            assert!(!bundle.join("bin").exists());
+        }
+    }
+
+    #[test]
+    fn app_metadata_uses_the_desktop_package_version_and_enters_the_inventory() {
+        let root = tempdir().unwrap();
+        stage_application_metadata(root.path()).unwrap();
+        let manifest = generate_manifest_json(root.path(), "release").unwrap();
+        let files = manifest["files"].as_array().unwrap();
+        if NativeBundleLayout::current() == NativeBundleLayout::MacOs {
+            let source: toml::Value =
+                toml::from_str(&fs::read_to_string(mochi_ui_manifest_path()).unwrap()).unwrap();
+            let version = source["package"]["version"].as_str().unwrap();
+            let expected = macos_info_plist(version).unwrap();
+            assert_eq!(
+                fs::read_to_string(root.path().join("Mochi.app/Contents/Info.plist")).unwrap(),
+                expected
+            );
+            assert_eq!(files.len(), 1);
+            assert_eq!(
+                files[0]["path"].as_str(),
+                Some("Mochi.app/Contents/Info.plist")
+            );
+            assert_eq!(
+                files[0]["sha256"].as_str(),
+                Some(sha256_hex(expected.as_bytes()).as_str())
+            );
+            assert!(
+                NativeBundleLayout::MacOs
+                    .resources_directory(root.path())
+                    .is_dir()
+            );
+            assert!(!root.path().join("bin").exists());
+        } else {
+            assert!(files.is_empty());
+        }
+    }
+
+    #[test]
+    fn staging_and_inventory_propagate_missing_tree_errors() {
+        let root = tempdir().unwrap();
+        assert!(generate_manifest_json(&root.path().join("missing"), "release").is_err());
+        assert!(
+            copy_directory(
+                &root.path().join("missing"),
+                &root.path().join("destination")
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_and_inventory_reject_indirect_files_and_directories() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let source = root.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("data"), b"not bundle custody").unwrap();
+        for target in [outside.clone(), outside.join("data")] {
+            symlink(target, source.join("indirect")).unwrap();
+            assert!(generate_manifest_json(&source, "release").is_err());
+            assert!(copy_directory(&source, &root.path().join("destination")).is_err());
+            fs::remove_file(source.join("indirect")).unwrap();
+        }
+    }
+
+    #[test]
+    fn staged_bundle_has_complete_sorted_identical_file_inventory_after_relocation() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("source");
+        let bundle = root.path().join("bundle");
+        fs::create_dir(&source).unwrap();
+        for name in RUNTIME_BINARIES {
+            fs::write(
+                source.join(format!("{name}{}", env::consts::EXE_SUFFIX)),
+                name,
+            )
+            .unwrap();
+        }
+        copy_runtime_binaries(&source, &bundle).unwrap();
+        stage_application_metadata(&bundle).unwrap();
+        stage_network_profiles(
+            Some(&InstalledNetworkProfiles::new(Vec::new()).unwrap()),
+            &bundle,
+        )
+        .unwrap();
+        let before = generate_manifest_json(&bundle, "release").unwrap();
+        let moved = root.path().join("relocated");
+        copy_directory(&bundle, &moved).unwrap();
+        fs::remove_dir_all(&bundle).unwrap();
+        let after = generate_manifest_json(&moved, "release").unwrap();
+        assert_eq!(before["files"], after["files"]);
+        let names = after["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(names.len(), if cfg!(target_os = "macos") { 5 } else { 4 });
+        let runtime = iroha_deploy::managed::InstalledRuntime::from_directory(
+            &NativeBundleLayout::current().runtime_directory(&moved),
+        )
+        .unwrap();
+        assert!(runtime.network_profiles().is_ok());
     }
     #[test]
     fn incomplete_runtime_is_rejected_before_any_binary_is_copied() {
@@ -560,6 +752,78 @@ mod tests {
         }
         assert!(copy_runtime_binaries(&source, &bundle).is_err());
         assert!(!bundle.exists());
+    }
+    #[test]
+    fn explicit_installed_profiles_are_canonical_and_covered_by_the_bundle_inventory() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_deploy::bootstrap::{InstalledNetworkProfile, InstalledNetworkProfiles};
+        let root = tempdir().unwrap();
+        let profiles = InstalledNetworkProfiles::new(vec![
+            InstalledNetworkProfile::new(
+                "fixture".into(),
+                KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+                7,
+                "https://release.example/checkpoint.nrt".into(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let bytes = profiles.encode_installation().unwrap();
+        let source = root.path().join("installer-selected.nrt");
+        fs::write(&source, &bytes).unwrap();
+        let loaded = super::load_network_profiles(Some(&source))
+            .unwrap()
+            .unwrap();
+        let bundle = root.path().join("bundle");
+        fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle)).unwrap();
+        super::stage_network_profiles(Some(&loaded), &bundle).unwrap();
+        assert_eq!(
+            fs::read(NativeBundleLayout::current().profiles_path(&bundle)).unwrap(),
+            bytes
+        );
+        let manifest = super::generate_manifest_json(&bundle, "test").unwrap();
+        let entries = manifest.as_object().unwrap()["files"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().unwrap();
+        assert_eq!(
+            entry["path"].as_str(),
+            Some(
+                NativeBundleLayout::current()
+                    .profiles_path(Path::new(""))
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .as_str()
+            )
+        );
+        assert_eq!(entry["size"].as_u64(), Some(bytes.len() as u64));
+        assert_eq!(
+            entry["sha256"].as_str(),
+            Some(super::sha256_hex(&bytes).as_str())
+        );
+        assert!(loaded.select("taira").is_err());
+    }
+    #[test]
+    fn missing_profile_option_installs_no_authority_and_invalid_input_is_rejected() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("bin")).unwrap();
+        assert!(super::load_network_profiles(None).unwrap().is_none());
+        super::stage_network_profiles(None, root.path()).unwrap();
+        assert!(
+            !NativeBundleLayout::current()
+                .profiles_path(root.path())
+                .exists()
+        );
+        let source = root.path().join("invalid.nrt");
+        fs::write(&source, b"response-selected untrusted authority").unwrap();
+        assert!(super::load_network_profiles(Some(&source)).is_err());
+        assert!(super::load_network_profiles(Some(&root.path().join("missing.nrt"))).is_err());
+        assert!(
+            !NativeBundleLayout::current()
+                .profiles_path(root.path())
+                .exists()
+        );
     }
     #[test]
     fn mochi_help_validation_accepts_workspace_desktop_usage() {
@@ -586,8 +850,13 @@ mod tests {
         let output_root = tempdir.path();
         let bundle_name = "mochi-test-bundle";
         let bundle_root = output_root.join(bundle_name);
-        fs::create_dir_all(bundle_root.join("bin")).expect("bundle dir");
-        fs::write(bundle_root.join("bin").join("mochi"), b"binary").expect("bundle file");
+        fs::create_dir_all(NativeBundleLayout::current().runtime_directory(&bundle_root))
+            .expect("bundle dir");
+        fs::write(
+            NativeBundleLayout::current().executable(&bundle_root, "mochi"),
+            b"binary",
+        )
+        .expect("bundle file");
         let archive_path =
             create_archive(output_root, bundle_name, &bundle_root).expect("archive builds");
         assert!(archive_path.exists(), "archive should exist");
@@ -603,9 +872,14 @@ mod tests {
         );
         let stdout = String::from_utf8(listing.stdout).expect("utf8 listing");
         assert!(
-            stdout
-                .lines()
-                .any(|line| line == format!("{bundle_name}/bin/mochi")),
+            stdout.lines().any(|line| line
+                == format!(
+                    "{bundle_name}/{}",
+                    NativeBundleLayout::current()
+                        .executable(Path::new(""), "mochi")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                )),
             "archive listing did not include bundle payload: {stdout}"
         );
     }

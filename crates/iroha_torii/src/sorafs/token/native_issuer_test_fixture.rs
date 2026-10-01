@@ -23,6 +23,7 @@ pub fn issue_native_token_v1(
             provider_id,
             profile_handle,
             TokenOverrides::default(),
+            None,
         )
         .map(|issued| issued.token)
 }

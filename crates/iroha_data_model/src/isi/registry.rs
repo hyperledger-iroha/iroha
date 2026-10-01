@@ -361,11 +361,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 390;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 392;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 390;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 392;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 369;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 371;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -1568,6 +1568,9 @@ mod stream_token_authority_tests;
 #[cfg(test)]
 #[path = "registry/stream_token_custody_tests.rs"]
 mod stream_token_custody_tests;
+#[cfg(test)]
+#[path = "registry/stream_token_gateway_tests.rs"]
+mod stream_token_gateway_tests;
 
 #[cfg(test)]
 #[path = "registry/final_promotion_authority_tests.rs"]

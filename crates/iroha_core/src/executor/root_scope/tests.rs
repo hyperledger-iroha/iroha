@@ -106,6 +106,12 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
     };
     let instruction = InstructionBox::from(MultisigInstructionBox::Propose(propose));
     assert!(ensure_instruction_scope(&instruction, &tx).is_err());
+<<<<<<< HEAD
+    let no_scope: InstructionBox = Register::account(Account::new(ALICE_ID.clone())).into();
+    assert!(
+        matches!(ensure_instruction_scope(&no_scope, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
+    );
+=======
     let no_scope: InstructionBox =
         CustomInstruction::new("unreviewed private-root operation").into();
     let peer_key =
@@ -120,6 +126,7 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
             matches!(ensure_instruction_scope(&unreviewed, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
         );
     }
+>>>>>>> origin/optimizations
 }
 
 #[test]

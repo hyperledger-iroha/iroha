@@ -22,7 +22,10 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
     let reader = writer.reader();
     assert_eq!(reader.purpose(), PURPOSE);
     assert!(reader.recover(OPERATION).is_err());
-    assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&path),
+        0
+    );
     let bytes = b"exact private receipt bytes";
     drop(writer.stage(OPERATION, bytes).unwrap());
     drop(writer);
@@ -108,7 +111,10 @@ fn read_only_recovery_has_the_same_closed_purpose_bounds() {
         assert_eq!(reader.purpose(), purpose);
         assert!(reader.recover([0; 32]).is_err());
         assert!(reader.recover(OPERATION).is_err());
-        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        assert_eq!(
+            crate::signer_operation::journal::test_record_count(&path),
+            0
+        );
         let bytes = vec![0x43; purpose.max_bytes()];
         drop(writer.stage(OPERATION, &bytes).unwrap());
         let pinned = reader.recover(OPERATION).unwrap();

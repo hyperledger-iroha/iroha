@@ -264,12 +264,17 @@ FAMILIES = {
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_subscription_mutation": "68947e4ed41a19abd272c78f0aa36e7155064773b2d22242651dcfaec36803ee",
-    "catalog_route_policy": "4d08cd3741b5fba7bb81c791a1188229a0f3db6a1e6ee9e77a2a358201e0882f",
+    "catalog_route_policy": "3c5d167f1473d8c6b72fd10bd5080253025ca44fcd6bcbffcd1b47733655048b",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
+<<<<<<< HEAD
+ROUTE_ROW_COUNT = 572
+ROUTE_TUPLE_SHA256 = "2c973dacd8c3a148b148bc41138dfd78447bd74b34ac4f5d0af63d3221056dfc"
+=======
 ROUTE_ROW_COUNT = 569
 ROUTE_TUPLE_SHA256 = "3fa65bc2f86f7f68fe9228727323fa141b1457dc8f5a060aae5e6881401b0a83"
+>>>>>>> origin/optimizations
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -842,6 +847,7 @@ def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
                 "canonical_signed": "handler:CanonicalSignedBody",
                 "protocol_handshake": "handler:ProtocolHandshake",
                 "operator_credential": "handler:OperatorCredentialExchange",
+                "private_root_owner": "handler:PrivateRootOwnerToken",
                 "onboarding": "onboarding",
             }[stem]
         except KeyError as error:

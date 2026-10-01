@@ -354,7 +354,8 @@ impl DeploymentService {
             .map_err(|error| preflight_error("contract manifest signature", eyre!(error)))?;
         let sequence =
             self.sign_native_sequence(request, manifest, verified.code_hash, &state, &address)?;
-        let (transactions, quotes) = self.quote_transactions(sequence, &request.fee_payment)?;
+        let (transactions, quotes) =
+            self.quote_transactions(sequence, &request.fee_payment, state.dataspace_id)?;
         let preflight = DeploymentPreflight {
             network_id: self.config.network_id,
             chain_id: self.config.chain.to_string(),
@@ -709,6 +710,7 @@ impl DeploymentService {
         &self,
         sequence: Vec<(String, String, SignedTransaction)>,
         fee_payment: &FeePaymentIntent,
+        expected_dataspace: DataSpaceId,
     ) -> DeploymentResult<(Vec<TransactionRecord>, Vec<FeeQuoteResponse>)> {
         let mut transactions = Vec::with_capacity(sequence.len());
         let mut quotes = Vec::with_capacity(sequence.len());
@@ -716,6 +718,8 @@ impl DeploymentService {
             let (signed, quote) =
                 quote_and_resign_transaction(&self.client, &draft, fee_payment)
                     .map_err(|source| preflight_error("exact transaction fee quote", source))?;
+            native::validate_quote_route(&quote, expected_dataspace)
+                .map_err(|source| preflight_error("exact transaction fee route", source))?;
             transactions.push(TransactionRecord {
                 name,
                 hash: signed.hash().to_string(),

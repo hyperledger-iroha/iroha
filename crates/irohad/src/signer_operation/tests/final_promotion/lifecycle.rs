@@ -202,7 +202,10 @@ fn early_errors_release_the_gate_without_consuming_an_operation() {
     );
     assert!(source.inner.state.lock().unwrap().used_ids.is_empty());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
-    assert!(journal_entries(&path).is_empty());
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&path),
+        0
+    );
     let receipt = service.sign().unwrap();
     assert_eq!(service.recover().unwrap(), receipt);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
@@ -218,7 +221,12 @@ fn late_errors_release_the_gate_but_preserve_the_uncompleted_tombstone() {
         SignerFinalPromotionErrorV1::Operation(SignerOperationErrorV1::ReservationConflict);
     assert_eq!(service.sign().unwrap_err(), conflict);
     let retained = journal_entries(&path);
-    assert_eq!(retained.len(), 1);
+    // One receipt tombstone plus the independently validated empty native control lock.
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&path),
+        1
+    );
+    assert_eq!(retained.len(), 2);
     let calls = source.calls.load(Ordering::SeqCst);
     assert_eq!(service.recover().unwrap_err(), conflict);
     assert!(source.calls.load(Ordering::SeqCst) > calls);
@@ -252,7 +260,10 @@ fn a_panicked_lifecycle_permanently_rejects_sign_and_recover_before_io() {
     assert_eq!(source.calls.load(Ordering::SeqCst), calls);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     assert!(source.inner.state.lock().unwrap().used_ids.is_empty());
-    assert!(journal_entries(&path).is_empty());
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&path),
+        0
+    );
 }
 
 #[test]
@@ -343,5 +354,8 @@ fn recovery_only_view_preserves_shared_poison_without_any_observation_or_journal
     assert_eq!(source.calls.load(Ordering::SeqCst), calls);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     assert!(source.inner.state.lock().unwrap().used_ids.is_empty());
-    assert!(journal_entries(&path).is_empty());
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&path),
+        0
+    );
 }

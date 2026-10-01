@@ -2333,10 +2333,6 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         policy_digest: Some([0xB1; 32]),
         bootle_lantern_issuance_bindings: None,
         stream_token_signer_binding: None,
-        stream_token_gateway_admission_qualification: None,
-        stream_token_gateway_admission_max_pending: None,
-        stream_token_gateway_admission_max_tracked_tokens: None,
-        stream_token_gateway_admission_reconcile_max_items: None,
         appeal_finance_signer_binding: None,
         appeal_finance_checkpoint_binding: None,
         appeal_finance_checkpoint_max_bytes: None,
@@ -2440,167 +2436,41 @@ fn source_streams_transfer_to_actual_retained_plan_reservations() {
     assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
 }
 #[test]
-fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
-    const HANDLE: &str = "sealed-cas:prod/stream-token/gateway-admission/v1";
-    #[derive(Debug)]
-    struct QualificationOnlyProvider {
-        qualification: iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1,
-    }
-    impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 for QualificationOnlyProvider {
-        fn handle(&self) -> &str {
-            HANDLE
-        }
-        fn qualification(
-            &self,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1,
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-        > {
-            Ok(self.qualification)
-        }
-        fn admit(
-            &self,
-            _request: &iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionResultV1,
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-        > {
-            Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
-        }
-        fn pending(
-            &self,
-            _max_items: u32,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionReadbackV1,
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-        > {
-            Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
-        }
-        fn acknowledge(
-            &self,
-            _record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionAckV1,
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-        > {
-            Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
-        }
-        fn release_lease(
-            &self,
-            _record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionAckV1,
-            iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-        > {
-            Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
-        }
-    }
-    let qualification = iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1 {
-        gateway_id: [0x54; 32],
-        revision: 7,
-        policy_digest: TEST_POLICY_DIGEST,
-        max_pending: 64,
-        max_tracked_tokens: 32,
-        lease_ttl_ms: 120_000,
-    };
-    let mut binding = plain_runtime_binding(
-        IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
-        HANDLE,
+fn native_gateway_authority_has_no_broker_binding() {
+    assert_eq!(IrohaRuntimeProviderSlotV1::from_wire_id(53), None);
+    let mut binding = token_signer_binding();
+    validate_wire_binding(&binding).expect("independent stream-token signer remains supported");
+    binding.slot = 53;
+    assert_eq!(
+        validate_wire_binding(&binding),
+        Err(BrokerError::BindingMismatch),
+        "a broker DTO cannot install native gateway admission authority"
     );
-    binding.stream_token_gateway_admission_qualification = Some(qualification);
-    binding.stream_token_gateway_admission_max_pending = Some(qualification.max_pending);
-    binding.stream_token_gateway_admission_max_tracked_tokens =
-        Some(qualification.max_tracked_tokens);
-    binding.stream_token_gateway_admission_reconcile_max_items = Some(16);
-    validate_wire_binding(&binding).expect("valid stream-token gateway binding");
-    let mutations: [(&str, fn(&mut ProviderBindingWireV1)); 13] = [
-        ("outer revision", |binding| binding.revision = Some(8)),
-        ("outer policy", |binding| {
-            binding.policy_digest = Some([0x91; 32])
-        }),
-        ("missing qualification", |binding| {
-            binding.stream_token_gateway_admission_qualification = None;
-        }),
-        ("pending ceiling", |binding| {
-            binding.stream_token_gateway_admission_max_pending = Some(65);
-        }),
-        ("token ceiling", |binding| {
-            binding.stream_token_gateway_admission_max_tracked_tokens = Some(33);
-        }),
-        ("zero reconciliation", |binding| {
-            binding.stream_token_gateway_admission_reconcile_max_items = Some(0);
-        }),
-        ("oversized reconciliation", |binding| {
-            binding.stream_token_gateway_admission_reconcile_max_items =
-                Some(iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1 + 1);
-        }),
-        ("foreign governance ingress", |binding| {
-            binding.governance_request_ingress_binding = Some(
-                governance_request_ingress_binding_to_wire(ingress_fixture(TEST_SIGNER_KEY)),
-            );
-        }),
-        ("foreign signer role", |binding| {
-            binding.stream_token_signer_binding =
-                token_signer_binding().stream_token_signer_binding;
-        }),
-        ("foreign evidence role", |binding| {
-            binding.evidence_viewer_grant_ttl_ms = Some(1_000);
-        }),
-        ("foreign provider checkpoint", |binding| {
-            binding.provider_ingest_checkpoint_max_bytes = Some(1_024);
-        }),
-        ("foreign moderation checkpoint", |binding| {
-            binding.moderation_checkpoint_max_bytes = Some(1_024);
-        }),
-        ("foreign governance key", |binding| {
-            binding.governance_dag_publisher_public_key = Some(TEST_SIGNER_KEY);
-        }),
-    ];
-    for (label, mutate) in mutations {
-        let mut changed = binding.clone();
-        mutate(&mut changed);
-        assert_ne!(changed, binding, "{label} must change the fixture");
+}
+
+#[test]
+fn native_gateway_operations_are_rejected_before_reading_a_payload() {
+    for operation in [107_u16, 108, 109, 110] {
+        let mut discriminator = Vec::new();
+        discriminator.extend_from_slice(
+            &IrohaRuntimeProviderSlotV1::GovernanceDagSigner
+                .wire_id()
+                .to_be_bytes(),
+        );
+        discriminator.extend_from_slice(&operation.to_be_bytes());
+        let mut reader = std::io::Cursor::new(discriminator);
+        assert!(matches!(
+            read_operation_request_frame_inner(&mut reader, None, None),
+            Err(BrokerError::Protocol)
+        ));
         assert_eq!(
-            validate_wire_binding(&changed),
-            Err(BrokerError::BindingMismatch),
-            "{label} must remain rejected after the canonical positive is accepted"
+            reader.position(),
+            4,
+            "reject before payload length or allocation"
         );
     }
-    let backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_stream_token_gateway_admission(Arc::new(QualificationOnlyProvider { qualification }));
-    validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
-        .expect("exact stream-token gateway backend set");
-    let observation = make_server_observation(network_id(), &binding, &backends)
-        .expect("observe exact stream-token gateway backend");
-    let state = BrokerServerStateV1 {
-        decode_pool: new_test_process_pool(),
-        chain_id: "server-test-chain".to_owned(),
-        network_id: server_test_network_id(),
-        catalog: vec![binding.clone()],
-        observations: vec![observation.clone()],
-        backends,
-    };
-    let request = make_operation_request(
-        TEST_SESSION_ID,
-        1,
-        binding,
-        observation.metadata_digest,
-        OPERATION_QUALIFY_V1,
-        encode_canonical(&(), MAX_STREAM_TOKEN_FRAME_BYTES_V1)
-            .expect("encode qualification request"),
-    )
-    .expect("build qualification request");
-    validate_operation_request(&request).expect("admit stream-token gateway qualification request");
-    let encoded = dispatch_server_operation(&state, &request)
-        .expect("dispatch stream-token gateway qualification");
-    let observed =
-        decode_canonical::<QualificationResultWireV1>(&encoded, MAX_OPERATION_FRAME_BYTES_V1)
-            .expect("decode qualification response");
-    assert_eq!(observed.revision, qualification.revision);
-    assert_eq!(observed.policy_digest, qualification.policy_digest);
-    validate_operation_result(&request, STATUS_OK_V1, &encoded, &state.network_id)
-        .expect("validate stream-token gateway qualification response");
 }
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_socket_device_identity_preserves_signed_dev_t_bits() {

@@ -214,10 +214,36 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     assert_eq!(current.authorization.last_height, 6);
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
+    // This certificate-transcript fixture does not execute NPoS transitions, but the real
+    // payload builder still needs the original signed root-routing metadata. Project only
+    // that exact genesis parameter into its authoring World; absence never implies Global.
+    let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis).unwrap();
+    let routing_world = World::new();
+    {
+        let mut parameters = routing_world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
+                iroha_primitives::json::Json::from_norito_value_ref(
+                    &norito::json::value::to_value(&metadata).unwrap(),
+                )
+                .unwrap(),
+            ),
+        ));
+        parameters.commit();
+    }
+    assert_eq!(
+        crate::sumeragi::lanes::routing::committed_root_scope(&routing_world.view()),
+        Some(metadata.sumeragi_context.root_scope),
+    );
     let world = State::new_with_chain_and_network_id_for_testing(
+<<<<<<< HEAD
+        routing_world,
+=======
         crate::sumeragi::lanes::routing::test_support::world(
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         ),
+>>>>>>> origin/optimizations
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),
@@ -271,6 +297,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
             &time_source,
         )
         .unwrap();
+        let entry_hash = transaction.hash_as_entrypoint();
         let mut block = payload::assemble(
             &world,
             Assembly {
@@ -281,6 +308,15 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
             &[transaction],
         )
         .unwrap();
+        assert_eq!(
+            block.execution_context().unwrap().external,
+            vec![iroha_data_model::block::ExternalExecutionContext::new(
+                entry_hash,
+                crate::sumeragi::lanes::routing::GLOBAL_LANE,
+                metadata.sumeragi_context.root_scope.dataspace_id(),
+            )],
+            "normal payload assembly commits the exact signed-root route",
+        );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(
                 GlobalThresholdBeaconChainAnchorV1 {
@@ -492,9 +528,7 @@ fn rotated_away_committee_verifies_from_authenticated_boundaries_with_bounded_au
     let other = with_parts(&history[6], |header, qc, _| {
         *qc = certificate(&keys(true), header, qc.result, true)
     });
-    let other = reader
-        .check_certificate(read_frame(other, 7).unwrap())
-        .unwrap();
+    let other = reader.check_certificate(other, 7).unwrap();
     assert_ne!(
         original.commit_qc().unwrap().signers,
         other.commit_qc().unwrap().signers
@@ -538,7 +572,7 @@ fn retained_generation_still_binds_new_epoch_and_fresh_leader_randomness() {
         *qc = certificate(&keys(false), header, qc.result, false);
     });
     assert!(matches!(
-        read_frame(old_epoch, 7).and_then(|block| reader.check_certificate(block)),
+        reader.check_certificate(old_epoch, 7),
         Err(ChainReadError::HeaderMismatch { height: 7 })
     ));
 }

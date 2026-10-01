@@ -10,10 +10,12 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId,
     },
     domain::Domain,
+    fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
     isi::{
         AtomicSettlementMovement, AtomicSettlementMovements, Grant, Instruction, SettleAtomic,
         SettlementDetails,
     },
+    parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter},
     permission::Permission,
 };
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
@@ -32,6 +34,44 @@ fn owner(index: u16) -> AccountId {
     )
 }
 
+<<<<<<< HEAD
+fn expected_transcript(instruction: &SettleAtomic, sponsor: &AccountId) -> TransferTranscript {
+    let mut received = Quantity::zero();
+    let deltas = instruction
+        .movements()
+        .as_slice()
+        .iter()
+        .map(|movement| {
+            let before = received.clone();
+            received = received
+                .checked_add(&movement.quantity)
+                .expect("bounded sum");
+            TransferDeltaTranscript {
+                from_account: movement.source.account().clone(),
+                to_account: sponsor.clone(),
+                asset_definition: movement.source.definition().clone(),
+                amount: movement.quantity.clone(),
+                from_balance_before: Quantity::from(1000_u32),
+                from_balance_after: Quantity::from(1000_u32)
+                    .checked_sub(&movement.quantity)
+                    .expect("prefunded fixture source"),
+                to_balance_before: before,
+                to_balance_after: received.clone(),
+                from_smt_witness: TransferSmtWitness::default(),
+                to_smt_witness: TransferSmtWitness::default(),
+            }
+        })
+        .collect();
+    TransferTranscript {
+        batch_hash: Hash::new(b"atomic-overlay-carrier"),
+        authority_digest: crate::fastpq::authority_digest(sponsor),
+        poseidon_preimage_digest: None,
+        deltas,
+    }
+}
+
+fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, AccountId) {
+=======
 /// Freeze a finite component corpus bound through the same governed source policy.
 fn set_source_delta_limit(
     world: &World,
@@ -97,6 +137,7 @@ fn fixture_with_source_delta_limit(
     SettleAtomic,
     AccountId,
 ) {
+>>>>>>> origin/optimizations
     let sponsor = owner(u16::MAX);
     let domain_id = DomainId::try_new("atomic_overlay", "universal").expect("domain");
     let definition =
@@ -153,6 +194,13 @@ fn fixture_with_source_delta_limit(
         assets,
         [],
     );
+<<<<<<< HEAD
+    let state = State::new(
+        super::test_support::with_global_root(world),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+=======
     // The 255-movement corpus exceeds bootstrap's sixteen transfer deltas.
     // Reserve its deltas and complete framing before StateBlock freezes its source owner.
     let source_policy = set_source_delta_limit(&world, max_deltas);
@@ -166,6 +214,7 @@ fn fixture_with_source_delta_limit(
         ));
     let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
         .expect("signed atomic settlement corpus policy");
+>>>>>>> origin/optimizations
     let instruction = SettleAtomic::new(
         chain.network_id(),
         "overlay_atomic_business".parse().expect("id"),
@@ -173,6 +222,59 @@ fn fixture_with_source_delta_limit(
         nonzero!(100_u64),
         Metadata::default(),
     );
+<<<<<<< HEAD
+    // This exact fixture corpus includes 255 transfers with fixed Ed25519 owners
+    // and prefunded quantities. Measure its complete canonical transcript/statement
+    // under a finite local construction cap, then freeze all six policy dimensions
+    // before block admission. Raising D alone leaves I/M/S at the bootstrap corpus.
+    // The successful test compares this sizing input against the actual emitted
+    // transcript; it does not replace execution, source ownership or quota checks.
+    let transcript = expected_transcript(&instruction, &sponsor);
+    let measured =
+        crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage(
+            transcript.batch_hash,
+            [&transcript],
+            crate::fastpq::FastpqSourceStatementBuildLimits {
+                max_executed_entries: 1,
+                max_transcripts: 1,
+                max_deltas: count,
+                max_input_transcript_bytes: 4 * 1024 * 1024,
+                max_statement_bytes: 4 * 1024 * 1024,
+                max_total_statement_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .expect("exact atomic fixture fits its bounded sizing corpus");
+    let mut parameters = state.world.parameters.block();
+    let baseline = parameters.get().block().fastpq_source();
+    let mut intrinsic = baseline.intrinsic;
+    intrinsic.max_transcripts = intrinsic
+        .max_transcripts
+        .max(u32::try_from(measured.transcripts).unwrap());
+    intrinsic.max_deltas = intrinsic
+        .max_deltas
+        .max(u32::try_from(measured.deltas).unwrap());
+    intrinsic.max_input_transcript_bytes = intrinsic
+        .max_input_transcript_bytes
+        .max(u64::try_from(measured.input_transcript_bytes).unwrap());
+    intrinsic.max_statement_bytes = intrinsic
+        .max_statement_bytes
+        .max(u64::try_from(measured.max_statement_bytes).unwrap());
+    intrinsic.max_total_statement_bytes = intrinsic
+        .max_total_statement_bytes
+        .max(u64::try_from(measured.total_statement_bytes).unwrap());
+    let profile = FastpqSourcePolicyV1::from_sizing(
+        parameters.get().block().execution_output(),
+        intrinsic,
+        baseline.mandatory,
+        1,
+    )
+    .expect("bounded atomic component profile");
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+    parameters.commit();
+    (state, instruction, sponsor)
+=======
     (chain, instruction, sponsor)
 }
 
@@ -188,6 +290,7 @@ fn next_block(state: &State) -> StateBlock<'_> {
         0,
         0,
     ))
+>>>>>>> origin/optimizations
 }
 
 fn permission(instruction: &SettleAtomic, source: &AssetId) -> Permission {
@@ -299,6 +402,11 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
             let state = chain.state();
             let mut block = next_block(state);
             grant_consents(&mut block, &instruction, &sponsor, None);
+<<<<<<< HEAD
+            // Retain the finite direct-component invocation before borrowing its effects.
+            // This fixture exercises overlay execution, not network input or publication.
+=======
+>>>>>>> origin/optimizations
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::new(b"atomic-overlay-carrier"));
             assert_eq!(state_tx.pending_transfer_transcript_count_for_testing(), 0);
@@ -355,6 +463,16 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
             assert_eq!(
                 *intent_hash,
                 instruction.intent_hash().expect("full intent")
+            );
+            state_tx.apply();
+            let expected = expected_transcript(&instruction, &sponsor);
+            assert_eq!(
+                block
+                    .drain_transfer_transcripts()
+                    .remove(&expected.batch_hash)
+                    .expect("one retained settlement transcript"),
+                vec![expected],
+                "finite sizing corpus must match the original executed transcript"
             );
         }
     }

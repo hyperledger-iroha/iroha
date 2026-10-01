@@ -4889,8 +4889,13 @@ export function buildSubmitAgendaProposalInstruction(options) {
 
 /**
  * Build a `RegisterSmartContractCode` instruction payload.
+<<<<<<< HEAD
+ * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, manifest: object}} options
+ * @returns {{RegisterSmartContractCode: {artifact_id: object, manifest: object}}}
+=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, manifest: object}} options
  * @returns {{RegisterSmartContractCode: {artifact_id: {dataspace_id: string, code_hash: string}, manifest: object}}}
+>>>>>>> origin/optimizations
  */
 export function buildRegisterSmartContractCodeInstruction(options) {
   if (!options || typeof options !== "object") {
@@ -4915,8 +4920,13 @@ export function buildRegisterSmartContractCodeInstruction(options) {
 
 /**
  * Build a `RegisterSmartContractBytes` instruction payload.
+<<<<<<< HEAD
+ * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, code: ArrayBufferView|ArrayBuffer|Buffer|string}} options
+ * @returns {{RegisterSmartContractBytes: {artifact_id: object, code: string}}}
+=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, code: ArrayBufferView|ArrayBuffer|Buffer|string}} options
  * @returns {{RegisterSmartContractBytes: {artifact_id: {dataspace_id: string, code_hash: string}, code: string}}}
+>>>>>>> origin/optimizations
  */
 export function buildRegisterSmartContractBytesInstruction(options) {
   if (!options || typeof options !== "object") {
@@ -4980,6 +4990,9 @@ function normalizeCanonicalU64(value, name) {
 function normalizeContractArtifactId(value) {
   const source = assertPlainObject(value, "artifactId");
   assertExactFields(source, ["dataspaceId", "codeHash"], "artifactId");
+  if (typeof source.dataspaceId === "string" && source.dataspaceId.length > 20) {
+    throw new TypeError("artifactId.dataspaceId must fit u64");
+  }
   return {
     dataspace_id: normalizeCanonicalU64(source.dataspaceId, "artifactId.dataspaceId"),
     code_hash: normalizeHash(source.codeHash, "artifactId.codeHash"),
@@ -5018,7 +5031,7 @@ function normalizeSmartContractChunk(value, name) {
 
 /**
  * Build one bounded `UploadSmartContractCodeChunk` instruction.
- * @param {{codeHash: string|Buffer, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
+ * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
  */
 export function buildUploadSmartContractCodeChunkInstruction(options) {
   const source = assertPlainObject(options, "uploadSmartContractCodeChunk");
@@ -5164,8 +5177,13 @@ export function buildCommitContractDeploymentInstruction(options) {
 
 /**
  * Build a `RemoveSmartContractBytes` instruction payload.
+<<<<<<< HEAD
+ * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, reason?: string | null}} options
+ * @returns {{RemoveSmartContractBytes: {artifact_id: object, reason?: string}}}
+=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, reason?: string | null}} options
  * @returns {{RemoveSmartContractBytes: {artifact_id: {dataspace_id: string, code_hash: string}, reason?: string}}}
+>>>>>>> origin/optimizations
  */
 export function buildRemoveSmartContractBytesInstruction(options) {
   const source = assertPlainObject(options, "removeSmartContractBytes");

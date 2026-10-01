@@ -3,6 +3,8 @@
 use super::super::*;
 use std::{
     fs,
+    fs::Permissions,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
 };
 
@@ -50,7 +52,7 @@ fn enospc_after_durable_tombstone_blocks_only_that_operation_after_restart() {
             .stage_pending_reserve_with(INTERRUPTED, b"second signed Reserve", |checkpoint| {
                 if checkpoint == PendingReserveCheckpoint::TombstoneDurable {
                     reached = true;
-                    Err(rustix::io::Errno::NOSPC)
+                    Err(rustix::io::Errno::NOSPC.into())
                 } else {
                     Ok(())
                 }
@@ -95,7 +97,7 @@ fn interruption_after_signed_bytes_sync_never_publishes_an_unfinished_record() {
             .inner
             .stage_pending_reserve_with(INTERRUPTED, b"second signed Reserve", |checkpoint| {
                 if checkpoint == PendingReserveCheckpoint::SignedBytesDurable {
-                    Err(rustix::io::Errno::NOSPC)
+                    Err(rustix::io::Errno::NOSPC.into())
                 } else {
                     Ok(())
                 }
@@ -150,7 +152,7 @@ fn in_progress_tombstones_consume_inventory_and_reject_unsafe_files() {
     assert!(
         inner
             .stage_pending_reserve_with(INTERRUPTED, b"interrupted", |_| {
-                Err(rustix::io::Errno::NOSPC)
+                Err(rustix::io::Errno::NOSPC.into())
             })
             .is_err()
     );

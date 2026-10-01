@@ -902,6 +902,8 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     contract_address: &ContractAddress,
 ) -> Option<&'a AccountId> {
     let code_hash = world.contract_instances().get(contract_address)?;
+    let artifact_id = ContractArtifactId::for_address(contract_address, *code_hash).ok()?;
+    crate::executor::root_scope::ensure_committed_artifact_scope(world, &artifact_id).ok()?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
     if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
@@ -1379,11 +1381,19 @@ mod tests {
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
+<<<<<<< HEAD
+        let borrowed = with_code_bytes(
+            &view,
+            &ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            |bytes| (bytes.as_ptr(), bytes.to_vec()),
+        )
+=======
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
         let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
             (bytes.as_ptr(), bytes.to_vec())
         })
+>>>>>>> origin/optimizations
         .expect("borrow stored bytes");
         assert_eq!(borrowed.1, code);
         let stored_ptr = view
@@ -2086,7 +2096,9 @@ seiyaku LifecycleAba {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let mut world = World::default();
+        let mut world = crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
         world.accounts.insert(
             authority.clone(),
             iroha_data_model::account::AccountValue::new(

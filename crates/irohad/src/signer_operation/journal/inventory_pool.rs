@@ -2,27 +2,21 @@
 //!
 //! One original pool is injected into receipt purposes and pending Reserve. Credits are local
 //! resources: refusal is retryable and never makes a signed operation consensus-invalid.
-
-use std::{
-    mem,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-use iroha_allocation::{AllocationBudget, AllocationReservation};
-use iroha_config::parameters::actual::SorafsSignerJournalInventory;
+//! Exact portable filesystem accounting is recorded in `inventory_budget.md` beside this module.
 
 use super::{
-    Directory, MAX_JOURNAL_PATH_BYTES, MAX_JOURNAL_PATH_COMPONENTS, SignerReceiptJournalErrorV1,
+    MAX_JOURNAL_PATH_BYTES, MAX_JOURNAL_PATH_COMPONENTS, MAX_RECORDS, SignerReceiptJournalErrorV1,
+};
+use iroha_allocation::{AllocationBudget, AllocationReservation};
+use iroha_config::parameters::actual::SorafsSignerJournalInventory;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
-const MIN_RESIDENT_BYTES: u64 = 1024 * 1024;
-const MIN_METADATA_PROBES: u64 = 65_537 + 4 * 65 + 4 + 4 * 65 + 1;
-const MIN_OPEN_HANDLES: u32 = 67;
-const DIRECTORY_BUFFER_ALLOWANCE: usize = 256 * 1024;
+const NATIVE_BUFFER_ALLOWANCE: usize = 256 * 1024;
 const PENDING_ID_SLOT_ALLOWANCE: usize = 128;
+const TRANSIENT_HANDLES: u64 = 4;
 
 /// One original finite pool injected into all receipt families and pending Reserve.
 #[derive(Clone)]
@@ -35,11 +29,11 @@ impl SignerJournalInventoryPoolV1 {
     /// Construct the process pool from validated non-secret node configuration.
     ///
     /// # Errors
-    /// Rejects any limit unable to fund one full receipt scan and pinned maximum path.
+    /// Rejects limits unable to fund one full receipt scan and pinned maximum path.
     pub fn new(policy: SorafsSignerJournalInventory) -> Result<Self, SignerReceiptJournalErrorV1> {
-        if policy.resident_bytes.0 < MIN_RESIDENT_BYTES
-            || policy.metadata_probes < MIN_METADATA_PROBES
-            || policy.open_handles < MIN_OPEN_HANDLES
+        if policy.resident_bytes.0 < SorafsSignerJournalInventory::MIN_RESIDENT_BYTES
+            || policy.metadata_probes < SorafsSignerJournalInventory::MIN_METADATA_PROBES
+            || policy.open_handles < SorafsSignerJournalInventory::MIN_OPEN_HANDLES
         {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
@@ -64,45 +58,30 @@ impl SignerJournalInventoryPoolV1 {
         &self,
         path_bytes: usize,
         components: usize,
-    ) -> Result<(OpenLease, CounterPermit), SignerReceiptJournalErrorV1> {
+    ) -> Result<(OpenLease, InspectionLease), SignerReceiptJournalErrorV1> {
         if path_bytes > MAX_JOURNAL_PATH_BYTES
             || components == 0
             || components > MAX_JOURNAL_PATH_COMPONENTS
         {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
+        let d = components + 1;
+        // iroha_fs retains each complete prefix PathBuf, not just its component name.
         let resident_bytes = path_bytes
-            .checked_mul(3)
-            .and_then(|bytes| {
-                components
-                    .checked_mul(
-                        mem::size_of::<Directory>() + mem::size_of::<std::ffi::OsString>() + 64,
-                    )
-                    .and_then(|lineage| bytes.checked_add(lineage))
-            })
-            .and_then(|bytes| bytes.checked_add(4096))
+            .checked_mul(2)
+            .and_then(|n| n.checked_mul(d))
+            .and_then(|n| n.checked_add(256 * d))
+            .and_then(|n| n.checked_add(4096))
             .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
-        let resident = self
-            .resident
-            .try_reserve_bytes(resident_bytes)
-            .map_err(|_| SignerReceiptJournalErrorV1::Capacity)?;
-        let path_probes = self.metadata.try_acquire(
-            u64::try_from(components)
-                .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?
-                .checked_add(1)
-                .and_then(|count| count.checked_mul(4))
-                .and_then(|count| count.checked_add(1))
-                .ok_or(SignerReceiptJournalErrorV1::Unavailable)?,
-        )?;
-        let handles = self.handles.try_acquire(
-            u64::try_from(components + 1).map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?,
-        )?;
+        let resident = self.reserve(resident_bytes)?;
+        let handles = self.handles.try_acquire((d + 1) as u64)?; // ancestry plus control lock
+        let inspection = self.admit_work(NATIVE_BUFFER_ALLOWANCE, 68 * d as u64 + 20)?;
         Ok((
             OpenLease {
                 _resident: resident,
                 _handles: handles,
             },
-            path_probes,
+            inspection,
         ))
     }
 
@@ -111,41 +90,71 @@ impl SignerJournalInventoryPoolV1 {
         max_records: usize,
         pending_ids: bool,
         lineage_len: usize,
-    ) -> Result<ScanLease, SignerReceiptJournalErrorV1> {
-        let id_bytes = if pending_ids {
-            max_records.checked_mul(PENDING_ID_SLOT_ALLOWANCE)
+    ) -> Result<InspectionLease, SignerReceiptJournalErrorV1> {
+        let d = bounded_lineage(lineage_len)?;
+        if max_records > MAX_RECORDS || (pending_ids && max_records > 4096) {
+            return Err(SignerReceiptJournalErrorV1::Unavailable);
+        }
+        let ids = if pending_ids {
+            max_records * PENDING_ID_SLOT_ALLOWANCE
         } else {
-            Some(0)
+            0
         };
-        let resident_bytes = id_bytes
-            .and_then(|bytes| bytes.checked_add(DIRECTORY_BUFFER_ALLOWANCE))
+        // One control entry and one overflow entry are included before an excessive scan stops.
+        let entries = max_records as u64 + 2;
+        self.admit_work(NATIVE_BUFFER_ALLOWANCE + ids, 8 * entries + 92 * d + 34)
+    }
+
+    pub(super) fn admit_file(
+        &self,
+        max_record_bytes: usize,
+        lineage_len: usize,
+    ) -> Result<FileLease, SignerReceiptJournalErrorV1> {
+        bounded_lineage(lineage_len)?;
+        let bytes = max_record_bytes
+            .checked_add(16 * lineage_len + 2048)
             .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
-        let probes = u64::try_from(max_records)
-            .ok()
-            .and_then(|count| count.checked_add(1))
-            .and_then(|count| {
-                u64::try_from(lineage_len)
-                    .ok()
-                    .and_then(|len| len.checked_mul(4))
-                    .and_then(|lineage| count.checked_add(lineage))
-            })
-            .and_then(|count| count.checked_add(4))
-            .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
-        let resident = self
-            .resident
-            .try_reserve_bytes(resident_bytes)
-            .map_err(|_| SignerReceiptJournalErrorV1::Capacity)?;
-        let metadata = self.metadata.try_acquire(probes)?;
-        let directory = self.handles.try_acquire(1)?;
-        Ok(ScanLease {
+        let resident = self.reserve(bytes)?;
+        let handle = self.handles.try_acquire(1)?;
+        Ok(FileLease {
             _resident: resident,
-            _metadata: metadata,
-            _directory: directory,
+            _handle: handle,
         })
     }
 
-    pub(super) fn admit_file(&self) -> Result<CounterPermit, SignerReceiptJournalErrorV1> {
-        self.handles.try_acquire(1)
+    pub(super) fn admit_inspection(
+        &self,
+        lineage_len: usize,
+        read_bytes: usize,
+    ) -> Result<InspectionLease, SignerReceiptJournalErrorV1> {
+        let d = bounded_lineage(lineage_len)?;
+        let bytes = NATIVE_BUFFER_ALLOWANCE
+            .checked_add(read_bytes)
+            .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
+        // The largest phase is durable pending creation, seal, exact read and no-replace rename.
+        // Stage/recovery release this permit before their final independently budgeted recheck.
+        self.admit_work(bytes, 198 * d + 128)
+    }
+
+    fn reserve(&self, bytes: usize) -> Result<AllocationReservation, SignerReceiptJournalErrorV1> {
+        self.resident
+            .try_reserve_bytes(bytes)
+            .map_err(|_| SignerReceiptJournalErrorV1::Capacity)
+    }
+
+    fn admit_work(
+        &self,
+        bytes: usize,
+        probes: u64,
+    ) -> Result<InspectionLease, SignerReceiptJournalErrorV1> {
+        let resident = self.reserve(bytes)?;
+        let metadata = self.metadata.try_acquire(probes)?;
+        let handles = self.handles.try_acquire(TRANSIENT_HANDLES)?;
+        Ok(InspectionLease {
+            _resident: resident,
+            _metadata: metadata,
+            _handles: handles,
+        })
     }
 
     #[cfg(test)]
@@ -154,15 +163,25 @@ impl SignerJournalInventoryPoolV1 {
     }
 }
 
+fn bounded_lineage(value: usize) -> Result<u64, SignerReceiptJournalErrorV1> {
+    if !(2..=MAX_JOURNAL_PATH_COMPONENTS + 1).contains(&value) {
+        return Err(SignerReceiptJournalErrorV1::Unavailable);
+    }
+    Ok(value as u64)
+}
+
 pub(super) struct OpenLease {
     _resident: AllocationReservation,
     _handles: CounterPermit,
 }
-
-pub(super) struct ScanLease {
+pub(super) struct FileLease {
+    _resident: AllocationReservation,
+    _handle: CounterPermit,
+}
+pub(super) struct InspectionLease {
     _resident: AllocationReservation,
     _metadata: CounterPermit,
-    _directory: CounterPermit,
+    _handles: CounterPermit,
 }
 
 struct Counter {
@@ -216,23 +235,31 @@ impl Drop for CounterPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn admission_refusal_refunds_partial_acquisition_and_keeps_original_pool() {
-        let pool = SignerJournalInventoryPoolV1::for_test(1024 * 1024, 100, 2);
-        let (_open_lease, open_probes) = pool.admit_open(10, 1).expect("first path");
-        assert_eq!(pool.metadata.held.load(Ordering::Acquire), 9);
-        assert_eq!(pool.handles.held.load(Ordering::Acquire), 2);
+        let pool = SignerJournalInventoryPoolV1::for_test(1024 * 1024, 1000, 7);
+        let (open, probes) = pool.admit_open(10, 1).expect("first path");
+        let resident = pool.resident.reserved_bytes();
+        assert_eq!(pool.metadata.held.load(Ordering::Acquire), 156);
+        assert_eq!(pool.handles.held.load(Ordering::Acquire), 7);
         assert!(matches!(
             pool.admit_scan(1, false, 2),
             Err(SignerReceiptJournalErrorV1::Capacity)
         ));
-        assert_eq!(pool.metadata.held.load(Ordering::Acquire), 9);
-        drop(open_probes);
+        assert_eq!(pool.metadata.held.load(Ordering::Acquire), 156);
+        assert_eq!(pool.resident.reserved_bytes(), resident);
+        drop(probes);
         assert_eq!(pool.metadata.held.load(Ordering::Acquire), 0);
+        assert_eq!(pool.handles.held.load(Ordering::Acquire), 3);
+        drop(open);
+        assert_eq!(pool.resident.reserved_bytes(), 0);
+        assert_eq!(pool.handles.held.load(Ordering::Acquire), 0);
     }
+
     #[test]
     fn distinct_purpose_handles_share_one_original_pool_and_refund_on_drop() {
-        let pool = SignerJournalInventoryPoolV1::for_test(1024 * 1024, 100, 3);
+        let pool = SignerJournalInventoryPoolV1::for_test(1024 * 1024, 1000, 7);
         let (first, probes) = pool.admit_open(10, 1).unwrap();
         drop(probes);
         let clone = pool.clone();
@@ -243,15 +270,83 @@ mod tests {
         drop(first);
         assert!(clone.admit_open(10, 1).is_ok());
     }
+
     #[test]
     fn exact_scan_probe_boundary_and_one_below_are_distinct_from_invalid_content() {
-        let probe_demand = 1 + 1 + 4 * 2 + 4;
-        let exact = SignerJournalInventoryPoolV1::for_test(1024 * 1024, probe_demand, 1);
+        let probes = 8 * 3 + 92 * 2 + 34;
+        let exact = SignerJournalInventoryPoolV1::for_test(NATIVE_BUFFER_ALLOWANCE, probes, 4);
         assert!(exact.admit_scan(1, false, 2).is_ok());
-        let below = SignerJournalInventoryPoolV1::for_test(1024 * 1024, probe_demand - 1, 1);
+        let below = SignerJournalInventoryPoolV1::for_test(NATIVE_BUFFER_ALLOWANCE, probes - 1, 4);
         assert!(matches!(
             below.admit_scan(1, false, 2),
             Err(SignerReceiptJournalErrorV1::Capacity)
         ));
+        assert_eq!(below.resident.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn exact_open_resident_and_transient_handle_bounds_are_admitted() {
+        let bytes = 2 * 10 * 2 + 256 * 2 + 4096 + NATIVE_BUFFER_ALLOWANCE;
+        let exact = SignerJournalInventoryPoolV1::for_test(bytes, 156, 7);
+        assert!(exact.admit_open(10, 1).is_ok());
+        for pool in [
+            SignerJournalInventoryPoolV1::for_test(bytes - 1, 156, 7),
+            SignerJournalInventoryPoolV1::for_test(bytes, 155, 7),
+            SignerJournalInventoryPoolV1::for_test(bytes, 156, 6),
+        ] {
+            assert!(matches!(
+                pool.admit_open(10, 1),
+                Err(SignerReceiptJournalErrorV1::Capacity)
+            ));
+            assert_eq!(pool.resident.reserved_bytes(), 0);
+            assert_eq!(pool.metadata.held.load(Ordering::Acquire), 0);
+            assert_eq!(pool.handles.held.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn pinned_bytes_and_recheck_bytes_hold_separate_refundable_credits() {
+        let file_bytes = 64 * 1024 + 16 * 2 + 2048;
+        let read_bytes = NATIVE_BUFFER_ALLOWANCE + 64 * 1024;
+        let probes = 198 * 2 + 128;
+        let pool = SignerJournalInventoryPoolV1::for_test(file_bytes + read_bytes, probes, 5);
+        let file = pool.admit_file(64 * 1024, 2).unwrap();
+        let read = pool.admit_inspection(2, 64 * 1024).unwrap();
+        assert_eq!(pool.resident.reserved_bytes(), file_bytes + read_bytes);
+        assert!(matches!(
+            pool.admit_file(1, 2),
+            Err(SignerReceiptJournalErrorV1::Capacity)
+        ));
+        drop(read);
+        assert_eq!(pool.resident.reserved_bytes(), file_bytes);
+        drop(file);
+        assert_eq!(pool.resident.reserved_bytes(), 0);
+        assert_eq!(pool.handles.held.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn configured_minimum_funds_maximum_portable_path_scan_and_pending_read() {
+        let policy = SorafsSignerJournalInventory {
+            resident_bytes: iroha_config_base::util::Bytes(
+                SorafsSignerJournalInventory::MIN_RESIDENT_BYTES,
+            ),
+            metadata_probes: SorafsSignerJournalInventory::MIN_METADATA_PROBES,
+            open_handles: SorafsSignerJournalInventory::MIN_OPEN_HANDLES,
+        };
+        let pool = SignerJournalInventoryPoolV1::new(policy).unwrap();
+        let (_open, probes) = pool.admit_open(4096, 64).unwrap();
+        drop(probes);
+        let _file = pool.admit_file(136 * 1024, 65).unwrap();
+        let scan = pool.admit_scan(MAX_RECORDS, false, 65).unwrap();
+        assert_eq!(
+            pool.metadata.held.load(Ordering::Acquire),
+            policy.metadata_probes
+        );
+        drop(scan);
+        let pending = pool.admit_scan(4096, true, 65).unwrap();
+        drop(pending);
+        let read = pool.admit_inspection(65, 136 * 1024).unwrap();
+        drop(read);
+        assert!(pool.resident.peak_reserved_bytes() <= policy.resident_bytes.0 as usize);
     }
 }

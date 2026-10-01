@@ -28,7 +28,6 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_governance_dag_checkpoint_store",
     "with_stream_token_signer_client",
     "with_stream_token_state_observer",
-    "with_stream_token_gateway_admission",
     "with_appeal_finance_checkpoint",
     "with_proof_outcome_transaction_signer",
     "with_repair_transaction_signer",
@@ -92,7 +91,7 @@ EXPECTED_CONSENSUS_SIGNERS = {
     ),
 }
 EXPECTED_INVENTORY_SHA256 = (
-    "61ff12820063662dcb9174e4b3038be045fbea4142d88ae7c51c10b7777d1ecd"
+    "11664b2cc43b6fb6ddddfddba62ca8e7f7595d9fc6c2f510df0f3ff1232394df"
 )
 GENERATOR_MACROS = (
     "runtime_provider_backend_collection_v1",
@@ -196,7 +195,7 @@ def _generator_hashes(source: str) -> dict[str, str]:
 
 def _validate_source(source: str) -> None:
     records = _inventory(source)
-    _require(len(records) == 57, f"expected 57 frozen backends, found {len(records)}")
+    _require(len(records) == 56, f"expected 56 frozen backends, found {len(records)}")
     _require(
         len({record[2] for record in records}) == len(records),
         "backend fields must be unique",
@@ -208,7 +207,7 @@ def _validate_source(source: str) -> None:
 
     optional = [record for record in records if record[1] == "optional"]
     repeated = [record for record in records if record[1] == "repeated"]
-    _require(len(optional) == 56, f"expected 56 optional backends, found {len(optional)}")
+    _require(len(optional) == 55, f"expected 55 optional backends, found {len(optional)}")
     _require(len(repeated) == 1, f"expected one repeated backend, found {len(repeated)}")
     _require(
         tuple(record[5] for record in optional) == EXPECTED_OPTIONAL_METHODS,
@@ -266,6 +265,18 @@ class RuntimeProviderBrokerBackendSetterSourceTests(unittest.TestCase):
     def test_contract_rejects_source_mutations(self) -> None:
         source = API_PATH.read_text(encoding="utf-8")
         mutations = {
+            "retired gateway admission backend": source.replace(
+                BACKEND_STRUCT_MARKER,
+                BACKEND_STRUCT_MARKER
+                + (
+                    "\n        /// Attach the deployment-owned stream-token quota, sealed-sequence, and\n"
+                    "        /// ordered callback-outbox provider.\n"
+                    "        optional stream_token_gateway_admission: "
+                    "Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1> "
+                    "=> pub fn with_stream_token_gateway_admission(provider);\n"
+                ),
+                1,
+            ),
             "missing entry": _remove_inventory_entry(
                 source, "with_bootle_lantern_issuance"
             ),

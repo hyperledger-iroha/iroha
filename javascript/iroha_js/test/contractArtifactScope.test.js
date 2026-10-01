@@ -22,8 +22,10 @@ const dataspace = "18446744073709551615";
 const artifactId = { dataspaceId: dataspace, codeHash: hash };
 const networkId = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 const privateKey = Buffer.alloc(32, 0x0b);
-const accountId = AccountAddress.fromAccount({ algorithm: "ed25519", publicKey: ed25519.getPublicKey(privateKey) }).toI105(753);
-const auth = { canonicalAuth: { accountId, privateKey } };
+function artifactAuth() {
+  const accountId = AccountAddress.fromAccount({ algorithm: "ed25519", publicKey: ed25519.getPublicKey(privateKey) }).toI105(753);
+  return { canonicalAuth: { accountId, privateKey } };
+}
 const wireId = { dataspace_id: dataspace, code_hash: canonicalHashLiteral(Buffer.from(hash, "hex")) };
 
 function clientFor(payload, calls = []) {
@@ -78,6 +80,7 @@ test("six artifact instructions require one exact full-width dataspace", () => {
 });
 
 test("artifact reads require account authentication and bind network, u64 scope and bytes", async () => {
+  const auth = artifactAuth();
   const payload = { network_id: networkId.literal, artifact_id: wireId, code_b64: fixture.artifact_base64 };
   const calls = [];
   const client = clientFor(payload, calls);
@@ -96,4 +99,45 @@ test("artifact reads require account authentication and bind network, u64 scope 
     await assert.rejects(clientFor(replacement).getContractCodeBytes(artifactId, auth));
   }
   assert.equal(typeof client.registerContractCode, "undefined");
+});
+
+test("artifact response normalization preserves full-u64 identity and rejects scope substitution", async () => {
+  // The native signed transport is tested above; this test independently exercises
+  // bounded response admission using an already authenticated transport result.
+  const auth = { canonicalAuth: { accountId: "alice-1@wonderland", privateKey } };
+  const payload = { network_id: networkId.literal, artifact_id: wireId, code_b64: fixture.artifact_base64 };
+  const normalizedClient = (record) => {
+    const client = clientFor(record);
+    client._request = async () => new Response(
+      JSON.stringify(record).replace(`"dataspace_id":"${dataspace}"`, `"dataspace_id":${dataspace}`),
+      { headers: { "content-type": "application/json" } },
+    );
+    return client;
+  };
+  await assert.rejects(normalizedClient(payload).getContractCodeBytes(artifactId), /canonicalAuth/u);
+  const result = await normalizedClient(payload).getContractCodeBytes(artifactId, auth);
+  assert.deepEqual(result, payload);
+  for (const replacement of [
+    { ...payload, network_id: NetworkId.fromBytes(Buffer.alloc(32, 0xa7)).literal },
+    { ...payload, artifact_id: { ...wireId, dataspace_id: "7" } },
+    { ...payload, artifact_id: { ...wireId, code_hash: canonicalHashLiteral(Buffer.alloc(32, 0xab)) } },
+    { ...payload, artifact_id: { ...wireId, dataspace_id: "18446744073709551616" } },
+    { ...payload, artifact_id: { ...wireId, dataspace_id: "01" } },
+    { ...payload, code_b64: `${fixture.artifact_base64}\n` },
+    { ...payload, code_b64: Buffer.of(1).toString("base64") },
+    { ...payload, extra: true },
+    { code_b64: fixture.artifact_base64 },
+  ]) await assert.rejects(normalizedClient(replacement).getContractCodeBytes(artifactId, auth));
+  const manifestResponse = { network_id: networkId.literal, artifact_id: wireId, manifest: fixture.manifest };
+  const manifest = await normalizedClient(manifestResponse).getContractManifest(artifactId, auth);
+  assert.deepEqual(manifest.artifact_id, wireId);
+  assert.equal(manifest.code_hash, hash);
+  const inline = await normalizedClient({ ...manifestResponse, code_bytes: fixture.artifact_base64 }).getContractManifest(artifactId, auth);
+  assert.equal(inline.code_bytes, fixture.artifact_base64);
+  for (const replacement of [
+    { ...manifestResponse, artifact_id: { ...wireId, dataspace_id: "0" } },
+    { ...manifestResponse, network_id: NetworkId.fromBytes(Buffer.alloc(32, 0xa7)).literal },
+    { ...manifestResponse, code_bytes: null },
+    { ...manifestResponse, extra: true },
+  ]) await assert.rejects(normalizedClient(replacement).getContractManifest(artifactId, auth));
 });

@@ -1703,15 +1703,19 @@ mod tests {
             por_recorder_authority: account(1),
             dispute_recorder_authority: account(2),
             token_recorder_authority: account(3),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 86_400_000,
         }
     }
     fn authority_record() -> ReputationJournalAuthorityPolicyRecordV1 {
-        ReputationJournalAuthorityPolicyRecordV1::try_new(
-            authority_policy(),
-            account(4),
-            FINALIZED_AT_MS - 1_000,
-        )
+        ReputationJournalAuthorityPolicyRecordV1::try_new(authority_policy(),
+(account(4)).clone(),
+FINALIZED_AT_MS - 1_000,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: FINALIZED_AT_MS - 1_000, authority: (account(4)).clone(),
+    }))
         .expect("valid authority policy record")
     }
     fn journal_event(

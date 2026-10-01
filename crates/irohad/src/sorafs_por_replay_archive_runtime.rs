@@ -9,7 +9,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_node::{
     NodeHandle, PorReputationReconcileOutcomeV1,
     reputation::runtime::{
-        ReputationNativeOutcomeAdmissionApiV1, ReputationNativeOutcomeAdmissionStateV1,
+        PorTerminalReputationAdmissionStateV1, PorTerminalReputationAdmissionV1,
     },
 };
 use std::{sync::Arc, time::Duration};
@@ -56,7 +56,7 @@ pub(crate) struct PorReplayArchiveTickOutcomeV1 {
 /// Reconcile one bounded retained PoR-terminal batch into reputation.
 pub(crate) fn reconcile_reputation_once(
     node: &NodeHandle,
-    admission: &dyn ReputationNativeOutcomeAdmissionApiV1,
+    admission: &dyn PorTerminalReputationAdmissionV1,
     maximum_records: u32,
 ) -> Result<PorReplayArchiveTickOutcomeV1, PorReplayArchiveWorkerErrorV1> {
     if maximum_records == 0 {
@@ -66,14 +66,14 @@ pub(crate) fn reconcile_reputation_once(
         .activation_state()
         .map_err(|_| PorReplayArchiveWorkerErrorV1::ReputationReconciliation)?
     {
-        ReputationNativeOutcomeAdmissionStateV1::Deferred => {
+        PorTerminalReputationAdmissionStateV1::Deferred => {
             return Ok(PorReplayArchiveTickOutcomeV1 {
                 reputation_deferred: true,
                 reconciled_records: 0,
                 compacted_records: 0,
             });
         }
-        ReputationNativeOutcomeAdmissionStateV1::Active => {}
+        PorTerminalReputationAdmissionStateV1::Active => {}
     }
     let mut reconciled_records = 0_u32;
     for _ in 0..maximum_records {
@@ -96,7 +96,7 @@ pub(crate) fn reconcile_reputation_once(
 /// Run one bounded reconciliation and compaction tick.
 pub(crate) fn reconcile_and_compact_once(
     node: &NodeHandle,
-    admission: &dyn ReputationNativeOutcomeAdmissionApiV1,
+    admission: &dyn PorTerminalReputationAdmissionV1,
     maximum_records: u32,
 ) -> Result<PorReplayArchiveTickOutcomeV1, PorReplayArchiveWorkerErrorV1> {
     if maximum_records == 0
@@ -118,7 +118,7 @@ pub(crate) fn reconcile_and_compact_once(
 }
 fn start_supervised(
     node: NodeHandle,
-    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    admission: Arc<dyn PorTerminalReputationAdmissionV1>,
     mode: PorReputationWorkerModeV1,
     poll_interval: Duration,
     maximum_records: u32,
@@ -175,7 +175,7 @@ fn start_supervised(
 /// Returns an error for an inert cadence or record bound.
 pub(crate) fn start_reputation_reconciliation(
     node: NodeHandle,
-    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    admission: Arc<dyn PorTerminalReputationAdmissionV1>,
     poll_interval: Duration,
     maximum_records: u32,
     shutdown_signal: ShutdownSignal,
@@ -200,7 +200,7 @@ pub(crate) fn start_reputation_reconciliation(
 /// Returns an error when no valid archive policy is installed.
 pub(crate) fn start(
     node: NodeHandle,
-    admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    admission: Arc<dyn PorTerminalReputationAdmissionV1>,
     shutdown_signal: ShutdownSignal,
 ) -> Result<Child, PorReplayArchiveWorkerErrorV1> {
     let policy = node
@@ -225,43 +225,30 @@ pub(crate) fn start(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::sorafs::{
-        capacity::ProviderId,
-        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
-    };
+    use iroha_data_model::sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1};
     use sorafs_node::{
         NodeRuntimeDeps, PorFinalizedReplayArchiveBindingV1,
         PorFinalizedReplayArchiveExternalErrorV1, PorFinalizedReplayArchiveLookupV1,
         PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveRecordV1,
         PorFinalizedReplayArchiveV1,
         config::{GcConfig, PorReplayArchivePolicyV1, RepairConfig, StorageConfig},
-        reputation::runtime::{
-            ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError,
-            StreamTokenReputationAdmissionOutcomeV1,
-        },
+        reputation::runtime::{ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError},
     };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use tempfile::TempDir;
     #[derive(Debug)]
     struct RejectingAdmission;
-    impl ReputationNativeOutcomeAdmissionApiV1 for RejectingAdmission {
+    impl PorTerminalReputationAdmissionV1 for RejectingAdmission {
         fn activation_state(
             &self,
-        ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
-            Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+        ) -> Result<PorTerminalReputationAdmissionStateV1, ReputationRuntimeError> {
+            Ok(PorTerminalReputationAdmissionStateV1::Active)
         }
         fn record_por_terminal(
             &self,
             _provider_id: ProviderId,
             _outcome: PorTerminalOutcomeV1,
         ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
-            Err(ReputationRuntimeError::RuntimeBindingMismatch)
-        }
-        fn record_authenticated_stream_token_validation(
-            &self,
-            _provider_id: ProviderId,
-            _outcome: StreamTokenValidationOutcomeV1,
-        ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         }
     }
@@ -271,16 +258,16 @@ mod tests {
         active: AtomicBool,
         state_error: AtomicBool,
     }
-    impl ReputationNativeOutcomeAdmissionApiV1 for DeferredAdmission {
+    impl PorTerminalReputationAdmissionV1 for DeferredAdmission {
         fn activation_state(
             &self,
-        ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
+        ) -> Result<PorTerminalReputationAdmissionStateV1, ReputationRuntimeError> {
             if self.state_error.load(Ordering::Relaxed) {
                 Err(ReputationRuntimeError::RuntimeBindingMismatch)
             } else if self.active.load(Ordering::Relaxed) {
-                Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+                Ok(PorTerminalReputationAdmissionStateV1::Active)
             } else {
-                Ok(ReputationNativeOutcomeAdmissionStateV1::Deferred)
+                Ok(PorTerminalReputationAdmissionStateV1::Deferred)
             }
         }
         fn record_por_terminal(
@@ -289,13 +276,6 @@ mod tests {
             _outcome: PorTerminalOutcomeV1,
         ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Err(ReputationRuntimeError::RuntimeBindingMismatch)
-        }
-        fn record_authenticated_stream_token_validation(
-            &self,
-            _provider_id: ProviderId,
-            _outcome: StreamTokenValidationOutcomeV1,
-        ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         }
     }
@@ -410,8 +390,7 @@ mod tests {
             reconcile_and_compact_once(&node, &RejectingAdmission, 1),
             Err(PorReplayArchiveWorkerErrorV1::InvalidConfiguration)
         );
-        let admission: Arc<dyn ReputationNativeOutcomeAdmissionApiV1> =
-            Arc::new(RejectingAdmission);
+        let admission: Arc<dyn PorTerminalReputationAdmissionV1> = Arc::new(RejectingAdmission);
         assert!(matches!(
             start_reputation_reconciliation(
                 node.clone(),

@@ -142,7 +142,7 @@ impl<'view, 'state, 'round> PreparedCheckExecutionV1<'view, 'state, 'round> {
         Ok(())
     }
 
-    pub(crate) fn finish(self) -> Result<BorrowedCheckExecutionCutV1<'view, 'state>, Error> {
+    fn validate_finish(&self) -> Result<(), Error> {
         self.round.ensure_live()?;
         if self.failed
             || self.next_height.is_some()
@@ -150,6 +150,36 @@ impl<'view, 'state, 'round> PreparedCheckExecutionV1<'view, 'state, 'round> {
         {
             return Err(Error::Execution);
         }
+        Ok(())
+    }
+
+    /// Retain the same one-use signed binding for a final purpose-owned currentness fence.
+    /// This does not renew, rebind, decode or clone the original round or capability.
+    pub(crate) fn finish_retaining_bound(
+        self,
+    ) -> Result<
+        (
+            BorrowedCheckExecutionCutV1<'view, 'state>,
+            BoundNativeCheckV1,
+        ),
+        Error,
+    > {
+        self.validate_finish()?;
+        let cut = BorrowedCheckExecutionCutV1 {
+            view: self.view,
+            data: CheckExecutionDataV1 {
+                check_height: self.check_height,
+                applied_floor: self.applied_floor,
+                entry_hash: self.entry_hash,
+                canonical_external: self.bound.entry_bytes.clone(),
+                check_block_hash: self.check_block_hash.ok_or(Error::Execution)?,
+            },
+        };
+        Ok((cut, self.bound))
+    }
+
+    pub(crate) fn finish(self) -> Result<BorrowedCheckExecutionCutV1<'view, 'state>, Error> {
+        self.validate_finish()?;
         Ok(BorrowedCheckExecutionCutV1 {
             view: self.view,
             data: CheckExecutionDataV1 {

@@ -538,11 +538,16 @@ fn print_usage() {
         "    Produce a PolicyJurySortitionV1 manifest for roadmap item MINFO-5 (specs/ministry/policy_jury_ballots.md), wiring deterministic draws + waitlists into referendum packets."
     );
     eprintln!(
-        "  cargo xtask mochi-bundle [--out <path>] [--profile <name>] [--no-archive] [--kagami <path>] [--matrix <path>] [--smoke] [--stage <path>]"
+        "  cargo xtask mochi-bundle [--out <path>] [--profile <name>] [--no-archive] [--network-profiles <path>] [--matrix <path>] [--smoke] [--stage <path>]"
+    );
+    eprintln!("  cargo xtask mochi-latency --bundle <directory> --out <new-sample-directory>");
+    eprintln!("  cargo xtask mochi-latency-report --samples <directory> --out <new-report.json>");
+    eprintln!(
+        "  cargo xtask mochi-latency-remote --bundle <directory> --driver <release-test-executable> --out <new-campaign-directory>"
     );
     eprintln!("    Build the MOCHI desktop bundle with a manifest and optional .tar.gz archive.");
     eprintln!(
-        "    Use --kagami to point at a prebuilt kagami binary instead of building one from the workspace."
+        "    The bundler builds matching Mochi, Kagami and iroha3d together; latency commands observe an existing bundle and emit diagnostic samples only."
     );
     eprintln!(
         "    Use --matrix to append the bundle metadata to a JSON matrix (created if missing)."
@@ -550,7 +555,9 @@ fn print_usage() {
     eprintln!(
         "    Use --stage to copy the bundle (and archive when present) into a shared staging directory."
     );
-    eprintln!("    Use --smoke to run the packaged `mochi --help` as a basic execution gate.");
+    eprintln!(
+        "    Use --smoke to verify packaged help, config-free source/bytecode/package deployment, live execution, and four-validator restart."
+    );
     eprintln!(
         "  cargo xtask iso-bridge-lint [--isin <path>] [--bic-lei <path>] [--mic <path>] [--fixtures <path>]"
     );

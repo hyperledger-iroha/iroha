@@ -524,6 +524,7 @@ fn parse_capability_name(name: &str) -> Option<CapabilityType> {
         "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
         "soranet_pq" => Some(CapabilityType::SoraNetHybridPq),
         "potr_mldsa" => Some(CapabilityType::PotrMlDsa),
+        "registered_account_read" => Some(CapabilityType::RegisteredAccountRead),
         "vendor_reserved" => Some(CapabilityType::VendorReserved),
         _ => None,
     }

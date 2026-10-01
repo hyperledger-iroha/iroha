@@ -290,6 +290,8 @@ fn write_acceleration_config(cfg: AccelerationConfig) {
 }
 /// Apply acceleration configuration. Optional; when not called the VM
 /// automatically uses all available hardware, subject to golden self-tests.
+/// Metal discovery, qualification and calibration run when acceleration is requested,
+/// rather than while applying policy.
 pub fn set_acceleration_config(cfg: AccelerationConfig) {
     write_acceleration_config(cfg);
     iroha_accel::ProcessResources::install(cfg.resource_limits);
@@ -299,9 +301,6 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
         crate::vector::set_metal_enabled(cfg.enable_metal);
-        if cfg.enable_metal {
-            crate::vector::warm_up_metal();
-        }
     }
     // CUDA policy
     #[cfg(feature = "cuda")]
@@ -375,6 +374,7 @@ pub struct AccelerationRuntimeStatus {
     pub cuda: BackendRuntimeStatus,
 }
 /// Retrieve the latest acceleration runtime status including parity checks.
+/// This explicit query may discover and qualify enabled hardware.
 #[must_use]
 pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
     let cfg = acceleration_config();
@@ -394,20 +394,14 @@ pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
     // Metal status (macOS + `metal` feature)
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
-        let policy_enabled = crate::vector::metal_policy_enabled();
-        let runtime_allowed = crate::vector::metal_runtime_allowed();
-        let parity_ok = crate::vector::metal_parity_ok();
+        // An enabled policy alone is not evidence of a qualified physical device.
+        let available = crate::vector::metal_available();
         status.metal = BackendRuntimeStatus {
             supported: true,
             configured: cfg.enable_metal,
-            available: runtime_allowed,
-            parity_ok: parity_ok && runtime_allowed,
+            available,
+            parity_ok: available && crate::vector::metal_parity_ok(),
         };
-        // If policy disabled, runtime_allowed will be false. Preserve parity flag reflecting last self-test.
-        if !policy_enabled {
-            status.metal.available = false;
-            status.metal.parity_ok = parity_ok;
-        }
     }
     #[cfg(not(all(target_os = "macos", feature = "metal")))]
     {

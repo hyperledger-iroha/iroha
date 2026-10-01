@@ -34,8 +34,6 @@ const MAX_STREAM_TOKEN_WIRE_BYTES: usize = STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 pub(crate) const MAX_CLIENT_ID_BYTES: usize = 128;
 /// Maximum echoed issuance nonce bytes.
 pub(crate) const MAX_NONCE_BYTES: usize = 128;
-/// Maximum tolerated positive clock skew for an otherwise valid token.
-pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
 #[cfg(feature = "test-fixtures")]
 #[path = "token/native_issuer_test_fixture.rs"]
 pub mod native_issuer_test_fixture;
@@ -75,6 +73,18 @@ impl StreamTokenQuotaSubject {
     pub(crate) fn from_authenticated_operator(public_key: &PublicKey) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(Self::DERIVATION_CONTEXT);
         hasher.update(public_key.to_string().as_bytes());
+        Self(*hasher.finalize().as_bytes())
+    }
+    /// Separate quota namespace for a canonical authenticated network account.
+    pub(crate) fn from_authenticated_account(
+        network: iroha_data_model::NetworkId,
+        account: &iroha_data_model::account::AccountId,
+    ) -> Self {
+        let mut hasher = blake3::Hasher::new_derive_key(
+            "iroha.torii.sorafs.stream-token.account-quota-subject.v1",
+        );
+        hasher.update(network.as_bytes());
+        hasher.update(account.to_string().as_bytes());
         Self(*hasher.finalize().as_bytes())
     }
 }
@@ -204,12 +214,8 @@ impl StreamTokenIssuer {
             max_seen_epoch: AtomicU64::new(0),
         })
     }
-    /// Issue a signed stream token for the provided manifest details.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StreamTokenIssuerError`] when system time overflows, the runtime signer fails, or
-    /// the request violates the configured issuance quotas.
+    /// Shared issuer with optional explicit admitted account-read ceilings.
+    /// The caller authenticates and revalidates the policy against native state.
     pub(crate) fn issue_token(
         &self,
         quota_subject: StreamTokenQuotaSubject,
@@ -217,22 +223,33 @@ impl StreamTokenIssuer {
         provider_id: [u8; 32],
         profile_handle: String,
         overrides: TokenOverrides,
+        policy: Option<&sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1>,
     ) -> Result<TokenIssue, StreamTokenIssuerError> {
-        let ttl_secs = checked_override("ttl_secs", overrides.ttl_secs, self.defaults.ttl_secs)?;
-        let max_streams = checked_override(
-            "max_streams",
-            overrides.max_streams,
-            self.defaults.max_streams,
-        )?;
+        let mut limits = self.defaults;
+        if let Some(policy) = policy {
+            policy
+                .validate()
+                .map_err(|_| StreamTokenIssuerError::InvalidPolicy {
+                    field: "account_read",
+                    reason: "invalid admitted policy".into(),
+                })?;
+            limits.ttl_secs = limits.ttl_secs.min(policy.ttl_secs);
+            limits.max_streams = limits.max_streams.min(policy.max_streams);
+            limits.rate_limit_bytes = limits.rate_limit_bytes.min(policy.rate_limit_bytes);
+            limits.requests_per_minute = limits.requests_per_minute.min(policy.requests_per_minute);
+        }
+        let ttl_secs = checked_override("ttl_secs", overrides.ttl_secs, limits.ttl_secs)?;
+        let max_streams =
+            checked_override("max_streams", overrides.max_streams, limits.max_streams)?;
         let rate_limit_bytes = checked_override(
             "rate_limit_bytes",
             overrides.rate_limit_bytes,
-            self.defaults.rate_limit_bytes,
+            limits.rate_limit_bytes,
         )?;
         let requests_per_minute = checked_override(
             "requests_per_minute",
             overrides.requests_per_minute,
-            self.defaults.requests_per_minute,
+            limits.requests_per_minute,
         )?;
         let now = self.signer.now_unix_ms()? / 1_000;
         self.observe_epoch(now)?;
@@ -255,7 +272,11 @@ impl StreamTokenIssuer {
         // Refuse before charging issuance quota when finalized completed-operation proof has
         // no production source. The signer repeats this check before provider I/O.
         self.signer.require_completed_proof_source()?;
-        let remaining_quota = self.reserve_issuance_budget(quota_subject, Instant::now())?;
+        let remaining_quota = self.reserve_issuance_budget(
+            quota_subject,
+            Instant::now(),
+            limits.requests_per_minute,
+        )?;
         let token = self.signer.sign(body)?;
         Ok(TokenIssue {
             token,
@@ -288,8 +309,8 @@ impl StreamTokenIssuer {
         &self,
         quota_subject: StreamTokenQuotaSubject,
         now: Instant,
+        limit: u32,
     ) -> Result<u32, StreamTokenIssuerError> {
-        let limit = self.defaults.requests_per_minute;
         let mut budgets = self
             .issuance_budgets
             .lock()

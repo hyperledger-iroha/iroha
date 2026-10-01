@@ -67,8 +67,6 @@ fn dispatch_server_operation_with_session(
     let governance_checkpoint_slot =
         IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id();
     let stream_token_slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
-    let stream_token_gateway_admission_slot =
-        IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
     let appeal_signer_slot = IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id();
     let appeal_checkpoint_slot = IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint.wire_id();
     let potr_gateway_slot = IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id();
@@ -234,7 +232,6 @@ fn dispatch_server_operation_with_session(
                 || slot == fenced_privacy_publisher_slot
                 || slot == fenced_privacy_head_reader_slot
                 || slot == governance_checkpoint_slot
-                || slot == stream_token_gateway_admission_slot
                 || slot == appeal_signer_slot
                 || slot == appeal_checkpoint_slot
                 || slot == potr_gateway_slot
@@ -458,23 +455,6 @@ fn dispatch_server_operation_with_session(
         }
         (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
             stream_token_operations::stream_token_check(state, request)
-        }
-        (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
-            if slot == stream_token_gateway_admission_slot =>
-        {
-            stream_token_operations::stream_token_gateway_admit(state, request)
-        }
-        (slot, OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1)
-            if slot == stream_token_gateway_admission_slot =>
-        {
-            stream_token_operations::stream_token_gateway_pending(state, request)
-        }
-        (
-            slot,
-            OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1,
-        ) if slot == stream_token_gateway_admission_slot => {
-            stream_token_operations::stream_token_gateway_complete(state, request)
         }
         (slot, OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1) if slot == appeal_signer_slot => {
             appeal_finance_operations::appeal_finance_transaction_sign(state, request)

@@ -643,6 +643,16 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     let domain = Domain::new(fixture_domain_id()).build(authority);
     let account = build_fixture_account(authority, authority);
     let world = World::with([domain], [account], []);
+<<<<<<< HEAD
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
+=======
     use crate::sumeragi::{
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},
@@ -664,6 +674,7 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
         None,
     )
     .expect("apply signed host genesis");
+>>>>>>> origin/optimizations
     grant_named_permission_to_account(
         &state,
         authority,
@@ -779,7 +790,7 @@ fn install_contract_with_interface_and_lifecycle(
     let mut manifest = ivm::verify_contract_artifact(&code)
         .expect("test contract artifact must verify after wildcard sanitization")
         .manifest;
-    let next_height = u64::try_from(state.view().height() + 1)
+    let next_height = u64::try_from((state.view().height() + 1).max(2))
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next block height must fit in u64 and be non-zero");
@@ -971,7 +982,7 @@ seiyaku ProtectedPages {
     grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
     assert_can_resume(&other);
 
-    let next_height = u64::try_from(state.view().height() + 1)
+    let next_height = u64::try_from((state.view().height() + 1).max(2))
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next permission block height");

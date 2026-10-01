@@ -9696,8 +9696,16 @@ seiyaku GuardedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture address selects its exact artifact scope");
+=======
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -9871,8 +9879,16 @@ seiyaku DynamicAccessCounter {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture address selects its exact artifact scope");
+=======
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -10072,8 +10088,16 @@ seiyaku DynamicTarget {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
+            code_hash,
+        )
+        .expect("fixture address selects its exact artifact scope");
+=======
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests

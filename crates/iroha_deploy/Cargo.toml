@@ -19,6 +19,8 @@ workspace = true
 
 [dependencies]
 iroha = { workspace = true }
+iroha_contract_deploy = { workspace = true }
+iroha_wallet = { workspace = true }
 iroha_config = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
@@ -61,4 +63,5 @@ iroha_allocation = { workspace = true }
 halo2curves = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
+kotodama_lang = { workspace = true }
 tempfile = { workspace = true }

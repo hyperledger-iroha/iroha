@@ -18,7 +18,7 @@ use iroha_data_model::sns::pricing::{
     pick_pricing_tier, required_payment_amount, tier_by_pricing_class, validate_term_bounds,
 };
 pub use iroha_data_model::sns::{
-    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, record_storage_key,
 };
 #[cfg(test)]
 use iroha_data_model::transaction::Executable;
@@ -326,16 +326,6 @@ impl SnsNamespace {
             ))),
         }
     }
-}
-/// Compute the durable smart-contract-state key for a SNS record selector.
-#[must_use]
-pub fn record_storage_key(selector: &NameSelectorV1) -> StatePath {
-    StatePath::from_str(&format!(
-        "sns/records/{}/{}",
-        selector.suffix_id,
-        hex::encode(selector.name_hash())
-    ))
-    .expect("static SNS storage key format is a valid StatePath")
 }
 /// Compute the durable smart-contract-state key for a SNS suffix policy.
 #[must_use]
@@ -1191,7 +1181,77 @@ fn seed_alias_manage_permissions_if_missing(
 /// authority are only coming online while the block executes. This helper pre-seeds the leases and
 /// alias-management permissions that the first block itself consumes, mirroring how operators would
 /// pre-register those names before normal operation.
+/// Private namespace pricing is initialized from the unique fee policy in the same authenticated
+/// original genesis before State initialization can seed its global defaults. Existing policy
+/// bytes are validated, never retargeted or repaired.
+///
+/// # Errors
+/// Rejects unauthenticated genesis, invalid private fee authority, or conflicting namespace state.
 pub fn seed_genesis_alias_bootstrap(
+    world: &mut World,
+    block: &iroha_data_model::block::SignedBlock,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<(), SnsError> {
+    use iroha_data_model::{
+        block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
+        isi::SetParameter,
+        parameter::Parameter,
+    };
+
+    iroha_data_model::sumeragi_finality::genesis_epoch(block)
+        .map_err(|error| SnsError::BadRequest(format!("invalid SNS bootstrap genesis: {error}")))?;
+    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
+        .map_err(SnsError::BadRequest)?;
+    if let SumeragiRootScope::Dataspace { .. } = metadata.sumeragi_context.root_scope {
+        let mut policy = None;
+        for transaction in block.external_transactions() {
+            for instruction in transaction.instructions().explicit_instructions() {
+                let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                let Parameter::Custom(custom) = set.inner() else {
+                    continue;
+                };
+                if custom.id() != &PrivateRootFeePolicy::parameter_id() {
+                    continue;
+                }
+                let decoded = PrivateRootFeePolicy::from_custom_parameter(custom)
+                    .map_err(|error| SnsError::BadRequest(error.to_string()))?;
+                if policy.replace(decoded).is_some() {
+                    return Err(SnsError::BadRequest(
+                        "private SNS bootstrap repeats its signed fee policy".into(),
+                    ));
+                }
+            }
+        }
+        let policy = policy.ok_or_else(|| {
+            SnsError::BadRequest("private SNS bootstrap omits its signed fee policy".into())
+        })?;
+        let payment_asset_id = policy.asset_definition_id.to_string();
+        // Prevalidate all present namespaces before inserting any absent policy. A partial
+        // retained world with another currency must fail without creating mixed state.
+        for namespace in [
+            SnsNamespace::AccountAlias,
+            SnsNamespace::Domain,
+            SnsNamespace::Dataspace,
+        ] {
+            if let Some(bytes) = world
+                .smart_contract_state
+                .view()
+                .get(&policy_storage_key(namespace.suffix_id()))
+            {
+                let existing = decode_policy_for_suffix(bytes, namespace.suffix_id())?;
+                ensure_namespace_policy_is_current(namespace, &existing)?;
+                ensure_policy_payment_asset_literal(&existing, &payment_asset_id)?;
+            }
+        }
+        try_seed_default_namespace_policies(world, &payment_asset_id)?;
+    }
+    seed_genesis_alias_records(world, block, dataspace_catalog);
+    Ok(())
+}
+
+fn seed_genesis_alias_records(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2863,5 +2923,7 @@ pub fn active_dataspace_owner_by_id(
     };
     active_dataspace_owner_by_alias(world, &resolution.alias, now_ms)
 }
+#[cfg(test)]
+mod genesis_bootstrap_tests;
 #[cfg(test)]
 mod tests;

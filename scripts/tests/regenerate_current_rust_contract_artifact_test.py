@@ -918,6 +918,49 @@ def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
     assert binding == "test-binding"
 
 
+<<<<<<< HEAD
+def test_current_koto_closure_covers_cli_compiler_abi_and_admission_inputs() -> None:
+    """Follow actual Cargo manifests so another CLI split cannot silently omit its producer."""
+    repo = MODULE.REPOSITORY_ROOT
+    available = frozenset(
+        {Path("Cargo.toml")}
+        | {
+            manifest.relative_to(repo)
+            for tree in ("crates", "vendor")
+            for manifest in (repo / tree).rglob("Cargo.toml")
+        }
+    )
+    manifests, packages = MODULE._package_source_closure(available)
+    expected_packages = {
+        Path("crates/kotodama_toolchain"),
+        Path("crates/kotodama_lang"),
+        Path("crates/ivm"),
+        Path("crates/ivm_abi"),
+        Path("crates/ivm_artifact_admission"),
+        Path("crates/iroha_data_model"),
+    }
+    assert expected_packages <= packages
+    assert {package / "Cargo.toml" for package in expected_packages} <= set(manifests)
+
+    producer_inputs = {
+        Path("crates/kotodama_toolchain/src/bin/koto.rs"),
+        Path("crates/kotodama_lang/src/compiler.rs"),
+        Path("crates/kotodama_lang/grammar/v1.lex"),
+        Path("crates/ivm/src/lib.rs"),
+        Path("crates/ivm_abi/src/metadata.rs"),
+        Path("crates/ivm_artifact_admission/src/lib.rs"),
+        Path("crates/iroha_data_model/src/smart_contract.rs"),
+    }
+    assert all((repo / path).is_file() for path in producer_inputs)
+    non_build_inputs = {
+        package / tree / "developer_only.rs"
+        for package in expected_packages
+        for tree in ("tests", "examples", "benches", "fuzz", "docs")
+    } | {Path("tools/unrelated/src/lib.rs")}
+    assert MODULE._build_package_paths(
+        producer_inputs | non_build_inputs, packages
+    ) == frozenset(producer_inputs)
+=======
 
 def test_default_package_closure_binds_the_current_koto_producer(
     monkeypatch: pytest.MonkeyPatch,
@@ -969,6 +1012,7 @@ def test_default_package_closure_binds_the_current_koto_producer(
     assert not MODULE._is_build_package_path(
         Path("crates/kotodama_lang/tests/parser.rs"), packages
     )
+>>>>>>> origin/optimizations
 
 
 def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
@@ -979,6 +1023,7 @@ def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
     (repo / "crates/root").mkdir(parents=True)
     (repo / "crates/dep").mkdir(parents=True)
     (repo / "crates/build-dep").mkdir(parents=True)
+    (repo / "crates/dev-only").mkdir(parents=True)
     (repo / "vendor/patched").mkdir(parents=True)
     (repo / "vendor/patch-dep").mkdir(parents=True)
     (repo / "Cargo.toml").write_text(
@@ -989,10 +1034,11 @@ def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
     (repo / "crates/root/Cargo.toml").write_text(
         "[package]\nname='root'\nversion='0.1.0'\n"
         "[dependencies]\ndep.workspace=true\n"
-        "[build-dependencies]\nbuild-dep={path='../build-dep'}\n",
+        "[build-dependencies]\nbuild-dep={path='../build-dep'}\n"
+        "[dev-dependencies]\ndev-only={path='../dev-only'}\n",
         encoding="utf-8",
     )
-    for name in ("dep", "build-dep"):
+    for name in ("dep", "build-dep", "dev-only"):
         (repo / f"crates/{name}/Cargo.toml").write_text(
             f"[package]\nname='{name}'\nversion='0.1.0'\n",
             encoding="utf-8",
@@ -1012,6 +1058,7 @@ def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
             Path("crates/root/Cargo.toml"),
             Path("crates/dep/Cargo.toml"),
             Path("crates/build-dep/Cargo.toml"),
+            Path("crates/dev-only/Cargo.toml"),
             Path("vendor/patched/Cargo.toml"),
             Path("vendor/patch-dep/Cargo.toml"),
         }

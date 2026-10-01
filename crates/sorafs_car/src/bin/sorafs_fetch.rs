@@ -1577,6 +1577,7 @@ fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::PotrMlDsa => "potr_mldsa",
+        CapabilityType::RegisteredAccountRead => "registered_account_read",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }

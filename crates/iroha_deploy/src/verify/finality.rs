@@ -23,7 +23,6 @@
 //! that honest tips need. A checkpoint lagging by more than one observation budget is caught up
 //! across observations ([`FinalityError::CatchingUp`]) or explicitly in pages
 //! ([`FinalityVerifier::catch_up`]).
-// TODO(P2): provide the native HTTP transport and concurrent bounded peer reads.
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -119,6 +118,18 @@ pub trait FinalitySource {
         peer: &PeerId,
         challenge: &[u8; 32],
     ) -> Result<SumeragiFinalityAttestation, Self::Error>;
+    /// Read a bounded batch in request order. HTTP transports can overlap independent peers.
+    /// Each result still needs the caller's independent committee and chain verification.
+    fn latest_attestations(
+        &self,
+        peers: &[PeerId],
+        challenge: &[u8; 32],
+    ) -> Vec<Result<SumeragiFinalityAttestation, Self::Error>> {
+        peers
+            .iter()
+            .map(|peer| self.latest_attestation(peer, challenge))
+            .collect()
+    }
 }
 
 /// A durable tip that one committee member attested to.
@@ -245,8 +256,8 @@ pub enum FinalityError {
     #[error("{} of {} required committee members attested", .0.verified(), .0.required)]
     InsufficientAttestations(Box<AttestationQuorum>),
     /// Members claim tips beyond what one observation budget verified. The next observation
-    /// continues from the verified successors; the checkpoint is unchanged until a fresh quorum
-    /// confirms a tip.
+    /// continues from the verified successors. A durable owner may retain that certified prefix,
+    /// but this error never establishes a fresh committee quorum or readiness.
     #[error("verified through height {verified}, members claim up to {claimed}; observe again")]
     CatchingUp {
         /// Last height this observation verified.
@@ -299,12 +310,13 @@ impl Budget {
     }
 }
 
-/// A complete independently anchored checkpoint; failure never replaces it.
+/// An independently anchored certified prefix; fresh readiness requires a successful observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalityVerifier {
     checkpoint: SumeragiFinalityCheckpoint,
     /// Successors an observation verified before its budget ran out, awaiting a fresh quorum.
-    /// The next observation continues from here; they never become the checkpoint without one.
+    /// The next observation continues from here. The durable runtime owner may explicitly
+    /// retain them as a certificate-only checkpoint while still returning CatchingUp.
     pending: Option<SumeragiFinalityCheckpoint>,
 }
 
@@ -371,6 +383,26 @@ impl FinalityVerifier {
     /// Complete native checkpoint to persist for independently authenticated restart.
     pub fn checkpoint(&self) -> &SumeragiFinalityCheckpoint {
         &self.checkpoint
+    }
+    /// Move only previously native-verified successors into the durable owner's certified prefix.
+    /// This supplies no fresh attestation quorum; the owner must retain the CatchingUp refusal.
+    pub(crate) fn promote_verified_progress(&mut self) -> bool {
+        let Some(pending) = self.pending.take() else {
+            return false;
+        };
+        self.checkpoint = pending;
+        true
+    }
+    /// Authenticate the exact retained tip for execution-bound receipts and public record proofs.
+    /// This capability inherits this verifier's independently selected checkpoint; the caller
+    /// must not replace it with a response-selected checkpoint to authenticate a receipt.
+    ///
+    /// # Errors
+    /// The retained native checkpoint or its certified execution decision is inconsistent.
+    pub fn verified_tip(&self) -> Result<VerifiedSumeragiBlock, FinalityError> {
+        Ok(self
+            .native()?
+            .verify_retained_decision(self.checkpoint.tip())?)
     }
     /// Size of the exact committee that certified the tip.
     pub fn committee_size(&self) -> CommitteeSize {
@@ -574,7 +606,9 @@ impl FinalityVerifier {
     ///
     /// When members claim tips beyond one observation budget, the observation returns
     /// [`FinalityError::CatchingUp`] and keeps the successors it verified for the next
-    /// observation, which continues from them. Nothing is published without a fresh quorum.
+    /// observation, which continues from them. This method changes its checkpoint only on fresh
+    /// quorum success; a durable owner may separately retain the verified prefix while returning
+    /// CatchingUp and requiring a new challenged observation for readiness.
     ///
     /// # Errors
     /// Zero challenge, peer budget exhaustion, [`FinalityError::CatchingUp`], or insufficient
@@ -697,17 +731,30 @@ fn read_members<S: FinalitySource + ?Sized>(
     network: NetworkId,
     reads: &mut BTreeMap<PeerId, Read>,
 ) -> Result<(), FinalityError> {
-    for peer in prefix.members()? {
-        if !reads.contains_key(&peer) {
-            if reads.len() == MAX_OBSERVATION_PEERS {
-                return Err(FinalityError::ResourceLimit("peer count"));
-            }
-            let response = source
-                .latest_attestation(&peer, challenge)
-                .map_err(|e| e.to_string());
-            let read = Read::new(response, &peer, challenge, network);
-            reads.insert(peer, read);
-        }
+    let peers = prefix
+        .members()?
+        .into_iter()
+        .filter(|peer| !reads.contains_key(peer))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if reads.len() + peers.len() > MAX_OBSERVATION_PEERS {
+        return Err(FinalityError::ResourceLimit("peer count"));
+    }
+    let responses = source.latest_attestations(&peers, challenge);
+    if responses.len() != peers.len() {
+        return Err(FinalityError::ResourceLimit(
+            "attestation batch cardinality",
+        ));
+    }
+    for (peer, response) in peers.into_iter().zip(responses) {
+        let read = Read::new(
+            response.map_err(|error| error.to_string()),
+            &peer,
+            challenge,
+            network,
+        );
+        reads.insert(peer, read);
     }
     Ok(())
 }

@@ -45,6 +45,11 @@ pub mod node;
 pub mod payload;
 pub(crate) mod penalties;
 pub mod private_dataspace;
+<<<<<<< HEAD
+/// Body-free owner-private root registration and native certificate exports.
+pub mod private_dataspace_export;
+=======
+>>>>>>> origin/optimizations
 /// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
 pub mod records;
 pub mod schedule;

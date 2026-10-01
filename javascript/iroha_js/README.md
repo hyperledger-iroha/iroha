@@ -3164,8 +3164,21 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
+  manifest: {
+    codeHash: Buffer.alloc(32, 0xab),
+    abiHash: "hash:…",
+    compilerFingerprint: "kotodama-1.2 rustc-1.79",
+    accessSetHints: {
+      readKeys: ["account:sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"],
+      writeKeys: ["contract:apps:ledger"],
+    },
+  },
+=======
   artifactId,
   manifest,
+>>>>>>> origin/optimizations
   privateKey,
 });
 
@@ -3173,7 +3186,11 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
+=======
   artifactId,
+>>>>>>> origin/optimizations
   code: fs.readFileSync("./contract.to"),
   privateKey,
 });
@@ -3182,12 +3199,31 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
+=======
   artifactId,
+>>>>>>> origin/optimizations
   reason: "retire archived artifact",
   privateKey,
 });
 ```
 
+<<<<<<< HEAD
+Artifact instructions require `artifactId: { dataspaceId, codeHash }`; the
+same code hash in two dataspaces identifies two separately authorized artifacts.
+Use `deploySmartContractBrowser` for the alias-first upload, manifest, and binding
+workflow. Its authenticated deployment state supplies the dataspace ID.
+`getContractManifest` and `getContractCodeBytes` take that explicit artifact ID
+and canonical account authentication, and verify the returned network and scope.
+Byte reads also verify the artifact hash. Standalone manifest registration uses
+the ordinary signed transaction builders shown above.
+
+The recipe mirrors the same validation rules: keys can be supplied as
+`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`
+selects the deploy dataspace via its suffix, and `CONTRACT_LEASE_EXPIRY_MS`
+can stage a leased alias binding for rehearsal environments.
+=======
 Every artifact helper requires an explicit `{ dataspaceId, codeHash }` identity;
 use a canonical decimal string for the full unsigned 64-bit dataspace range.
 Manifest registration also requires its `code_hash` to match that identity.
@@ -3198,6 +3234,7 @@ hashes without the Iroha marker bit are rejected. Native Norito encoding retains
 `entrypoints`, `kotoba`, and `provenance`; committed ledger admission remains
 authoritative. Bytecode helpers accept `Buffer`, typed arrays, or base64 strings.
 `buildRemoveSmartContractBytesInstruction/Transaction` rejects empty reason strings.
+>>>>>>> origin/optimizations
 
 ### Contract calls via Torii
 

@@ -170,6 +170,29 @@ fn stream_endpoints_and_default_event_filters_match_torii_contract() {
         torii_routes::streaming::SUBSCRIPTION_WS.path()
     );
     let filters = canonical_event_filters();
+<<<<<<< HEAD
+    assert!(matches!(
+        filters.as_slice(),
+        [
+            EventFilterBox::Pipeline(
+                iroha_data_model::events::pipeline::PipelineEventFilterBox::Transaction(_)
+            ),
+            EventFilterBox::Pipeline(
+                iroha_data_model::events::pipeline::PipelineEventFilterBox::Block(_)
+            ),
+            EventFilterBox::Pipeline(
+                iroha_data_model::events::pipeline::PipelineEventFilterBox::Witness(_)
+            ),
+            EventFilterBox::Data(DataEventFilter::Any),
+            EventFilterBox::Time(_),
+            EventFilterBox::ExecuteTrigger(_),
+            EventFilterBox::TriggerCompleted(_),
+        ]
+    ));
+    assert_eq!(
+        filters[4],
+        EventFilterBox::Time(TimeEventFilter::new(ExecutionTime::PreCommit))
+=======
     assert_eq!(filters.len(), 7);
     assert_eq!(
         filters,
@@ -182,6 +205,7 @@ fn stream_endpoints_and_default_event_filters_match_torii_contract() {
             EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new()),
             EventFilterBox::TriggerCompleted(TriggerCompletedEventFilter::new()),
         ]
+>>>>>>> origin/optimizations
     );
     let request = EventSubscriptionRequest::new(filters.clone());
     let encoded = norito::to_bytes(&request).expect("encode event subscription");

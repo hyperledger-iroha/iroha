@@ -1177,6 +1177,21 @@ async fn app_api_vk_and_proofs_lists_ok() {
 }
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
+<<<<<<< HEAD
+    let app = mk_app_state_for_tests();
+    let headers = HeaderMap::new();
+    // An admitted exact artifact lookup preserves a scoped absence result.
+    let resp = routing::handle_get_contract_code(
+        app.state.clone(),
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"missing artifact"),
+        ),
+    )
+    .await
+    .expect("scoped absence mapping")
+    .into_response();
+=======
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
     let caller = AccountId::new(key_pair.public_key().clone());
@@ -1220,6 +1235,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
     )
     .await
     .unwrap_or_else(|error| error.into_response());
+>>>>>>> origin/optimizations
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     // VK by backend/name (non-existent)
     let resp = super::handler_get_vk_by_backend_name(

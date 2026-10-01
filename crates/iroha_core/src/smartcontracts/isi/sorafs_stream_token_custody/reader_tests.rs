@@ -47,7 +47,17 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         ),
         [true]
     );
+<<<<<<< HEAD
+    let original_qc = chain
+        .committed(2)
+        .block()
+        .commit_certificate()
+        .expect("genuine native exact-quorum certificate")
+        .commit_qc()
+        .to_vec();
+=======
     let original = chain.committed(2);
+>>>>>>> origin/optimizations
     chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert_eq!(
         read(&policy.binding, 2),
@@ -64,6 +74,9 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         "absence of a provider row cannot bypass finality"
     );
     assert_eq!(read(&policy.binding, 0), Err(Error::StaleHeight));
+<<<<<<< HEAD
+    // A successor certificate cannot repair a corrupted historical authority prefix.
+=======
     // Restore only the exact original QC before advancing. A later valid block
     // cannot replace a missing historical certificate in the required prefix.
     state
@@ -89,7 +102,18 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         original.block().executed_block_wire_identity().unwrap()
     );
     // A certified successor: the retained row is current at a certified block.
+>>>>>>> origin/optimizations
     assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());
+    assert_eq!(read(&policy.binding, 3), Err(Error::FinalityUnavailable));
+    // Restore only the actual original stored QC, without inventing an execution result.
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(original_qc),
+        )
+        .expect("restore original native certificate");
+    // The retained row is now current on the independently certified complete prefix.
     let current = read(&policy.binding, 3)
         .expect("same-State finality")
         .expect("raw custody");
