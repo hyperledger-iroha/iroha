@@ -136,6 +136,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return ensureTransactionSubmissionCompatibility()
             .thenCompose { executeAccepted(request, "transaction JSON submit", 202) }
@@ -148,6 +149,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return ensureTransactionSubmissionCompatibility().thenCompose {
             notifyRequest(request)
@@ -192,7 +194,7 @@ class HttpClientTransport private constructor(
         require(signedQuery.isNotEmpty() && signedQuery.size <= 16 * 1024) {
             "signed committed-transaction query exceeds its native bound"
         }
-        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "signed committed-transaction query requires HTTPS"
         }
         val ownedHeaders = listOf("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding", "Cache-Control")
@@ -218,6 +220,7 @@ class HttpClientTransport private constructor(
         TransportSecurity.requireHttpRequestAllowed(
             "signed committed-transaction query", config.baseUri(), target,
             config.defaultHeaders(), signedQuery,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return fetchExactNoritoBytes(
             request, "signed committed-transaction query",
@@ -235,7 +238,7 @@ class HttpClientTransport private constructor(
      */
     fun getBridgeFinalityBundleJson(height: Long): CompletableFuture<ByteArray> {
         require(height > 0) { "bridge finality height must be positive" }
-        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "bridge finality bundle fetch requires HTTPS"
         }
         val ownedHeaders = listOf("Accept", "Accept-Encoding", "Cache-Control")
@@ -274,6 +277,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return ensureTransactionSubmissionCompatibility()
             .thenCompose { executeAccepted(request, "transaction entrypoint JSON submit", 202) }
@@ -325,6 +329,7 @@ class HttpClientTransport private constructor(
     private fun newEventStreamClientBuilder(): ToriiEventStreamClient.Builder =
         ToriiEventStreamClient.builder()
             .setBaseUri(config.baseUri())
+            .setAllowLocalDevelopmentHttp(config.allowLocalDevelopmentHttp())
             .setTransportExecutor(executor)
             .defaultHeaders(config.defaultHeaders())
             .observers(config.observers())
@@ -334,6 +339,7 @@ class HttpClientTransport private constructor(
     fun newDaToriiClient(): DaToriiClient = DaToriiClient.builder()
         .executor(executor)
         .baseUri(config.baseUri())
+        .setAllowLocalDevelopmentHttp(config.allowLocalDevelopmentHttp())
         .timeout(config.requestTimeout())
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
@@ -348,7 +354,7 @@ class HttpClientTransport private constructor(
             electionId,
             "election_id",
         )
-        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "election tally requests require an HTTPS Torii endpoint"
         }
         require(config.defaultHeaders().keys.none { name ->
@@ -374,6 +380,7 @@ class HttpClientTransport private constructor(
         AtomicPrivateSettlementToriiClientV1.builder()
             .executor(executor)
             .baseUri(config.baseUri())
+            .setAllowLocalDevelopmentHttp(config.allowLocalDevelopmentHttp())
             .localSigningContext(config.requireLocalSigningContext())
             .timeout(config.requestTimeout())
             .defaultHeaders(config.defaultHeaders())
@@ -426,7 +433,7 @@ class HttpClientTransport private constructor(
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<PrivacyExact12CapabilityManifestV1> {
-        require(config.baseUri().scheme == "https") {
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "Exact12 privacy capabilities require an HTTPS Torii endpoint"
         }
         val expectedNetworkId = config.requireLocalSigningContext().networkId()
@@ -1130,7 +1137,7 @@ class HttpClientTransport private constructor(
         canonicalAuth: ToriiCanonicalRequestAuth,
         codec: ValidationFeeHijiriQuoteCodec,
     ): CompletableFuture<ValidationFeeHijiriQuoteV1> {
-        check(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+        check(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "Hijiri validation-fee quote requests require an HTTPS Torii base URL"
         }
         val body = codec.encode(request).copyOf()
@@ -1584,6 +1591,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
 
         return ensureTransactionSubmissionCompatibility().thenCompose {
@@ -1686,7 +1694,13 @@ class HttpClientTransport private constructor(
         if (future.isDone) return
         val configuredMaxAttempts = options.maxAttempts
         if (configuredMaxAttempts != null && attemptsSoFar >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $attemptsSoFar attempts", hashHex, attemptsSoFar, lastPayload)); return }
-        val request = ToriiRequestBuilder.buildStatusRequest(config.baseUri(), hashHex, config.requestTimeout(), config.defaultHeaders())
+        val request = ToriiRequestBuilder.buildStatusRequest(
+            config.baseUri(),
+            hashHex,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
+        )
         notifyRequest(request)
         executor.execute(request).whenComplete { response, throwable ->
             try {
@@ -1760,6 +1774,7 @@ class HttpClientTransport private constructor(
         maximumResponseBytes: Long? = null,
     ): TransportRequest {
         val target = appendQuery(resolvePath(path), queryParams)
+        requireHttpRequestAllowed(target)
         val builder = TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
         if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
@@ -1773,8 +1788,10 @@ class HttpClientTransport private constructor(
         require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
             "Accept must not be overridden for exact JSON requests"
         }
+        val target = resolvePath(path)
+        requireHttpRequestAllowed(target)
         val builder = TransportRequest.builder()
-            .setUri(resolvePath(path))
+            .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", "application/json")
             .setMaximumResponseBytes(maximumResponseBytes)
@@ -1812,6 +1829,7 @@ class HttpClientTransport private constructor(
             target,
             operatorHeaders,
             null,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }
@@ -1821,7 +1839,9 @@ class HttpClientTransport private constructor(
         body: ByteArray,
         maximumResponseBytes: Long? = null,
     ): TransportRequest {
-        val builder = TransportRequest.builder().setUri(resolvePath(path)).setMethod("POST").setBody(body).addHeader("Content-Type", "application/json").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
+        val target = resolvePath(path)
+        requireHttpRequestAllowed(target, body)
+        val builder = TransportRequest.builder().setUri(target).setMethod("POST").setBody(body).addHeader("Content-Type", "application/json").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
         if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
         return builder.build()
@@ -1844,6 +1864,7 @@ class HttpClientTransport private constructor(
         }
         if (canonicalAuth != null) requireCanonicalHeadersUnset()
         val target = resolvePath(path)
+        requireHttpRequestAllowed(target)
         val builder = TransportRequest.builder()
             .setUri(target)
             .setMethod("GET")
@@ -1864,6 +1885,7 @@ class HttpClientTransport private constructor(
                 target,
                 canonicalHeaders,
                 null,
+                allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
             )
         }
         return builder.build()
@@ -1905,6 +1927,7 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }
@@ -1940,12 +1963,13 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }
 
     private fun requireSecureVpnBaseUri() {
-        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
             "Sora VPN requests require an HTTPS Torii base URI"
         }
     }
@@ -1960,17 +1984,35 @@ class HttpClientTransport private constructor(
         require(config.defaultHeaders().keys.none { it.equals(ONBOARDING_TOKEN_HEADER, ignoreCase = true) }) {
             "$ONBOARDING_TOKEN_HEADER must be supplied only through the sponsored onboarding API"
         }
+        val target = resolvePath(path)
+        val headers = LinkedHashMap(config.defaultHeaders())
+        headers[ONBOARDING_TOKEN_HEADER] = token
+        requireHttpRequestAllowed(target, body, headers)
         val builder = TransportRequest.builder()
-            .setUri(resolvePath(path))
+            .setUri(target)
             .setMethod(method)
             .addHeader("Accept", "application/json")
             .setTimeout(config.requestTimeout())
         if (body != null) {
             builder.setBody(body).addHeader("Content-Type", "application/json")
         }
-        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
-        builder.addHeader(ONBOARDING_TOKEN_HEADER, token)
+        for ((key, value) in headers) builder.addHeader(key, value)
         return builder.build()
+    }
+
+    private fun requireHttpRequestAllowed(
+        target: URI,
+        body: ByteArray? = null,
+        headers: Map<String, String> = config.defaultHeaders(),
+    ) {
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            config.baseUri(),
+            target,
+            headers,
+            body,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
+        )
     }
 
     private fun buildCanonicalHeaders(method: String, target: URI, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): Map<String, String> {

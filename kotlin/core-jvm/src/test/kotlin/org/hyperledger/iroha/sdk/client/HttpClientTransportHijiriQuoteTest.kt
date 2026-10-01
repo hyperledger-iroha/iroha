@@ -7,6 +7,8 @@ import java.security.Signature
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -34,8 +36,9 @@ class HttpClientTransportHijiriQuoteTest {
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x62), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
-    @Test
-    fun `quote posts and verifies the same exact account-signed Norito request`() {
+    @ParameterizedTest
+    @ValueSource(strings = ["https://torii.example/api", "http://127.0.0.1/api", "http://10.0.2.2/api"])
+    fun `quote posts and verifies the same exact account-signed Norito request`(baseUri: String) {
         val responseNorito = byteArrayOf(9, 8, 7, 6)
         val executor = ExactResponseExecutor(responseNorito)
         val codec = CapturingCodec(byteArrayOf(1, 3, 3, 7), projectionJson())
@@ -49,7 +52,8 @@ class HttpClientTransportHijiriQuoteTest {
         val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example/api"))
+                .setBaseUri(URI.create(baseUri))
+                .setAllowLocalDevelopmentHttp(baseUri.startsWith("http:"))
                 .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical()))
                 .build(),
         )
@@ -63,7 +67,7 @@ class HttpClientTransportHijiriQuoteTest {
         val sent = assertNotNull(executor.lastRequest)
         assertEquals("POST", sent.method)
         assertEquals(
-            "https://torii.example/api/v1/validation-fee/hijiri/quote",
+            "$baseUri/v1/validation-fee/hijiri/quote",
             sent.uri.toString(),
         )
         assertContentEquals(codec.encodedRequest, sent.body)

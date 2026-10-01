@@ -19,7 +19,8 @@ internal object ToriiRequestBuilder {
         transaction: SignedTransaction,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowLocalDevelopmentHttp: Boolean = false,
     ): TransportRequest {
         val target = resolve(baseUri, SUBMIT_PATH)
         val norito: ByteArray
@@ -34,6 +35,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             norito,
+            allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -52,7 +54,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedTransactionJson: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowLocalDevelopmentHttp: Boolean = false,
     ): TransportRequest =
         buildJsonIngressRequest(
             baseUri,
@@ -62,6 +65,7 @@ internal object ToriiRequestBuilder {
             extraHeaders,
             acceptHeader,
             "encodedVersionedTransactionJson",
+            allowLocalDevelopmentHttp,
         )
 
     @JvmStatic
@@ -70,7 +74,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedEntrypoint: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowLocalDevelopmentHttp: Boolean = false,
     ): TransportRequest {
         require(encodedVersionedEntrypoint.isNotEmpty()) {
             "encodedVersionedEntrypoint must not be empty"
@@ -83,6 +88,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             body,
+            allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -101,7 +107,8 @@ internal object ToriiRequestBuilder {
         encodedVersionedEntrypointJson: ByteArray,
         timeout: Duration?,
         extraHeaders: Map<String, String>?,
-        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader()
+        acceptHeader: String = WireFormatPreference.NORITO_PREFERRED.acceptHeader(),
+        allowLocalDevelopmentHttp: Boolean = false,
     ): TransportRequest =
         buildJsonIngressRequest(
             baseUri,
@@ -111,6 +118,7 @@ internal object ToriiRequestBuilder {
             extraHeaders,
             acceptHeader,
             "encodedVersionedEntrypointJson",
+            allowLocalDevelopmentHttp,
         )
 
     @JvmStatic
@@ -118,7 +126,8 @@ internal object ToriiRequestBuilder {
         baseUri: URI,
         hashHex: String,
         timeout: Duration?,
-        extraHeaders: Map<String, String>?
+        extraHeaders: Map<String, String>?,
+        allowLocalDevelopmentHttp: Boolean = false,
     ): TransportRequest {
         require(hashHex.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
             "hashHex must be a canonical lowercase marked 32-byte transaction hash"
@@ -130,6 +139,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             null,
+            allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
@@ -148,6 +158,7 @@ internal object ToriiRequestBuilder {
         extraHeaders: Map<String, String>?,
         acceptHeader: String,
         bodyName: String,
+        allowLocalDevelopmentHttp: Boolean,
     ): TransportRequest {
         require(bodyBytes.isNotEmpty()) { "$bodyName must not be empty" }
         val target = resolve(baseUri, path)
@@ -158,6 +169,7 @@ internal object ToriiRequestBuilder {
             target,
             extraHeaders,
             body,
+            allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
         )
         val builder = TransportRequest.builder()
             .setUri(target)
