@@ -216,11 +216,19 @@ pub enum KagemushaArtifactRoleV1 {
     MintHashClaimPkEp = 48,
     /// Ep/Fq ordered recursive mint-hash claim verifying key.
     MintHashClaimVkEp = 49,
+    /// Eq/Fp ordinary app credential and original operation-signature proving key.
+    OrdinaryAppGuardPkEq = 50,
+    /// Eq/Fp ordinary app credential and original operation-signature verifying key.
+    OrdinaryAppGuardVkEq = 51,
+    /// Ep/Fq ordinary app credential and original operation-signature proving key.
+    OrdinaryAppGuardPkEp = 52,
+    /// Ep/Fq ordinary app credential and original operation-signature verifying key.
+    OrdinaryAppGuardVkEp = 53,
 }
 
 impl KagemushaArtifactRoleV1 {
     /// Exact canonically ordered release inventory.
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 54] = [
         Self::ParamsEq,
         Self::ParamsEp,
         Self::InnerStatePkEq,
@@ -271,6 +279,10 @@ impl KagemushaArtifactRoleV1 {
         Self::MintHashClaimVkEq,
         Self::MintHashClaimPkEp,
         Self::MintHashClaimVkEp,
+        Self::OrdinaryAppGuardPkEq,
+        Self::OrdinaryAppGuardVkEq,
+        Self::OrdinaryAppGuardPkEp,
+        Self::OrdinaryAppGuardVkEp,
     ];
 
     const fn is_params(self) -> bool {
@@ -307,6 +319,8 @@ impl KagemushaArtifactRoleV1 {
                 | Self::MintHashShardPkEp
                 | Self::MintHashClaimPkEq
                 | Self::MintHashClaimPkEp
+                | Self::OrdinaryAppGuardPkEq
+                | Self::OrdinaryAppGuardPkEp
         )
     }
 
@@ -337,6 +351,8 @@ impl KagemushaArtifactRoleV1 {
                 | Self::MintHashShardVkEp
                 | Self::MintHashClaimVkEq
                 | Self::MintHashClaimVkEp
+                | Self::OrdinaryAppGuardVkEq
+                | Self::OrdinaryAppGuardVkEp
         )
     }
 }
@@ -596,17 +612,20 @@ pub enum KagemushaQualifiedHelperCircuitV1 {
     MintHashShard,
     /// Prove the ordered, complete fold of every mint-transcript hash shard.
     MintHashClaim,
+    /// Verify an ordinary app credential and the complete original platform approval.
+    OrdinaryAppGuard,
 }
 
 impl KagemushaQualifiedHelperCircuitV1 {
     /// Exact canonically ordered helper-circuit set.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::MintAuthorization,
         Self::MintCredit,
         Self::PlatformCredential,
         Self::GuardBundle,
         Self::MintHashShard,
         Self::MintHashClaim,
+        Self::OrdinaryAppGuard,
     ];
 
     const fn expected_vk_roles(self) -> (KagemushaArtifactRoleV1, KagemushaArtifactRoleV1) {
@@ -635,6 +654,10 @@ impl KagemushaQualifiedHelperCircuitV1 {
                 KagemushaArtifactRoleV1::MintHashClaimVkEq,
                 KagemushaArtifactRoleV1::MintHashClaimVkEp,
             ),
+            Self::OrdinaryAppGuard => (
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+            ),
         }
     }
 
@@ -645,6 +668,7 @@ impl KagemushaQualifiedHelperCircuitV1 {
                 | Self::GuardBundle
                 | Self::MintHashShard
                 | Self::MintHashClaim
+                | Self::OrdinaryAppGuard
         )
     }
 }
@@ -3904,7 +3928,7 @@ mod inner_mint_artifact_tests {
     #[test]
     fn inner_mint_roles_append_without_renumbering_and_roundtrip_norito() {
         assert_eq!(&KagemushaArtifactRoleV1::ALL[34..42], &INNER_ROLES);
-        assert_eq!(&KagemushaArtifactRoleV1::ALL[42..], &MINT_HASH_ROLES);
+        assert_eq!(&KagemushaArtifactRoleV1::ALL[42..50], &MINT_HASH_ROLES);
         for (index, role) in KagemushaArtifactRoleV1::ALL.into_iter().enumerate() {
             assert_eq!(usize::from(role as u8), index);
         }

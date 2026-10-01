@@ -93,10 +93,11 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     }
   }
 
-  func testCoordinatorMethodsMatchSharedCurrentSchemaVectors() throws {
+  func testPublishedBaseCoordinatorFixturesMatchCurrentSchema() throws {
     let cases = try fixtures()
-    // The maintained native producer supplies structural diagnostics for all
-    // first-release methods; these archives grant no native authority.
+    // The immutable published base fixture contains methods1...18 only.
+    // Ordinary app methods19...21 have separate exact projection/frame tests;
+    // this archived fixture never claims complete current method coverage.
     XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(18)))
     XCTAssertEqual(cases.count, 25)
     for item in cases {
@@ -105,6 +106,14 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
       XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.encodeRequest(item.method, fields: request), item.request, item.name)
       XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.encodeResponse(item.method, requestFrame: item.request, fields: response), item.response, item.name)
     }
+  }
+
+  func testCurrentCoordinatorMethodInventoryIncludesExactOrdinaryAppMethods() {
+    XCTAssertEqual(KagemushaCoreCoordinatorMethodV1.allCases.map(\.rawValue),Array(UInt8(1)...UInt8(21)))
+    XCTAssertEqual([KagemushaCoreCoordinatorMethodV1.authenticatedHardwarePolicy.rawValue,
+      KagemushaCoreCoordinatorMethodV1.appOperationApproval.rawValue,
+      KagemushaCoreCoordinatorMethodV1.appEnrollmentPossession.rawValue,
+      KagemushaCoreCoordinatorMethodV1.preparedOrdinaryAppIdentity.rawValue],[18,19,20,21])
   }
 
   func testTruncationRetiredSchemaAndInvalidLengthsFailClosed() throws {

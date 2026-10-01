@@ -157,6 +157,15 @@ fn policy_with_treasury_payout_lifecycle(
     policy.treasury_payout_binding = Some(binding);
     policy
 }
+// Ordinary fixtures bind policy authority to their genuine signed root.
+fn policy_with_treasury_payout_lifecycle_at_network(
+    binding: ValidationFeeTreasuryPayoutBindingV1,
+    network: iroha_data_model::NetworkId,
+) -> ValidationFeePolicyV1 {
+    let mut policy = policy_with_treasury_payout_lifecycle(binding);
+    policy.network_id = network;
+    policy
+}
 fn policy_fee_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
     policy.ds_asset_id.clone()
 }
@@ -174,6 +183,7 @@ fn test_parliament_candidates() -> Vec<AccountId> {
 fn test_authorization(
     proposal: &iroha_data_model::governance::types::ProposalKind,
     policy_effective_height: u64,
+    network: &iroha_data_model::NetworkId,
 ) -> ValidationFeeParliamentAuthorizationV1 {
     let enacted_at_height = policy_effective_height
         .checked_sub(
@@ -183,7 +193,7 @@ fn test_authorization(
     let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
         proposal,
         test_parliament_candidates(),
-        &validation_fee_test_network_id(),
+        network,
         enacted_at_height,
     );
     let governance_certificate = attempt
@@ -230,6 +240,7 @@ fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyReg
                     parliament_authorization: test_authorization(
                         &lifecycle_kind,
                         policy.effective_from_height,
+                        &policy.network_id,
                     ),
                 }
             });
@@ -243,7 +254,7 @@ fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyReg
             });
             ValidationFeePolicyRegistryEntryV1::from_enactment(
                 policy.clone(),
-                test_authorization(&kind, policy.effective_from_height),
+                test_authorization(&kind, policy.effective_from_height, &policy.network_id),
                 payout_lifecycle,
             )
             .expect("registry entry")
@@ -256,6 +267,7 @@ fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyReg
 fn seed_authorized_proposal(
     kind: iroha_data_model::governance::types::ProposalKind,
     authorization: ValidationFeeParliamentAuthorizationV1,
+    network: &iroha_data_model::NetworkId,
     state_tx: &mut StateTransaction<'_, '_>,
 ) {
     let proposal_id = authorization.proposal_fingerprint;
@@ -265,7 +277,7 @@ fn seed_authorized_proposal(
     let attempt = crate::governance::parliament::enacted_parliament_attempt_for_testing(
         &kind,
         test_parliament_candidates(),
-        &validation_fee_test_network_id(),
+        network,
         authorization.enacted_at_height,
     );
     assert_eq!(
@@ -309,6 +321,7 @@ fn install_policy_registry_fixture(
                     payout_binding: binding.clone(),
                 }),
                 reference.parliament_authorization.clone(),
+                &entry.policy.network_id,
                 state_tx,
             );
         }
@@ -322,6 +335,7 @@ fn install_policy_registry_fixture(
                     .map(|reference| reference.parliament_authorization.proposal_fingerprint),
             }),
             entry.parliament_authorization.clone(),
+            &entry.policy.network_id,
             state_tx,
         );
     }
@@ -545,6 +559,65 @@ pub(crate) fn with_validation_fee_payout_state_at_height(
     .expect("register payout contract manifest");
     test(&mut state_tx, &deployer, &code, code_hash);
 }
+// Apply an authentic original signed genesis to the unique unpublished State.
+// All component configuration and seeded World state are retained; no worker or
+// copied root/committee metadata is used to manufacture execution authority.
+fn original_validation_fee_state(component: crate::state::State) -> crate::state::State {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let nexus = component.nexus_snapshot();
+    let crypto = component.crypto.read().as_ref().clone();
+    let mut config = TestChainConfig::new(component.world, 0);
+    config.chain_id = component.chain_id;
+    config.pipeline = component.pipeline;
+    config.nexus = Some(nexus);
+    config.zk = Some(component.zk);
+    config.governance = Some(component.gov);
+    config.crypto = Some(crypto);
+    config.fraud_monitoring = component.fraud_monitoring;
+    let account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared =
+        CertifiedTestChain::prepare(config).expect("original signed fee fixture genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished fee fixture State is unique"));
+    crate::sumeragi::startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original authenticated fee fixture genesis");
+    state
+}
+fn original_validation_fee_header(state: &crate::state::State, height: u64) -> BlockHeader {
+    use crate::state::StateReadOnly as _;
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("original signed fee parent");
+    let timestamp = u64::try_from(parent.header().creation_time().as_millis())
+        .unwrap()
+        .checked_add(1)
+        .expect("fee fixture clock follows original parent");
+    BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("nonzero fee height"),
+        state.view().latest_block_hash(),
+        None,
+        timestamp,
+        0,
+    )
+}
+fn with_ordinary_validation_fee_payout_state_at_height(
+    height: u64,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    with_original_validation_fee_payout_state_at_height(
+        height,
+        original_validation_fee_state,
+        test,
+    );
+}
 // This ordinary contract fixture owns the original signed root and finite
 // callback invocation. The pristine component helper above remains unchanged.
 pub(crate) fn with_original_validation_fee_payout_state_at_height(
@@ -734,7 +807,7 @@ fn install_active_bound_validation_fee_policy(
     )
     .expect("activate contract instance");
     let binding = treasury_payout_binding(contract_address, &code);
-    let policy = policy_with_treasury_payout_lifecycle(binding);
+    let policy = policy_with_treasury_payout_lifecycle_at_network(binding, state_tx.network_id);
     install_policy_registry_fixture(&policy_registry(std::slice::from_ref(&policy)), state_tx);
     policy
 }

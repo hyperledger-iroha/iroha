@@ -20,6 +20,7 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
     fun requireRequest(fields: List<ByteArray>) {
         when (phase(fields)) {
             1 -> { count(fields, 2); digest(fields[1]) }
+            11 -> count(fields, 1)
             2, 4, 6, 7, 8, 9 -> { count(fields, 2); ticket(fields[1]) }
             3 -> { count(fields, 3); ticket(fields[1]); reference(fields[2]) }
             5 -> {
@@ -35,6 +36,7 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
     fun requireResponse(request: List<ByteArray>, fields: List<ByteArray>) {
         when (phase(request)) {
             1 -> preparation(request[1], fields)
+            11 -> { count(fields, 1); digest(fields[0]) }
             2 -> {
                 count(fields, 2); require(fields[0].size == 1)
                 when (fields[0][0].toInt()) {

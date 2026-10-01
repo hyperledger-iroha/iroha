@@ -35,13 +35,13 @@ final class KagemushaAppAttestEnrollmentPossessionOriginalV1Tests: XCTestCase {
     let domain = Data("iroha:kagemusha:v1:app-enrollment-possession\0".utf8)
     f[1].replaceSubrange((domain.count + 8 + 355)..<(domain.count + 8 + 363), with: u64(1001))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: nil, enrollmentID: digest(1)))
+      approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:fields(key)[7]))))
     f = fields(key); f[8] = digest(0x88)
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: nil, enrollmentID: digest(1)))
+      approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:fields(key)[7]))))
   }
   private func projection(_ key: P256.Signing.PrivateKey) throws -> KagemushaAppPlatformPreparedProjectionV1 {
-    try KagemushaAppPlatformPreparedProjectionV1(nativeFields: fields(key), approvalID: nil, enrollmentID: digest(1))
+    try KagemushaAppPlatformPreparedProjectionV1(nativeFields: fields(key), approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:fields(key)[7])))
   }
   private func fields(_ key: P256.Signing.PrivateKey) -> [Data] {
     let point = key.publicKey.x963Representation, keyID = Data(SHA256.hash(data: point))
@@ -51,7 +51,7 @@ final class KagemushaAppAttestEnrollmentPossessionOriginalV1Tests: XCTestCase {
     for i in [UInt64(1), 2, 1000, 121000] { c.append(u64(i)) }
     var e = Data("iroha:kagemusha:v1:app-enrollment-possession\0".utf8)
       + u64(371) + Data([1, 0, 1])
-    for d in [digest(1), digest(2), digest(3), digest(4), digest(5), digest(11),
+    for d in [Data(SHA256.hash(data:c)), digest(2), digest(3), digest(4), digest(5), digest(11),
       digest(7), digest(8), digest(6), keyID, digest(0x77)] { e.append(d) }
     e.append(u64(1000)); e.append(u64(121000))
     return [u64(9), e, Data([4]), Data(keyID.base64EncodedString().utf8), Data(SHA256.hash(data: c)),

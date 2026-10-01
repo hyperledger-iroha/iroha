@@ -4450,7 +4450,7 @@ fn hash_receiver_plaintext_opening_v1<F: KagemushaPoseidonFieldV1>(
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
-fn assigned_uint_bytes_v1<F: KagemushaPoseidonFieldV1>(
+pub(super) fn assigned_uint_bytes_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
     value: AssignedValue<F>,
@@ -4467,7 +4467,7 @@ fn assigned_uint_bytes_v1<F: KagemushaPoseidonFieldV1>(
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
-fn assigned_digest_bytes_v1<F: KagemushaPoseidonFieldV1>(
+pub(super) fn assigned_digest_bytes_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
     digest: [AssignedValue<F>; 2],

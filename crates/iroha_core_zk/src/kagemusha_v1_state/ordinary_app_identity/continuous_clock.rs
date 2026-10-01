@@ -3,12 +3,12 @@
 //! or handset wall-clock fallback is permitted. A reading cannot be decoded or supplied by JNI.
 use super::{Custody, Result};
 #[derive(Clone, Copy)]
-pub(super) struct Reading {
+pub(in crate::kagemusha_v1_state::ordinary_app_identity) struct Reading {
     process: u32,
     nanos: u128,
 }
 impl Reading {
-    pub(super) fn now() -> Result<Self> {
+    pub(in crate::kagemusha_v1_state::ordinary_app_identity) fn now() -> Result<Self> {
         let process = std::process::id();
         let nanos = platform_nanos()?;
         if process == 0 || process != std::process::id() {
@@ -16,7 +16,10 @@ impl Reading {
         }
         Ok(Self { process, nanos })
     }
-    pub(super) fn elapsed_ms(self, earlier: Self) -> Result<u64> {
+    pub(in crate::kagemusha_v1_state::ordinary_app_identity) fn elapsed_ms(
+        self,
+        earlier: Self,
+    ) -> Result<u64> {
         if self.process != earlier.process || self.process != std::process::id() {
             return Err(Custody);
         }
@@ -25,6 +28,10 @@ impl Reading {
     }
 }
 #[cfg(target_vendor = "apple")]
+#[allow(
+    unsafe_code,
+    reason = "Apple exposes its suspend-inclusive continuous clock only through the native Mach API"
+)]
 fn platform_nanos() -> Result<u128> {
     #[repr(C)]
     struct MachTimebase {
@@ -72,6 +79,19 @@ fn platform_nanos() -> Result<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_vendor = "apple", target_os = "android", target_os = "linux"))]
+    #[test]
+    fn native_readings_retain_the_original_process_and_monotonic_order() {
+        let first = Reading::now().expect("supported native continuous clock");
+        let second = Reading::now().expect("same native continuous clock");
+        assert_eq!(first.process, std::process::id());
+        assert_eq!(second.process, first.process);
+        assert!(second.nanos >= first.nanos);
+        assert_eq!(
+            second.elapsed_ms(first).unwrap(),
+            u64::try_from((second.nanos - first.nanos) / 1_000_000).unwrap()
+        );
+    }
     #[test]
     fn elapsed_readings_reject_backwards_and_foreign_process() {
         let process = std::process::id();

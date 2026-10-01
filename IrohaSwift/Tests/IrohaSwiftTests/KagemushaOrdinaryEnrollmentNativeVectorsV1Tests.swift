@@ -9,7 +9,7 @@ final class KagemushaOrdinaryEnrollmentNativeVectorsV1Tests: XCTestCase {
     for row in try vectors() {
       let f = try fields(row), c = try KagemushaOrdinaryAppEnrollmentProjectionV1(f[7])
       let p = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-        approvalID: nil, enrollmentID: c.enrollmentID)
+        approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:c.canonicalSigningBytes)))
       XCTAssertEqual(p.generationChallenge, try value(row,"attestation_challenge_hex"))
       XCTAssertEqual(Data(SHA256.hash(data: p.signingBytes)), try value(row,"possession_sha256_hex"))
       XCTAssertEqual(p.signingBytes, try value(row,"possession_signing_hex"))
@@ -26,24 +26,24 @@ final class KagemushaOrdinaryEnrollmentNativeVectorsV1Tests: XCTestCase {
     }
   }
 
-  func testActualNativeEnrollmentRejectsWrongPurposeChallengeHashAndAliasSubstitution() throws {
+  func testActualNativeEnrollmentRejectsWrongPurposeAttemptIDAndAliasSubstitution() throws {
     for row in try vectors() {
       let original = try fields(row), c = try KagemushaOrdinaryAppEnrollmentProjectionV1(original[7])
       let start = Data("iroha:kagemusha:v1:app-enrollment-possession\0".utf8).count+8
       var bad = original; bad[1][start+2] = 2
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:bad,
-        approvalID:nil,enrollmentID:c.enrollmentID))
-      bad=original;bad[1].replaceSubrange((start+3)..<(start+35),with:original[4])
+        approvalID:nil,enrollmentChallengeHash:Data(SHA256.hash(data:c.canonicalSigningBytes))))
+      bad=original;bad[1].replaceSubrange((start+3)..<(start+35),with:c.enrollmentID)
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:bad,
-        approvalID:nil,enrollmentID:c.enrollmentID))
+        approvalID:nil,enrollmentChallengeHash:Data(SHA256.hash(data:c.canonicalSigningBytes))))
       bad=original;bad[3]=Data("substituted-original-alias".utf8)
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:bad,
-        approvalID:nil,enrollmentID:c.enrollmentID))
+        approvalID:nil,enrollmentChallengeHash:Data(SHA256.hash(data:c.canonicalSigningBytes))))
       // The signed original C cannot be replaced by its Norito archive.
       bad=original;bad[7]=try value(row,"challenge_archive_hex")
       bad[4]=Data(SHA256.hash(data:bad[7]))
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:bad,
-        approvalID:nil,enrollmentID:c.enrollmentID))
+        approvalID:nil,enrollmentChallengeHash:Data(SHA256.hash(data:c.canonicalSigningBytes))))
     }
   }
 

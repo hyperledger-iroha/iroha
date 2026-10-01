@@ -118,10 +118,16 @@ fn lane_lifecycle_waits_for_prebuilt_runtime_without_holding_publication_fences(
     let (block_ready_tx, block_ready_rx) = mpsc::channel();
     let (commit_release_tx, commit_release_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
+    let (commit_result_tx, commit_result_rx) = mpsc::channel();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let original_hash = header.hash();
+    let history_before: Vec<_> = state.block_hashes.view().iter().copied().collect();
+    let height_before = state.committed_height();
+    let membership_height_before = state.transactions.latest_height();
+    let samples_before = state.autoscale_sample_history_snapshot();
     let commit_state = Arc::clone(&state);
     let commit_done = done_tx.clone();
     let commit_handle = thread::spawn(move || {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = commit_state.block(header);
         block_ready_tx
             .send(())
@@ -129,9 +135,13 @@ fn lane_lifecycle_waits_for_prebuilt_runtime_without_holding_publication_fences(
         commit_release_rx
             .recv()
             .expect("wait for the lifecycle runtime-writer probe");
-        block
-            .commit_empty_block_for_testing()
-            .expect("commit prebuilt block");
+        // Consuming commit abandons the original overlay on a local busy
+        // refusal. Report that exact outcome before notifying completion, so a
+        // valid refusal cannot masquerade as a missing lifecycle completion.
+        let result = block.commit_empty_block_for_testing();
+        commit_result_tx
+            .send(result)
+            .expect("report original consuming commit outcome");
         let _ = commit_done.send("commit");
     });
     block_ready_rx
@@ -181,6 +191,45 @@ fn lane_lifecycle_waits_for_prebuilt_runtime_without_holding_publication_fences(
         .expect("second operation completion");
     lifecycle_handle.join().expect("lane lifecycle thread");
     commit_handle.join().expect("commit thread");
+    let result = commit_result_rx
+        .recv_timeout(timeout)
+        .expect("original consuming commit outcome");
+    let history_after: Vec<_> = state.block_hashes.view().iter().copied().collect();
+    match result {
+        Ok(()) => {
+            let mut expected_history = history_before.clone();
+            expected_history.push(original_hash);
+            assert_eq!(history_after, expected_history);
+            assert_eq!(state.committed_height(), height_before + 1);
+            assert_eq!(
+                state.transactions.latest_height(),
+                membership_height_before + 1
+            );
+            assert_eq!(state.latest_block_hash_fast(), Some(original_hash));
+            let samples = state.autoscale_sample_history_snapshot();
+            assert_eq!(samples.len(), samples_before.len() + 1);
+            assert_eq!(samples.back().unwrap().block_hash, original_hash);
+            assert_eq!(
+                samples.back().unwrap().block_height,
+                (height_before + 1) as u64
+            );
+        }
+        Err(storage_transactions::TransactionsBlockError::PublicationBusy(_)) => {
+            assert_eq!(history_after, history_before);
+            assert_eq!(state.committed_height(), height_before);
+            assert_eq!(state.transactions.latest_height(), membership_height_before);
+            assert_eq!(
+                state.latest_block_hash_fast(),
+                history_before.last().copied()
+            );
+            assert_eq!(state.autoscale_sample_history_snapshot(), samples_before);
+        }
+        Err(other) => panic!("unexpected original consuming commit refusal: {other:?}"),
+    }
+    assert_eq!(state.state_view_generation() % 2, 0);
+    let current = state.view();
+    assert_eq!(current.height(), state.committed_height());
+    assert_eq!(current.block_hashes().len(), history_after.len());
     assert!(
         state
             .nexus_snapshot()
@@ -190,6 +239,38 @@ fn lane_lifecycle_waits_for_prebuilt_runtime_without_holding_publication_fences(
         "published lane should survive prebuilt block serialization"
     );
 }
+#[test]
+fn uncontended_prebuilt_block_publishes_its_original_history_cut() {
+    let kura = Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), kura, query);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let original_hash = header.hash();
+    let block = state.block(header);
+    block
+        .commit_empty_block_for_testing()
+        .expect("uncontended original consuming commit");
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.transactions.latest_height(), 1);
+    assert_eq!(state.latest_block_hash_fast(), Some(original_hash));
+    assert_eq!(
+        state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![original_hash]
+    );
+    let samples = state.autoscale_sample_history_snapshot();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].block_hash, original_hash);
+    assert_eq!(samples[0].block_height, 1);
+    let current = state.view();
+    assert_eq!(current.height(), 1);
+    assert_eq!(current.block_hashes().get(0), Some(&original_hash));
+}
+
 #[test]
 fn transaction_and_state_views_keep_canonical_catalog_after_projection_cache_drift() {
     let kura = Kura::blank_kura_for_testing();

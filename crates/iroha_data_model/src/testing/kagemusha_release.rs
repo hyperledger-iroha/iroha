@@ -25,7 +25,7 @@ pub struct KagemushaExperimentalReleaseFixtureV1 {
 }
 
 impl KagemushaExperimentalReleaseFixtureV1 {
-    /// Build a signed test release for the caller's exact 50 role-to-byte bindings.
+    /// Build a signed test release for the caller's exact 54 role-to-byte bindings.
     ///
     /// # Panics
     /// Panics when the supplied artifact inventory, network or scope violates V1 invariants.
@@ -98,6 +98,10 @@ pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
 pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
 pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
 pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
+/// Deterministic EQ protocol tag for the synthetic ordinary-app guard fixture.
+pub const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x45; 32];
+/// Deterministic EP protocol tag for the synthetic ordinary-app guard fixture.
+pub const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x46; 32];
 pub const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 pub const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 pub const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
@@ -154,6 +158,13 @@ pub fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
             ep_protocol_digest: MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST,
             eq_proof_bytes: MINT_HASH_CLAIM_EQ_PROOF_BYTES,
             ep_proof_bytes: MINT_HASH_CLAIM_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard,
+            eq_protocol_digest: ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: GUARD_EQ_PROOF_BYTES,
+            ep_proof_bytes: GUARD_EP_PROOF_BYTES,
         },
     ]
 }
@@ -323,6 +334,7 @@ pub fn helper_qualifications(
                         | KagemushaQualifiedHelperCircuitV1::GuardBundle
                         | KagemushaQualifiedHelperCircuitV1::MintHashShard
                         | KagemushaQualifiedHelperCircuitV1::MintHashClaim
+                        | KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard
                 ) {
                     protocol
                         .eq_proof_bytes

@@ -38,7 +38,7 @@ const BODY_BYTES: usize = 371;
 pub struct KagemushaAppEnrollmentPossessionChallengeV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// Original pending enrollment attempt; not a financial operation ID.
+    /// SHA-256 of the full original C signing message; distinct from the stable enrollment ID.
     pub enrollment_attempt_id: [u8; 32],
     /// Original client nonce from C.
     pub client_nonce: [u8; 32],
@@ -229,7 +229,7 @@ impl KagemushaAppEnrollmentPossessionChallengeV1 {
         key.validate().map_err(|_| "E original point rejected")?;
         let challenge = Self {
             version: 1,
-            enrollment_attempt_id: original.enrollment_id,
+            enrollment_attempt_id: original.attestation_challenge()?,
             client_nonce: original.client_nonce,
             server_nonce: original.server_nonce,
             account_binding: original.account_binding,
@@ -526,7 +526,8 @@ mod tests {
             (e.issued_at_ms, e.expires_at_ms),
             (c.issued_at_ms, c.expires_at_ms)
         );
-        assert_eq!(e.enrollment_attempt_id, c.enrollment_id);
+        assert_eq!(e.enrollment_attempt_id, c.attestation_challenge().unwrap());
+        assert_ne!(e.enrollment_attempt_id, c.enrollment_id);
         assert_eq!(e.raw_platform_evidence_digest, [14; 32]);
         assert_eq!(e.app_authority_policy_digest, c.app_authority_policy_digest);
         assert_eq!(
@@ -536,6 +537,8 @@ mod tests {
             .unwrap(),
             e.canonical_signing_bytes().unwrap()
         );
+        let original_message = e.canonical_signing_bytes().unwrap();
+        let original_signature: p256::ecdsa::Signature = signing.sign(&original_message);
         for field in 0..4 {
             let mut substituted = c;
             match field {
@@ -550,17 +553,33 @@ mod tests {
                 [14; 32],
             )
             .unwrap();
-            // These selectors belong to the complete native C/raw-admission join, not to
-            // E's enrollment-ID field. E alone is public correlation and cannot admit C.
-            assert_eq!(
-                changed.canonical_signing_bytes().unwrap(),
-                e.canonical_signing_bytes().unwrap()
+            assert_ne!(changed.canonical_signing_bytes().unwrap(), original_message);
+            use p256::ecdsa::signature::Verifier as _;
+            assert!(
+                signing
+                    .verifying_key()
+                    .verify(
+                        &changed.canonical_signing_bytes().unwrap(),
+                        &original_signature,
+                    )
+                    .is_err()
             );
             assert_ne!(
                 substituted.attestation_challenge().unwrap(),
                 c.attestation_challenge().unwrap()
             );
         }
+        let mut stable_id = e;
+        stable_id.enrollment_attempt_id = c.enrollment_id;
+        let stable_signature: p256::ecdsa::Signature =
+            signing.sign(&stable_id.canonical_signing_bytes().unwrap());
+        use p256::ecdsa::signature::Verifier as _;
+        assert!(
+            signing
+                .verifying_key()
+                .verify(&original_message, &stable_signature)
+                .is_err()
+        );
         let alias = kagemusha_ordinary_android_app_key_alias_v1(&c).unwrap();
         assert!(alias.starts_with("kagemusha-ordinary-app-v1-"));
         assert_eq!(alias.len(), "kagemusha-ordinary-app-v1-".len() + 64);

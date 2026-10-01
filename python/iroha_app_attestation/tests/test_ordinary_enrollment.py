@@ -62,7 +62,7 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
     def test_e371_exact_purpose_fields_and_native_interval_are_mandatory(self):
         selected=challenge(); key=b'\x77'*32; raw_digest=b'\x88'*32
         message=selected.possession_message(key,raw_digest,1000,121000)
-        fields=(selected.enrollment_id,selected.client_nonce,selected.server_nonce,
+        fields=(selected.attestation_challenge(),selected.client_nonce,selected.server_nonce,
                 selected.account_binding,selected.network_id,selected.app_authority_policy_digest,
                 selected.release_id,selected.hardware_profile_id,selected.lane_id,key,raw_digest)
         body=b'\x01\x00\x01'+b''.join(fields)+(1000).to_bytes(8,'little')+(121000).to_bytes(8,'little')
@@ -70,16 +70,17 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
         self.assertEqual(message,POSSESSION_DOMAIN+(371).to_bytes(8,'little')+body)
         self.assertEqual(len(message),424)
         self.assertNotEqual(message,selected.signing_bytes())
-        self.assertEqual(fields[0],selected.enrollment_id)
+        self.assertEqual(fields[0],hashlib.sha256(selected.signing_bytes()).digest())
+        self.assertNotEqual(fields[0],selected.enrollment_id)
         for change in ({'hardware_epoch':23},
                        {'financial_authority_commitment':b'\x91'*32},
                        {'suite_id':b'\x92'*32},
                        {'trust_policy_digest':b'\x93'*32}):
             altered=replace(selected,**change)
-            # Holding raw digest fixed is only a codec comparison. The issuer's
-            # complete-C/raw platform join independently rejects that substitution.
+            # Every original C field is committed even where E also projects
+            # selected fields explicitly; unchanged raw evidence cannot erase it.
             self.assertNotEqual(altered.attestation_challenge(),selected.attestation_challenge())
-            self.assertEqual(altered.possession_message(key,raw_digest,1000,121000),message)
+            self.assertNotEqual(altered.possession_message(key,raw_digest,1000,121000),message)
         for supplied_key,supplied_raw,issue,expiry in ((bytes(32),raw_digest,1000,121000),
                 (key,bytes(32),1000,121000),(key,raw_digest,True,121000),
                 (key,raw_digest,1000,1000),(key,raw_digest,1000,121001),
@@ -94,7 +95,7 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
         e=challenge().possession_message(key,proof.evidence_sha256,1000,121000)
         old_body=challenge().signing_bytes()+key
         old=b'iroha:kagemusha:v1:ordinary-app-enrollment-possession\0'+len(old_body).to_bytes(8,'little')+old_body
-        foreign_attempt_e=e[:len(POSSESSION_DOMAIN)+8+3]+challenge().attestation_challenge()+e[len(POSSESSION_DOMAIN)+8+35:]
+        foreign_attempt_e=e[:len(POSSESSION_DOMAIN)+8+3]+challenge().enrollment_id+e[len(POSSESSION_DOMAIN)+8+35:]
         self.assertEqual(len(foreign_attempt_e),len(e))
         for wrong_message in (old,hashlib.sha256(e).digest(),foreign_attempt_e):
             (self.directory/'wrong-possession-message').write_bytes(wrong_message)
@@ -103,6 +104,20 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
             with self.assertRaisesRegex(AttestationRejected,'signature rejected'):
                 verify_enrollment_possession(challenge(),proof,raw,pop,self.openssl,
                     apple_app_id=None,possession_issued_at_ms=1000,possession_expires_at_ms=121000)
+
+        # A genuine E signature over the complete original C cannot be replayed
+        # against an epoch/suite/trust/financial-only C substitution.
+        (self.directory/'original-e').write_bytes(e)
+        self.openssl_run('dgst','-sha256','-sign','leaf.key','-out','original-e-signature','original-e')
+        original_signature=(self.directory/'original-e-signature').read_bytes()
+        verify_enrollment_possession(challenge(),proof,raw,original_signature,self.openssl,
+            apple_app_id=None,possession_issued_at_ms=1000,possession_expires_at_ms=121000)
+        for change in ({'hardware_epoch':23},{'policy_epoch':24},
+                       {'financial_authority_commitment':b'\x91'*32},
+                       {'suite_id':b'\x92'*32},{'trust_policy_digest':b'\x93'*32}):
+            with self.subTest(change=change),self.assertRaisesRegex(AttestationRejected,'signature rejected'):
+                verify_enrollment_possession(replace(challenge(),**change),proof,raw,original_signature,
+                    self.openssl,apple_app_id=None,possession_issued_at_ms=1000,possession_expires_at_ms=121000)
 
     def test_actual_core_signature_binds_every_original_selector_and_signed_epoch(self):
         selected=challenge(); original=self.signed(selected)

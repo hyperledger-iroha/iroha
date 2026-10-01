@@ -10,7 +10,7 @@ use crate::{
         attestation::{NativePastaVerifier, encode_native_seal, native_seal_message},
         commitment::{ExecutionResultCommitment, execution_commitment, result_of_preimage},
         crypto::{BlsCrypto, KeyPairSigner, core_key},
-        payload::{self, Assembly},
+        payload,
         schedule::{self, ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
     },
     zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1,
@@ -118,6 +118,44 @@ fn outcome(
         boundary,
     }
 }
+
+/// Author a structural offline proposal from its actual signed root and retained parent.
+/// This fixture has no executed successor World from which production routing can be read.
+fn offline_proposal(
+    genesis: &SignedBlock,
+    parent: &SignedBlock,
+    input: crate::tx::AcceptedTransaction<'static>,
+) -> Result<SignedBlock, String> {
+    let epoch = crate::sumeragi::epoch::genesis_epoch(genesis)?;
+    if input.entrypoint().network_id() != Some(&epoch.network_id) {
+        return Err("offline input does not belong to its original signed genesis".into());
+    }
+    let scope = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)?
+        .sumeragi_context
+        .root_scope;
+    let context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+        iroha_data_model::block::ExternalExecutionContext::new(
+            input.hash_as_entrypoint(),
+            iroha_model_base::topology::LaneId::SINGLE,
+            scope.dataspace_id(),
+        ),
+    ]);
+    let time = parent
+        .header()
+        .creation_time()
+        .checked_add(Duration::from_millis(1))
+        .ok_or("offline parent clock overflows")?;
+    let (_, clock) = iroha_primitives::time::TimeSource::new_mock(time);
+    Ok(
+        crate::block::BlockBuilder::new_with_time_source(vec![input], clock)
+            .chain(0, Some(parent))
+            .with_execution_context(Some(context))
+            .with_network_input_time_floor(time)
+            .ok_or("offline input clock overflows")?
+            .into_unsigned_proposal(),
+    )
+}
+
 fn certify(
     keys: &[KeyPair],
     header: &BlockHeader,
@@ -259,16 +297,10 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
                 format!("offline committee transcript {height}"),
             )])
             .sign(signer.private_key());
-        let mut block = payload::assemble(
-            &state,
-            Assembly {
-                parent,
-                view: 0,
-                cadence: Duration::from_millis(1),
-            },
-            &[crate::tx::AcceptedTransaction::new_unchecked(
-                std::borrow::Cow::Owned(input),
-            )],
+        let mut block = offline_proposal(
+            &history[0],
+            parent,
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(input)),
         )
         .unwrap();
         outputs(&mut block);
@@ -515,6 +547,84 @@ fn selection_evidence_fixture() -> ValidatorCommitteeSelectionEvidenceV1 {
         status,
         finality_journal: fixture.finality_journal,
     }
+}
+
+#[test]
+fn offline_committee_proposal_retains_signed_root_and_refuses_foreign_network_input() {
+    let key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+    let genesis = crate::sumeragi::test_chain::signed_genesis_fixture(
+        &chain_id(),
+        &key,
+        &crate::sumeragi::test_chain::fixture_validators(),
+        Vec::new(),
+        1000,
+        ConsensusMode::Permissioned,
+        None,
+    )
+    .unwrap();
+    let network = NetworkId::from_genesis_hash(genesis.hash());
+    let input = |network| {
+        let mut builder = iroha_data_model::transaction::TransactionBuilder::new(
+            network,
+            iroha_data_model::account::AccountId::new(key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(genesis.header().creation_time());
+        crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+            builder
+                .with_instructions([iroha_data_model::isi::Log::new(
+                    iroha_data_model::Level::INFO,
+                    "offline original root".to_owned(),
+                )])
+                .sign(key.private_key()),
+        ))
+    };
+    let original = input(network);
+    let hash = original.hash_as_entrypoint();
+    let proposal = offline_proposal(&genesis, &genesis, original).unwrap();
+    assert_eq!(proposal.header().height().get(), 2);
+    assert_eq!(proposal.header().prev_block_hash(), Some(genesis.hash()));
+    assert_eq!(
+        proposal.header().creation_time(),
+        Duration::from_millis(1001)
+    );
+    assert_eq!(
+        proposal.execution_context().unwrap().external,
+        vec![iroha_data_model::block::ExternalExecutionContext::new(
+            hash,
+            iroha_model_base::topology::LaneId::SINGLE,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )]
+    );
+    assert!(proposal.is_resultless_proposal());
+    assert_eq!(
+        payload::decode(&payload::encode(&proposal).unwrap()).unwrap(),
+        proposal
+    );
+    assert!(
+        offline_proposal(
+            &genesis,
+            &genesis,
+            input(NetworkId::from_genesis_hash(
+                HashOf::from_untyped_unchecked(Hash::new(b"foreign offline signed root",))
+            )),
+        )
+        .is_err()
+    );
+    let foreign_key = KeyPair::from_seed(vec![0xCF; 32], Algorithm::Ed25519);
+    let mut substituted_root = genesis.clone();
+    substituted_root
+        .replace_signatures(
+            [iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(foreign_key.private_key(), genesis.hash())
+                    .unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+    assert!(offline_proposal(&substituted_root, &genesis, input(network)).is_err());
 }
 
 #[test]

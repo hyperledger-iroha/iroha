@@ -8892,6 +8892,8 @@ enum KagemushaProofRecoveryPhaseV1 {
     TerminalAuthorization,
     #[cfg(any(test, feature = "kagemusha-production-prover"))]
     CommitWrapper,
+    #[cfg(feature = "kagemusha-production-prover")]
+    OrdinaryAppGuard,
     MintAuthorization,
     MintAuthorizationTransport,
     MintHashShard,
@@ -8920,6 +8922,8 @@ impl KagemushaProofRecoveryPhaseV1 {
             }
             #[cfg(any(test, feature = "kagemusha-production-prover"))]
             Self::CommitWrapper => "iroha:kagemusha:v1:proof-recovery:commit-wrapper",
+            #[cfg(feature = "kagemusha-production-prover")]
+            Self::OrdinaryAppGuard => "iroha:kagemusha:v1:proof-recovery:ordinary-app-guard",
             Self::MintAuthorization => "iroha:kagemusha:v1:proof-recovery:mint-authorization",
             Self::MintAuthorizationTransport => {
                 "iroha:kagemusha:v1:proof-recovery:mint-authorization-transport"

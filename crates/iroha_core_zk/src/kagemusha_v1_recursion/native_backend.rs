@@ -34,7 +34,7 @@ use snark_verifier::{
 };
 
 use super::{
-    KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1 as PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
+    DigestV1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1 as PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1 as PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_RATE_V1 as PASTA_IPA_POSEIDON_RATE_V1,
     KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1 as PASTA_IPA_POSEIDON_SECURE_MDS_V1,
@@ -647,6 +647,9 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     state_checkpoint_artifacts: super::KagemushaRecursionArtifactsV1,
     provider_policy_root: [u8; 32],
     eq_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    eq_ordinary_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    ep_ordinary_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    ordinary_guard_protocol_digests: [DigestV1; 2],
     ep_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
@@ -723,6 +726,20 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .resolve(KagemushaArtifactRoleV1::StateVkEp)?
                 .as_ref(),
             profile.state_ep,
+        )?;
+        let eq_ordinary_guard_vk = read_eq_ordinary_guard_vk(
+            artifacts
+                .resolve(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq)?
+                .as_ref(),
+            profile.guard_eq.clone(),
+            provider_policy_root,
+        )?;
+        let ep_ordinary_guard_vk = read_ep_ordinary_guard_vk(
+            artifacts
+                .resolve(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp)?
+                .as_ref(),
+            profile.guard_ep.clone(),
+            provider_policy_root,
         )?;
         let eq_guard_vk = read_eq_guard_vk(
             artifacts
@@ -875,6 +892,37 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 "compiled recursive protocol roles alias".to_owned(),
             ));
         }
+        let eq_ordinary_guard_protocol = compile(
+            &eq_parameters,
+            &eq_ordinary_guard_vk,
+            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                super::ordinary_guard_circuit::ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1,
+            ]),
+        );
+        let ep_ordinary_guard_protocol = compile(
+            &ep_parameters,
+            &ep_ordinary_guard_vk,
+            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                super::ordinary_guard_circuit::ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1,
+            ]),
+        );
+        let ordinary_guard_protocol_digests = [
+            native_parent_protocol_digest_v1(
+                &eq_ordinary_guard_protocol,
+                KagemushaPastaParityV1::Eq,
+            )
+            .map_err(KagemushaArtifactErrorV1::InvalidRelease)?,
+            native_parent_protocol_digest_v1(
+                &ep_ordinary_guard_protocol,
+                KagemushaPastaParityV1::Ep,
+            )
+            .map_err(KagemushaArtifactErrorV1::InvalidRelease)?,
+        ];
+        if ordinary_guard_protocol_digests != artifacts.ordinary_guard_protocol_digests() {
+            return Err(KagemushaArtifactErrorV1::InvalidRelease(
+                "compiled ordinary app Guard protocol mismatch".into(),
+            ));
+        }
         let eq_terminal_authorization_protocol = compile(
             &eq_parameters,
             &eq_terminal_authorization_vk,
@@ -1002,6 +1050,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ep_protocol_digest,
             guard_eq_protocol_digest,
             guard_ep_protocol_digest,
+            ordinary_guard_protocol_digests[0],
+            ordinary_guard_protocol_digests[1],
             terminal_authorization_eq_protocol_digest,
             terminal_authorization_ep_protocol_digest,
             commit_wrapper_eq_protocol_digest,
@@ -1031,6 +1081,9 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             provider_policy_root,
             eq_guard_protocol,
             ep_guard_protocol,
+            eq_ordinary_guard_protocol,
+            ep_ordinary_guard_protocol,
+            ordinary_guard_protocol_digests,
             eq_state_protocol,
             ep_state_protocol,
             eq_commit_wrapper_protocol,
@@ -1114,6 +1167,16 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .canonical_empty_effect_digest,
         );
         expected.validate().map_err(|error| error.to_string())?;
+        let ordinary = release
+            .helper_protocol(
+                iroha_data_model::kagemusha::KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard,
+            )
+            .ok_or_else(|| "ordinary app Guard helper is absent".to_owned())?;
+        if [ordinary.eq_protocol_digest, ordinary.ep_protocol_digest]
+            != self.ordinary_guard_protocol_digests
+        {
+            return Err("ordinary app Guard release differs from loaded keys".into());
+        }
         if expected != self.state_checkpoint_artifacts
             || release.provider_policy_root() != self.provider_policy_root
             || release.native_profile_digest() != self.native_profile_digest
@@ -1213,6 +1276,21 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .state_checkpoint_artifacts
                 .canonical_empty_effect_digest,
             provider_policy_root: self.provider_policy_root,
+        }
+    }
+
+    pub(super) fn ordinary_guard_verifier_material(
+        &self,
+    ) -> super::ordinary_guard_verifier::OrdinaryGuardMaterialV1<'_> {
+        super::ordinary_guard_verifier::OrdinaryGuardMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            eq_protocol: &self.eq_ordinary_guard_protocol,
+            ep_protocol: &self.ep_ordinary_guard_protocol,
+            release_id: self.release_id,
+            artifact_manifest_digest: self.artifact_manifest_digest,
+            eq_protocol_digest: self.ordinary_guard_protocol_digests[0],
+            ep_protocol_digest: self.ordinary_guard_protocol_digests[1],
         }
     }
 
@@ -1925,6 +2003,41 @@ fn read_ep_guard_vk(
         params,
         KAGEMUSHA_HALO2_K_V1,
         "Ep provider-root-bound GuardBundle",
+    )
+}
+
+pub(super) fn read_eq_ordinary_guard_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<
+        EqAffine,
+        super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEqCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq ordinary app approval Guard",
+    )
+}
+pub(super) fn read_ep_ordinary_guard_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
+    let params = KagemushaProviderRootCircuitParamsV1::new(params, root)
+        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    read_recursive_vk_checked::<
+        EpAffine,
+        super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEpCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep ordinary app approval Guard",
     )
 }
 

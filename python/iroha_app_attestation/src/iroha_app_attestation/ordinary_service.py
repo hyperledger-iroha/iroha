@@ -15,6 +15,8 @@ from .attestation import AttestationRejected, require
 from .ordinary_issuance import DurableOrdinaryCredentialIssuer
 from .ordinary_provider import OrdinaryCredentialRequest, OrdinaryRawAttestationRequest
 from .service import _decode_base64, _decode_hex32, _unique_object
+from .ordinary_refresh_service import PATH as REFRESH_PATH, handle_refresh
+from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
 
 SCHEMA = "iroha.kagemusha.ordinary-app-credential-request.v1"
 PATH = "/v1/kagemusha/ordinary-app-credentials"
@@ -85,17 +87,21 @@ class OrdinaryCredentialService:
     route. The returned public credential is authenticated again by Native Core.
     """
     def __init__(self, *, issuer: DurableOrdinaryCredentialIssuer | None = None,
+                 refresh_issuer: DurableOrdinaryIntegrityRefreshIssuer | None = None,
                  authorize_core_call: Callable[[object], bool] | None = None) -> None:
         require(issuer is None or type(issuer) is DurableOrdinaryCredentialIssuer,
                 "actual ordinary issuer owner required")
         require(authorize_core_call is None or callable(authorize_core_call),
                 "ordinary Core caller owner invalid")
         self._issuer = issuer
+        require(refresh_issuer is None or type(refresh_issuer) is DurableOrdinaryIntegrityRefreshIssuer,
+                "actual refresh issuer owner required")
+        self._refresh = refresh_issuer
         self._authorize = authorize_core_call
 
     def handle(self, *, method: str, path: str, body: bytes,
                content_type: str, transport_context: object) -> tuple[int, bytes]:
-        if method != "POST" or path not in (PATH, RAW_PATH):
+        if method != "POST" or path not in (PATH, RAW_PATH, REFRESH_PATH):
             return 404, b'{"error":"route_not_found"}'
         if content_type != "application/json":
             return 415, b'{"error":"unsupported_media_type"}'
@@ -106,6 +112,8 @@ class OrdinaryCredentialService:
                 return 401, b'{"error":"caller_unauthorized"}'
         except Exception:
             return 503, b'{"error":"issuer_unavailable"}'
+        if path == REFRESH_PATH:
+            return handle_refresh(self._refresh,body)
         try:
             request = decode_raw_request(body) if path == RAW_PATH else decode_request(body)
         except AttestationRejected:

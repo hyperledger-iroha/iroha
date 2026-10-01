@@ -161,6 +161,10 @@ const fn artifact_role_name(role: KagemushaArtifactRoleV1) -> &'static str {
         KagemushaArtifactRoleV1::MintHashClaimVkEq => "mint_hash_claim_vk_eq",
         KagemushaArtifactRoleV1::MintHashClaimPkEp => "mint_hash_claim_pk_ep",
         KagemushaArtifactRoleV1::MintHashClaimVkEp => "mint_hash_claim_vk_ep",
+        KagemushaArtifactRoleV1::OrdinaryAppGuardPkEq => "ordinary_app_guard_pk_eq",
+        KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq => "ordinary_app_guard_vk_eq",
+        KagemushaArtifactRoleV1::OrdinaryAppGuardPkEp => "ordinary_app_guard_pk_ep",
+        KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp => "ordinary_app_guard_vk_ep",
     }
 }
 
@@ -185,6 +189,7 @@ const fn helper_name(helper: KagemushaQualifiedHelperCircuitV1) -> &'static str 
         KagemushaQualifiedHelperCircuitV1::GuardBundle => "guard_bundle",
         KagemushaQualifiedHelperCircuitV1::MintHashShard => "mint_hash_shard",
         KagemushaQualifiedHelperCircuitV1::MintHashClaim => "mint_hash_claim",
+        KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard => "ordinary_app_guard",
     }
 }
 
@@ -476,8 +481,8 @@ mod tests {
             names(&body.peer_messages),
             ["payment_request", "payment", "acknowledgement"]
         );
-        assert_eq!(body.artifact_role_count, 50);
-        assert_eq!(codes(&body.artifact_roles), (0_u16..50).collect::<Vec<_>>());
+        assert_eq!(body.artifact_role_count, 54);
+        assert_eq!(codes(&body.artifact_roles), (0_u16..54).collect::<Vec<_>>());
         assert_eq!(
             names(&body.artifact_roles),
             [
@@ -531,6 +536,10 @@ mod tests {
                 "mint_hash_claim_vk_eq",
                 "mint_hash_claim_pk_ep",
                 "mint_hash_claim_vk_ep",
+                "ordinary_app_guard_pk_eq",
+                "ordinary_app_guard_vk_eq",
+                "ordinary_app_guard_pk_ep",
+                "ordinary_app_guard_vk_ep",
             ]
         );
         assert_eq!(body.relation_count, 8);
@@ -548,8 +557,8 @@ mod tests {
                 "commit_wrapper",
             ]
         );
-        assert_eq!(body.helper_count, 6);
-        assert_eq!(codes(&body.helpers), (0_u16..6).collect::<Vec<_>>());
+        assert_eq!(body.helper_count, 7);
+        assert_eq!(codes(&body.helpers), (0_u16..7).collect::<Vec<_>>());
         assert_eq!(
             names(&body.helpers),
             [
@@ -559,6 +568,7 @@ mod tests {
                 "guard_bundle",
                 "mint_hash_shard",
                 "mint_hash_claim",
+                "ordinary_app_guard",
             ]
         );
         assert_eq!(body.hardware_capability_count, 16);
@@ -632,6 +642,12 @@ mod tests {
 
     #[test]
     fn canonical_vector_roundtrips_and_rejects_digest_or_inventory_drift() {
+        assert_eq!(
+            KagemushaNativeContractVectorBodyV1::canonical()
+                .canonical_digest()
+                .expect("canonical body encoding"),
+            KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DIGEST_V1
+        );
         let vector = KagemushaNativeContractVectorV1::canonical().expect("canonical vector");
         assert_eq!(
             vector.contract_digest,
@@ -715,9 +731,9 @@ mod tests {
             .collect();
         for (name, count) in [
             ("PEER_MESSAGE", 3),
-            ("ARTIFACT_ROLE", 50),
+            ("ARTIFACT_ROLE", 54),
             ("RELATION", 8),
-            ("HELPER", 6),
+            ("HELPER", 7),
             ("HARDWARE_CAPABILITY", 16),
             ("DEVICE_OPERATION", 22),
         ] {

@@ -30,7 +30,7 @@ enum KagemushaAppPlatformFrameV1 {
     case 1:
       _ = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
         approvalID: purpose == 1 ? request[1] : nil,
-        enrollmentID: purpose == 2 ? request[1] : nil)
+        enrollmentChallengeHash: purpose == 2 ? request[1] : nil)
     case 2, 5:
       guard f.count == 3, f[0].count == 1 else { throw invalid("invalid original recovery state") }
       let state = f[0][0], fence = phase(request) == 2

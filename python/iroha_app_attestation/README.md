@@ -1,63 +1,79 @@
 # Shared Iroha app attestation
 
-The implementation lives in Iroha for BPNG, BOI and CBSI. Product adapters supply
-actual native preparation and platform originals; they do not implement another
-challenge, crypto codec or trust policy. The first release has no old-format
-fallback and requires no custom applet or OMAPI provisioning.
+BPNG, BOI and CBSI use this shared Iroha implementation. Product adapters carry
+Native-selected requests and exact platform originals. The first release requires
+no custom applet, OMAPI access rule or OEM provisioning for Pixel 6 enrollment.
+Android generates a persistent nonexportable P256 SIGN/SHA256 key, prefers
+StrongBox, and accepts TEE only under the authenticated hardware policy. Imported,
+software and usage-limited keys are rejected. Apple uses genuine App Attest
+attestation and possession assertions with a separately retained assertion counter.
+The Native financial secret and logical financial index are independent of these
+platform approval keys and counters.
 
-The current ordinary enrollment transport is exactly 451 unsigned body bytes plus
-the real Core Ed25519 signature of 64 bytes, totaling 515. It binds the account's native model
-commitment, network, lane, actual release/profile/suite, policy and financial
-enrollment epochs, nonces/attempt and separate financial authority commitment.
-Android attests a persistent generated P256 SIGN/SHA256 key under the explicit
-TEE/StrongBox policy, preferring StrongBox; imported, software and usage-limited
-keys are rejected. Its actual possession signature signs Iroha's prepared message.
-Apple uses genuine App Attest enrollment and a possession assertion; that
-assertion's observed counter becomes the separate retained floor. The financial
-logical index is independent and may exceed UInt32.
+The current enrollment challenge is exactly 451 body bytes and a 64-byte Core
+Ed25519 signature. It binds account, network, lane, release, profile, suite, policy
+and financial epochs, nonces, attempt and the separate financial commitment.
+The first E371 possession field is SHA256 of the full model-owned challenge
+signing message; it is not the stable enrollment ID or the hash of the signed
+515-byte transport. The final `KOAC01` encoder request is exactly 831 bytes.
+Raw platform admission uses a separate `KRAC01` request and 314-byte signed
+admission, retained before possession and final credential admission. Both native
+encoders sign the actual Rust model and emit its canonical Norito originals.
 
-`ordinary_enrollment.py` implements the fixed 515 transport, exact platform
-challenge/possession subjects and original evidence digest. The local unsigned
-encoder request is `KOAC` + byte 01 + 794-byte issuer body + admitted app-authority
-Ed public key of 32 bytes, totaling 831. The native encoder consumes the model-owned parser,
-signs the actual model message and emits canonical Norito for the new ordinary
-credential. The platform P256 key and native financial secret are separate.
-These formatters and crypto checks do not admit a release, connect issuer keys
-or grant spending authority. `ordinary_provider.py` composes real preparation,
-platform, possession and current-policy checks. `ordinary_issuance.py` retains
-the actual Google response and exact signing input in separate durable commits
-before certificate publication. An identical recovery obtains the same original
-without another Google decode or signer call. `ordinary_service.py` owns the
-strict Core request DTO. The production Native startup/custody adapter is still
-being integrated, and the E371 possession model change needs a current source gate.
+`ordinary_provider.py` composes actual preparation, platform, possession and
+current-policy checks. `ordinary_issuance.py` commits the exact original Google
+response and signing input before publishing an enrollment credential. Identical
+lost-result recovery returns the retained original without another Google decode
+or signing operation. `ordinary_service.py` owns the strict credential DTO;
+`ordinary_service.py` also owns the separate raw-admission DTO;
+`ordinary_raw_admission.py` binds its original evidence to the model signing input.
 
-`play_integrity.py` independently sends the opaque standard token to Google's
-fixed HTTPS/OAuth decoder. It checks the original preparation and generated-key
-requestHash, package/version, Play app-signing certificate, selected recognized,
-licensed and device verdicts, and trusted freshness. It rejects every
-`testingDetails` payload. It supplies no wallet journal or hardware monotonic
-counter. Production enrollment and refresh must use the Native-authenticated
-Google policy original and server-account custody. No genuine Google response or
-physical qualification is claimed by synthetic tests.
+Periodic Android refresh is a separate challenge and lease. The Core-signed
+challenge is 450 body bytes plus 64 signature bytes. Its attempt ID hashes the
+complete model signing message; its requestHash and P256 possession message use
+their distinct model domains. `ordinary_refresh_issuance.py` selects the actual
+retained enrollment credential, checks current Native policy and raw revocation,
+reserves the exact challenge, original DER signature and opaque token, and retains
+the real Google response before freezing the `KRPI01` signing input. A restart
+returns the same canonical lease without another decode or signature. Conflicting
+retries and expired leases are rejected. A lease does not replace the enrollment
+credential, financial commitment, epoch or an operation approval.
+`ordinary_refresh_service.py` accepts only the closed six-field refresh request.
 
-`google_oauth.py` admits the exact public decoder-policy original against the
-independently authenticated Native Play policy digest before duplicating the
-owner-only credential FD. It checks the service-account project, principal,
-client ID and fixed Google token URI, signs an actual RS256 assertion through
-an inherited pipe, and requests only the `playintegrity` scope. Private JSON,
-keys and access tokens are absent from argv, environment and repository outputs.
-Synthetic RSA tests do not constitute a production credential invocation.
+`play_integrity.py` decodes opaque Standard tokens at Google's fixed HTTPS
+endpoint using the Native-authenticated Google policy. It checks the generated
+key's requestHash, exact package/version and Play app-signing certificate,
+recognized/licensed/device verdicts and trusted freshness. Testing verdicts are
+rejected. `google_oauth.py` checks the actual public decoder-policy original and
+project/principal/client ID before duplicating the owner-only credential FD.
+RS256 signing runs in the same process through the fixed isolated Python runtime's
+loaded OpenSSL 3 module; it never pipes the private key to a subprocess. Private
+JSON, keys and access tokens are absent from argv, environment and public outputs.
 
-Run the current package tests:
+The production `ordinary_worker.py` uses the Native-admitted private descriptor
+channel and sealed encoder/runtime/store roles. Its closed phases are `raw`,
+`credential` and `refresh`; no request selects an executable, policy or key path.
+Linux startup requires the Native parent's held Yama policy to disallow sibling
+ptrace before exec; the worker and both encoders independently become nondumpable
+before private intake. The Core startup adapter validates the same admitted
+release, immutable provider originals, signing-key identity and owner-only held
+custody before launching the worker. These boundaries have source and component
+tests; final integrated release, SDK and financial proof gates remain required.
+
+Run the package tests with the selected Python/OpenSSL runtime:
 
 ```sh
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
-The sections below retain earlier component APIs and evidence for migration;
-their 273-byte preparation/KAEA signing
-contract is not the new shipping ordinary enrollment contract. The old default
-WSGI route remains closed and cannot issue with the new native encoder.
+Scripted Google replies and fixture keys exercise cryptographic and durable-store
+behavior. They do not establish real Google decoding, physical qualification or
+permission to publish a monetary wallet. Financial publication must verify the
+genuine paired State and distinct ordinary Guard under the actual signed release.
+
+Earlier component guidance below records the predecessor 273-byte/KAEA APIs and
+diagnostic evidence. Those APIs do not provide a first-release fallback; the old
+default WSGI route cannot issue through the current native encoder.
 
 ## Predecessor component guidance and retained evidence
 

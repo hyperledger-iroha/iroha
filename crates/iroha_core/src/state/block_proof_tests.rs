@@ -31,7 +31,7 @@ fn proof_limits() -> BlockProofLimits {
     }
 }
 fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain {
-    use crate::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     use iroha_data_model::{
         events::pipeline::{BlockEventFilter, BlockStatus},
         isi::Log,
@@ -43,6 +43,11 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
     // Genesis timestamps span its instruction batches; keep the one-shot
     // schedule ahead of the actual parent rather than inside that span.
     let mut config = TestChainConfig::new(World::new(), 0);
+    if sealed {
+        // A sealed input has no public transaction timestamp. Its original
+        // signed cadence carries this block past the same one-shot schedule.
+        config.genesis_block_cadence_ms = nonzero!(1001_u64);
+    }
     let signer = config.genesis_key.clone();
     let authority = AccountId::new(signer.public_key().clone());
     config.genesis_instructions = vec![
@@ -106,17 +111,7 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
             },
             signer.private_key(),
         );
-        chain.commit_with_proposal(
-            None,
-            vec![successful],
-            Signers::Quorum,
-            Default::default(),
-            |proposal| {
-                proposal.set_external_entrypoints(vec![TransactionEntrypoint::SealedCommitment(
-                    commitment,
-                )]);
-            },
-        );
+        chain.commit_entrypoints(vec![TransactionEntrypoint::SealedCommitment(commitment)]);
     } else {
         let rejected = chain.sign(
             &signer,

@@ -6,14 +6,24 @@
 //! and a descriptor-held native logical journal; an OEM response cannot substitute for either.
 
 use super::*;
+pub(crate) use crate::kagemusha_v1_recursion::{
+    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+};
 use iroha_data_model::kagemusha::{
     KagemushaVerifiedOrdinaryAppCredentialV1,
     KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
-    kagemusha_ordinary_financial_epoch_id_v1,
+    KagemushaVerifiedPlayIntegrityRefreshLeaseV1, kagemusha_ordinary_financial_epoch_id_v1,
 };
+
+#[path = "authenticated_ordinary_current_publication.rs"]
+mod current_publication;
+pub use current_publication::KagemushaAuthenticatedOrdinaryCurrentPublicationV1;
 
 #[path = "authenticated_ordinary_logical_journal.rs"]
 mod logical_journal;
+pub(crate) use logical_journal::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
 pub use logical_journal::{
     KagemushaAuthenticatedOrdinaryApprovalV1, KagemushaOrdinaryLogicalApprovalJournalV1,
 };
@@ -23,6 +33,7 @@ pub use logical_journal::{
 pub struct KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
     enrollment: &'a KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
     release: Arc<KagemushaAuthenticatedReleaseV1>,
+    integrity_lease: Option<&'a KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
 }
 
 impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
@@ -33,6 +44,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
         let floor = Self {
             enrollment,
             release,
+            integrity_lease: None,
         };
         floor.recheck_at_trusted_time(enrollment.authenticated_at_ms())?;
         Ok(floor)
@@ -44,9 +56,15 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
     /// # Errors
     /// Rejects clock regression, expired originals or mixed scope/catalog/credential bindings.
     pub fn recheck_at_trusted_time(&self, now: u64) -> Result<(), KagemushaStateErrorV1> {
-        self.enrollment
-            .recheck_at_trusted_time(now)
-            .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        if let Some(lease) = self.integrity_lease {
+            self.enrollment
+                .recheck_with_integrity_lease(lease, now)
+                .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        } else {
+            self.enrollment
+                .recheck_at_trusted_time(now)
+                .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        }
         let retail = &self.enrollment.certificate().subject;
         let credential = self.enrollment.app_credential();
         let subject = credential.subject();
@@ -72,6 +90,21 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
             return Err(KagemushaStateErrorV1::InvalidHardwareProfile);
         }
         Ok(())
+    }
+
+    pub(crate) fn from_verified_enrollment_with_integrity_lease(
+        enrollment: &'a KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        integrity_lease: &'a KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        now: u64,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        let floor = Self {
+            enrollment,
+            release,
+            integrity_lease: Some(integrity_lease),
+        };
+        floor.recheck_at_trusted_time(now)?;
+        Ok(floor)
     }
 
     /// Actual independently verified ordinary credential original, without its private app key.
@@ -236,6 +269,10 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
     ) -> Result<Arc<KagemushaAuthenticatedReleaseV1>, KagemushaStateErrorV1> {
         self.recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())?;
         Ok(Arc::clone(&self.floor.release))
+    }
+
+    pub(crate) fn recursive_verifier(&self) -> &KagemushaAuthenticatedRecursiveVerifierV1 {
+        &self.recursive_verifier
     }
 
     /// Independently verify the real paired zero-State against the complete selected preview.

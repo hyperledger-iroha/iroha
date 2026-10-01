@@ -8,19 +8,19 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
   func testC451PreparationRejectsRetiredLayoutAndSubstitutedNativeScope() throws {
     let f = try preparation()
     let p = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: digest(0x11), enrollmentID: nil)
+      approvalID: digest(0x11), enrollmentChallengeHash: nil)
     XCTAssertEqual(p.platform, 4); XCTAssertEqual(p.appleCounterFloor, 7)
     var enumTaggedC = f
     let cStart = Data("iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0".utf8).count + 8
     enumTaggedC[7][cStart + 2] = 4
     enumTaggedC[4] = Data(SHA256.hash(data: enumTaggedC[7]))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: enumTaggedC,
-      approvalID: digest(0x11), enrollmentID: nil))
+      approvalID: digest(0x11), enrollmentChallengeHash: nil))
     XCTAssertEqual(p.approval!.clientDataHash, Data(SHA256.hash(data: f[1])))
     for index in [0, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13] {
       var bad = f; bad[index] = Data()
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: bad,
-        approvalID: digest(0x11), enrollmentID: nil), "field \(index)")
+        approvalID: digest(0x11), enrollmentChallengeHash: nil), "field \(index)")
     }
     var retired = f
     let domain = Data("iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0".utf8)
@@ -28,9 +28,9 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
     retired[7].removeSubrange((domain.count + 8 + 427)..<(domain.count + 8 + 435))
     retired[4] = Data(SHA256.hash(data: retired[7]))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: retired,
-      approvalID: digest(0x11), enrollmentID: nil))
+      approvalID: digest(0x11), enrollmentChallengeHash: nil))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: digest(0x12), enrollmentID: nil))
+      approvalID: digest(0x12), enrollmentChallengeHash: nil))
   }
 
   func testBootstrapCannotBecomeOrdinaryWDespiteMatchingSubjectHash() throws {
@@ -40,7 +40,7 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
     let start = KagemushaAppApprovalSigningProjectionV1.signingDomain.count + 8
     f[1].replaceSubrange((start + 195)..<(start + 227), with: Data(SHA256.hash(data: f[13])))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: digest(0x11), enrollmentID: nil))
+      approvalID: digest(0x11), enrollmentChallengeHash: nil))
   }
 
   func testPreparationRejectsCredentialAndGenerationSubstitutionDespiteRecomputedSubjectHash() throws {
@@ -60,7 +60,7 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
       XCTAssertNoThrow(try KagemushaAppApprovalSigningProjectionV1(
         nativeSigningBytes: bad[1], nativeFinancialSubject: bad[13]))
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: bad,
-        approvalID: digest(0x11), enrollmentID: nil))
+        approvalID: digest(0x11), enrollmentChallengeHash: nil))
     }
   }
 
@@ -76,7 +76,7 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
       XCTAssertNoThrow(try KagemushaAppApprovalSigningProjectionV1(
         nativeSigningBytes: bad[1], nativeFinancialSubject: bad[13]))
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: bad,
-        approvalID: digest(0x11), enrollmentID: nil), "range \(range)")
+        approvalID: digest(0x11), enrollmentChallengeHash: nil), "range \(range)")
     }
   }
 
@@ -84,15 +84,23 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
     var f = try preparation()
     f[1] = enrollmentPossession(key: f[6]); f[8] = Data(); f[13] = Data()
     let p = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: nil, enrollmentID: digest(1))
+      approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:challenge())))
     XCTAssertNil(p.approval); XCTAssertTrue(p.credentialDigest.isEmpty)
+    var oldAttempt=f
+    let eStart=Data("iroha:kagemusha:v1:app-enrollment-possession\0".utf8).count+8
+    oldAttempt[1].replaceSubrange((eStart+3)..<(eStart+35),with:digest(1))
+    XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:oldAttempt,
+      approvalID:nil,enrollmentChallengeHash:Data(SHA256.hash(data:challenge()))))
+    XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields:f,
+      approvalID:nil,enrollmentChallengeHash:digest(1)))
+
     for index in [8, 13] {
       var bad = f; bad[index] = digest(0x55)
       XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: bad,
-        approvalID: nil, enrollmentID: digest(1)))
+        approvalID: nil, enrollmentChallengeHash: Data(SHA256.hash(data:challenge()))))
     }
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-      approvalID: digest(1), enrollmentID: nil))
+      approvalID: digest(1), enrollmentChallengeHash: nil))
   }
 
   func testFixedReceiptRejectsOmittedTrailingAndCrossPlatformCounterFields() throws {
@@ -171,7 +179,7 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
   private func enrollmentPossession(key: Data) -> Data {
     var e = Data("iroha:kagemusha:v1:app-enrollment-possession\0".utf8)
       + u64(371) + Data([1, 0, 1])
-    for d in [digest(1), digest(2), digest(3), digest(4), digest(5), digest(11),
+    for d in [Data(SHA256.hash(data:challenge())), digest(2), digest(3), digest(4), digest(5), digest(11),
       digest(7), digest(8), digest(6), key, digest(0x77)] { e.append(d) }
     e.append(u64(1000)); e.append(u64(121000)); return e
   }

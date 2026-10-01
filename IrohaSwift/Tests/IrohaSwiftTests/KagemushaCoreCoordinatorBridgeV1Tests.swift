@@ -35,6 +35,28 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.events, [])
   }
 
+  func testRetiredCoordinatorMethodCeilingsRejectBeforeInstallation() {
+    for ceiling:UInt32 in [18,19,20,22] {
+      let endpoint=Endpoint();endpoint.contractWords[11]=ceiling
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath:"/durable/store",endpoint:endpoint))
+      XCTAssertEqual(endpoint.events,[]);XCTAssertEqual(endpoint.openCalls,0)
+    }
+  }
+
+  func testRetiredOrSubstitutedReleaseInventoriesRejectBeforeInstallation() {
+    let mismatches: [(Int, UInt32)] = [(4, 50), (4, 53), (4, 55), (6, 6), (6, 8)]
+    for (index, count) in mismatches {
+      let endpoint = Endpoint()
+      endpoint.contractWords[index] = count
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath: "/durable/store", endpoint: endpoint))
+      XCTAssertEqual(endpoint.events, [])
+      XCTAssertEqual(endpoint.installedPaths, [])
+      XCTAssertEqual(endpoint.openCalls, 0)
+    }
+  }
+
   func testTransportCorrelatesCallerIdentity() throws {
     let endpoint = Endpoint()
     let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
@@ -177,7 +199,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
   }
 
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
-    var contractWords: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18]
+    var contractWords: [UInt32] = [2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21]
     var returnedHandle = UInt64.max
     var openCalls = 0
     var invokeCalls = 0

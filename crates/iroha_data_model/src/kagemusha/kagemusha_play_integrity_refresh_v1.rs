@@ -229,6 +229,30 @@ pub struct KagemushaSignedPlayIntegrityRefreshChallengeV1 {
     pub signature: Signature,
 }
 impl KagemushaSignedPlayIntegrityRefreshChallengeV1 {
+    /// Verify the original Core signature and the independently selected credential/policy.
+    /// Native callers separately retain the nonce, current owner and exact original attempt.
+    /// # Errors
+    /// Rejects a substituted original, scope, epoch, key or trusted interval.
+    #[allow(clippy::too_many_arguments)]
+    pub fn authenticate(
+        &self,
+        expected: &KagemushaPlayIntegrityRefreshChallengeV1,
+        credential: &KagemushaVerifiedOrdinaryAppCredentialV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        trust: &KagemushaOrdinaryAppTrustPolicyV1,
+        authority: &KagemushaAppAttestationAuthorityPolicyV1,
+        core_key: &PublicKey,
+        now: u64,
+    ) -> Result<(), String> {
+        if self.challenge != *expected || core_key.algorithm() != Algorithm::Ed25519 {
+            return Err("Integrity refresh original/Core key differs".into());
+        }
+        self.challenge
+            .select(credential, release, trust, authority, now)?;
+        self.signature
+            .verify(core_key, &self.challenge.canonical_signing_bytes()?)
+            .map_err(|_| "Integrity refresh Core signature rejected".to_owned())
+    }
     /// Exact fixed 514-byte transport; encoding grants no native ownership.
     /// # Errors
     /// Rejects malformed challenge or signature width.

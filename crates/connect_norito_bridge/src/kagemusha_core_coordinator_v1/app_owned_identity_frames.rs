@@ -104,8 +104,13 @@ pub(super) fn validate_request(
 ) -> Result<()> {
     check(!f.is_empty())?;
     let phase = number(&f[0])?;
-    if method == KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity && phase == 11 {
-        return count(f, 1);
+    if method == KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity {
+        if matches!(phase, 11 | 12) {
+            return count(f, 1);
+        }
+        if phase == 1 {
+            return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+        }
     }
     if phase == 1 {
         count(f, 2)?;
@@ -115,7 +120,17 @@ pub(super) fn validate_request(
     ticket(&f[1])?;
     if method == KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity {
         match phase {
-            2 | 4 | 6 | 7 | 8 | 9 => count(f, 2),
+            2 | 4 | 7 | 8 | 9 | 14 => count(f, 2),
+            6 => {
+                count(f, 3)?;
+                check(f[2].len() == 314)
+            }
+            13 => {
+                count(f, 3)?;
+                KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&f[2])
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+                Ok(())
+            }
             3 => {
                 count(f, 3)?;
                 reference(&f[2])
@@ -239,7 +254,7 @@ fn approval_projection(
         }
         check(
             &e[3..35] == id
-                && e[3..35] == c[3..35]
+                && e[3..35] == Sha256::digest(&r[7])[..]
                 && e[35..131] == c[35..131]
                 && e[131..163] == c[131..163]
                 && e[163..195] == c[323..355]
@@ -285,7 +300,38 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
             count(r, 1)?;
             digest(&r[0])
         }
-        1 => {
+        12 => {
+            count(r, 8)?;
+            ticket(&r[0])?;
+            let account = std::str::from_utf8(&r[1])
+                .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+            check(
+                !account.is_empty() && account.len() <= 2048 && !account.as_bytes().contains(&0),
+            )?;
+            for i in 2..7 {
+                digest(&r[i])?;
+            }
+            let mut uuid = r[2][..16].to_vec();
+            uuid[6] = (uuid[6] & 0x0f) | 0x40;
+            uuid[8] = (uuid[8] & 0x3f) | 0x80;
+            let u = hex::encode(uuid);
+            check(
+                r[7] == format!(
+                    "{}-{}-{}-{}-{}",
+                    &u[..8],
+                    &u[8..12],
+                    &u[12..16],
+                    &u[16..20],
+                    &u[20..]
+                )
+                .as_bytes(),
+            )
+        }
+        14 => {
+            count(r, 1)?;
+            check(r[0].len() <= 16 * 1024)
+        }
+        13 => {
             count(r, 8)?;
             ticket(&r[0])?;
             check(r[1].len() == 515)?;
@@ -294,7 +340,7 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
                     .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
             let c = &signed.challenge;
             check(
-                c.enrollment_id.as_slice() == q[1]
+                r[1] == q[2]
                     && c.canonical_signing_bytes()
                         .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?
                         == r[2]
@@ -391,6 +437,65 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn possession_projection_binds_full_c_digest_and_rejects_retired_selectors() {
+        use iroha_data_model::kagemusha::{
+            KagemushaAppEnrollmentPossessionChallengeV1,
+            kagemusha_ordinary_android_app_key_alias_v1,
+        };
+        use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
+        // This is exact public wire correlation, never a native or device admission fixture.
+        let f = Fixture::new(false);
+        let c = &f.selection.preparation.challenge;
+        let key = &f.selection.issuance.credential.subject.app_public_key;
+        let original_c = c.canonical_signing_bytes().unwrap();
+        let e =
+            KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(c, key, [91; 32])
+                .unwrap();
+        let mut projection = vec![
+            1u64.to_le_bytes().to_vec(),
+            e.canonical_signing_bytes().unwrap(),
+            vec![5],
+            kagemusha_ordinary_android_app_key_alias_v1(c)
+                .unwrap()
+                .into_bytes(),
+            Sha256::digest(&original_c).to_vec(),
+            key.as_sec1_bytes().to_vec(),
+            Sha256::digest(key.as_sec1_bytes()).to_vec(),
+            original_c,
+            vec![],
+            vec![92; 32],
+            vec![],
+            vec![3],
+            vec![93; 32],
+            vec![],
+        ];
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession;
+        let selector = c.attestation_challenge().unwrap();
+        approval_projection(method, &selector, &projection).unwrap();
+        assert!(approval_projection(method, &c.enrollment_id, &projection).is_err());
+        assert!(approval_projection(method, &Sha256::digest(selector), &projection).is_err());
+        let mut retired_id_message = projection.clone();
+        let first = E_DOMAIN.len() + 8 + 3;
+        retired_id_message[1][first..first + 32].copy_from_slice(&c.enrollment_id);
+        assert!(approval_projection(method, &selector, &retired_id_message).is_err());
+        // A C-only epoch change cannot hide behind the otherwise identical explicit E fields.
+        let mut changed = c.clone();
+        changed.hardware_epoch += 1;
+        projection[7] = changed.canonical_signing_bytes().unwrap();
+        projection[4] = Sha256::digest(&projection[7]).to_vec();
+        projection[3] = kagemusha_ordinary_android_app_key_alias_v1(&changed)
+            .unwrap()
+            .into_bytes();
+        assert!(
+            approval_projection(
+                method,
+                &changed.attestation_challenge().unwrap(),
+                &projection
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn identity_original_selector_read_has_no_caller_identity_or_side_effect_field() {
         let m = KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity;

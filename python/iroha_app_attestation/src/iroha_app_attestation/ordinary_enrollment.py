@@ -86,9 +86,10 @@ class OrdinaryEnrollmentChallenge:
                 and expires_at_ms - issued_at_ms <= 120_000
                 and issued_at_ms == self.issued_at_ms and expires_at_ms == self.expires_at_ms,
                 'enrollment possession interval differs from original C')
-        # E retains the original enrollment ID. The distinct authenticated raw
-        # admission binds SHA(full C), including epochs/suite/trust; no alternate E.
-        fields = (self.enrollment_id, self.client_nonce, self.server_nonce,
+        # The sole E first field binds the complete original signed C, including
+        # epochs, suite, trust and financial commitment. Stable C.enrollment_id
+        # remains the separate native21 selector; there is no EID-wire fallback.
+        fields = (self.attestation_challenge(), self.client_nonce, self.server_nonce,
                   self.account_binding, self.network_id, self.app_authority_policy_digest,
                   self.release_id, self.hardware_profile_id, self.lane_id,
                   attested_key_id, raw_attestation_sha256)

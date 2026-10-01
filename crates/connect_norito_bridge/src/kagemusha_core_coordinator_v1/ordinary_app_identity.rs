@@ -11,10 +11,13 @@ use super::{
 };
 use iroha_core_zk::kagemusha_v1_state::{
     KagemushaOrdinaryAppEnrollmentAttemptV1 as Attempt,
-    KagemushaPreparedOrdinaryAppEnrollmentV1 as Prepared,
+    KagemushaOrdinaryPreparationReservationV1 as Reservation,
+    KagemushaOrdinaryPreparationSelectedOriginalsV1 as Selected,
 };
 use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1;
 use std::{
+    fs::{File, OpenOptions},
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -28,65 +31,109 @@ pub enum KagemushaOrdinaryEnrollmentDispositionV1 {
     /// Reopen the exact previously retained original; missing storage is never recreated.
     Recover,
 }
-/// Independently admitted native C owner and authenticated reference time.
-/// No C/JNI DTO or decoder constructs this selection.
-pub struct KagemushaNativeOrdinaryPreKeySelectionV1 {
-    prepared: Prepared,
-    trusted_reference_ms: u64,
-    disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+/// Concrete retained native account/release/policy selection and original storage directory.
+/// This source performs no issuer HTTP callback. Mobile transports return untrusted originals
+/// through explicit C21 intake, and the actual reservation/Attempt owners authenticate them.
+pub struct KagemushaNativeOrdinaryAppIdentitySourceV1 {
+    path: PathBuf,
+    directory: File,
+    selected: Arc<Selected>,
+    preparation_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    integrity_policy_original: Option<Vec<u8>>,
 }
-impl KagemushaNativeOrdinaryPreKeySelectionV1 {
-    /// Retain the actual cryptographically admitted pre-key owner under native source custody.
-    /// Registration of Rust code is not account/release authority. The source must independently
-    /// authenticate its current account reservation, signed original, policy and trusted time.
+impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
+    /// Bind actual independently selected native originals before any mobile call.
+    /// Dispositions originate in native startup's exact original recovery state, never frame data.
+    /// No decoded account/settings or unsigned policy can supply the selected opaque holder.
     /// # Errors
-    /// Rejects stale original interval before filesystem or platform side effects.
-    pub fn from_admitted_original(
-        prepared: Prepared,
-        trusted_reference_ms: u64,
-        disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    /// Rejects another directory, expired selection or an Integrity original not pinned by trust.
+    pub fn from_native_selected_originals(
+        path: PathBuf,
+        selected: Arc<Selected>,
+        preparation_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+        platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+        integrity_policy_original: Option<Vec<u8>>,
     ) -> Result<Self, Error> {
-        prepared
-            .recheck_at_trusted_time(trusted_reference_ms)
+        use sha2::{Digest as _, Sha256};
+        kagemusha_core_coordinator_validate_storage_path_v1(
+            path.to_str().ok_or(Error::Rejected)?.as_bytes(),
+        )
+        .map_err(|_| Error::Rejected)?;
+        if path.canonicalize().map_err(|_| Error::Rejected)? != path {
+            return Err(Error::Rejected);
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)
             .map_err(|_| Error::Rejected)?;
-        Ok(Self {
-            prepared,
-            trusted_reference_ms,
-            disposition,
-        })
+        match (
+            selected
+                .integrity_policy_digest()
+                .map_err(|_| Error::Rejected)?,
+            &integrity_policy_original,
+        ) {
+            (None, None) => {}
+            (Some(expected), Some(raw))
+                if !raw.is_empty()
+                    && raw.len() <= 16 * 1024
+                    && <[u8; 32]>::from(Sha256::digest(raw)) == expected => {}
+            _ => return Err(Error::Rejected),
+        }
+        let this = Self {
+            path,
+            directory,
+            selected,
+            preparation_disposition,
+            platform_disposition,
+            integrity_policy_original,
+        };
+        this.recheck_originals(&this.path)?;
+        Ok(this)
     }
-}
-/// Rust-only ordinary identity source, registered before application installation.
-///
-/// Every returned pre-key owner must have independently authenticated native account/nonce/
-/// financial-secret commitment reservations and actual issuer-signed C. The source selects
-/// current release, policies and clock from held originals. It supplies no monetary backend,
-/// final credential, hardware monotonicity or decoded-verdict capability.
-pub trait KagemushaNativeOrdinaryAppIdentitySourceV1: Send + Sync + 'static {
-    /// Recheck current native account approval, release/policy and original storage/issuer custody.
-    /// Refuse uncertainty before each platform fence, read, protected issuer call and publication.
-    fn recheck_originals(&self, storage_path: &Path) -> Result<(), Error>;
-    /// Read the already reserved original native enrollment ID under held account/policy custody.
-    /// This correlation projection must never allocate/generate/reselect an identity, nonce,
-    /// secret or C preparation. Unavailable or uncertain original custody fails closed.
-    fn original_enrollment_id(&self, storage_path: &Path) -> Result<[u8; 32], Error>;
-    /// Resolve a caller-known selector to the same independently retained original native owner.
-    /// This must not reserve another nonce, financial-secret commitment or issuer preparation.
-    fn select_pre_key(
-        &self,
-        storage_path: &Path,
-        enrollment_id: [u8; 32],
-    ) -> Result<KagemushaNativeOrdinaryPreKeySelectionV1, Error>;
-    /// Fetch the actual purpose-specific issuer raw admission for these native-held originals.
-    /// Response bytes remain untrusted until native model signature/policy/time/C/key checks.
-    /// The protected transport must be bounded and reject redirects, stale policy and substituted
-    /// issuer custody. It must use the raw route and dedicated KRAC encoder, never final KOAC.
-    fn fetch_raw_admission(
-        &self,
-        signed_c: &[u8],
-        point: &KagemushaDevicePublicKeyV1,
-        complete_raw_original: &[u8],
-    ) -> Result<Vec<u8>, Error>;
+    fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
+        self.selected
+            .trusted_time_ms()
+            .map_err(|_| Error::Rejected)?;
+        let held = self.directory.metadata().map_err(|_| Error::Rejected)?;
+        let current = std::fs::symlink_metadata(&self.path).map_err(|_| Error::Rejected)?;
+        if path != self.path
+            || !held.is_dir()
+            || !current.is_dir()
+            || current.file_type().is_symlink()
+            || held.dev() != current.dev()
+            || held.ino() != current.ino()
+            || held.uid() != current.uid()
+            || held.gid() != current.gid()
+            || held.mode() != current.mode()
+        {
+            return Err(Error::Rejected);
+        }
+        Ok(())
+    }
+    fn original_enrollment_id(&self, path: &Path) -> Result<[u8; 32], Error> {
+        self.recheck_originals(path)?;
+        self.selected.enrollment_id().map_err(|_| Error::Rejected)
+    }
+    fn reserve_preparation(&self, path: &Path) -> Result<Reservation, Error> {
+        self.recheck_originals(path)?;
+        let now = self
+            .selected
+            .trusted_time_ms()
+            .map_err(|_| Error::Rejected)?;
+        let result = match self.preparation_disposition {
+            KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
+                Reservation::create(path, self.selected.clone(), now)
+            }
+            KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
+                Reservation::open_existing(path, self.selected.clone(), now)
+            }
+        }
+        .map_err(|_| Error::Rejected)?;
+        self.recheck_originals(path)?;
+        Ok(result)
+    }
 }
 /// Install-once ordinary source registration failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +141,7 @@ pub enum KagemushaOrdinaryAppIdentityInstallErrorV1 {
     /// The process already retains an independently selected ordinary source.
     AlreadyInstalled,
 }
-static SOURCE: OnceLock<Arc<dyn KagemushaNativeOrdinaryAppIdentitySourceV1>> = OnceLock::new();
+static SOURCE: OnceLock<Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>> = OnceLock::new();
 struct Installation {
     attempted_path: Option<Box<str>>,
     succeeded: bool,
@@ -109,7 +156,7 @@ static INSTALL: Mutex<Installation> = Mutex::new(Installation {
 /// # Errors
 /// Refuses replacing an existing source.
 pub fn register_kagemusha_native_ordinary_app_identity_source_v1(
-    source: Arc<dyn KagemushaNativeOrdinaryAppIdentitySourceV1>,
+    source: Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>,
 ) -> Result<(), KagemushaOrdinaryAppIdentityInstallErrorV1> {
     SOURCE
         .set(source)
@@ -149,11 +196,13 @@ struct Owner {
     opened: bool,
     handle: Option<u64>,
     attempted: Option<[u8; 32]>,
+    reservation_started: bool,
+    reservation: Option<Reservation>,
     attempt: Option<Attempt>,
 }
 struct OrdinaryBackend {
     path: PathBuf,
-    source: Arc<dyn KagemushaNativeOrdinaryAppIdentitySourceV1>,
+    source: Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>,
     owner: Mutex<Owner>,
 }
 impl OrdinaryBackend {
@@ -181,43 +230,82 @@ impl OrdinaryBackend {
                 return Err(Error::Rejected);
             }
             vec![id.to_vec()]
-        } else if phase == 1 {
-            let id: [u8; 32] = fields[1]
-                .as_slice()
-                .try_into()
-                .map_err(|_| Error::Rejected)?;
-            if owner.attempted.is_none() {
-                // Fence selection before calling native transport or touching attempt storage.
-                owner.attempted = Some(id);
-                let selected = self.source.select_pre_key(&self.path, id)?;
-                self.source.recheck_originals(&self.path)?;
-                if selected
-                    .prepared
-                    .original_preparation(selected.trusted_reference_ms)
-                    .map_err(|_| Error::Rejected)?
-                    .challenge
-                    .enrollment_id
-                    != id
-                {
+        } else if phase == 12 {
+            if owner.reservation.is_none() {
+                if owner.reservation_started {
                     return Err(Error::Rejected);
                 }
-                let attempt = match selected.disposition {
-                    KagemushaOrdinaryEnrollmentDispositionV1::Fresh => Attempt::create(
-                        &self.path,
-                        selected.prepared,
-                        selected.trusted_reference_ms,
-                    ),
-                    KagemushaOrdinaryEnrollmentDispositionV1::Recover => Attempt::open_existing(
-                        &self.path,
-                        selected.prepared,
-                        selected.trusted_reference_ms,
-                    ),
+                owner.reservation_started = true;
+                owner.reservation = Some(self.source.reserve_preparation(&self.path)?);
+            }
+            let held = owner.reservation.as_ref().ok_or(Error::Rejected)?;
+            let carrier = held.carrier().map_err(|_| Error::Rejected)?;
+            let mut uuid = carrier.client_nonce[..16].to_vec();
+            uuid[6] = (uuid[6] & 0x0f) | 0x40;
+            uuid[8] = (uuid[8] & 0x3f) | 0x80;
+            let u = hex::encode(uuid);
+            let request_id = format!(
+                "{}-{}-{}-{}-{}",
+                &u[..8],
+                &u[8..12],
+                &u[12..16],
+                &u[16..20],
+                &u[20..]
+            );
+            vec![
+                held.ticket()
+                    .map_err(|_| Error::Rejected)?
+                    .to_le_bytes()
+                    .to_vec(),
+                carrier.account_i105.as_bytes().to_vec(),
+                carrier.client_nonce.to_vec(),
+                carrier.release_id.to_vec(),
+                carrier.hardware_profile_id.to_vec(),
+                carrier.lane_id.to_vec(),
+                carrier.financial_authority_commitment.to_vec(),
+                request_id.into_bytes(),
+            ]
+        } else if phase == 13 {
+            let ticket = u64::from_le_bytes(
+                fields[1]
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::Rejected)?,
+            );
+            let reservation = owner.reservation.as_mut().ok_or(Error::Rejected)?;
+            if reservation.ticket().map_err(|_| Error::Rejected)? != ticket {
+                return Err(Error::Rejected);
+            }
+            reservation
+                .retain_preparation(&fields[2])
+                .map_err(|_| Error::Rejected)?;
+            if owner.attempt.is_none() {
+                let id = self.source.original_enrollment_id(&self.path)?;
+                if owner.attempted.is_some() {
+                    return Err(Error::Rejected);
+                }
+                owner.attempted = Some(id);
+                let prepared = owner
+                    .reservation
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .prepared_owner()
+                    .map_err(|_| Error::Rejected)?;
+                let now = self
+                    .source
+                    .selected
+                    .trusted_time_ms()
+                    .map_err(|_| Error::Rejected)?;
+                let attempt = match self.source.platform_disposition {
+                    KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
+                        Attempt::create(&self.path, prepared, now)
+                    }
+                    KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
+                        Attempt::open_existing(&self.path, prepared, now)
+                    }
                 }
                 .map_err(|_| Error::Rejected)?;
-                self.source.recheck_originals(&self.path)?;
                 owner.attempt = Some(attempt);
-            } else if owner.attempted != Some(id) {
-                return Err(Error::Rejected);
             }
             owner
                 .attempt
@@ -225,6 +313,29 @@ impl OrdinaryBackend {
                 .ok_or(Error::Rejected)?
                 .preparation_fields()
                 .map_err(|_| Error::Rejected)?
+        } else if phase == 14 {
+            let ticket = u64::from_le_bytes(
+                fields[1]
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::Rejected)?,
+            );
+            if owner
+                .reservation
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .ticket()
+                .map_err(|_| Error::Rejected)?
+                != ticket
+            {
+                return Err(Error::Rejected);
+            }
+            vec![
+                self.source
+                    .integrity_policy_original
+                    .clone()
+                    .unwrap_or_default(),
+            ]
         } else {
             let ticket = u64::from_le_bytes(
                 fields[1]
@@ -259,28 +370,9 @@ impl OrdinaryBackend {
                         .retain_raw(point, &original)
                         .map_err(|_| Error::Rejected)?
                 }
-                6 => {
-                    if let Some(original_result) = attempt
-                        .retained_raw_admission_result()
-                        .map_err(|_| Error::Rejected)?
-                    {
-                        original_result
-                    } else {
-                        let (c, point, raw) = attempt
-                            .raw_issuer_originals()
-                            .map_err(|_| Error::Rejected)?;
-                        self.source.recheck_originals(&self.path)?;
-                        let original = self.source.fetch_raw_admission(&c, &point, &raw)?;
-                        self.source.recheck_originals(&self.path)?;
-                        attempt.recheck().map_err(|_| Error::Rejected)?;
-                        if original.len() != 314 {
-                            return Err(Error::Rejected);
-                        }
-                        attempt
-                            .accept_raw_admission(&original)
-                            .map_err(|_| Error::Rejected)?
-                    }
-                }
+                6 => attempt
+                    .accept_raw_admission(&fields[2])
+                    .map_err(|_| Error::Rejected)?,
                 7 => attempt.recovery_fields().map_err(|_| Error::Rejected)?,
                 8 => attempt.recheck_fields().map_err(|_| Error::Rejected)?,
                 9 => {
@@ -299,7 +391,7 @@ impl OrdinaryBackend {
             }
         };
         self.source.recheck_originals(&self.path)?;
-        if !matches!(phase, 9 | 11) {
+        if !matches!(phase, 9 | 11 | 12 | 14) {
             owner
                 .attempt
                 .as_ref()
@@ -345,9 +437,11 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
         }
         owner.handle = None;
         owner.attempt = None;
+        owner.reservation = None;
         self.source.recheck_originals(&self.path)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,112 +450,48 @@ mod tests {
         kagemusha::*,
         testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture,
     };
+    use p256::ecdsa::SigningKey;
     use sha2::{Digest as _, Sha256};
-    struct Source {
-        fixture: Fixture,
-        path: PathBuf,
-        calls: Mutex<u32>,
-    }
-    impl KagemushaNativeOrdinaryAppIdentitySourceV1 for Source {
-        fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
-            if path == self.path {
-                Ok(())
-            } else {
-                Err(Error::Rejected)
-            }
-        }
-        fn original_enrollment_id(&self, path: &Path) -> Result<[u8; 32], Error> {
-            self.recheck_originals(path)?;
-            Ok(self.fixture.selection.preparation.challenge.enrollment_id)
-        }
-        fn select_pre_key(
-            &self,
-            path: &Path,
-            id: [u8; 32],
-        ) -> Result<KagemushaNativeOrdinaryPreKeySelectionV1, Error> {
-            self.recheck_originals(path)?;
-            let f = &self.fixture;
-            let c = &f.selection.preparation.challenge;
-            if c.enrollment_id != id {
-                return Err(Error::Rejected);
-            }
-            let prepared = Prepared::authenticate_pre_key(
-                f.selection.preparation.clone(),
+    fn backend() -> (tempfile::TempDir, OrdinaryBackend, Fixture) {
+        let f = Fixture::new(true);
+        let key = SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        let core_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            key.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap();
+        let selected = Arc::new(
+            Selected::from_selected_originals(
                 f.selection.owner.clone(),
                 f.release.clone(),
+                f.issuer_policy.clone(),
                 f.trust.clone(),
                 f.app_authority.clone(),
-                f.issuer_policy.clone(),
-                c.hardware_profile_id,
-                c.client_nonce,
-                c.financial_authority_commitment,
-                c.hardware_epoch,
+                f.selection.preparation.challenge.hardware_profile_id,
+                &core_key,
                 300,
             )
-            .map_err(|_| Error::Rejected)?;
-            KagemushaNativeOrdinaryPreKeySelectionV1::from_admitted_original(
-                prepared,
-                300,
-                KagemushaOrdinaryEnrollmentDispositionV1::Fresh,
-            )
-        }
-        fn fetch_raw_admission(
-            &self,
-            c: &[u8],
-            point: &KagemushaDevicePublicKeyV1,
-            raw: &[u8],
-        ) -> Result<Vec<u8>, Error> {
-            *self.calls.lock().unwrap() += 1;
-            let f = &self.fixture;
-            let expected = &f.selection.preparation.challenge;
-            if c != f.selection.preparation.to_transport_bytes().unwrap() {
-                return Err(Error::Rejected);
-            }
-            // Actual synthetic Ed signature isolates transport/custody only. No Apple attestation
-            // verification or physical/platform qualification is claimed by this test source.
-            let subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
-                version: 1,
-                enrollment_challenge_digest: expected.attestation_challenge().unwrap(),
-                authority_policy_digest: f.app_authority.canonical_digest().unwrap(),
-                platform_class: expected.platform_class,
-                security_level: KagemushaAppKeySecurityLevelV1::AppleAppAttest,
-                app_public_key: *point,
-                attested_key_id: Sha256::digest(point.as_sec1_bytes()).into(),
-                raw_platform_evidence_digest: Sha256::digest(raw).into(),
-                app_signing_identity_digest: f.app_authority.app_signing_identity_digest,
-                original_app_attest_counter: 0,
-                issued_at_ms: expected.issued_at_ms,
-                expires_at_ms: expected.expires_at_ms,
-            };
-            let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
-            KagemushaRawAppAttestationAdmissionV1 {
-                subject,
-                signature: Signature::try_new(
-                    key.private_key(),
-                    &subject.canonical_signing_bytes().unwrap(),
-                )
-                .unwrap(),
-            }
-            .to_transport_bytes()
-            .map_err(|_| Error::Rejected)
-        }
-    }
-    fn backend() -> (tempfile::TempDir, OrdinaryBackend, Arc<Source>) {
+            .unwrap(),
+        );
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().canonicalize().unwrap();
-        let source = Arc::new(Source {
-            fixture: Fixture::new(true),
-            path: path.clone(),
-            calls: Mutex::new(0),
-        });
+        let source = Arc::new(
+            KagemushaNativeOrdinaryAppIdentitySourceV1::from_native_selected_originals(
+                path.clone(),
+                selected,
+                KagemushaOrdinaryEnrollmentDispositionV1::Fresh,
+                KagemushaOrdinaryEnrollmentDispositionV1::Fresh,
+                None,
+            )
+            .unwrap(),
+        );
         (
             temp,
             OrdinaryBackend {
                 path,
-                source: source.clone(),
+                source,
                 owner: Mutex::new(Owner::default()),
             },
-            source,
+            f,
         )
     }
     fn call(
@@ -476,17 +506,48 @@ mod tests {
         super::super::kagemusha_core_coordinator_decode_response_v1(&result)
             .map_err(|_| Error::Rejected)
     }
+    fn prepare(b: &OrdinaryBackend, h: u64, f: &Fixture) -> Vec<Vec<u8>> {
+        let carrier = call(b, h, 12, vec![]).unwrap();
+        assert_eq!(carrier.len(), 8);
+        assert_eq!(call(b, h, 12, vec![]).unwrap(), carrier);
+        let mut c = f.selection.preparation.challenge;
+        c.client_nonce = carrier[2].as_slice().try_into().unwrap();
+        c.financial_authority_commitment = carrier[6].as_slice().try_into().unwrap();
+        c.issued_at_ms = b.source.selected.trusted_time_ms().unwrap();
+        c.expires_at_ms = c.issued_at_ms + 1900;
+        let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let signed = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
+            challenge: c,
+            signature: Signature::try_new(key.private_key(), &c.canonical_signing_bytes().unwrap())
+                .unwrap(),
+        }
+        .to_transport_bytes()
+        .unwrap();
+        let result = call(b, h, 13, vec![carrier[0].clone(), signed.clone()]).unwrap();
+        assert_eq!(result.len(), 8);
+        assert_eq!(result[1], signed);
+        assert_eq!(
+            call(b, h, 13, vec![carrier[0].clone(), signed]).unwrap(),
+            result
+        );
+        assert_eq!(
+            call(b, h, 14, vec![carrier[0].clone()]).unwrap(),
+            vec![vec![]]
+        );
+        result
+    }
     #[test]
-    fn called_c21_fences_native_identity_without_a_financial_or_oem_backend() {
-        let (_temp, b, source) = backend();
+    fn called_c21_reserves_before_http_and_fences_identity_without_money() {
+        let (_temp, b, f) = backend();
         let h = b.open(b.path.to_str().unwrap()).unwrap();
-        let id = source.fixture.selection.preparation.challenge.enrollment_id;
-        let selected = call(&b, h, 11, vec![]).unwrap();
-        assert_eq!(selected, vec![id.to_vec()]);
-        assert!(b.owner.lock().unwrap().attempted.is_none());
-        assert!(b.owner.lock().unwrap().attempt.is_none());
-        let prepared = call(&b, h, 1, vec![id.to_vec()]).unwrap();
-        assert_eq!(prepared.len(), 8);
+        let id = call(&b, h, 11, vec![]).unwrap();
+        assert_eq!(
+            id,
+            vec![f.selection.preparation.challenge.enrollment_id.to_vec()]
+        );
+        assert!(b.owner.lock().unwrap().reservation.is_none());
+        assert!(call(&b, h, 1, vec![id[0].clone()]).is_err());
+        let prepared = prepare(&b, h, &f);
         let ticket = prepared[0].clone();
         assert_eq!(
             call(&b, h, 2, vec![ticket.clone()]).unwrap(),
@@ -499,27 +560,21 @@ mod tests {
             b.invoke(h, Method::PreparedAppOperationApproval, &[])
                 .is_err()
         );
-        let recovered = call(&b, h, 7, vec![ticket.clone()]).unwrap();
-        assert_eq!(recovered[0], vec![1]);
+        assert_eq!(call(&b, h, 7, vec![ticket.clone()]).unwrap()[0], vec![1]);
         assert!(call(&b, h, 9, vec![ticket]).is_err());
-        assert_eq!(*source.calls.lock().unwrap(), 0);
     }
     #[test]
-    fn called_c21_retains_two_chunks_before_native_raw_issuer_and_refuses_substitution() {
+    fn called_c21_authenticates_explicit_raw_original_and_preserves_two_chunks() {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
-        let (_temp, b, source) = backend();
+        let (_temp, b, f) = backend();
         let h = b.open(b.path.to_str().unwrap()).unwrap();
-        let f = &source.fixture;
-        let prepared = call(
-            &b,
-            h,
-            1,
-            vec![f.selection.preparation.challenge.enrollment_id.to_vec()],
-        )
-        .unwrap();
+        let prepared = prepare(&b, h, &f);
         let ticket = prepared[0].clone();
-        call(&b, h, 2, vec![ticket.clone()]).unwrap();
+        let c = KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&prepared[1])
+            .unwrap()
+            .challenge;
         let app = f.selection.issuance.credential.subject;
+        call(&b, h, 2, vec![ticket.clone()]).unwrap();
         call(
             &b,
             h,
@@ -546,11 +601,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(retained[0], Sha256::digest(&raw).to_vec());
-        let result = call(&b, h, 6, vec![ticket.clone()]).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(*source.calls.lock().unwrap(), 1);
-        assert_eq!(call(&b, h, 6, vec![ticket.clone()]).unwrap(), result);
-        assert_eq!(*source.calls.lock().unwrap(), 1);
+        // A real governed Ed signature isolates raw issuer/custody joins; synthetic raw bytes do
+        // not establish Apple attestation, a financial proof or a physically qualified deployment.
+        let subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
+            version: 1,
+            enrollment_challenge_digest: c.attestation_challenge().unwrap(),
+            authority_policy_digest: f.app_authority.canonical_digest().unwrap(),
+            platform_class: c.platform_class,
+            security_level: KagemushaAppKeySecurityLevelV1::AppleAppAttest,
+            app_public_key: app.app_public_key,
+            attested_key_id: app.attested_key_id,
+            raw_platform_evidence_digest: Sha256::digest(&raw).into(),
+            app_signing_identity_digest: f.app_authority.app_signing_identity_digest,
+            original_app_attest_counter: 0,
+            issued_at_ms: c.issued_at_ms,
+            expires_at_ms: c.expires_at_ms,
+        };
+        let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let original = KagemushaRawAppAttestationAdmissionV1 {
+            subject,
+            signature: Signature::try_new(
+                key.private_key(),
+                &subject.canonical_signing_bytes().unwrap(),
+            )
+            .unwrap(),
+        }
+        .to_transport_bytes()
+        .unwrap();
+        assert!(call(&b, h, 6, vec![ticket.clone()]).is_err());
+        assert!(call(&b, h, 6, vec![ticket.clone(), vec![1; 314]]).is_err());
+        let result = call(&b, h, 6, vec![ticket.clone(), original.clone()]).unwrap();
+        assert_eq!(
+            call(&b, h, 6, vec![ticket.clone(), original]).unwrap(),
+            result
+        );
         let recovered = call(&b, h, 7, vec![ticket.clone()]).unwrap();
         assert_eq!(recovered[0], vec![5]);
         assert_eq!(recovered[5].len(), 314);
@@ -561,7 +645,6 @@ mod tests {
             call(&b, h, 10, vec![ticket.clone(), 1u32.to_le_bytes().to_vec()]).unwrap()[1].iter(),
         );
         assert_eq!(joined, raw);
-        assert!(call(&b, h, 6, vec![ticket.clone(), vec![1; 314]]).is_err());
         assert!(
             call(
                 &b,

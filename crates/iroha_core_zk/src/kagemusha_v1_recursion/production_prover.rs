@@ -12,6 +12,8 @@ use super::*;
 mod native_outgoing_witness;
 #[path = "production_incoming.rs"]
 mod production_incoming;
+#[path = "production_ordinary_guard.rs"]
+mod production_ordinary_guard;
 #[path = "production_terminal.rs"]
 mod production_terminal;
 use super::super::{

@@ -109,6 +109,28 @@ class KagemushaNativeOrdinaryAppIdentityV1Test {
         assertFailsWith<IllegalArgumentException> { facade(platform).prepareOrdinaryIdentity(platform.id) }
     }
 
+    @Test fun retainedRawChunkBoundaryNeverRequestsAbsentTail() {
+        val boundary = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(
+            listOf(der(16_384, 1), der(16_384, 2), der(16_384, 3), der(16_362, 4))).transportBytes()
+        assertEquals(65_536, boundary.size)
+        val small = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(
+            listOf(der(32, 1), der(32, 2))).transportBytes()
+        for (original in listOf(small, boundary)) {
+            val endpoint = Endpoint().apply { state = 4; raw = original }
+            val admission = checkNotNull(facade(endpoint).prepareOrdinaryIdentity(endpoint.id).recoverOriginalAdmission())
+            assertContentEquals(original, admission.originalAttestationBytes())
+            assertEquals(listOf(0), endpoint.chunkIndices)
+        }
+        val method = KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY
+        val read = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(10), le64(7), KagemushaCoreCoordinatorFrameV1.u32(1)))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, read,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(1), byteArrayOf(), sha(boundary),
+                    KagemushaCoreCoordinatorFrameV1.u32(boundary.size)))
+        }
+    }
+
     @Test fun `chunk ABI preserves existing caps and refuses noncanonical split index and missing tail`() {
         val method = KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY
         val ticket = le64(7)

@@ -71,7 +71,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 20]
+  private static let expectedContract: [UInt32] = [2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint

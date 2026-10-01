@@ -12,7 +12,7 @@ use rand_core_06::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
 use std::{path::Path, sync::Arc};
 #[path = "continuous_clock.rs"]
-mod continuous_clock;
+pub(super) mod continuous_clock;
 
 const MAX_RAW: usize = 128 * 1024;
 const MAX_FRAME: usize = 160 * 1024;
@@ -709,7 +709,8 @@ mod tests {
             .unwrap()
             .possession_challenge(300)
             .unwrap();
-        assert_eq!(e.enrollment_attempt_id, c.enrollment_id);
+        assert_eq!(e.enrollment_attempt_id, c.attestation_challenge().unwrap());
+        assert_ne!(e.enrollment_attempt_id, c.enrollment_id);
         assert_eq!(
             e.raw_platform_evidence_digest,
             Sha256::digest(&raw).as_slice()

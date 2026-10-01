@@ -16,6 +16,16 @@ import org.hyperledger.iroha.sdk.crypto.keystore.requireOriginalP256DerV1
 class KagemushaNativeAppApprovalCoordinatorV1 internal constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
 ) {
+    /** Read the installed source's already reserved original ID; a selector grants no enrollment authority. */
+    fun originalEnrollmentAttemptId(): ByteArray = bridge.invoke(
+        KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY,
+        listOf(KagemushaCoreCoordinatorFrameV1.u32(11)),
+    ).single().copyOf()
+
+    /** Select the same native reservation before preparing C; never allocate or construct a client subject. */
+    fun prepareOriginalIdentity(): KagemushaNativePreparedOrdinaryAppIdentityV1 =
+        prepareOrdinaryIdentity(originalEnrollmentAttemptId())
+
     /** Obtain the native signed C and durable generation/attestation attempt; no caller subject or key. */
     fun prepareOrdinaryIdentity(enrollmentAttemptId: ByteArray): KagemushaNativePreparedOrdinaryAppIdentityV1 {
         val id = enrollmentAttemptId.copyOf()

@@ -30,6 +30,17 @@ const ORIGINAL_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-operation-approval-origi
 pub const KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:ordinary-app-approval-proof-binding\0";
 
+/// Borrow exact authData and DER slices using the maintained bounded CBOR parser.
+/// This is data-only parsing; callers separately verify the original signature.
+/// # Errors
+/// Rejects malformed, oversized or trailing App Attest assertion originals.
+pub fn kagemusha_app_attest_original_parts_v1(
+    raw_assertion: &[u8],
+) -> Result<(&[u8], &[u8]), String> {
+    super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
+        .map_err(|error| format!("App Attest assertion parse failed: {error:?}"))
+}
+
 /// Decode the counter from the complete original App Attest assertion.
 ///
 /// This is a bounded data projection, not signature verification, enrollment
@@ -38,8 +49,7 @@ pub const KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1: &[u8] =
 /// # Errors
 /// Rejects malformed or trailing CBOR, a different authenticator shape or flag.
 pub fn kagemusha_app_attest_original_counter_v1(raw_assertion: &[u8]) -> Result<u32, String> {
-    let (auth_data, _) = super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
-        .map_err(|error| format!("App Attest assertion parse failed: {error:?}"))?;
+    let (auth_data, _) = kagemusha_app_attest_original_parts_v1(raw_assertion)?;
     if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] == [0; 32] {
         return Err("App Attest authenticator shape differs".into());
     }

@@ -197,8 +197,8 @@ pub use kagemusha_core_coordinator_v1::{
 };
 #[cfg(unix)]
 pub use kagemusha_core_coordinator_v1::{
-    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryPreKeySelectionV1,
-    KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
+    KagemushaOrdinaryEnrollmentDispositionV1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod kagemusha_device_bridge_v1;

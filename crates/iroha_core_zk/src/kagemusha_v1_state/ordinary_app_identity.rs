@@ -12,6 +12,12 @@ use std::sync::Arc;
 #[path = "ordinary_app_identity/journal.rs"]
 mod journal;
 pub use journal::KagemushaOrdinaryAppEnrollmentAttemptV1;
+#[path = "ordinary_app_identity/preparation_reservation.rs"]
+mod preparation_reservation;
+pub use preparation_reservation::{
+    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+};
 
 /// Confidential closed ordinary identity failures; private inputs are never formatted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

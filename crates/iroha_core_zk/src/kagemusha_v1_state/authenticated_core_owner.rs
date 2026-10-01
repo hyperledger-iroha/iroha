@@ -21,7 +21,14 @@ mod ordinary_enrollment;
 pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
-    KagemushaAuthenticatedOrdinaryCredentialFloorV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaAuthenticatedOrdinaryCredentialFloorV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+};
+pub(crate) use ordinary_enrollment::{
+    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
+    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
 };
 
 #[path = "authenticated_core_dispatch.rs"]

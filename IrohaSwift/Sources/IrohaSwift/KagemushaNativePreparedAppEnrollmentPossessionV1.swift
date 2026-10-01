@@ -19,7 +19,7 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
     let fields = try bridge.invoke(.appEnrollmentPossession,
       fields: [KagemushaCoreCoordinatorFrameV1.u32(1), id])
     let projection = try KagemushaAppPlatformPreparedProjectionV1(
-      nativeFields: fields, approvalID: nil, enrollmentID: id)
+      nativeFields: fields, approvalID: nil, enrollmentChallengeHash: id)
     let result = KagemushaNativePreparedAppEnrollmentPossessionV1(bridge: bridge, original: projection, originalID: id)
     _ = try result.recheck()
     return result
@@ -101,7 +101,7 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
 /// or monetary authority. Final issuance remains the separately authenticated issuer.
 /// It is created only by the genuine bridge's purpose-bound native consume/recovery.
 public struct KagemushaNativeAppEnrollmentPossessionReceiptV1: Sendable {
-  public let enrollmentID: Data
+  public let enrollmentChallengeHash: Data
   public let keyID: Data
   public let keyAlias: String
   public let signingDigest: Data
@@ -111,17 +111,18 @@ public struct KagemushaNativeAppEnrollmentPossessionReceiptV1: Sendable {
 
   fileprivate init(original: KagemushaAppPlatformPreparedProjectionV1,
     receipt: KagemushaAppPlatformReceiptProjectionV1) {
-    enrollmentID = receipt.originalID; keyID = original.keyID; keyAlias = original.keyAlias
+    enrollmentChallengeHash = receipt.originalID; keyID = original.keyID; keyAlias = original.keyAlias
     signingDigest = receipt.challengeDigest; rawAssertionDigest = receipt.rawEvidenceDigest
     observedCounter = receipt.appleCounter!; canonicalReceipt = receipt.canonicalBytes
   }
 }
 
 extension KagemushaCoreCoordinatorBridgeV1 {
-  /// Select an existing native pending enrollment; no caller constructs E or pending authority.
+  /// Select the held pending original by SHA(full C), never its stable attempt ID.
+  /// No caller constructs E, changes C or supplies pending authority.
   /// Missing signed raw-attestation admission, original owner or scope remains unavailable.
-  public func prepareAppEnrollmentPossession(originalEnrollmentID: Data) throws
+  public func prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: Data) throws
     -> KagemushaNativePreparedAppEnrollmentPossessionV1 {
-    try KagemushaNativePreparedAppEnrollmentPossessionV1.prepare(bridge: self, id: originalEnrollmentID)
+    try KagemushaNativePreparedAppEnrollmentPossessionV1.prepare(bridge: self, id: originalEnrollmentChallengeHash)
   }
 }

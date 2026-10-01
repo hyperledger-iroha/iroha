@@ -280,13 +280,39 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     let owner_id = AccountId::new(owner_keypair.public_key().clone());
     let mut world = World::new();
     world.accounts.insert(
-        owner_id,
+        owner_id.clone(),
         iroha_data_model::account::AccountValue::new(
             iroha_data_model::account::AccountDetails::default(),
         ),
     );
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, Signers};
-    let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 0)).unwrap();
+    let mut config = TestChainConfig::new(world, 0);
+    let lane_incarnation = derive_static_lane_incarnations(&LaneCatalog::default())[&LaneId::SINGLE];
+    let admission = iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1 {
+        version: iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::VERSION,
+        revision: 1,
+        expected_previous_policy_hash: None,
+        lanes: vec![iroha_data_model::da::ingest::DaIngestAdmissionLaneV1 {
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            producers: vec![owner_id],
+            current_epoch: 1,
+            grace_epoch: None,
+        }],
+    };
+    admission.validate().expect("bounded original DA producer policy");
+    config.genesis_parameters.push(iroha_data_model::parameter::Parameter::Custom(
+        admission.clone().into_custom_parameter(),
+    ));
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    assert_eq!(chain.state().lane_incarnation_at_height(LaneId::SINGLE, 2), Some(lane_incarnation));
+    assert_eq!(
+        iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::from_custom_parameter(
+            chain.state().world.parameters.view().custom().get(
+                &iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1::parameter_id(),
+            ).expect("actual signed genesis producer policy"),
+        ).unwrap(), Some(admission),
+    );
     let state = Arc::clone(chain.state());
     let authorization = crate::da::signed_test_ingest_authorization(
         *state.network_id_ref(), &owner_keypair, LaneId::SINGLE, 1, 0, 1,

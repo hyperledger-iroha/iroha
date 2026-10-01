@@ -862,6 +862,49 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertEqual(release.manifest.releaseId, release.attestation.subject.releaseId)
     }
 
+    func testKagemushaOrdinaryAppGuardArtifactRolesUseClosedTaggedShapes() throws {
+        let decoder = JSONDecoder()
+        let roles: [(String, ToriiGovernanceKagemushaArtifactRoleTagV1)] = [
+            ("ordinary_app_guard_pk_eq", .ordinaryAppGuardPkEq),
+            ("ordinary_app_guard_vk_eq", .ordinaryAppGuardVkEq),
+            ("ordinary_app_guard_pk_ep", .ordinaryAppGuardPkEp),
+            ("ordinary_app_guard_vk_ep", .ordinaryAppGuardVkEp),
+        ]
+        for (rawRole, expected) in roles {
+            let data = Data("{\"role\":\"\(rawRole)\",\"value\":null}".utf8)
+            let decoded = try decoder.decode(ToriiGovernanceKagemushaArtifactRoleV1.self, from: data)
+            XCTAssertEqual(decoded.role, expected)
+        }
+        for invalid in [
+            #"{"role":"ordinary_app_guard","value":null}"#,
+            #"{"role":"ordinary_app_guard_pk","value":null}"#,
+            #"{"role":"OrdinaryAppGuardPkEq","value":null}"#,
+            #"{"role":"ordinary_app_guard_pk_eq"}"#,
+            #"{"role":"ordinary_app_guard_pk_eq","value":{}}"#,
+            #"{"role":"ordinary_app_guard_pk_eq","value":null,"retired":null}"#,
+        ] {
+            XCTAssertThrowsError(try decoder.decode(
+                ToriiGovernanceKagemushaArtifactRoleV1.self, from: Data(invalid.utf8)))
+        }
+    }
+
+    func testKagemushaOrdinaryAppGuardHelperUsesClosedTaggedShape() throws {
+        let decoder = JSONDecoder()
+        let data = Data(#"{"helper":"ordinary_app_guard","value":null}"#.utf8)
+        let decoded = try decoder.decode(ToriiGovernanceKagemushaQualifiedHelperCircuitV1.self, from: data)
+        XCTAssertEqual(decoded.helper, .ordinaryAppGuard)
+        for invalid in [
+            #"{"helper":"ordinary_app_guard_pk_eq","value":null}"#,
+            #"{"helper":"ordinary_app_guard_unknown","value":null}"#,
+            #"{"helper":"ordinary_app_guard"}"#,
+            #"{"helper":"ordinary_app_guard","value":{}}"#,
+            #"{"helper":"ordinary_app_guard","value":null,"retired":null}"#,
+        ] {
+            XCTAssertThrowsError(try decoder.decode(
+                ToriiGovernanceKagemushaQualifiedHelperCircuitV1.self, from: Data(invalid.utf8)))
+        }
+    }
+
     func testKagemushaReleasePurposeUsesClosedTaggedShapes() throws {
         let decoder = JSONDecoder()
         let production = Data(#"{"kind":"production","value":null}"#.utf8)

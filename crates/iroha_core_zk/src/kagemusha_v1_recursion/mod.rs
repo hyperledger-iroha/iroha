@@ -42,6 +42,16 @@ mod native_backend;
     any(test, feature = "kagemusha-production-prover")
 ))]
 mod ordinary_app_guard_binding;
+#[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_guard_circuit;
+#[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_guard_verifier;
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) use ordinary_guard_verifier::{
+    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+};
 #[cfg(all(
     feature = "zk-halo2-ipa",
     any(test, feature = "kagemusha-production-prover")
@@ -222,6 +232,7 @@ pub use generation::{
     prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
     prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
 };
+pub(crate) use guard_bundle::device_authority_commitment_v1;
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
     KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,

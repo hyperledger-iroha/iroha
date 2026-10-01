@@ -49,6 +49,8 @@ const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
 const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
 const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
 const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
+const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x45; 32];
+const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x46; 32];
 const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
@@ -101,6 +103,13 @@ fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
             ep_protocol_digest: MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST,
             eq_proof_bytes: MINT_HASH_CLAIM_EQ_PROOF_BYTES,
             ep_proof_bytes: MINT_HASH_CLAIM_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard,
+            eq_protocol_digest: ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: GUARD_EQ_PROOF_BYTES,
+            ep_proof_bytes: GUARD_EP_PROOF_BYTES,
         },
     ]
 }
@@ -297,6 +306,10 @@ fn profile_qualification(
                     KagemushaArtifactRoleV1::MintHashClaimVkEq,
                     KagemushaArtifactRoleV1::MintHashClaimVkEp,
                 ),
+                KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard => (
+                    KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                    KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+                ),
             };
             KagemushaHelperQualificationV1 {
                 helper: protocol.helper,
@@ -314,6 +327,7 @@ fn profile_qualification(
                         | KagemushaQualifiedHelperCircuitV1::GuardBundle
                         | KagemushaQualifiedHelperCircuitV1::MintHashShard
                         | KagemushaQualifiedHelperCircuitV1::MintHashClaim
+                        | KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard
                 ) {
                     protocol
                         .eq_proof_bytes

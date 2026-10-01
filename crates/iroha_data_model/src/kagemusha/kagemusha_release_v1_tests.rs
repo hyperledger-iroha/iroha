@@ -1191,7 +1191,7 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
     assert_relation_artifact_bindings(artifacts, &base);
 }
 
-const EXPECTED_ARTIFACT_ROLE_GROUPS: [[KagemushaArtifactRoleV1; 4]; 12] = [
+const EXPECTED_ARTIFACT_ROLE_GROUPS: [[KagemushaArtifactRoleV1; 4]; 13] = [
     [
         KagemushaArtifactRoleV1::InnerStatePkEq,
         KagemushaArtifactRoleV1::InnerStateVkEq,
@@ -1264,11 +1264,17 @@ const EXPECTED_ARTIFACT_ROLE_GROUPS: [[KagemushaArtifactRoleV1; 4]; 12] = [
         KagemushaArtifactRoleV1::MintHashClaimPkEp,
         KagemushaArtifactRoleV1::MintHashClaimVkEp,
     ],
+    [
+        KagemushaArtifactRoleV1::OrdinaryAppGuardPkEq,
+        KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+        KagemushaArtifactRoleV1::OrdinaryAppGuardPkEp,
+        KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+    ],
 ];
 
 #[test]
 fn artifact_and_relation_inventories_are_frozen() {
-    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 50);
+    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 54);
     assert_eq!(
         KagemushaArtifactRoleV1::ALL
             .into_iter()
@@ -1289,6 +1295,7 @@ fn artifact_and_relation_inventories_are_frozen() {
             KagemushaQualifiedHelperCircuitV1::GuardBundle,
             KagemushaQualifiedHelperCircuitV1::MintHashShard,
             KagemushaQualifiedHelperCircuitV1::MintHashClaim,
+            KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard,
         ]
     );
     assert_eq!(
@@ -1308,6 +1315,18 @@ fn artifact_and_relation_inventories_are_frozen() {
     assert!(KagemushaQualifiedHelperCircuitV1::PlatformCredential.uses_internal_proof_evidence());
     assert!(KagemushaQualifiedHelperCircuitV1::MintHashShard.uses_internal_proof_evidence());
     assert!(KagemushaQualifiedHelperCircuitV1::MintHashClaim.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard.uses_internal_proof_evidence());
+    assert_eq!(
+        KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard.expected_vk_roles(),
+        (
+            KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+            KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+        )
+    );
+    assert_ne!(
+        KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard.expected_vk_roles(),
+        KagemushaQualifiedHelperCircuitV1::GuardBundle.expected_vk_roles()
+    );
     assert!(!KagemushaQualifiedHelperCircuitV1::MintAuthorization.uses_internal_proof_evidence());
 
     let artifacts = artifacts();

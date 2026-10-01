@@ -15,7 +15,7 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_ORDINARY_RETAIL_ENROLLMENT_MAX_BYTES_V1, KagemushaAppOperationApprovalChallengeV1,
     KagemushaAppOperationApprovalPurposeV1, KagemushaAppOperationApprovalV1,
     KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
-    KagemushaVerifiedAppOperationApprovalV1,
+    KagemushaVerifiedAppOperationApprovalV1, KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
 };
 use rand_core_06::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
@@ -38,7 +38,12 @@ enum Record {
         normalized_guard_digest: DigestV1,
     },
     Reserve(KagemushaAppOperationApprovalChallengeV1),
+    IntegrityLease {
+        original: Vec<u8>,
+    },
     Approval {
+        accepted_at_ms: u64,
+        integrity_lease_digest: Option<DigestV1>,
         original: Vec<u8>,
         counter_floor_before: Option<u32>,
         accepted_counter: Option<u32>,
@@ -46,6 +51,7 @@ enum Record {
 }
 
 struct Pending {
+    counter_floor_before: Option<u32>,
     challenge: KagemushaAppOperationApprovalChallengeV1,
     approved: Option<KagemushaVerifiedAppOperationApprovalV1>,
 }
@@ -59,6 +65,7 @@ pub struct KagemushaOrdinaryLogicalApprovalJournalV1 {
     bootstrap: BootstrapPreviewV1,
     pending: Option<Pending>,
     counter_floor: Option<u32>,
+    integrity_lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
 }
 
 /// Borrowed original signature admission under the still-held durable native attempt.
@@ -68,6 +75,51 @@ pub struct KagemushaAuthenticatedOrdinaryApprovalV1<'a> {
     original: &'a KagemushaVerifiedAppOperationApprovalV1,
     journal: &'a KagemushaOrdinaryLogicalApprovalJournalV1,
     prefix: KagemushaRecoveryJournalPrefixV1,
+}
+
+/// Historical signature original retained for a selected publication, never a renewed approval.
+#[allow(missing_copy_implementations)]
+pub(crate) struct KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'a> {
+    original: &'a KagemushaVerifiedAppOperationApprovalV1,
+    journal: &'a KagemushaOrdinaryLogicalApprovalJournalV1,
+    prefix: KagemushaRecoveryJournalPrefixV1,
+    publication_time_ms: u64,
+}
+impl KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_> {
+    pub(crate) fn recheck_originals(
+        &self,
+        publication_time_ms: u64,
+        native_now_ms: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if self.publication_time_ms != publication_time_ms
+            || publication_time_ms > native_now_ms
+            || self.journal.wal.recovery_prefix().map_err(storage)? != self.prefix
+        {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        self.journal.recheck_at_trusted_time(native_now_ms)?;
+        self.original
+            .recheck_at_trusted_time(publication_time_ms)
+            .map_err(material)?;
+        self.journal.wal.check_owned().map_err(storage)
+    }
+    pub(crate) fn challenge(&self) -> &KagemushaAppOperationApprovalChallengeV1 {
+        self.original.challenge()
+    }
+    pub(crate) fn original(&self) -> &[u8] {
+        self.original.original()
+    }
+    pub(crate) fn proof_binding_digest(&self) -> DigestV1 {
+        self.original.proof_binding_digest()
+    }
+    pub(crate) fn retained_enrollment(
+        &self,
+    ) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
+        &self.journal.enrollment
+    }
+    pub(crate) fn retained_release(&self) -> &Arc<KagemushaAuthenticatedReleaseV1> {
+        &self.journal.release
+    }
 }
 
 impl KagemushaAuthenticatedOrdinaryApprovalV1<'_> {
@@ -95,6 +147,31 @@ impl KagemushaAuthenticatedOrdinaryApprovalV1<'_> {
     pub fn digest(&self) -> DigestV1 {
         self.original.digest()
     }
+    /// Model-owned digest of the same exact wrapper and original DER/CBOR evidence.
+    /// The paired ordinary Guard must constrain the actual platform equation before exposing it.
+    pub fn proof_binding_digest(&self) -> DigestV1 {
+        self.original.proof_binding_digest()
+    }
+
+    pub(crate) fn retained_enrollment(
+        &self,
+    ) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
+        &self.journal.enrollment
+    }
+
+    pub(crate) fn retained_release(&self) -> &Arc<KagemushaAuthenticatedReleaseV1> {
+        &self.journal.release
+    }
+
+    /// The independent floor held before this exact original assertion was admitted.
+    pub(crate) fn previous_app_attest_counter_floor(&self) -> Option<u32> {
+        self.journal
+            .pending
+            .as_ref()
+            .expect("admitted pending exists")
+            .counter_floor_before
+    }
+
     /// Independently advancing Apple assertion counter; never a financial logical index.
     pub fn app_attest_counter(&self) -> Option<u32> {
         self.original.app_attest_counter()
@@ -120,6 +197,7 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             release,
             bootstrap,
             pending: None,
+            integrity_lease: None,
         };
         journal.persist(&record)?;
         selection.recheck_at_trusted_time(now)?;
@@ -135,7 +213,19 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
         now: u64,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        selection.credential_floor().recheck_at_trusted_time(now)?;
+        Self::open_existing_with_integrity_leases(path, selection, enrollment, &[], now)
+    }
+
+    /// Reopen under independently re-admitted typed originals for every retained refresh.
+    /// WAL bytes select an exact supplied genuine original; they cannot construct a lease token.
+    pub fn open_existing_with_integrity_leases(
+        path: &Path,
+        selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
+        enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+        integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+        now: u64,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        validate_lease_input_budget(integrity_leases)?;
         let (release, bootstrap) = retain_selected_originals(selection, &enrollment)?;
         let expected = initial_record(&enrollment, &release, &bootstrap)?;
         let mut journal = Self {
@@ -145,6 +235,7 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             release,
             bootstrap,
             pending: None,
+            integrity_lease: None,
         };
         let mut initialized = false;
         while let Some((sequence, payload)) = journal.wal.replay_next().map_err(storage)? {
@@ -162,19 +253,43 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
                 Record::Reserve(challenge) if initialized && journal.pending.is_none() => {
                     journal.require_bootstrap_challenge(&challenge)?;
                     journal.pending = Some(Pending {
+                        counter_floor_before: journal.counter_floor,
                         challenge,
                         approved: None,
                     });
                 }
+                Record::IntegrityLease { original } if initialized => {
+                    let admitted = integrity_leases
+                        .iter()
+                        .find(|lease| lease.original() == original)
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    journal.require_integrity_lease(admitted, admitted.subject().issued_at_ms)?;
+                    journal.integrity_lease = Some(Arc::clone(admitted));
+                }
                 Record::Approval {
+                    accepted_at_ms,
+                    integrity_lease_digest,
                     original,
                     counter_floor_before,
                     accepted_counter,
                 } if initialized => {
-                    if counter_floor_before != journal.counter_floor {
+                    if integrity_lease_digest
+                        != journal.integrity_lease.as_ref().map(|lease| lease.digest())
+                        || counter_floor_before != journal.counter_floor
+                    {
                         return Err(KagemushaStateErrorV1::SnapshotRollback);
                     }
-                    let verified = journal.authenticate_original(&original, true)?;
+                    if journal
+                        .pending
+                        .as_ref()
+                        .is_none_or(|pending| pending.approved.is_some())
+                    {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                    // The original admission instant is fsynced with the evidence. A periodic
+                    // lease may have been selected after Reserve; replay must not backdate it
+                    // to the challenge's earlier issue time or renew it at reopen time.
+                    let verified = journal.authenticate_original_at(&original, accepted_at_ms)?;
                     if verified.app_attest_counter() != accepted_counter {
                         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                     }
@@ -227,6 +342,7 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             let challenge = self.bootstrap_challenge(operation_id, nonce, now)?;
             self.persist(&Record::Reserve(challenge))?;
             self.pending = Some(Pending {
+                counter_floor_before: self.counter_floor,
                 challenge,
                 approved: None,
             });
@@ -264,6 +380,8 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         let verified = self.authenticate_original_at(original, now)?;
         let accepted_counter = verified.app_attest_counter();
         self.persist(&Record::Approval {
+            accepted_at_ms: now,
+            integrity_lease_digest: self.integrity_lease.as_ref().map(|lease| lease.digest()),
             original: original.to_vec(),
             counter_floor_before: self.counter_floor,
             accepted_counter,
@@ -296,6 +414,81 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         })
     }
 
+    /// Select a genuinely admitted periodic Integrity lease without changing the credential or
+    /// a financial epoch. Fsync precedes selection; uncertainty poisons this original journal.
+    pub fn retain_integrity_lease(
+        &mut self,
+        lease: Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.wal.check_owned().map_err(storage)?;
+        self.require_integrity_lease(&lease, now)?;
+        if self
+            .integrity_lease
+            .as_ref()
+            .is_some_and(|old| old.original() == lease.original())
+        {
+            return self.recheck_at_trusted_time(now);
+        }
+        self.persist(&Record::IntegrityLease {
+            original: lease.original().to_vec(),
+        })?;
+        self.integrity_lease = Some(lease);
+        self.recheck_at_trusted_time(now)
+    }
+
+    pub(crate) fn retained_integrity_lease(
+        &self,
+    ) -> Option<&Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>> {
+        self.integrity_lease.as_ref()
+    }
+
+    /// Historical proof recheck only. The publication owner independently selects this time from
+    /// its exact admitted WAL record and checks current enrollment/Integrity at native now.
+    pub(crate) fn approved_at_original_publication_time(
+        &self,
+        publication_time_ms: u64,
+        native_now_ms: u64,
+    ) -> Result<KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_>, KagemushaStateErrorV1> {
+        self.recheck_at_trusted_time(native_now_ms)?;
+        if publication_time_ms > native_now_ms {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        let original = self
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.approved.as_ref())
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        original
+            .recheck_at_trusted_time(publication_time_ms)
+            .map_err(material)?;
+        Ok(KagemushaAuthenticatedOrdinaryHistoricalApprovalV1 {
+            original,
+            journal: self,
+            prefix: self.wal.recovery_prefix().map_err(storage)?,
+            publication_time_ms,
+        })
+    }
+
+    fn require_integrity_lease(
+        &self,
+        lease: &KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if lease.original().is_empty()
+            || lease.original().len() > FORMAT.maximum_payload_bytes as usize
+            || self.integrity_lease.as_ref().is_some_and(|old| {
+                old.original() != lease.original()
+                    && lease.subject().issued_at_ms <= old.subject().issued_at_ms
+            })
+        {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment_with_integrity_lease(
+            self.enrollment.as_ref(), Arc::clone(&self.release), lease, now,
+        )?.validate_current(&self.bootstrap.state)
+    }
+
     /// Recheck the retained actual enrollment, release, financial preview and descriptor custody.
     /// Reopening the journal does not refresh a credential, approval interval or Apple floor.
     pub fn recheck_at_trusted_time(&self, now: u64) -> Result<(), KagemushaStateErrorV1> {
@@ -323,10 +516,17 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
     fn credential_floor(
         &self,
     ) -> Result<KagemushaAuthenticatedOrdinaryCredentialFloorV1<'_>, KagemushaStateErrorV1> {
-        KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
-            self.enrollment.as_ref(),
-            Arc::clone(&self.release),
-        )
+        if let Some(lease) = &self.integrity_lease {
+            // Construction checks the original issuer time; use separately rechecks native now.
+            KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment_with_integrity_lease(
+                self.enrollment.as_ref(), Arc::clone(&self.release), lease, lease.subject().issued_at_ms,
+            )
+        } else {
+            KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+                self.enrollment.as_ref(),
+                Arc::clone(&self.release),
+            )
+        }
     }
     fn persist(&mut self, record: &Record) -> Result<(), KagemushaStateErrorV1> {
         let bytes = norito::encode_canonical(record).map_err(material)?;
@@ -363,20 +563,6 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         }
         Ok(())
     }
-    fn authenticate_original(
-        &self,
-        original: &[u8],
-        replay: bool,
-    ) -> Result<KagemushaVerifiedAppOperationApprovalV1, KagemushaStateErrorV1> {
-        let pending = self
-            .pending
-            .as_ref()
-            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        if !replay || pending.approved.is_some() {
-            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-        }
-        self.authenticate_original_at(original, pending.challenge.issued_at_ms)
-    }
     fn authenticate_original_at(
         &self,
         original: &[u8],
@@ -395,15 +581,47 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             .as_ref()
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         self.require_bootstrap_challenge(&pending.challenge)?;
-        decoded
-            .authenticate(
-                &pending.challenge,
-                self.enrollment.app_credential(),
-                self.counter_floor,
-                now,
-            )
-            .map_err(material)
+        if let Some(lease) = &self.integrity_lease {
+            decoded
+                .authenticate_with_integrity_lease(
+                    &pending.challenge,
+                    self.enrollment.app_credential(),
+                    lease,
+                    self.counter_floor,
+                    now,
+                )
+                .map_err(material)
+        } else {
+            decoded
+                .authenticate(
+                    &pending.challenge,
+                    self.enrollment.app_credential(),
+                    self.counter_floor,
+                    now,
+                )
+                .map_err(material)
+        }
     }
+}
+
+fn validate_lease_input_budget(
+    leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+) -> Result<(), KagemushaStateErrorV1> {
+    let mut total = 0_usize;
+    let mut originals = std::collections::BTreeSet::new();
+    for lease in leases {
+        total = total
+            .checked_add(lease.original().len())
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        if lease.original().is_empty()
+            || lease.original().len() > FORMAT.maximum_payload_bytes as usize
+            || total > 8 * 1024 * 1024
+            || !originals.insert(lease.digest())
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+    }
+    Ok(())
 }
 
 fn retain_selected_originals(
@@ -605,6 +823,91 @@ mod tests {
         run(&floor, &preview, expected);
     }
     #[test]
+    fn historical_publication_retains_original_admission_time_and_current_descriptor() {
+        use std::io::Write as _;
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let enrollment = Arc::new(fixture.verify(300).unwrap());
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+            enrollment.as_ref(),
+            Arc::clone(&fixture.release),
+        )
+        .unwrap();
+        let (_, bootstrap) = derive_preview(&floor, [43; 32], capacity()).unwrap();
+        let challenge =
+            derive_challenge_from_floor(&floor, &bootstrap, [44; 32], [45; 32], 300).unwrap();
+        let verified = sign(challenge, false, 0)
+            .authenticate(&challenge, floor.credential(), None, 301)
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("historical");
+        let mut wal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        for record in [
+            initial_record(enrollment.as_ref(), &fixture.release, &bootstrap).unwrap(),
+            Record::Reserve(challenge),
+            Record::Approval {
+                accepted_at_ms: 301,
+                integrity_lease_digest: None,
+                original: verified.original().to_vec(),
+                counter_floor_before: None,
+                accepted_counter: None,
+            },
+        ] {
+            wal.append(&norito::encode_canonical(&record).unwrap())
+                .unwrap();
+        }
+        drop(floor);
+        // Only this test assembles a holder from genuine native model fixture admissions.
+        // No accepting verifier, usable financial owner or hardware qualification is created.
+        let journal = KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal,
+            enrollment,
+            release: Arc::clone(&fixture.release),
+            bootstrap,
+            pending: Some(Pending {
+                counter_floor_before: None,
+                challenge,
+                approved: Some(verified),
+            }),
+            counter_floor: None,
+            integrity_lease: None,
+        };
+        assert!(
+            journal
+                .approved_at_original_publication_time(300, 1000)
+                .is_err()
+        );
+        assert!(
+            journal
+                .approved_at_original_publication_time(1001, 1000)
+                .is_err()
+        );
+        let historical = journal
+            .approved_at_original_publication_time(301, 1000)
+            .unwrap();
+        assert_eq!(historical.challenge(), &challenge);
+        assert_eq!(
+            historical.original(),
+            journal
+                .pending
+                .as_ref()
+                .unwrap()
+                .approved
+                .as_ref()
+                .unwrap()
+                .original()
+        );
+        assert!(historical.recheck_originals(301, 1000).is_ok());
+        assert!(historical.recheck_originals(302, 1000).is_err());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path.join(FORMAT.filename))
+            .unwrap()
+            .write_all(&[1])
+            .unwrap();
+        assert!(historical.recheck_originals(301, 1000).is_err());
+    }
+
+    #[test]
     fn retained_enrollment_requires_the_same_actual_admitted_capability() {
         let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
         let selected = Arc::new(fixture.verify(300).unwrap());
@@ -748,6 +1051,8 @@ mod tests {
             let records = [
                 Record::Reserve(expected),
                 Record::Approval {
+                    accepted_at_ms: 301,
+                    integrity_lease_digest: None,
                     original: verified.original().to_vec(),
                     counter_floor_before: None,
                     accepted_counter: None,
@@ -787,6 +1092,8 @@ mod tests {
             let mut wal = PrivateJournal::create_new(&path, FORMAT).unwrap();
             wal.append(
                 &norito::encode_canonical(&Record::Approval {
+                    accepted_at_ms: 301,
+                    integrity_lease_digest: None,
                     original: original.original().to_vec(),
                     counter_floor_before: None,
                     accepted_counter: None,

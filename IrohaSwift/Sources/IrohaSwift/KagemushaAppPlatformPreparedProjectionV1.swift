@@ -20,9 +20,9 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
   let financialSubject: Data
   let approval: KagemushaAppApprovalSigningProjectionV1?
 
-  init(nativeFields: [Data], approvalID: Data?, enrollmentID: Data?) throws {
+  init(nativeFields: [Data], approvalID: Data?, enrollmentChallengeHash: Data?) throws {
     let f = nativeFields.map { Data($0) }
-    guard f.count == 14, (approvalID == nil) != (enrollmentID == nil),
+    guard f.count == 14, (approvalID == nil) != (enrollmentChallengeHash == nil),
       f[0].count == 8, Self.nonzero(f[0]), f[2].count == 1,
       [UInt8(4), 5].contains(f[2][0]), (1...255).contains(f[3].count),
       !f[3].contains(0), let alias = String(data: f[3], encoding: .utf8),
@@ -76,7 +76,7 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
       guard f[8].isEmpty, f[13].isEmpty else {
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("pending enrollment carries credential or financial subject")
       }
-      try Self.validateEnrollmentPossession(f[1], id: enrollmentID!, key: f[6], challenge: challenge)
+      try Self.validateEnrollmentPossession(f[1], id: enrollmentChallengeHash!, key: f[6], challenge: challenge)
       approval = nil
     }
     ticket = f[0]; signingBytes = f[1]; platform = f[2][0]; keyAlias = alias
@@ -96,7 +96,8 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
     }
     let fields = (0..<11).map { Data(e[(start + 3 + $0 * 32)..<(start + 35 + $0 * 32)]) }
     let issue = u64(e, start + 355), expiry = u64(e, start + 363)
-    guard fields.allSatisfy(digest), fields[0] == id, fields[0] == c.enrollmentID,
+    guard fields.allSatisfy(digest), fields[0] == id,
+      fields[0] == Data(SHA256.hash(data:c.canonicalSigningBytes)),
       fields[1] == c.clientNonce, fields[2] == c.serverNonce,
       fields[3] == c.accountBinding, fields[4] == c.networkID,
       fields[5] == c.appAuthorityPolicyDigest, fields[6] == c.releaseID,
@@ -120,7 +121,7 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
 }
 
 /// Structural C451 decoder; freshness and issuer authority remain native checks.
-struct KagemushaOrdinaryAppEnrollmentProjectionV1 {
+struct KagemushaOrdinaryAppEnrollmentProjectionV1: Sendable {
   let canonicalSigningBytes: Data
   let platform: UInt8
   let enrollmentID, clientNonce, serverNonce, accountBinding, networkID: Data

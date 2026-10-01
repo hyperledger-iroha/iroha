@@ -24,7 +24,8 @@ from .native_policy_projection import decode_native_policy_projection
 from .ordinary_issuance import (CanonicalOrdinaryCredentialEncoder, CanonicalRawAppAdmissionEncoder,
                                 DurableOrdinaryCredentialIssuer)
 from .ordinary_provider import GovernedOrdinaryEvidenceProvider
-from .ordinary_service import OrdinaryCredentialService, PATH, RAW_PATH, MAX_BODY_BYTES
+from .ordinary_service import OrdinaryCredentialService, PATH, RAW_PATH, REFRESH_PATH, MAX_BODY_BYTES
+from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
 from .play_integrity import GooglePlayIntegrityVerifier
 from .service import _decode_base64, _decode_hex32
 
@@ -132,14 +133,14 @@ def _command_path(command: dict) -> str:
     """Select a closed purpose only inside the held Native parent channel.
 
     This structural check grants no transport, release or signing authority.
-    An old command lacking the mandatory purpose never reaches either issuer.
+    An old command lacking the mandatory phase never reaches any issuer.
     """
     require(type(command) is dict
-            and set(command)=={"schema","request_id","purpose","body_base64"}
+            and set(command)=={"schema","request_id","phase","body_base64"}
             and command["schema"]==REQUEST_SCHEMA
-            and command["purpose"] in ("raw_admission","credential"),
+            and command["phase"] in ("raw","credential","refresh"),
             "Native worker request layout differs")
-    return RAW_PATH if command["purpose"]=="raw_admission" else PATH
+    return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}[command["phase"]]
 
 
 def serve_native_parent(channel:NativeParentChannel) -> None:
@@ -180,7 +181,9 @@ def serve_native_parent(channel:NativeParentChannel) -> None:
         issuer=DurableOrdinaryCredentialIssuer(path=store/"ordinary-app-attempts.sqlite",provider=provider,
             encoder=encoder,raw_encoder=raw_encoder)
         transport_owner=object()
-        service=OrdinaryCredentialService(issuer=issuer,authorize_core_call=lambda offered:offered is transport_owner)
+        refresh=DurableOrdinaryIntegrityRefreshIssuer(issuer)
+        service=OrdinaryCredentialService(issuer=issuer,refresh_issuer=refresh,
+            authorize_core_call=lambda offered:offered is transport_owner)
         channel.recheck();channel.send({"kind":"ready","request_id":startup["request_id"],"projection_sha256":pin.hex()})
         while True:
             # An idle worker holds no current financial capability. Only an

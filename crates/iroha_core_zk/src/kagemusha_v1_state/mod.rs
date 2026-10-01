@@ -34,18 +34,28 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedCoreRecoveryV1, KagemushaAuthenticatedIncomingFoldV1,
     KagemushaAuthenticatedIncomingProvingSelectionV1, KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
-    KagemushaAuthenticatedOrdinaryCredentialFloorV1, KagemushaAuthenticatedOutboxReleaseV1,
+    KagemushaAuthenticatedOrdinaryCredentialFloorV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaAuthenticatedOutboxReleaseV1,
     KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
     KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
 };
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use authenticated_core_owner::{
+    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
+    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+};
 #[cfg(unix)]
 mod ordinary_app_identity;
 #[cfg(unix)]
 pub use ordinary_app_identity::{
-    KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
     KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
 };
 mod candidate_lifecycle;

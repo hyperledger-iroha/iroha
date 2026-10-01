@@ -55,9 +55,14 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
 
   /// Obtain the original pending native enrollment's opaque E possession ticket.
   /// Final credential issuance and financial state protection remain independent.
-  public func prepareAppEnrollmentPossession(originalEnrollmentID: Data) throws
+  public func prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: Data) throws
     -> KagemushaNativePreparedAppEnrollmentPossessionV1 {
-    try bridge.prepareAppEnrollmentPossession(originalEnrollmentID: originalEnrollmentID)
+    try bridge.prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: originalEnrollmentChallengeHash)
+  }
+
+  /// Resolve the independently installed original enrollment without choosing its ID or C.
+  public func prepareOriginalIdentity() throws -> KagemushaNativePreparedOrdinaryAppIdentityV1 {
+    try bridge.prepareOriginalIdentity()
   }
 
   /// Revoke this wallet's native handle on logout or account switch.

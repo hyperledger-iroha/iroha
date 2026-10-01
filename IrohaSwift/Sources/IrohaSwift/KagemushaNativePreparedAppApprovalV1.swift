@@ -17,7 +17,7 @@ public final class KagemushaNativePreparedAppApprovalV1: @unchecked Sendable {
     let fields = try bridge.invoke(.appOperationApproval,
       fields: [KagemushaCoreCoordinatorFrameV1.u32(1), id])
     let projection = try KagemushaAppPlatformPreparedProjectionV1(
-      nativeFields: fields, approvalID: id, enrollmentID: nil)
+      nativeFields: fields, approvalID: id, enrollmentChallengeHash: nil)
     let result = KagemushaNativePreparedAppApprovalV1(bridge: bridge, original: projection)
     _ = try result.recheck()
     return result

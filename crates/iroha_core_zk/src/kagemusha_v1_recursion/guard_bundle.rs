@@ -1780,6 +1780,7 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     /// App policy bindings opened by the two authenticated credential statements.
     pub(super) credential_app_policy_binding_digests: [[PastaSha256ByteV1<F>; 32]; 2],
     pub(super) credential_device_public_keys: [Vec<PastaSha256ByteV1<F>>; 2],
+    pub(super) credential_financial_authority_commitments: [[PastaSha256ByteV1<F>; 32]; 2],
     pub(super) protocol_version: AssignedValue<F>,
     pub(super) predecessor_suite_id: [AssignedValue<F>; 2],
     pub(super) predecessor_vk_digest: [AssignedValue<F>; 2],
@@ -2383,6 +2384,10 @@ where
         credential_app_policy_binding_digests: [
             predecessor_credential.app_policy_binding_digest,
             successor_credential.app_policy_binding_digest,
+        ],
+        credential_financial_authority_commitments: [
+            predecessor_credential.device_authority_commitment,
+            successor_credential.device_authority_commitment,
         ],
         credential_device_public_keys: [
             predecessor_credential.device_public_key,

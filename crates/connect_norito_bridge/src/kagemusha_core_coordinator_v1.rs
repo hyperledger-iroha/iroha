@@ -33,8 +33,8 @@ pub use native_core_work::{
 };
 #[cfg(unix)]
 pub use ordinary_app_identity::{
-    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryPreKeySelectionV1,
-    KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
+    KagemushaOrdinaryEnrollmentDispositionV1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod recovered_backend;
@@ -2254,7 +2254,7 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21]
+            [2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),

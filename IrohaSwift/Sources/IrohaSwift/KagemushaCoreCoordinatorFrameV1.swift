@@ -13,6 +13,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case prepareIncomingFold, completeIncomingFold, stageIncomingOriginal
   case authenticatedHardwarePolicy
   case appOperationApproval, appEnrollmentPossession
+  case preparedOrdinaryAppIdentity
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -219,6 +220,8 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try count(fields, 0)
     case .appOperationApproval, .appEnrollmentPossession:
       try KagemushaAppPlatformFrameV1.validateRequest(method, fields)
+    case .preparedOrdinaryAppIdentity:
+      try KagemushaOrdinaryAppIdentityFrameV1.validateRequest(fields)
     }
   }
 
@@ -312,6 +315,8 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       for index in response.indices { try digest(response, index) }
     case .appOperationApproval, .appEnrollmentPossession:
       try KagemushaAppPlatformFrameV1.validateResponse(method, request, response)
+    case .preparedOrdinaryAppIdentity:
+      try KagemushaOrdinaryAppIdentityFrameV1.validateResponse(request, response)
     }
   }
 
