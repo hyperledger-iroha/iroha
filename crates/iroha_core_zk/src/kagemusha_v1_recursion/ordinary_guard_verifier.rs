@@ -15,8 +15,9 @@ use super::{
 use crate::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
     kagemusha_v1_state::{
-        KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1, KagemushaAuthenticatedOrdinaryApprovalV1,
+        KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1,
         KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+        KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
         KagemushaAuthenticatedOrdinaryHistoricalApprovalV1, KagemushaStateErrorV1,
     },
 };
@@ -106,12 +107,12 @@ impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
 
 pub(crate) fn verify_ordinary_bootstrap_guard_v1(
     selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-    approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+    approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
     paired_guard: &[u8],
     trusted_native_now_ms: u64,
 ) -> Result<KagemushaAuthenticatedOrdinaryBootstrapGuardV1> {
     selection.recheck_at_trusted_time(trusted_native_now_ms)?;
-    approval.recheck_at_trusted_time(trusted_native_now_ms)?;
+    approval.recheck_captured_bootstrap_at_native_time(trusted_native_now_ms)?;
     if !core::ptr::eq(
         selection.enrollment(),
         approval.retained_enrollment().as_ref(),
@@ -125,7 +126,7 @@ pub(crate) fn verify_ordinary_bootstrap_guard_v1(
         approval.retained_release(),
         paired_guard,
     )?;
-    approval.recheck_at_trusted_time(trusted_native_now_ms)?;
+    approval.recheck_captured_bootstrap_at_native_time(trusted_native_now_ms)?;
     selection.recheck_at_trusted_time(trusted_native_now_ms)?;
     Ok(admitted)
 }
@@ -134,7 +135,7 @@ pub(crate) fn verify_ordinary_bootstrap_guard_v1(
 /// converted into the live approval result or used to reserve a new financial operation.
 pub(crate) struct KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     verified: KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    publication_time_ms: u64,
+    approval_admission_time_ms: u64,
 }
 impl KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     pub(crate) fn normalized_guard_digest(&self) -> DigestV1 {
@@ -161,8 +162,8 @@ impl KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     pub(crate) fn original(&self) -> &[u8] {
         self.verified.original()
     }
-    pub(crate) fn publication_time_ms(&self) -> u64 {
-        self.publication_time_ms
+    pub(crate) fn approval_admission_time_ms(&self) -> u64 {
+        self.approval_admission_time_ms
     }
 }
 
@@ -173,10 +174,10 @@ pub(crate) fn verify_ordinary_bootstrap_guard_historical_v1(
     selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
     approval: &KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_>,
     paired_guard: &[u8],
-    publication_time_ms: u64,
+    approval_admission_time_ms: u64,
     trusted_native_now_ms: u64,
 ) -> Result<KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1> {
-    approval.recheck_originals(publication_time_ms, trusted_native_now_ms)?;
+    approval.recheck_originals(approval_admission_time_ms, trusted_native_now_ms)?;
     // The original approval's own lease is checked at its retained publication instant by the
     // historical holder. The selection's latest lease must be checked at actual native now;
     // a later refresh must never be backdated to the initial publication time.
@@ -195,10 +196,10 @@ pub(crate) fn verify_ordinary_bootstrap_guard_historical_v1(
         paired_guard,
     )?;
     selection.recheck_at_trusted_time(trusted_native_now_ms)?;
-    approval.recheck_originals(publication_time_ms, trusted_native_now_ms)?;
+    approval.recheck_originals(approval_admission_time_ms, trusted_native_now_ms)?;
     Ok(KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
         verified,
-        publication_time_ms,
+        approval_admission_time_ms,
     })
 }
 

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Closed additive method19/20 grammar. Shape validation grants no native owner.
+/// Closed method19/20 grammar, including the native FI ceremony. Shape grants no owner.
 enum KagemushaAppPlatformFrameV1 {
   static func validateRequest(_ method: KagemushaCoreCoordinatorMethodV1, _ f: [Data]) throws {
     guard method == .appOperationApproval || method == .appEnrollmentPossession,
@@ -21,6 +21,24 @@ enum KagemushaAppPlatformFrameV1 {
       guard method == .appEnrollmentPossession, f.count == 3, ticket(f[1]),
         (1...16384).contains(f[2].count) else {
         throw invalid("invalid final app identity original")
+      }
+    case 9:
+      guard method == .appEnrollmentPossession, f.count == 4, ticket(f[1]),
+        (1...32768).contains(f[2].count), KagemushaAppPlatformPreparedProjectionV1.digest(f[3]) else {
+        throw invalid("invalid original retail enrollment challenge")
+      }
+    case 10, 13, 14:
+      guard method == .appEnrollmentPossession, f.count == 2, ticket(f[1]) else {
+        throw invalid("invalid retail enrollment ticket")
+      }
+    case 11:
+      guard method == .appEnrollmentPossession, f.count == 3, ticket(f[1]), f[2].count == 64 else {
+        throw invalid("invalid original wallet signature")
+      }
+    case 12:
+      guard method == .appEnrollmentPossession, f.count == 3, ticket(f[1]),
+        (1...16384).contains(f[2].count) else {
+        throw invalid("invalid original retail enrollment certificate")
       }
     default: throw invalid("unknown app platform phase")
     }
@@ -77,6 +95,40 @@ enum KagemushaAppPlatformFrameV1 {
         f.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
         throw invalid("invalid retained final app identity response")
       }
+    case 9:
+      guard f.count == 5, ticket(f[0]), f[1] == request[2], f[2] == request[3],
+        KagemushaAppPlatformPreparedProjectionV1.digest(f[3]),
+        KagemushaAppPlatformPreparedProjectionV1.digest(f[4]) else {
+        throw invalid("retail preparation substitutes original challenge or message")
+      }
+    case 10:
+      guard f.count == 2,
+        (f[0] == Data([1]) && f[1].isEmpty) || (f[0] == Data([2]) && f[1].count == 64) else {
+        throw invalid("invalid wallet invocation fence")
+      }
+    case 11:
+      guard f.count == 1, f[0] == Data(SHA256.hash(data: request[2])) else {
+        throw invalid("native wallet retention substitutes original signature")
+      }
+    case 12:
+      guard f.count == 2, f.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
+        throw invalid("invalid retained retail enrollment response")
+      }
+    case 13:
+      guard f.count == 3, f[0].count == 1 else { throw invalid("invalid retail recovery fields") }
+      switch f[0][0] {
+      case 0, 1:
+        guard f[1].isEmpty, f[2].isEmpty else { throw invalid("unretained action carries originals") }
+      case 2:
+        guard f[1].count == 64, f[2].isEmpty else { throw invalid("invalid retained wallet signature") }
+      case 3:
+        guard f[1].count == 64, (1...16384).contains(f[2].count) else {
+          throw invalid("invalid retained retail certificate")
+        }
+      default: throw invalid("unknown retail recovery state")
+      }
+    case 14:
+      guard f.isEmpty else { throw invalid("retail cancellation carries result") }
     default: throw invalid("unknown app platform phase")
     }
   }

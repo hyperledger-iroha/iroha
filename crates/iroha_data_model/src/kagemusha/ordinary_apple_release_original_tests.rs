@@ -134,6 +134,22 @@ fn measured_originals_preserve_both_orders_and_exact_maximum_utf8_version() {
 #[test]
 fn limited_original_has_explicit_unavailable_release_and_does_not_admit_wrong_equations() {
     let (raw, key, release) = fixture(None, true, true);
+    let pad_parts = kagemusha_ordinary_apple_original_parts_v1(&raw, [0; 32]).unwrap();
+    assert_eq!(pad_parts.release_measurement, Measurement::Unavailable);
+    assert_eq!(pad_parts.validation_category, None);
+    assert_eq!(pad_parts.bundle_version, None);
+    // Parsing the unmeasured original for inactive padding grants no signature authority.
+    assert!(
+        authenticate(
+            raw.clone(),
+            &key,
+            [0; 32],
+            [12; 32],
+            Some(6),
+            b"held native message"
+        )
+        .is_err()
+    );
     assert_eq!(
         authenticate(
             raw.clone(),
@@ -174,6 +190,7 @@ fn limited_original_has_explicit_unavailable_release_and_does_not_admit_wrong_eq
 #[test]
 fn measured_original_refuses_release_substitution_flags_nonminimal_and_duplicate_keys() {
     let (raw, key, release) = fixture(Some(&"a".repeat(128)), true, true);
+    assert!(kagemusha_ordinary_apple_original_parts_v1(&raw, [0; 32]).is_err());
     assert!(
         authenticate(
             raw.clone(),

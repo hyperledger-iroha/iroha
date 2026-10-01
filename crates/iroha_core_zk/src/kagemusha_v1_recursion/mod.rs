@@ -101,6 +101,24 @@ mod ordinary_integrity_binding;
         feature = "kagemusha-real-proof-harness"
     )
 ))]
+mod ordinary_integrity_stream;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_integrity_union;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
 mod ordinary_issuer_equation;
 #[cfg(all(
     feature = "zk-halo2-ipa",
@@ -180,6 +198,8 @@ mod real_handoff_qualification_tests;
 #[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
 pub(crate) use real_handoff_qualification_tests::DiagnosticMintStageProofV1;
 #[cfg(test)]
+mod ordinary_state_artifact_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 
 pub use super::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1;
@@ -228,7 +248,8 @@ pub use generation::production_prover::{
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
     KagemushaOrdinaryBootstrapAuxiliaryConsumerV1,
     KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1, KagemushaProductionProverV1,
-    KagemushaProductionTerminalProofV1, register_kagemusha_native_outgoing_witness_source_v1,
+    KagemushaProductionTerminalProofV1, KagemushaRetainedOrdinaryBootstrapAuxiliariesV1,
+    register_kagemusha_native_outgoing_witness_source_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 #[cfg(test)]

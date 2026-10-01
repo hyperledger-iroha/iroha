@@ -902,7 +902,7 @@ mod tests {
         );
         assert_eq!(
             call(b, h, 14, vec![carrier[0].clone()]).unwrap(),
-            vec![vec![]]
+            vec![Vec::<u8>::new()]
         );
         result
     }

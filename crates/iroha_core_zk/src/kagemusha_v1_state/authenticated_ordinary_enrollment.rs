@@ -25,7 +25,9 @@ pub use current_publication::KagemushaAuthenticatedOrdinaryCurrentPublicationV1;
 mod logical_journal;
 pub(crate) use logical_journal::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
 pub use logical_journal::{
-    KagemushaAuthenticatedOrdinaryApprovalV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaAuthenticatedOrdinaryApprovalV1,
+    KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
+    KagemushaOrdinaryLogicalApprovalJournalV1,
 };
 
 /// Borrowed actual ordinary credential floor, never decoded into an authenticated capability.
@@ -245,6 +247,40 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
         let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
             enrollment, release,
         )?;
+        let (proof_release, preview) = derive_preview(&floor, state_nonce_commitment, capacity)?;
+        let selection = Self {
+            floor,
+            recursive_verifier,
+            capacity,
+            preview,
+            proof_release,
+        };
+        selection.recheck_at_trusted_time(trusted_native_now_ms)?;
+        Ok(selection)
+    }
+
+    /// Select a genuinely admitted current Integrity refresh without replacing the original
+    /// enrollment or zero-State preview. Original possession is checked at its actual admission;
+    /// the unchanged credential and selected current lease are checked at current Native time.
+    /// # Errors
+    /// Rejects foreign scope, expired originals/current lease or a replaced production verifier.
+    pub fn from_verified_enrollment_with_current_integrity_lease(
+        enrollment: &'a KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        recursive_verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
+        state_nonce_commitment: DigestV1,
+        capacity: KagemushaDurableCapacityV1,
+        integrity_lease: &'a KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        trusted_native_now_ms: u64,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        enrollment
+            .possession()
+            .recheck_at_trusted_time(enrollment.authenticated_at_ms())
+            .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        let release = admitted_release(&recursive_verifier)?;
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment_with_integrity_lease(
+            enrollment, release, integrity_lease, trusted_native_now_ms,
+        )?;
+        floor.recheck_original_admission()?;
         let (proof_release, preview) = derive_preview(&floor, state_nonce_commitment, capacity)?;
         let selection = Self {
             floor,

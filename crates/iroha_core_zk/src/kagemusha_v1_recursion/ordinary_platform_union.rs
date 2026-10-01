@@ -34,7 +34,7 @@ use halo2_proofs::halo2curves::{
 };
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalEvidenceV1, KagemushaAppOperationApprovalSigningLayoutV1 as A,
-    KagemushaAppOperationApprovalV1, kagemusha_app_attest_original_parts_v1,
+    KagemushaAppOperationApprovalV1, kagemusha_ordinary_apple_original_parts_v1,
 };
 use p256::ecdsa::Signature;
 use sha2::{Digest as _, Sha256};
@@ -130,6 +130,7 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
     jobs: &mut PastaSha256JobsV1<F>,
     credential: &OrdinaryCredentialOriginalCellsV1<F>,
     original_key: &[u8; 65],
+    expected_release_digest: [u8; 32],
     approval: &KagemushaAppOperationApprovalV1,
     wrapper: &[PastaSha256ByteV1<F>; A::TOTAL_BYTES],
     apple: AssignedValue<F>,
@@ -158,8 +159,15 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
                     (signature_der.as_slice(), None, signature_der.as_slice())
                 }
                 KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
-                    let (a, d) = kagemusha_app_attest_original_parts_v1(raw_assertion)?;
-                    (raw_assertion.as_slice(), Some(a), d)
+                    let parts = kagemusha_ordinary_apple_original_parts_v1(
+                        raw_assertion,
+                        expected_release_digest,
+                    )?;
+                    (
+                        raw_assertion.as_slice(),
+                        Some(parts.authenticator_data),
+                        parts.signature_der,
+                    )
                 }
             }
         } else {
@@ -230,8 +238,10 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
         let stream = if branch_apple {
             let auth_raw: [u8; 37] = auth
                 .ok_or("ordinary Apple authData absent")?
+                .get(..37)
+                .ok_or("ordinary Apple authData header absent")?
                 .try_into()
-                .map_err(|_| "ordinary Apple authData width")?;
+                .map_err(|_| "ordinary Apple authData header width")?;
             let auth_cells =
                 core::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth_raw[i]))));
             let rp = core::array::from_fn(|i| {
@@ -239,6 +249,16 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
                     ctx,
                     credential.fixed_digests[11][i].quantum_cell(),
                     Constant(F::from(u64::from(pad.auth[i]))),
+                    active,
+                )
+            });
+            // The active branch receives the independently governed original credential cells;
+            // inactive public padding retains explicit unavailable release measurement.
+            let release = core::array::from_fn(|i| {
+                range.gate().select(
+                    ctx,
+                    credential.fixed_digests[12][i].quantum_cell(),
+                    Constant(F::ZERO),
                     active,
                 )
             });
@@ -269,6 +289,12 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
                 &selected_wrapper,
                 &auth_cells,
                 &rp,
+                if is_active {
+                    expected_release_digest
+                } else {
+                    [0; 32]
+                },
+                &release,
                 floor,
                 counter,
                 &signature,
@@ -291,7 +317,7 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
     let length = range
         .gate()
         .select(ctx, apple_stream.actual_len(), android.actual_len(), apple);
-    let bytes = (0..142)
+    let bytes = (0..311)
         .map(|i| {
             let a = android
                 .bytes()
@@ -331,9 +357,14 @@ mod tests {
             changed[0] ^= 1;
             assert!(key.verify(&changed, &signature).is_err());
             if apple {
-                let (auth, der) = kagemusha_app_attest_original_parts_v1(&pad.assertion).unwrap();
-                assert_eq!(auth, pad.auth);
-                assert_eq!(der, pad.der);
+                let parts =
+                    kagemusha_ordinary_apple_original_parts_v1(&pad.assertion, [0; 32]).unwrap();
+                assert_eq!(parts.authenticator_data, pad.auth);
+                assert_eq!(parts.signature_der, pad.der);
+                assert_eq!(
+                    parts.release_measurement,
+                    iroha_data_model::kagemusha::KagemushaAppAttestReleaseMeasurementV1::Unavailable,
+                );
             }
         }
     }

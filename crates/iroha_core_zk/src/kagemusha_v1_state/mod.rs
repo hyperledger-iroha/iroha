@@ -25,6 +25,12 @@ pub use response_evidence_archive::{
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod authenticated_core_owner;
+#[cfg(all(
+    unix,
+    feature = "kagemusha-production-prover",
+    feature = "zk-halo2-ipa"
+))]
+pub use authenticated_core_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use authenticated_core_owner::{
     KagemushaAuthenticatedBootstrapProvingSelectionV1, KagemushaAuthenticatedBootstrapStageV1,
@@ -34,6 +40,7 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedCoreRecoveryV1, KagemushaAuthenticatedIncomingFoldV1,
     KagemushaAuthenticatedIncomingProvingSelectionV1, KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
     KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaAuthenticatedOutboxReleaseV1,
     KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,

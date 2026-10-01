@@ -148,7 +148,9 @@ explicitly approved OVH target.
 | R3 | Community ownership | Maintainers/public docs | Clear onboarding, repeat subsystem reviewers and official demos/Q&A/recaps; accurate implementation updates and independent release evidence. |
 
 Ordinary signing permits authenticated software custody with runtime-only secrets,
-rotation/revocation and recovery. KAGEMUSHA money requires governed non-forking
-hardware. IVM is the sole VM; Wasm/WASI is prohibited. Sumeragi requires exact
+rotation/revocation and recovery. The first production KAGEMUSHA app profile
+requires governed hardware app-key admission, genuine monetary proofs and
+current-owner/replay authority. Ordinary keys confer no hardware journal or
+clock guarantee. IVM is the sole VM; Wasm/WASI is prohibited. Sumeragi requires exact
 `3f + 1` global committees, exactly `n - f` votes and signed RS16 availability.
 Idle chains create no blocks.

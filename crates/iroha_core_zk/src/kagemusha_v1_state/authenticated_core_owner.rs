@@ -16,11 +16,17 @@ use crate::kagemusha_v1_recursion::{
 mod bootstrap_proving;
 pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
 
+#[cfg(feature = "kagemusha-production-prover")]
+#[path = "authenticated_ordinary_bootstrap_owner.rs"]
+mod ordinary_bootstrap_owner;
 #[path = "authenticated_ordinary_enrollment.rs"]
 mod ordinary_enrollment;
+#[cfg(feature = "kagemusha-production-prover")]
+pub use ordinary_bootstrap_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
 pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
     KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
 };

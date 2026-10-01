@@ -414,15 +414,14 @@ pub struct KagemushaOrdinaryAppleOriginalPartsV1<'a> {
 /// Parse exact bounded Apple originals and correlate signed release fields to an external digest.
 /// This formatter/parser never authenticates a signature or constructs an enrolled/native owner.
 /// # Errors
-/// Rejects malformed/nonminimal/duplicate/trailing CBOR, wrong flags or a different release.
+/// Rejects malformed/nonminimal/duplicate/trailing CBOR, wrong flags or a different measured
+/// release. The limited form returns explicit unavailable measurement even without a release
+/// digest; signature authentication separately requires its independently governed policy.
 pub fn kagemusha_ordinary_apple_original_parts_v1(
     raw: &[u8],
     expected_app_release_digest: [u8; 32],
 ) -> Result<KagemushaOrdinaryAppleOriginalPartsV1<'_>, String> {
-    if raw.is_empty()
-        || raw.len() > KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1
-        || expected_app_release_digest == [0; 32]
-    {
+    if raw.is_empty() || raw.len() > KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1 {
         return Err("ordinary Apple original/release bound differs".into());
     }
     let (auth, der) = super::kagemusha_v1::parse_app_attest_assertion(raw)
@@ -440,6 +439,9 @@ pub fn kagemusha_ordinary_apple_original_parts_v1(
             None,
         )
     } else {
+        if expected_app_release_digest == [0; 32] {
+            return Err("ordinary Apple measured release policy absent".into());
+        }
         if !matches!(auth[32], 0x40 | 0xc0) {
             return Err("ordinary Apple extension flag absent".into());
         }

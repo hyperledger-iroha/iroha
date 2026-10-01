@@ -31,10 +31,7 @@ use super::{
         assign_ordinary_credential_union_v1, reconstruct_ordinary_credential_union_v1,
     },
     ordinary_guard_circuit::{bind_credential, bind_subject},
-    ordinary_integrity_binding::{
-        constrain_ordinary_initial_integrity_interval_v1,
-        constrain_ordinary_integrity_lease_data_v1,
-    },
+    ordinary_integrity_union::constrain_ordinary_integrity_union_v1,
 };
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
@@ -133,26 +130,17 @@ pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
     let approval_purpose = wrapper[A::PURPOSE.start]
         .assigned()
         .expect("assigned ordinary approval purpose");
-    let lease_digest = if let Some(lease) = integrity_lease {
-        Some(constrain_ordinary_integrity_lease_data_v1(
-            builder,
-            jobs,
-            &cells,
-            &credential_digest,
-            lease,
-            original.issued_at_ms,
-            original.expires_at_ms,
-        )?)
-    } else {
-        constrain_ordinary_initial_integrity_interval_v1(
-            builder,
-            &cells,
-            integrity,
-            original.issued_at_ms,
-            original.expires_at_ms,
-        )?;
-        None
-    };
+    let lease_digest = constrain_ordinary_integrity_union_v1(
+        builder,
+        jobs,
+        &cells,
+        &credential_digest,
+        integrity,
+        integrity_lease,
+        None,
+        original.issued_at_ms,
+        original.expires_at_ms,
+    )?;
     let raw = match &approval.evidence {
         KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
             signature_der.as_slice()
@@ -161,11 +149,11 @@ pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
             raw_assertion.as_slice()
         }
     };
-    if raw.is_empty() || raw.len() > 142 {
+    if raw.is_empty() || raw.len() > 311 {
         return Err("ordinary original platform evidence exceeds fixed capacity".into());
     }
     let ctx = builder.main(0);
-    let bytes = (0..142)
+    let bytes = (0..311)
         .map(|i| {
             let byte = ctx.load_witness(F::from(u64::from(raw.get(i).copied().unwrap_or(0))));
             PastaSha256ByteV1::range_checked(ctx, &range, byte)
@@ -185,7 +173,7 @@ pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
         builder,
         jobs,
         &approval_digest,
-        lease_digest.as_ref(),
+        Some(&lease_digest),
     )?;
     let subject_bytes = signed_s
         .map(|byte| PastaSha256ByteV1::range_checked(builder.main(0), &range, byte))

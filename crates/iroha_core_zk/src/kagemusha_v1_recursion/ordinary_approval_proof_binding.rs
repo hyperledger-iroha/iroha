@@ -40,7 +40,7 @@ use crate::{
 
 /// Hash the same wrapper and whole original evidence that the signature equation consumed.
 /// The evidence tag is fixed by the release-selected platform circuit, not an assertion response.
-/// Variable DER widths/CBOR ordering retain one fixed 142-byte evidence capacity and SHA graph.
+/// Variable DER widths/CBOR ordering retain one fixed 311-byte evidence capacity and SHA graph.
 pub(super) fn constrain_ordinary_approval_proof_binding_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -65,7 +65,7 @@ pub(super) fn constrain_ordinary_selected_approval_proof_binding_v1<F: Kagemusha
     evidence_tag: AssignedValue<F>,
     original: &KagemushaBoundedByteStreamV1<F>,
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    if original.bytes().len() > 142 {
+    if original.bytes().len() > 311 {
         return Err("ordinary approval proof transcript capacity differs".into());
     }
     let range = builder.range_chip();
@@ -93,7 +93,7 @@ pub(super) fn constrain_ordinary_selected_approval_proof_binding_v1<F: Kagemusha
     let prefix_length = prefix.len();
     let fixed_prefix_length = ctx.load_constant(F::from(prefix_length as u64));
     let fixed = KagemushaBoundedByteStreamV1::constrain(ctx, &range, prefix, fixed_prefix_length)?;
-    let transcript = fixed.concat(ctx, &range, original, prefix_length + 142)?;
+    let transcript = fixed.concat(ctx, &range, original, prefix_length + 311)?;
     let digest =
         jobs.digest_bounded_constrained(ctx, &range, transcript.bytes(), transcript.actual_len())?;
     let mut result = Vec::with_capacity(32);
@@ -294,7 +294,7 @@ mod tests {
             let cell = ctx.load_witness(F::from(u64::from(signing[i])));
             PastaSha256ByteV1::range_checked(ctx, &range, cell)
         });
-        let original = (0..142)
+        let original = (0..311)
             .map(|i| {
                 let cell = ctx.load_witness(F::from(u64::from(raw.get(i).copied().unwrap_or(0))));
                 PastaSha256ByteV1::range_checked(ctx, &range, cell)

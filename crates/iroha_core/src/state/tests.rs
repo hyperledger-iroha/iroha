@@ -19635,7 +19635,7 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     {
         configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
     }
-    let state = authenticate_trigger_fixture(state);
+    let mut state = authenticate_trigger_fixture(state);
     assert_eq!(
         state.committed_height(),
         1,

@@ -12,10 +12,13 @@ use super::*;
 mod native_outgoing_witness;
 #[path = "production_incoming.rs"]
 mod production_incoming;
+#[path = "production_ordinary_auxiliaries.rs"]
+mod production_ordinary_auxiliaries;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
 #[path = "production_ordinary_state.rs"]
 mod production_ordinary_state;
+pub use production_ordinary_auxiliaries::KagemushaRetainedOrdinaryBootstrapAuxiliariesV1;
 pub use production_ordinary_state::{
     KagemushaOrdinaryBootstrapAuxiliaryConsumerV1, KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
 };
@@ -404,10 +407,13 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         ),
         KagemushaArtifactGenerationErrorV1,
     > {
-        let release = self.artifacts.recursion_artifacts();
         // The inner identities are derived by the authenticated verifier from the signed
         // inner VK roles and profile. They are distinct from the public transport protocols.
         let checkpoint = self.verifier.state_checkpoint_material();
+        // Use the exact family admitted by the held Native verifier, including the
+        // distinct ordinary Guard roles. The generic byte resolver also retains the
+        // experimental OEM helper catalog and cannot select this State family.
+        let release = checkpoint.artifacts;
         let eq_parameters = self.artifacts.load_eq_params()?;
         let eq_vk_bytes = self.artifacts.resolve(KagemushaArtifactRoleV1::StateVkEq)?;
         let eq_vk = native_backend::read_eq_state_vk(&eq_vk_bytes, self.profile.state_eq.clone())?;

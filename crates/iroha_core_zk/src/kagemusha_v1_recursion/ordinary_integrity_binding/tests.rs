@@ -12,9 +12,9 @@ use halo2_proofs::{
 };
 use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1;
 #[test]
-fn private_current_lease_requires_both_genuine_issuer_equation_entry_points() {
-    let _ = constrain_ordinary_integrity_lease_v1::<Fp>;
-    let _ = constrain_ordinary_integrity_lease_v1::<Fq>;
+fn private_current_lease_uses_one_union_entry_point_in_both_fields() {
+    let _ = super::super::ordinary_integrity_union::constrain_ordinary_integrity_union_v1::<Fp>;
+    let _ = super::super::ordinary_integrity_union::constrain_ordinary_integrity_union_v1::<Fq>;
 }
 
 const TEST_K: u32 = 17;

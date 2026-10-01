@@ -679,23 +679,24 @@ impl KagemushaOrdinaryPreparationReservationV1 {
                 .map_err(|_| Rejected)?;
             self.require_enrollment(&enrollment)?;
             if let Some(raw) = &self.completed {
+                let completed = decode(raw)?;
                 let Record::EnrollmentComplete {
                     certificate_original,
                     possession_original,
                     authenticated_at_ms,
                     captured_at_ms,
-                } = decode(raw)?
+                } = &completed
                 else {
                     return Err(Custody);
                 };
-                if certificate_original
+                if certificate_original.as_slice()
                     != enrollment
                         .certificate()
                         .canonical_bytes()
                         .map_err(|_| Rejected)?
-                    || possession_original != enrollment.possession().original()
-                    || authenticated_at_ms != enrollment.authenticated_at_ms()
-                    || captured_at_ms > now
+                    || possession_original.as_slice() != enrollment.possession().original()
+                    || *authenticated_at_ms != enrollment.authenticated_at_ms()
+                    || *captured_at_ms > now
                 {
                     return Err(Custody);
                 }
@@ -864,6 +865,18 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
     pub(crate) fn financial_secret(&self) -> Result<&[u8; 32]> {
         self.recheck()?;
         Ok(&self.reservation.secret)
+    }
+    pub(crate) fn bootstrap_state_nonce_commitment(&self) -> Result<[u8; 32]> {
+        use sha2::{Digest as _, Sha256};
+        self.recheck()?;
+        let mut hash = Sha256::new();
+        hash.update(b"iroha:kagemusha:v1:ordinary-bootstrap-state-nonce\0");
+        hash.update(self.reservation.secret.as_slice());
+        hash.update(self.reservation.carrier.client_nonce);
+        hash.update(self.enrollment.certificate().subject.enrollment_id);
+        let commitment = hash.finalize().into();
+        self.recheck()?;
+        Ok(commitment)
     }
     #[cfg(feature = "zk-halo2-ipa")]
     pub(crate) fn with_borrowed_financial_secret(
@@ -1066,11 +1079,88 @@ mod tests {
         let enrolled = Arc::new(f.verify(600).unwrap());
         let completed = held.complete_enrollment(enrolled.clone()).unwrap();
         assert_eq!(*completed.financial_secret().unwrap(), secret);
+        let certificate_original = enrolled.certificate().canonical_bytes().unwrap();
+        let wal_path = root
+            .join(format!(
+                "{}-preparation",
+                hex::encode(original.owner.enrollment_id().unwrap())
+            ))
+            .join(FORMAT.filename);
+        let wal_before = Zeroizing::new(std::fs::read(&wal_path).unwrap());
+        assert!(completed.reservation.completed.is_some());
+        let completed_prefix = completed.reservation.journal.recovery_prefix().unwrap();
+        assert_eq!(completed_prefix.sequence, 3);
+        let retry_at_ms = completed.reservation.now().unwrap();
+        drop(completed);
+        let retained = KagemushaOrdinaryPreparationReservationV1::open_retained_originals(
+            &root,
+            original.clone(),
+            retry_at_ms,
+        )
+        .unwrap();
+        assert!(retained.completed.is_some());
+        assert_eq!(
+            retained.journal.recovery_prefix().unwrap(),
+            completed_prefix
+        );
+        let completed = retained
+            .complete_enrollment_or_retain(enrolled.clone())
+            .unwrap_or_else(|(_, error)| panic!("same enrollment retry refused: {error:?}"));
+        assert_eq!(*completed.financial_secret().unwrap(), secret);
+        assert!(Arc::ptr_eq(completed.enrollment(), &enrolled));
+        assert_eq!(
+            completed
+                .enrollment()
+                .certificate()
+                .canonical_bytes()
+                .unwrap(),
+            certificate_original
+        );
+        assert_eq!(
+            completed.reservation.journal.recovery_prefix().unwrap(),
+            completed_prefix,
+        );
+        let wal_after = Zeroizing::new(std::fs::read(&wal_path).unwrap());
+        assert!(
+            wal_before.as_slice() == wal_after.as_slice(),
+            "same enrollment retry appended or replaced the WAL"
+        );
         drop(completed);
         assert!(
             KagemushaOrdinaryPreparationReservationV1::open_existing(&root, original.clone(), 2500)
                 .is_err()
         );
+        let completed_wal = Zeroizing::new(std::fs::read(&wal_path).unwrap());
+        let foreign = Arc::new(Fixture::new(false).verify(300).unwrap());
+        foreign.recheck_at_trusted_time(2500).unwrap();
+        assert_ne!(
+            foreign.certificate().canonical_bytes().unwrap(),
+            enrolled.certificate().canonical_bytes().unwrap()
+        );
+        let held = KagemushaOrdinaryPreparationReservationV1::open_retained_originals(
+            &root,
+            original.clone(),
+            2500,
+        )
+        .unwrap();
+        let held = match held.complete_enrollment_or_retain(foreign) {
+            Err((held, _)) => held,
+            Ok(_) => panic!("foreign enrollment replaced completed reservation custody"),
+        };
+        assert_eq!(
+            Zeroizing::new(std::fs::read(&wal_path).unwrap()).as_slice(),
+            completed_wal.as_slice()
+        );
+        let completed = match held.complete_enrollment_or_retain(enrolled.clone()) {
+            Ok(completed) => completed,
+            Err((_, error)) => panic!("original completed enrollment refused recovery: {error:?}"),
+        };
+        assert_eq!(*completed.financial_secret().unwrap(), secret);
+        assert_eq!(
+            Zeroizing::new(std::fs::read(&wal_path).unwrap()).as_slice(),
+            completed_wal.as_slice()
+        );
+        drop(completed);
         let completed = KagemushaOrdinaryEnrolledFinancialOwnerV1::open_existing(
             &root,
             original.clone(),

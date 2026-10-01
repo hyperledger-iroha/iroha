@@ -45,6 +45,11 @@ enum Record {
     IntegrityLease {
         original: Vec<u8>,
     },
+    CaptureBootstrap {
+        captured_at_ms: u64,
+        approval_digest: DigestV1,
+        authorization_binding_digest: DigestV1,
+    },
     Approval {
         accepted_at_ms: u64,
         integrity_lease_digest: Option<DigestV1>,
@@ -54,7 +59,13 @@ enum Record {
     },
 }
 
+#[path = "captured_ordinary_bootstrap_approval.rs"]
+mod captured_bootstrap;
+pub use captured_bootstrap::KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1;
+
 struct Pending {
+    accepted_at_ms: Option<u64>,
+    captured_at_ms: Option<u64>,
     counter_floor_before: Option<u32>,
     challenge: KagemushaAppOperationApprovalChallengeV1,
     approved: Option<KagemushaVerifiedAppOperationApprovalV1>,
@@ -89,23 +100,23 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'a> {
     original: &'a KagemushaVerifiedAppOperationApprovalV1,
     journal: &'a KagemushaOrdinaryLogicalApprovalJournalV1,
     prefix: KagemushaRecoveryJournalPrefixV1,
-    publication_time_ms: u64,
+    approval_admission_time_ms: u64,
 }
 impl KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_> {
     pub(crate) fn recheck_originals(
         &self,
-        publication_time_ms: u64,
+        approval_admission_time_ms: u64,
         native_now_ms: u64,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if self.publication_time_ms != publication_time_ms
-            || publication_time_ms > native_now_ms
+        if self.approval_admission_time_ms != approval_admission_time_ms
+            || approval_admission_time_ms > native_now_ms
             || self.journal.wal.recovery_prefix().map_err(storage)? != self.prefix
         {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         self.journal.recheck_at_trusted_time(native_now_ms)?;
         self.original
-            .recheck_at_trusted_time(publication_time_ms)
+            .recheck_at_trusted_time(approval_admission_time_ms)
             .map_err(material)?;
         self.journal.wal.check_owned().map_err(storage)
     }
@@ -306,6 +317,8 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
                         journal.integrity_lease.as_deref(),
                     )?;
                     journal.pending = Some(Pending {
+                        accepted_at_ms: None,
+                        captured_at_ms: None,
                         counter_floor_before: journal.counter_floor,
                         challenge,
                         approved: None,
@@ -363,11 +376,34 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
                         .as_mut()
                         .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
                         .approval_integrity_lease = lease;
-                    journal
+                    let pending = journal
                         .pending
                         .as_mut()
-                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
-                        .approved = Some(verified);
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    pending.accepted_at_ms = Some(accepted_at_ms);
+                    pending.approved = Some(verified);
+                }
+                Record::CaptureBootstrap {
+                    captured_at_ms,
+                    approval_digest,
+                    authorization_binding_digest,
+                } if initialized => {
+                    if captured_at_ms > now {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    journal.require_bootstrap_capture(
+                        captured_at_ms,
+                        approval_digest,
+                        authorization_binding_digest,
+                    )?;
+                    let pending = journal
+                        .pending
+                        .as_mut()
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    if pending.captured_at_ms.is_some() {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    pending.captured_at_ms = Some(captured_at_ms);
                 }
                 _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
             }
@@ -377,6 +413,15 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         }
         journal.recheck_at_trusted_time(now)?;
         Ok(journal)
+    }
+
+    /// Data-only exact bootstrap S, derived from the same genuine owner and model serializer
+    /// that produces the actual Native challenge. It creates neither an approval nor a wallet.
+    pub fn bootstrap_selection_original(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.wal.check_owned().map_err(storage)?;
+        let subject =
+            derive_bootstrap_subject_from_floor(&self.credential_floor()?, &self.bootstrap)?;
+        subject.canonical_signing_bytes().map_err(material)
     }
 
     /// Reserve one bootstrap approval before exposing any signing bytes. Native entropy chooses
@@ -414,6 +459,8 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
                 integrity_lease_digest: self.integrity_lease.as_ref().map(|lease| lease.digest()),
             })?;
             self.pending = Some(Pending {
+                accepted_at_ms: None,
+                captured_at_ms: None,
                 counter_floor_before: self.counter_floor,
                 challenge,
                 approved: None,
@@ -473,10 +520,9 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             .as_mut()
             .expect("authenticated pending exists")
             .approval_integrity_lease = lease;
-        self.pending
-            .as_mut()
-            .expect("authenticated pending exists")
-            .approved = Some(verified);
+        let pending = self.pending.as_mut().expect("authenticated pending exists");
+        pending.accepted_at_ms = Some(now);
+        pending.approved = Some(verified);
         self.recheck_at_trusted_time(now)
     }
 
@@ -531,14 +577,22 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
 
     /// Historical proof recheck only. The publication owner independently selects this time from
     /// its exact admitted WAL record and checks current enrollment/Integrity at native now.
-    pub(crate) fn approved_at_original_publication_time(
+    pub(crate) fn approved_at_original_capture_time(
         &self,
-        publication_time_ms: u64,
+        approval_admission_time_ms: u64,
         native_now_ms: u64,
     ) -> Result<KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_>, KagemushaStateErrorV1> {
         self.recheck_at_trusted_time(native_now_ms)?;
-        if publication_time_ms > native_now_ms {
+        if approval_admission_time_ms > native_now_ms {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        if self
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.captured_at_ms)
+            != Some(approval_admission_time_ms)
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let original = self
             .pending
@@ -546,13 +600,13 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             .and_then(|pending| pending.approved.as_ref())
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         original
-            .recheck_at_trusted_time(publication_time_ms)
+            .recheck_at_trusted_time(approval_admission_time_ms)
             .map_err(material)?;
         Ok(KagemushaAuthenticatedOrdinaryHistoricalApprovalV1 {
             original,
             journal: self,
             prefix: self.wal.recovery_prefix().map_err(storage)?,
-            publication_time_ms,
+            approval_admission_time_ms,
         })
     }
 
@@ -786,17 +840,14 @@ fn initial_record(
     })
 }
 
-fn derive_challenge_from_floor(
+fn derive_bootstrap_subject_from_floor(
     floor: &KagemushaAuthenticatedOrdinaryCredentialFloorV1<'_>,
     preview: &BootstrapPreviewV1,
-    operation: DigestV1,
-    nonce: DigestV1,
-    issued: u64,
-) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
+) -> Result<KagemushaHardwareTransitionSelectionV1, KagemushaStateErrorV1> {
     floor.validate_current(&preview.state)?;
     let c = floor.credential();
     let epoch = floor.financial_epoch()?;
-    let subject = KagemushaHardwareTransitionSelectionV1 {
+    Ok(KagemushaHardwareTransitionSelectionV1 {
         version: 1,
         release_id: preview.state.release_id,
         provider_policy_root: preview.state.device_policy_binding.hardware_policy_id,
@@ -814,7 +865,18 @@ fn derive_challenge_from_floor(
         terminal_body_commitment: [0; 32],
         secure_index_before: 0,
         secure_index_after: 0,
-    };
+    })
+}
+
+fn derive_challenge_from_floor(
+    floor: &KagemushaAuthenticatedOrdinaryCredentialFloorV1<'_>,
+    preview: &BootstrapPreviewV1,
+    operation: DigestV1,
+    nonce: DigestV1,
+    issued: u64,
+) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
+    let subject = derive_bootstrap_subject_from_floor(floor, preview)?;
+    let c = floor.credential();
     let expires = issued
         .checked_add(KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1)
         .ok_or(KagemushaStateErrorV1::InvalidTrustedCommitTime)?
@@ -955,6 +1017,16 @@ mod tests {
                 counter_floor_before: None,
                 accepted_counter: None,
             },
+            Record::CaptureBootstrap {
+                captured_at_ms: 301,
+                approval_digest: verified.digest(),
+                authorization_binding_digest:
+                    kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+                        verified.proof_binding_digest(),
+                        None,
+                    )
+                    .unwrap(),
+            },
         ] {
             wal.append(&norito::encode_canonical(&record).unwrap())
                 .unwrap();
@@ -968,6 +1040,8 @@ mod tests {
             release: Arc::clone(&fixture.release),
             bootstrap,
             pending: Some(Pending {
+                accepted_at_ms: Some(301),
+                captured_at_ms: Some(301),
                 counter_floor_before: None,
                 challenge,
                 approved: Some(verified),
@@ -979,16 +1053,16 @@ mod tests {
         };
         assert!(
             journal
-                .approved_at_original_publication_time(300, 1000)
+                .approved_at_original_capture_time(300, 1000)
                 .is_err()
         );
         assert!(
             journal
-                .approved_at_original_publication_time(1001, 1000)
+                .approved_at_original_capture_time(1001, 1000)
                 .is_err()
         );
         let historical = journal
-            .approved_at_original_publication_time(301, 1000)
+            .approved_at_original_capture_time(301, 1000)
             .unwrap();
         assert_eq!(historical.challenge(), &challenge);
         assert_eq!(

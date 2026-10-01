@@ -108,6 +108,20 @@ class KagemushaNativePreparedAppEnrollmentPossessionV1 private constructor(priva
         request.requireCurrent()
         return acceptOriginalCredential(original)
     }
+    /** Public HTTP start carrier remains selected by the same Native reservation and admitted credential. */
+    fun retailStartRequestOriginal(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1): KagemushaOrdinaryIdentityHttpOriginalV1 =
+        state.retailStartRequest(reservation, identity)
+    /** Native authenticates and fsyncs the exact FI challenge before exposing the wallet signing digest. */
+    suspend fun prepareOriginalRetailEnrollment(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        transport: KagemushaOrdinaryIdentityOriginalTransportV1): KagemushaNativeOrdinaryRetailEnrollmentV1 {
+        val request = retailStartRequestOriginal(reservation, identity)
+        request.requireCurrent()
+        val raw = transport.exchange(request)
+        request.requireCurrent()
+        return state.acceptRetailStart(reservation, identity, request, raw)
+    }
     /** Cancel only the native pending attempt; existing enrolled key custody remains native policy. */
     fun cancel() = state.cancel()
 
@@ -136,6 +150,8 @@ private class NativeAppPreparedStateV1(
     private val messageDigest = sha(message)
     private var unusable = false
     private var certificateBody: ByteArray? = null
+    private var credentialOriginal: ByteArray? = null
+    private var credentialDigest: ByteArray? = null
 
     @Synchronized fun signingBytes(): ByteArray { recheck(); return message.copyOf() }
     @Synchronized fun financialSelectionOriginal(): ByteArray { recheck(); return original[13].copyOf() }
@@ -217,7 +233,46 @@ private class NativeAppPreparedStateV1(
         val admitted = invoke(8, held)
         same(admitted[1], scope)
         recheck()
+        credentialOriginal?.let { same(it, held) }
+        credentialDigest?.let { same(it, admitted[0]) }
+        credentialOriginal = held.copyOf(); credentialDigest = admitted[0].copyOf()
         return admitted[0].copyOf()
+    }
+
+    @Synchronized fun retailStartRequest(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1): KagemushaOrdinaryIdentityHttpOriginalV1 {
+        val (selected, policy) = certificateInputs(reservation, identity)
+        val credential = checkNotNull(credentialOriginal) { "Native has not admitted the original ordinary credential" }.copyOf()
+        val digest = checkNotNull(credentialDigest).copyOf()
+        val body = KagemushaOrdinaryIdentityHttpCodecV1.retailStartBody(selected[0], credential)
+        return KagemushaOrdinaryIdentityHttpOriginalV1.retail(originalId, "start", body) {
+            recheckCertificateInputs(reservation, identity, selected, policy)
+            recheckRetailCredential(credential, digest)
+        }
+    }
+
+    @Synchronized fun acceptRetailStart(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1, request: KagemushaOrdinaryIdentityHttpOriginalV1,
+        raw: ByteArray): KagemushaNativeOrdinaryRetailEnrollmentV1 {
+        request.requireCurrent()
+        val (selected, _) = certificateInputs(reservation, identity)
+        val credential = checkNotNull(credentialOriginal).copyOf(); val digest = checkNotNull(credentialDigest).copyOf()
+        val response = KagemushaOrdinaryIdentityHttpCodecV1.retailStartResponse(raw, selected[0])
+        request.requireCurrent()
+        val admitted = try { bridge.invoke(method, listOf(KagemushaCoreCoordinatorFrameV1.u32(9),
+            ticket.copyOf(), response[0], response[1])) }
+        catch (failure: Throwable) { unusable = true; throw failure }
+        same(admitted[3], scope); same(admitted[4], digest)
+        request.requireCurrent()
+        return KagemushaNativeOrdinaryRetailEnrollmentV1.fromNative(bridge, originalId, admitted, scope, digest) {
+            recheckRetailCredential(credential, digest)
+        }
+    }
+
+    @Synchronized private fun recheckRetailCredential(credential: ByteArray, digest: ByteArray) {
+        recheck()
+        same(checkNotNull(credentialOriginal), credential); same(checkNotNull(credentialDigest), digest)
+        recheck()
     }
 
     @Synchronized fun certificateRequest(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,

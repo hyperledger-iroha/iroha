@@ -27,6 +27,7 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
 struct Record {
     version: u16,
     published_at_ms: u64,
+    approval_captured_at_ms: u64,
     initial_state: KagemushaStateV1,
     statement: BootstrapStatementV1,
     retail_certificate_original: Vec<u8>,
@@ -81,9 +82,9 @@ impl PublishedGuard {
             Self::Restored(g) => g.original(),
         }
     }
-    fn require_publication_time(&self, expected: u64) -> Result<(), KagemushaStateErrorV1> {
+    fn require_approval_admission_time(&self, expected: u64) -> Result<(), KagemushaStateErrorV1> {
         if let Self::Restored(g) = self {
-            if g.publication_time_ms() != expected {
+            if g.approval_admission_time_ms() != expected {
                 return Err(KagemushaStateErrorV1::SnapshotIntegrity);
             }
         }
@@ -96,7 +97,8 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
     /// the complete initial publication before returning its retained owner. Existing paths are
     /// never reset. The proof must open the independent financial commitment; app key custody
     /// alone cannot publish this state. The actual held financial owner supplies fresh
-    /// suspend-inclusive Native time before and after proofs and fsync.
+    /// suspend-inclusive Native time before and after proofs and fsync. Its distinct zero-State
+    /// approval was already captured while live; slow proof work does not renew that signature.
     pub fn create_new(
         path: &Path,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
@@ -120,7 +122,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         }
         validate_guard_bytes(&paired_ordinary_guard_original)?;
         selection.verify_state_proof(&state_proof)?;
-        let approval = approvals.approved_at_trusted_time(trusted_native_now_ms)?;
+        let approval = approvals.captured_bootstrap_at_native_time(trusted_native_now_ms)?;
         let verified_guard = verify_ordinary_bootstrap_guard_v1(
             selection,
             &approval,
@@ -146,10 +148,11 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         }
         let published_at_ms = financial.trusted_time_ms().map_err(material)?;
         selection.recheck_at_trusted_time(published_at_ms)?;
-        approval.recheck_at_trusted_time(published_at_ms)?;
+        approval.recheck_captured_bootstrap_at_native_time(published_at_ms)?;
         let record = Record {
             version: 1,
             published_at_ms,
+            approval_captured_at_ms: approval.captured_at_ms(),
             initial_state: preview.state.clone(),
             statement: preview.statement.clone(),
             retail_certificate_original: selection
@@ -171,12 +174,12 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         }
         let before_append_ms = financial.trusted_time_ms().map_err(material)?;
         selection.recheck_at_trusted_time(before_append_ms)?;
-        approval.recheck_at_trusted_time(before_append_ms)?;
+        approval.recheck_captured_bootstrap_at_native_time(before_append_ms)?;
         let mut current = PrivateJournal::create_new(path, FORMAT).map_err(storage)?;
         current.append(&canonical).map_err(storage)?;
         let before_exposure_ms = financial.trusted_time_ms().map_err(material)?;
         selection.recheck_at_trusted_time(before_exposure_ms)?;
-        approval.recheck_at_trusted_time(before_exposure_ms)?;
+        approval.recheck_captured_bootstrap_at_native_time(before_exposure_ms)?;
         let publication = Self {
             current,
             canonical,
@@ -217,7 +220,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         require_selected_preview(selection, &approvals, &record)?;
         selection.verify_state_proof(&record.state_proof)?;
         let approval =
-            approvals.approved_at_original_publication_time(record.published_at_ms, now)?;
+            approvals.approved_at_original_capture_time(record.approval_captured_at_ms, now)?;
         if approval.original() != record.approval_original
             || approval.authorization_binding_digest()? != record.authorization_transcript_digest
             || approval.challenge().subject_signing_digest != record.subject_signing_digest
@@ -228,13 +231,13 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             selection,
             &approval,
             &record.paired_ordinary_guard_original,
-            record.published_at_ms,
+            record.approval_captured_at_ms,
             now,
         )?;
         // Verification can take time: current credential/lease is checked with a new Native
         // sample before any restored owner is exposed. The old approval remains historical.
         let exposure_now = financial.trusted_time_ms().map_err(material)?;
-        approval.recheck_originals(record.published_at_ms, exposure_now)?;
+        approval.recheck_originals(record.approval_captured_at_ms, exposure_now)?;
         current.require_single_record(&canonical).map_err(storage)?;
         let publication = Self {
             current,
@@ -261,10 +264,10 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             .require_single_record(&self.canonical)
             .map_err(storage)?;
         self.verified_guard
-            .require_publication_time(self.record.published_at_ms)?;
+            .require_approval_admission_time(self.record.approval_captured_at_ms)?;
         let approval = self
             .approvals
-            .approved_at_original_publication_time(self.record.published_at_ms, now)?;
+            .approved_at_original_capture_time(self.record.approval_captured_at_ms, now)?;
         if self.verified_guard.digests()
             != [
                 self.record.normalized_guard_digest,
@@ -427,6 +430,8 @@ fn decode_record(bytes: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
     if norito::encode_canonical(&record).map_err(material)? != bytes
         || record.version != 1
         || record.published_at_ms == 0
+        || record.approval_captured_at_ms == 0
+        || record.approval_captured_at_ms > record.published_at_ms
         || record.retail_certificate_original.is_empty()
         || record.retail_certificate_original.len()
             > KAGEMUSHA_ORDINARY_RETAIL_ENROLLMENT_MAX_BYTES_V1

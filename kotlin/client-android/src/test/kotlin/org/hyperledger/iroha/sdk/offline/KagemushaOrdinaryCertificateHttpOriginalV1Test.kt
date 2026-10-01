@@ -141,6 +141,112 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         assertEquals(0, e.credentialIntakes)
     }
 
+    @Test fun fiStartSelectsTheSameAdmittedCredentialAndNativeRetainsItsFullChallenge() = runBlocking {
+        val e = Endpoint(); val held = Held(e); val credential = byteArrayOf(0x71, 0x72)
+        held.e.acceptOriginalCredential(credential)
+        val request = held.e.retailStartRequestOriginal(held.reservation, held.identity)
+        assertEquals("/v1/offline/enrollment/ordinary/start", request.path)
+        assertEquals(mapOf("signed_preparation_base64" to base64(e.signedC),
+            "app_certificate_base64" to base64(credential)), fields(request.body()))
+        val retail = held.e.prepareOriginalRetailEnrollment(held.reservation, held.identity) { original ->
+            assertContentEquals(request.body(), original.body()); e.retailStartReply()
+        }
+        assertEquals(1, e.retailIntakes)
+        assertContentEquals(e.retailMessage, retail.accountSigningBytes())
+        assertNull(retail.recoverOriginalAccountSignature())
+    }
+
+    @Test fun fiStartCannotDispatchNativeIntakeAfterCurrentOwnerChangeOrWithExpiredPublicReply() = runBlocking {
+        for (replaceOwner in listOf(true, false)) {
+            val e = Endpoint(); val held = Held(e); held.e.acceptOriginalCredential(byteArrayOf(0x71))
+            assertFails { held.e.prepareOriginalRetailEnrollment(held.reservation, held.identity) {
+                if (replaceOwner) { e.changedScope = true; e.retailStartReply() }
+                else json(fields(e.retailStartReply()).toMutableMap().also { it["expires_at_ms"] = 121001L })
+            } }
+            assertEquals(0, e.retailIntakes)
+        }
+    }
+
+    @Test fun sharedWorkflowCompletesOriginalsAndRepeatedSetupDoesNotSignOrRequestAgain() = runBlocking {
+        val e = Endpoint(); var walletCalls = 0; var httpCalls = 0
+        val workflow = e.workflow({ request -> httpCalls++; e.reply(request) }, {
+            walletCalls++; assertContentEquals(e.retailMessage, it); ByteArray(64) { 0x61 }
+        })
+        val first = workflow.beginOrResume()
+        assertContentEquals(e.enrollmentId, first.enrollmentId())
+        assertContentEquals(e.retailCertificate, first.originalRetailCertificate())
+        assertEquals(1, walletCalls); assertEquals(1, e.retailIntakes); assertEquals(1, e.retailCompletions)
+        assertEquals(4, httpCalls) // C, credential, FI start, FI finish; raw is already retained by the fixture.
+        first.enrollmentId().fill(0); first.originalRetailCertificate().fill(0)
+        val second = workflow.beginOrResume()
+        assertContentEquals(e.enrollmentId, second.enrollmentId())
+        assertEquals(1, walletCalls); assertEquals(4, httpCalls)
+    }
+
+    @Test fun sharedWorkflowKeepsTheWalletOriginalAcrossAnAmbiguousHttpFinish() = runBlocking {
+        val e = Endpoint(); var walletCalls = 0; var failFinish = true; val requests = ArrayList<Pair<String, ByteArray>>()
+        val workflow = e.workflow({ request ->
+            if (request.path.endsWith("/finish")) {
+                requests.add(request.requestId to request.body())
+                if (failFinish) { failFinish = false; error("Protected transport lost the reply") }
+            }
+            e.reply(request)
+        }, { walletCalls++; ByteArray(64) { 0x61 } })
+        assertFails { workflow.beginOrResume() }
+        assertEquals(1, walletCalls); assertEquals(0, e.retailCompletions)
+        val completed = workflow.beginOrResume()
+        assertContentEquals(e.enrollmentId, completed.enrollmentId()); assertEquals(1, walletCalls)
+        assertEquals(2, requests.size); assertEquals(requests[0].first, requests[1].first)
+        assertContentEquals(requests[0].second, requests[1].second)
+    }
+
+    @Test fun sharedWorkflowRetainsOneGoogleOriginalAcrossIssuerAndFiRetry() = runBlocking {
+        val e = Endpoint(policyOriginal = policy()); var googleCalls = 0; var failFinish = true; val tokens = ArrayList<Any?>()
+        val backend = object : KagemushaPlayIntegrityBackendV1 {
+            override fun prepare(cloudProjectNumber: Long): CompletableFuture<KagemushaPlayIntegrityPreparedV1> {
+                assertEquals(7L, cloudProjectNumber)
+                return CompletableFuture.completedFuture(object : KagemushaPlayIntegrityPreparedV1 {
+                    override fun request(originalHashText: String): CompletableFuture<String> {
+                        googleCalls++
+                        assertEquals(Base64.getUrlEncoder().withoutPadding().encodeToString(e.c.playIntegrityRequestHash(sha(e.point))), originalHashText)
+                        return CompletableFuture.completedFuture("retained-original-google-token")
+                    }
+                })
+            }
+        }
+        val workflow = e.workflow({ request ->
+            if (request.path.endsWith("/certificate")) tokens.add(fields(request.body())["play_integrity_token"])
+            if (request.path.endsWith("/finish") && failFinish) { failFinish = false; error("Lost protected reply") }
+            e.reply(request)
+        }, { ByteArray(64) { 0x61 } }, backend)
+        assertFails { workflow.beginOrResume() }
+        assertContentEquals(e.enrollmentId, workflow.beginOrResume().enrollmentId())
+        assertEquals(1, googleCalls); assertEquals(listOf<Any?>("retained-original-google-token", "retained-original-google-token"), tokens)
+    }
+
+    @Test fun sharedWorkflowRetriesOnlyAnExplicitInvalidGoogleProviderOnTheNextUserAction() = runBlocking {
+        val e = Endpoint(policyOriginal = policy()); var googleCalls = 0; var httpCertificates = 0
+        val invalid = IllegalStateException("fixture explicit invalid-provider code")
+        val backend = object : KagemushaPlayIntegrityBackendV1 {
+            override fun invalidatesPreparedProvider(error: Throwable) = error === invalid
+            override fun prepare(cloudProjectNumber: Long): CompletableFuture<KagemushaPlayIntegrityPreparedV1> =
+                CompletableFuture.completedFuture(object : KagemushaPlayIntegrityPreparedV1 {
+                override fun request(originalHashText: String): CompletableFuture<String> {
+                    googleCalls++
+                    return if (googleCalls == 1) CompletableFuture<String>().also { it.completeExceptionally(invalid) }
+                    else CompletableFuture.completedFuture("retained-original-google-token")
+                }
+            })
+        }
+        val workflow = e.workflow({ request ->
+            if (request.path.endsWith("/certificate")) httpCertificates++
+            e.reply(request)
+        }, { ByteArray(64) { 0x61 } }, backend)
+        assertFails { workflow.beginOrResume() }; assertEquals(1, googleCalls); assertEquals(0, httpCertificates)
+        assertContentEquals(e.enrollmentId, workflow.beginOrResume().enrollmentId())
+        assertEquals(2, googleCalls); assertEquals(1, httpCertificates)
+    }
+
     @Test fun pureSelectedGoogleProjectionRejectsExtraMembersUnsupportedNumbersAndBrokenIdentitySyntax() {
         assertEquals(7L, KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy()))
         for (mutation in listOf("extra", "project-extra", "project-zero", "project-overflow", "principal", "certificate", "version")) {
@@ -195,6 +301,32 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
             byteArrayOf(), pending, byteArrayOf(), byteArrayOf(1), bytes(0x50), byteArrayOf())
         val phases = ArrayList<Int>(); var closes = 0; var changedScope = false; var changedReceipt = false
         var credentialIntakes = 0; var credential = byteArrayOf()
+        val retailMessage = bytes(0x60); val retailChallenge = byteArrayOf(0x51, 0x52); var retailIntakes = 0
+        val retailCertificate = byteArrayOf(0x62, 0x63); val enrollmentId = bytes(0x64)
+        var retailState = 0; var retailSignature = byteArrayOf(); var retailCompletions = 0
+        fun retailStartReply() = json(linkedMapOf("challenge_id" to hex(attempt),
+            "canonical_challenge_base64" to base64(retailChallenge), "account_signing_message_base64" to base64(retailMessage),
+            "expires_at_ms" to 121000L))
+        fun reply(request: KagemushaOrdinaryIdentityHttpOriginalV1): ByteArray = when {
+            request.path.endsWith("/prepare") -> json(linkedMapOf("operation_id" to hex(attempt),
+                "signed_preparation_base64" to base64(signedC), "attestation_challenge_base64" to base64(attempt), "expires_at_ms" to 121000L))
+            request.path.endsWith("/certificate") -> json(linkedMapOf("certificate_base64" to base64(byteArrayOf(0x71, 0x72)),
+                "certificate_sha256_hex" to hex(sha(byteArrayOf(0x71, 0x72)))))
+            request.path.endsWith("/start") -> retailStartReply()
+            request.path.endsWith("/finish") -> json(linkedMapOf("challenge_id" to hex(attempt), "enrollment_id_hex" to hex(enrollmentId),
+                "canonical_certificate_base64" to base64(retailCertificate)))
+            else -> error("No alternate route")
+        }
+        fun workflow(transport: KagemushaOrdinaryIdentityOriginalTransportV1,
+            signer: KagemushaOrdinaryWalletAccountSignerV1,
+            backend: KagemushaPlayIntegrityBackendV1 = object : KagemushaPlayIntegrityBackendV1 {
+                override fun prepare(cloudProjectNumber: Long): CompletableFuture<KagemushaPlayIntegrityPreparedV1> = error("Absent Native PI policy")
+            }): KagemushaAndroidOrdinaryEnrollmentV1 {
+            val facade = KagemushaNativeAppApprovalCoordinatorV1(KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/ordinary-flow", this))
+            return KagemushaAndroidOrdinaryEnrollmentV1(facade, transport, signer, { check(!changedScope) },
+                { assertNotNull(it.recoverOriginalAttestation()) }, { assertNotNull(it.recoverOriginalPossession()) },
+                KagemushaAndroidPlayIntegrityProviderV1(backend))
+        }
         override fun contract() = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
@@ -203,6 +335,7 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
             val phase = ByteBuffer.wrap(fields[0]).order(ByteOrder.LITTLE_ENDIAN).int; phases.add(phase)
             return if (method == 21) when (phase) {
                 12 -> reserved.map(ByteArray::copyOf).toTypedArray()
+                11 -> arrayOf(attempt.copyOf())
                 13 -> prepared.map(ByteArray::copyOf).toTypedArray()
                 14 -> arrayOf(policyOriginal.copyOf())
                 7 -> arrayOf(byteArrayOf(5), alias.copyOf(), point.copyOf(), sha(raw), KagemushaCoreCoordinatorFrameV1.u32(raw.size),
@@ -217,6 +350,23 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
                     5 -> arrayOf(byteArrayOf(2), der.copyOf(), receipt())
                     6 -> arrayOf(pending.copyOf(), sha(eMessage))
                     8 -> { credentialIntakes++; credential = fields[2].copyOf(); arrayOf(sha(credential), pending.copyOf()) }
+                    9 -> {
+                        assertContentEquals(retailChallenge, fields[2]); assertContentEquals(retailMessage, fields[3])
+                        check(credential.isNotEmpty()); retailIntakes++
+                        arrayOf(le64(19), retailChallenge.copyOf(), retailMessage.copyOf(), pending.copyOf(), sha(credential))
+                    }
+                    10 -> {
+                        assertContentEquals(le64(19), fields[1])
+                        if (retailState >= 2) arrayOf(byteArrayOf(2), retailSignature.copyOf())
+                        else { check(retailState == 0); retailState = 1; arrayOf(byteArrayOf(1), byteArrayOf()) }
+                    }
+                    11 -> { check(retailState == 1); retailSignature = fields[2].copyOf(); retailState = 2; arrayOf(sha(retailSignature)) }
+                    12 -> {
+                        check(retailState in 2..3); assertContentEquals(retailCertificate, fields[2]); retailState = 3; retailCompletions++
+                        arrayOf(enrollmentId.copyOf(), pending.copyOf())
+                    }
+                    13 -> { assertContentEquals(le64(19), fields[1]); arrayOf(byteArrayOf(retailState.toByte()), retailSignature.copyOf(),
+                        if (retailState == 3) retailCertificate.copyOf() else byteArrayOf()) }
                     else -> error("Fixture cannot invoke possession platform work or financial admission")
                 }
             }

@@ -15,8 +15,8 @@ use super::super::super::{
 };
 use super::*;
 use crate::kagemusha_v1_state::{
-    DigestV1, KagemushaAuthenticatedOrdinaryApprovalV1,
-    KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    DigestV1, KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
     verify_ordinary_bootstrap_guard_v1,
 };
@@ -67,7 +67,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     pub fn prove_ordinary_bootstrap_guard(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
         let before = financial
@@ -77,7 +77,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             .recheck_at_trusted_time(before)
             .map_err(owner_error)?;
         approval
-            .recheck_at_trusted_time(before)
+            .recheck_captured_bootstrap_at_native_time(before)
             .map_err(owner_error)?;
         self.require_release_binding(
             selection
@@ -121,7 +121,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     fn prove_original(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         secret: &[u8; 32],
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
         let credential: KagemushaOrdinaryAppCredentialV1 =

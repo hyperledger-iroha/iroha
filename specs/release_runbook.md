@@ -16,7 +16,7 @@ The checked-in automation has distinct responsibilities:
 
 | Surface | Current responsibility |
 | --- | --- |
-| `.github/workflows/workspace_release.yml` | Exact-SHA workspace release gate. It runs nightly, on `main`, on `v*` tags, by manual dispatch, and as a reusable workflow. Its jobs check formatting, build the workspace, build Rustdoc, run the workspace tests and compile-unit guard, collect coverage, and run strict Clippy. |
+| `.github/workflows/workspace_release.yml` | Optional exact-SHA workspace CI evidence. It runs nightly, on `main`, on `v*` tags, by manual dispatch, and as a reusable workflow. Its jobs check formatting, build the workspace, build Rustdoc, run the workspace tests and compile-unit guard, collect coverage, and run strict Clippy. |
 | `scripts/run_release_pipeline.py` | Local Iroha 3 coordinator. It builds from reviewed prebuilt binaries, produces bundle inventories and checksums, creates the aggregate manifest, optionally signs it through an external signer, and creates and validates a publication plan. |
 | `.github/workflows/publish.yml` | Iroha 3 `v3*` container publication workflow. It is not the generic coordinator. |
 | `.github/workflows/sorafs-cli-release.yml` | Separate SoraFS tooling/canonical CLI release workflow for `sorafs-cli-v*`. Its evidence does not certify the generic Iroha bundles. |
@@ -40,10 +40,11 @@ coordinator rejects:
 Record the full source commit and epoch with the release evidence. Do not reuse
 an output directory from an earlier attempt.
 
-Before building artifacts, obtain a successful exact-SHA run of
-`.github/workflows/workspace_release.yml` for the candidate. The workflow is
-the source-backed full-workspace gate; a green pull-request subset is not a
-substitute.
+An exact-SHA run of `.github/workflows/workspace_release.yml` is optional CI
+evidence for the candidate. No successful full-workspace or regression result
+is a prerequisite for building artifacts or deploying Taira, production, or any
+other network. Retain the actual results when diagnostics are run; those results
+do not authorize or block deployment.
 
 ## 2. Confirm the canonical release configuration
 

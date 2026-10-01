@@ -132,12 +132,16 @@ passes.
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.
-- **Offline money/devices:** recursive proofs, durable non-forking hardware,
-  mint/redemption, adversarial recovery and signed physical profiles remain open.
-  Secure-key signing and host JNI do not establish offline money.
+- **Offline money/devices:** the ordinary app profile uses an attested persistent
+  hardware key, genuine platform admission and independent Native financial
+  custody. Recursive proofs, current-owner integration, mint/redemption,
+  adversarial recovery and signed physical qualification remain open. Ordinary
+  key signatures do not establish a non-forking journal or hardware clock.
 
 First-release contracts remain canonical APIs, domainless `AccountId`, Norito
 wire formats and deterministic ABI V1. Sumeragi uses exact `3f + 1` global
 committees, exactly `n - f` votes, signed RS16 availability and work-driven blocks.
-Ordinary signing supports authenticated software custody; KAGEMUSHA monetary
-authority separately requires governed non-forking hardware.
+Ordinary signing supports authenticated software custody. The first production
+KAGEMUSHA app profile requires governed app-key admission, genuine monetary
+proofs and exact current-owner/replay authority; it has no custom applet or
+one-use-key prerequisite.

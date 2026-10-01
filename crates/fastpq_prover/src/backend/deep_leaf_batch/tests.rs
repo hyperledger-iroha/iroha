@@ -219,12 +219,10 @@ fn bounded_leaf_jobs_return_the_first_input_error_after_workers_finish() {
     let binding = Context::new(b"ordered SHA3 worker errors").unwrap();
     let mut malformed = [0; 96];
     malformed[..8].copy_from_slice(&u64::MAX.to_le_bytes());
-    let malformed_error = format!(
-        "compact leaf batch: {}",
-        binding
-            .hash_leaf(Oracle::QuotientAndMask, 0, &malformed)
-            .unwrap_err()
-    );
+    let malformed_error = binding
+        .hash_leaf(Oracle::QuotientAndMask, 0, &malformed)
+        .unwrap_err()
+        .to_string();
     for threads in [1, 4] {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)

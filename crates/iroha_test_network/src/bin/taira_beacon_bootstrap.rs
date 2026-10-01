@@ -78,6 +78,7 @@ struct Args {
     binding: Binding,
     output: PathBuf,
     recover: bool,
+    submit_retained_install: bool,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -147,10 +148,19 @@ fn arguments(values: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut fields = BTreeMap::new();
     let mut validators = Vec::new();
     let mut recover = false;
+    let mut submit_retained_install = false;
     while let Some(name) = values.next() {
         if name == "--recover" {
             ensure!(!recover, "duplicate recovery flag");
             recover = true;
+            continue;
+        }
+        if name == "--submit-retained-install" {
+            ensure!(
+                !submit_retained_install,
+                "duplicate retained installation flag"
+            );
+            submit_retained_install = true;
             continue;
         }
         ensure!(
@@ -184,6 +194,10 @@ fn arguments(values: impl IntoIterator<Item = String>) -> Result<Args> {
             );
         }
     }
+    ensure!(
+        !(recover && submit_retained_install),
+        "read-only recovery and installation submission are separate actions"
+    );
     let mut take = |name: &str| fields.remove(name).ok_or_else(|| eyre!("missing {name}"));
     let args = Args {
         binding: Binding {
@@ -202,6 +216,7 @@ fn arguments(values: impl IntoIterator<Item = String>) -> Result<Args> {
         },
         output: take("--output-root")?.into(),
         recover,
+        submit_retained_install,
     };
     ensure!(
         args.binding.chain_discriminant != 0 && args.binding.validator_configs.len() == 4,
@@ -502,7 +517,7 @@ async fn recover_applied(
         outcome.block_height == Some(expected_height),
         "transaction applied at another height"
     );
-    let path = output.join(format!("{label}-applied.json"));
+    let path = output.join(format!("{label}-transaction-applied.json"));
     if !path.try_exists()? {
         write_new(&path, &json::to_vec(&outcome)?)?;
     }
@@ -697,7 +712,7 @@ async fn run(args: Args) -> Result<()> {
                 == args.binding.signed_genesis_sha256,
         "selected signed genesis bytes differ"
     );
-    if args.recover {
+    if args.recover || args.submit_retained_install {
         directory(&args.output, true)?;
         let binding: Binding =
             json::from_slice(&read_input(&args.output.join("attempt.json"), false)?)?;
@@ -720,6 +735,13 @@ async fn run(args: Args) -> Result<()> {
     }
     let client = client(&args.binding)?;
     let ceremony_path = args.output.join("ceremony.json");
+    if args.submit_retained_install {
+        ensure!(
+            ceremony_path.try_exists()?
+                && !args.output.join("install-submitted.nrt").try_exists()?,
+            "submission requires completed custody and no previously retained install; use read-only recovery after signing"
+        );
+    }
     if args.recover && !ceremony_path.try_exists()? {
         if args.output.join("phase-h4-submitted.nrt").try_exists()? {
             let instructions =
@@ -743,7 +765,7 @@ async fn run(args: Args) -> Result<()> {
             "DKG completion is absent; recovery cannot restart or submit the consumed attempt"
         ));
     }
-    if !args.recover {
+    if !args.recover && !args.submit_retained_install {
         let native = native_config(&args.binding.validator_configs[0], &args.binding)?;
         let manifest_json = read_input(&args.binding.genesis_manifest, false)?.to_vec();
         let signed_wire = read_input(&args.binding.genesis_signed, false)?.to_vec();
@@ -966,10 +988,13 @@ async fn run(args: Args) -> Result<()> {
         );
     }
     let instructions = installation(&args.output, &ceremony)?;
+    // Ceremony completion can outlive an idle HTTP connection. Installation has
+    // a fresh SDK transport; retained signed wire still prevents a second post.
+    let install_client = self::client(&args.binding)?;
     if args.recover {
         let transaction = retained_transaction(&args, "install", &instructions)?;
         recover_applied(
-            &client,
+            &install_client,
             &transaction,
             &args.output,
             "install",
@@ -979,7 +1004,7 @@ async fn run(args: Args) -> Result<()> {
         .await?;
     } else {
         submit_once(
-            &client,
+            &install_client,
             instructions.clone(),
             &args.output,
             "install",
@@ -1039,6 +1064,13 @@ mod tests {
         assert!(digest_literal("A".repeat(64)).is_err());
         assert!(digest_literal("0".repeat(63)).is_err());
         assert!(digest_literal("a".repeat(64)).is_ok());
+        assert!(
+            arguments([
+                "--recover".to_owned(),
+                "--submit-retained-install".to_owned()
+            ])
+            .is_err()
+        );
     }
 
     #[test]

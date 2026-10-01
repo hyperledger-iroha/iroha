@@ -149,7 +149,7 @@ pub(super) fn hash(
 }
 fn binding_error(error: &BindingError) -> Error {
     Error::InvalidTraceShape {
-        details: format!("compact leaf batch: {error}"),
+        details: error.to_string(),
     }
 }
 fn invalid(details: &'static str) -> Error {

@@ -25,9 +25,7 @@ use super::super::{
     ordinary_credential_union::{
         assign_ordinary_credential_union_v1, reconstruct_ordinary_credential_union_v1,
     },
-    ordinary_integrity_binding::{
-        constrain_ordinary_initial_integrity_interval_v1, constrain_ordinary_integrity_lease_v1,
-    },
+    ordinary_integrity_union::constrain_ordinary_integrity_union_v1,
     ordinary_issuer_equation::constrain_ordinary_issuer_original_v1,
 };
 use super::{KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1};
@@ -256,33 +254,23 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
         &signed_s,
         &original,
     )?;
-    let lease_digest = if let Some(lease) = w.integrity_lease {
-        Some(constrain_ordinary_integrity_lease_v1(
-            &mut builder,
-            &mut jobs,
-            &credential,
-            &credential_digest,
-            lease,
-            &issuer_raw,
-            &issuer_cells,
-            original.issued_at_ms,
-            original.expires_at_ms,
-        )?)
-    } else {
-        constrain_ordinary_initial_integrity_interval_v1(
-            &mut builder,
-            &credential,
-            integrity,
-            original.issued_at_ms,
-            original.expires_at_ms,
-        )?;
-        None
-    };
+    let lease_digest = constrain_ordinary_integrity_union_v1(
+        &mut builder,
+        &mut jobs,
+        &credential,
+        &credential_digest,
+        integrity,
+        w.integrity_lease,
+        Some((&issuer_raw, &issuer_cells)),
+        original.issued_at_ms,
+        original.expires_at_ms,
+    )?;
     let evidence = super::super::ordinary_platform_union::constrain_ordinary_platform_union_v1(
         &mut builder,
         &mut jobs,
         &credential,
         w.credential.subject.app_public_key.as_sec1_bytes(),
+        w.credential.subject.app_release_digest,
         w.approval,
         &bound_wrapper,
         apple,
@@ -304,7 +292,7 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
         &mut builder,
         &mut jobs,
         &approval_digest,
-        lease_digest.as_ref(),
+        Some(&lease_digest),
     )?;
     let subject_bytes = signed_s
         .map(|b| PastaSha256ByteV1::range_checked(builder.main(0), &range, b))
@@ -451,3 +439,7 @@ fn bind_slot<F: KagemushaPoseidonFieldV1>(
         .collect::<Vec<_>>();
     equal_bytes(ctx, range, &actual, &expected)
 }
+
+#[cfg(test)]
+#[path = "ordinary_guard_composition_tests.rs"]
+mod original_guard_tests;

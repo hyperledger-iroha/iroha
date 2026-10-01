@@ -29,6 +29,9 @@ class KagemushaAndroidPlayIntegrityProviderV1 internal constructor(private val b
     private var preparedProject: Long? = null
     private var prepared: CompletableFuture<KagemushaPlayIntegrityPreparedV1>? = null
 
+    /** The publisher's explicit invalid-provider error allows a later user retry, never an automatic repeat. */
+    internal fun invalidatedPreparedProviderOriginal(error: Throwable): Boolean = backend.invalidatesPreparedProvider(error)
+
     fun requestOriginal(cloudProjectNumber: Long, nativeRequestHash: ByteArray,
         requireOriginal: () -> Unit): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> {
         require(cloudProjectNumber > 0 && nativeRequestHash.size == 32 && nativeRequestHash.any { it != 0.toByte() })

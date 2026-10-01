@@ -11,18 +11,20 @@ use halo2_base::{
 };
 use halo2_ecc::{bigint::ProperCrtUint, ecc::EcPoint, fields::fp::FpChip};
 use halo2_proofs::halo2curves::secp256r1::Fp as P256Base;
-use iroha_data_model::kagemusha::KagemushaAppOperationApprovalSigningLayoutV1 as A;
+use iroha_data_model::kagemusha::{
+    KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1, KagemushaAppOperationApprovalSigningLayoutV1 as A,
+};
 
 use crate::{
     kagemusha_p256_curve_gadget::{
         P256_LIMB_BITS, P256_NUM_LIMBS, app_attest_der_gadget::constrain_p256_canonical_der_v1,
-        assert_apple_app_operation_approval_ecdsa, assert_p256_ecdsa_digest,
+        assert_p256_ecdsa_digest,
     },
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
 
-#[path = "app_attest_assertion_cbor.rs"]
+#[path = "ordinary_apple_original.rs"]
 mod original_apple_cbor;
 
 use super::{canonical_preimage::stream::KagemushaBoundedByteStreamV1, guard_bundle::hash};
@@ -114,6 +116,8 @@ pub(super) fn constrain_original_apple_approval_stream_v1<F: KagemushaPoseidonFi
     wrapper: &[AssignedValue<F>; A::TOTAL_BYTES],
     authenticator_data: &[AssignedValue<F>; 37],
     governed_rp_hash: &[AssignedValue<F>; 32],
+    expected_release_digest: [u8; 32],
+    governed_release_digest: &[AssignedValue<F>; 32],
     retained_counter_floor: AssignedValue<F>,
     accepted_counter: AssignedValue<F>,
     signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
@@ -121,30 +125,84 @@ pub(super) fn constrain_original_apple_approval_stream_v1<F: KagemushaPoseidonFi
     let range = builder.range_chip();
     let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
     let der = constrain_p256_canonical_der_v1(&chip, builder.main(0), signature.r, signature.s);
-    let original = original_apple_cbor::constrain_original_apple_assertion_stream_37_v1(
+    let streams = original_apple_cbor::constrain_original_apple_assertion_stream_v1(
         builder,
+        jobs,
         raw_assertion,
         authenticator_data,
+        expected_release_digest,
+        governed_release_digest,
         &der,
     )?;
-    assert_apple_app_operation_approval_ecdsa::<F, 256>(
+    let ctx = builder.main(0);
+    let gate = range.gate();
+    for (cell, byte) in wrapper.iter().zip(
+        KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1
+            .iter()
+            .copied()
+            .chain((A::BODY.len() as u64).to_le_bytes()),
+    ) {
+        gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+    }
+    for (cell, byte) in wrapper[A::VERSION].iter().zip([1_u8, 0]) {
+        gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+    }
+    // The whole wrapper admits the two distinct Native purposes. The actual State consumer
+    // requires PrepareTransition for its pre-candidate relation; the terminal money consumer
+    // separately requires MonetaryTransition and its exact candidate/body.
+    let purpose = wrapper[A::PURPOSE.start];
+    let first = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::ONE));
+    let second = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::from(2)));
+    let invalid = gate.mul(ctx, first, second);
+    gate.assert_is_const(ctx, &invalid, &F::ZERO);
+    let mut rp = Vec::with_capacity(32);
+    for (actual, expected) in authenticator_data[..32].iter().zip(governed_rp_hash) {
+        range.range_check(ctx, *expected, 8);
+        ctx.constrain_equal(actual, expected);
+        rp.push(*expected);
+    }
+    let rp_sum = gate.sum(ctx, rp);
+    let rp_empty = gate.is_zero(ctx, rp_sum);
+    gate.assert_is_const(ctx, &rp_empty, &F::ZERO);
+    range.range_check(ctx, retained_counter_floor, 32);
+    range.range_check(ctx, accepted_counter, 32);
+    let advanced = range.is_less_than(ctx, retained_counter_floor, accepted_counter, 32);
+    gate.assert_is_const(ctx, &advanced, &F::ONE);
+    let counter = gate.inner_product(
+        ctx,
+        authenticator_data[33..37].iter().copied(),
+        [24, 16, 8, 0].map(|bit| halo2_base::QuantumCell::Constant(F::from(1_u64 << bit))),
+    );
+    ctx.constrain_equal(&counter, &accepted_counter);
+    let wrapper_bytes = wrapper
+        .iter()
+        .copied()
+        .map(|b| PastaSha256ByteV1::range_checked(ctx, &range, b))
+        .collect();
+    let client_hash = hash(ctx, jobs, wrapper_bytes)?;
+    let client_len = ctx.load_constant(F::from(32_u64));
+    let client_stream =
+        KagemushaBoundedByteStreamV1::constrain(ctx, &range, client_hash.to_vec(), client_len)?;
+    let nonce_stream = streams
+        .authenticator
+        .concat(ctx, &range, &client_stream, 206 + 32)?;
+    let nonce = original_apple_cbor::bounded_hash(ctx, &range, jobs, &nonce_stream)?;
+    // The platform API signs nonce as an ECDSA-SHA256 message; the native equation hashes it.
+    let digest = hash(ctx, jobs, nonce.to_vec())?
+        .map(|b| b.assigned().expect("Apple final digest byte assigned"));
+    assert_p256_ecdsa_digest::<F, 256, false>(
         &chip,
-        builder.main(0),
-        jobs,
-        wrapper,
-        authenticator_data,
-        governed_rp_hash,
-        retained_counter_floor,
-        accepted_counter,
+        ctx,
         signature.signature_public_key,
         signature.enrolled_public_key,
         signature.enrolled_public_key_sec1,
         signature.r,
         signature.s,
         signature.z,
+        &digest,
         signature.digest_reduction_quotient,
-    )?;
-    Ok(original)
+    );
+    Ok(streams.original)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -155,6 +213,8 @@ pub(super) fn constrain_original_apple_approval_v1<F: KagemushaPoseidonFieldV1>(
     wrapper: &[AssignedValue<F>; A::TOTAL_BYTES],
     authenticator_data: &[AssignedValue<F>; 37],
     governed_rp_hash: &[AssignedValue<F>; 32],
+    expected_release_digest: [u8; 32],
+    governed_release_digest: &[AssignedValue<F>; 32],
     retained_counter_floor: AssignedValue<F>,
     accepted_counter: AssignedValue<F>,
     signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
@@ -166,6 +226,8 @@ pub(super) fn constrain_original_apple_approval_v1<F: KagemushaPoseidonFieldV1>(
         wrapper,
         authenticator_data,
         governed_rp_hash,
+        expected_release_digest,
+        governed_release_digest,
         retained_counter_floor,
         accepted_counter,
         signature,

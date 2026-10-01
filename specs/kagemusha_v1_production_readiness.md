@@ -5,7 +5,26 @@ qualified**. This record tracks implementation and validation work; it is not an
 independent cryptographic audit, hardware certification, or authorization to
 enable an offline monetary profile.
 
-## Current bounded goal — 2026-09-26
+## Current app profile — 2026-10-01
+
+The current owner requirement is working ordinary app KAGEMUSHA, including
+Pixel 6, through the shared Native/SDK implementation and thin BPNG, BOI and
+CBSI adapters. Android selects a generated persistent nonexportable P256 key,
+prefers StrongBox and admits only governed hardware attestation plus genuine
+Play Integrity enrollment and refresh. Apple uses actual App Attest. Custom
+applets, OMAPI provisioning and finite-use keys are not prerequisites. Ordinary
+signatures confer no monotonic wallet, non-forking journal or hardware clock.
+
+Wallet consent, the platform key and the Native financial secret retain separate
+purposes. Original issuer signatures, fixed-topology platform/issuer equations,
+exact current policy and operation, durable replay handling and both real State
+parities remain mandatory. The first production State family uses the distinct
+ordinary Guard roles and newly generated matching State keys. Signed role names
+alone cannot qualify an older circuit. Native compilation has a focused pass;
+genuine final proofs, the complete current owner, physical qualification and
+signed release acceptance remain open.
+
+## Completed bounded goal — 2026-09-26
 
 Finish and validate the existing signed-bootstrap-to-native-startup implementation
 in `/Users/takemiyamakoto/dev/iroha` on `optimizations`, then deliver one reviewable

@@ -29,6 +29,14 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
   /// These bytes are correlation data and cannot recreate this capability.
   public func signingBytes() throws -> Data { try recheck().signingBytes }
 
+  /// Correlate a retained signed preparation with the original native E owner.
+  /// This is SHA256 of C's canonical domain, length and body, excluding its signature.
+  /// Current native scope and policy must still pass; this value conveys no authority.
+  public func originalEnrollmentChallengeHash() throws -> Data {
+    _ = try recheck()
+    return Data(originalID)
+  }
+
   /// Return an original issuer-signed canonical credential archive to the same native
   /// pending owner. Native Core authenticates, correlates and durably retains it.
   /// A completed E may recover the identical previously issued credential after C's
@@ -52,6 +60,16 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
 
   /// Cancel this original ticket. Native Core rejects cancellation after invocation.
   public func cancel() throws { _ = try call(7) }
+
+  /// Offer the exact FI challenge and signing message after native final-identity admission.
+  /// Native phase9 authenticates and journals the originals; no caller constructs the holder.
+  /// The returned ceremony retains wallet/FI originals but does not enable cash dispatch.
+  public func prepareRetailEnrollment(originalChallenge: Data, accountSigningMessage: Data,
+    identity: KagemushaNativeOrdinaryAppIdentityConfirmationV1) throws
+    -> KagemushaNativePreparedRetailEnrollmentV1 {
+    try KagemushaNativePreparedRetailEnrollmentV1.prepare(bridge: bridge, possession: self,
+      identity: identity, originalChallenge: originalChallenge, accountSigningMessage: accountSigningMessage)
+  }
 
   func recheck() throws -> KagemushaAppPlatformPreparedProjectionV1 {
     let checked = try call(6)
@@ -151,7 +169,7 @@ public struct KagemushaNativeOrdinaryAppIdentityConfirmationV1: Sendable {
 }
 
 extension KagemushaCoreCoordinatorBridgeV1 {
-  /// Select the held pending original by SHA(full C), never its stable attempt ID.
+  /// Select the held pending original by SHA256(C canonical signing bytes), never its stable attempt ID.
   /// No caller constructs E, changes C or supplies pending authority.
   /// Missing signed raw-attestation admission, original owner or scope remains unavailable.
   public func prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: Data) throws

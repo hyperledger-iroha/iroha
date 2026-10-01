@@ -11,15 +11,15 @@ use super::super::super::{
 use super::production_ordinary_guard::derive_relation;
 use super::*;
 use crate::kagemusha_v1_state::{
-    KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
 };
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalV1, KagemushaOrdinaryAppCredentialV1,
     KagemushaPlayIntegrityRefreshLeaseV1,
 };
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use zeroize::Zeroize as _;
 
 /// Borrow public auxiliary original proofs without exposing financial witness material.
@@ -55,9 +55,10 @@ struct Originals {
 impl Originals {
     fn bind<'s, 'w: 's>(
         &'s self,
-        mut witness: KagemushaRecursiveStateGenerationWitnessV1<'w>,
+        witness: KagemushaRecursiveStateGenerationWitnessV1<'w>,
         floor: Option<u32>,
     ) -> KagemushaRecursiveStateGenerationWitnessV1<'s> {
+        let mut witness: KagemushaRecursiveStateGenerationWitnessV1<'s> = witness;
         witness.ordinary_selection = Some(KagemushaOrdinaryAppRecursiveSelectionWitnessV1 {
             credential: &self.credential,
             approval: &self.approval,
@@ -76,7 +77,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     pub fn prove_ordinary_bootstrap_state_hash_claim(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
         paired_ordinary_guard_original: &[u8],
         auxiliaries: &dyn KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
@@ -127,7 +128,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     pub fn prove_ordinary_bootstrap_state(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
         paired_ordinary_guard_original: &[u8],
         hash_claim: &KagemushaGeneratedMintHashClaimV1,
@@ -175,7 +176,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     fn recheck_ordinary_state(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
     ) -> Result<(), KagemushaArtifactGenerationErrorV1> {
         let now = financial
@@ -184,8 +185,15 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         selection
             .recheck_at_trusted_time(now)
             .map_err(owner_error)?;
-        approval.recheck_at_trusted_time(now).map_err(owner_error)?;
-        self.require_release_binding(&selection.authenticated_release().map_err(owner_error)?)?;
+        approval
+            .recheck_captured_bootstrap_at_native_time(now)
+            .map_err(owner_error)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
         if !core::ptr::eq(
             selection.enrollment(),
             approval.retained_enrollment().as_ref(),
@@ -201,7 +209,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     fn ordinary_state_originals(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
         paired_guard: &[u8],
     ) -> Result<Originals, KagemushaArtifactGenerationErrorV1> {
@@ -258,7 +266,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     fn bind_ordinary_state_witness<'s, 'w: 's>(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
-        approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+        approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         secret: &[u8; 32],
         mut witness: KagemushaRecursiveStateGenerationWitnessV1<'w>,
         originals: &'s Originals,
@@ -333,8 +341,8 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 "ordinary State auxiliary originals or exact preview differ",
             ));
         }
-        witness.guard_relation = expected.0.clone();
         witness.state.validate().map_err(proving_error)?;
+        witness.guard_relation = expected.0.clone();
         let bound = originals.bind(witness, approval.previous_app_attest_counter_floor());
         Ok(bound)
     }
@@ -342,7 +350,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
 
 fn ordinary_state_seed(
     secret: &[u8; 32],
-    approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
+    approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
 ) -> Result<KagemushaRecoverySeedV1, KagemushaArtifactGenerationErrorV1> {
     let mut hash = Sha256::new();
     hash.update(b"iroha:kagemusha:v1:ordinary-state-native-recovery-seed\0");
