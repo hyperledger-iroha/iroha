@@ -11,11 +11,10 @@ public actor KagemushaAppAttestOrdinaryIdentityProviderV1 {
   public init(service:any KagemushaAppAttestServiceV1,verifier:KagemushaAppAttestEnrollmentVerifierV1) {
     self.service=service;self.verifier=verifier
   }
-  /// Fence each device call in native WAL, retain its exact original, then ask
-  /// native to obtain the independently authenticated issuer raw admission.
-  /// Final E possession and credential issuance remain separate required steps.
-  public func enroll(_ identity:KagemushaNativePreparedOrdinaryAppIdentityV1) async throws
-    -> KagemushaNativePendingAppAttestIdentityV1 {
+  /// Fence each device call in native WAL and retain the complete original for issuer transport.
+  /// Explicit raw-admission intake, E possession and credential issuance remain separate steps.
+  public func collect(_ identity:KagemushaNativePreparedOrdinaryAppIdentityV1) async throws
+    -> KagemushaNativeCollectedAppIdentityOriginalV1 {
     guard service.isSupported else { throw KagemushaAppAttestEvidenceErrorV1.unsupportedDevice }
     guard !invocationInFlight else { throw KagemushaAppAttestEvidenceErrorV1.assertionAlreadyInFlight }
     guard !locallyUncertain else { throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown }
@@ -56,7 +55,7 @@ public actor KagemushaAppAttestOrdinaryIdentityProviderV1 {
   /// Recover only the native-retained original; no Apple device API is called.
   /// An invoked generation or attestation without its original stays unavailable.
   public func recover(_ identity:KagemushaNativePreparedOrdinaryAppIdentityV1) throws
-    -> KagemushaNativePendingAppAttestIdentityV1 {
+    -> KagemushaNativeCollectedAppIdentityOriginalV1 {
     guard !invocationInFlight else { throw KagemushaAppAttestEvidenceErrorV1.assertionAlreadyInFlight }
     invocationInFlight=true;defer { invocationInFlight=false }
     do {
@@ -85,7 +84,7 @@ public actor KagemushaAppAttestOrdinaryIdentityProviderV1 {
   private func finish(_ identity:KagemushaNativePreparedOrdinaryAppIdentityV1,
     original:KagemushaOrdinaryAppIdentityPreparedProjectionV1,
     retained:KagemushaOrdinaryAppIdentityRecoveryProjectionV1) throws
-    -> KagemushaNativePendingAppAttestIdentityV1 {
+    -> KagemushaNativeCollectedAppIdentityOriginalV1 {
     guard try KagemushaOrdinaryAppIdentityRecoveryActionV1.classify(retained.state) == .complete else {
       throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
     }
@@ -94,7 +93,11 @@ public actor KagemushaAppAttestOrdinaryIdentityProviderV1 {
     guard checked.publicKeyX963 == retained.point else {
       throw KagemushaCoreCoordinatorErrorV1.invalidFrame("retained App Attest original point differs")
     }
-    let result=try identity.acceptOriginalRawAdmission()
+    guard let result = try identity.recoverOriginalAttestation(),
+      result.publicKeyX963 == retained.point, result.rawAttestation == raw,
+      result.keyReference == retained.keyReference else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("retained App Attest original differs")
+    }
     locallyUncertain=false;return result
   }
 }

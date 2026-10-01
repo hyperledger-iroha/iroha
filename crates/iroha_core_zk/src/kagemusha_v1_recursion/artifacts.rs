@@ -592,6 +592,7 @@ pub struct KagemushaAuthenticatedArtifactSetV1<R> {
     suite_id: DigestV1,
     vk_set_digest: DigestV1,
     ordinary_guard_protocol_digests: [DigestV1; 2],
+    ordinary_issuer_table: super::ordinary_issuer_config::OrdinaryIssuerTableV1,
     bindings: [KagemushaArtifactBindingV1; KagemushaArtifactRoleV1::ALL.len()],
     resolver: R,
 }
@@ -664,6 +665,9 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
             provider_policy_root: release.provider_policy_root(),
             suite_id,
             vk_set_digest,
+            ordinary_issuer_table:
+                super::ordinary_issuer_config::OrdinaryIssuerTableV1::from_release(release)
+                    .map_err(KagemushaArtifactErrorV1::InvalidRelease)?,
             ordinary_guard_protocol_digests: {
                 let helper = release.helper_protocol(iroha_data_model::kagemusha::KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard)
                     .ok_or_else(|| KagemushaArtifactErrorV1::InvalidRelease("ordinary app Guard helper is absent".into()))?;
@@ -678,6 +682,26 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     #[must_use]
     pub const fn recursion_artifacts(&self) -> KagemushaRecursionArtifactsV1 {
         self.recursion
+    }
+
+    /// Exact signed ordinary Guard roles used by the first ordinary production State family.
+    /// Public helper originals remain untrusted until their actual equations are consumed.
+    pub(super) fn ordinary_recursion_artifacts(
+        &self,
+    ) -> Result<KagemushaRecursionArtifactsV1, KagemushaArtifactErrorV1> {
+        let mut artifacts = self.recursion;
+        [
+            artifacts.guard_bundle_eq_protocol_digest,
+            artifacts.guard_bundle_ep_protocol_digest,
+        ] = self.ordinary_guard_protocol_digests;
+        artifacts.guard_bundle_verifying_key_eq =
+            self.binding(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq);
+        artifacts.guard_bundle_verifying_key_ep =
+            self.binding(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp);
+        artifacts
+            .validate()
+            .map_err(|error| KagemushaArtifactErrorV1::InvalidRelease(error.to_string()))?;
+        Ok(artifacts)
     }
 
     /// Return the exact native layout digest authenticated by the signed validation receipt.
@@ -702,6 +726,12 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     #[must_use]
     pub const fn vk_set_digest(&self) -> DigestV1 {
         self.vk_set_digest
+    }
+
+    pub(super) fn ordinary_issuer_table(
+        &self,
+    ) -> &super::ordinary_issuer_config::OrdinaryIssuerTableV1 {
+        &self.ordinary_issuer_table
     }
 
     pub(super) fn ordinary_guard_protocol_digests(&self) -> [DigestV1; 2] {
@@ -1124,6 +1154,8 @@ mod tests {
             suite_id: [15; 32],
             vk_set_digest: [16; 32],
             ordinary_guard_protocol_digests: [[0x91; 32], [0x92; 32]],
+            ordinary_issuer_table:
+                super::super::ordinary_issuer_config::OrdinaryIssuerTableV1::default(),
             bindings: std::array::from_fn(|index| {
                 role_binding(KagemushaArtifactRoleV1::ALL[index])
             }),

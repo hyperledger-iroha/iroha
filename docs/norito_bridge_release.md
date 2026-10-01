@@ -172,8 +172,9 @@ that workflow for local release verification.
    XCFramework slice; it does not generate its enums from Rust. Run
    `python3 -m unittest scripts.tests.kagemusha_package_surface_test` to check the
    exact coordinator method inventory across C, Rust, Swift, Kotlin and the shared
-   fixture. Method 11 is `BeginObservation`; the contract probe still returns ten
-   words. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
+   fixture. The current inventory has 21 methods, ending with
+   `PreparedOrdinaryAppIdentity`; the contract probe returns twelve words.
+   Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
    matches the source header before zipping. Header hashes and exported-symbol
    inventories alone do not establish enum parity.
 

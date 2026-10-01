@@ -14,6 +14,40 @@ use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 
+/// Sign an exact model issuer admission under a known-public synthetic authority seed61.
+/// This fixture helper grants no production authority or physical qualification.
+/// # Panics
+/// Panics if the fixed signing model or fixture key shape changes.
+pub fn ordinary_test_issuer_admission_v1(
+    subject: KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1,
+) -> KagemushaOrdinaryIssuerCircuitAdmissionV1 {
+    let mut hash = Sha256::new();
+    hash.update(KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1);
+    hash.update([61; 32]);
+    let seed: [u8; 32] = hash.finalize().into();
+    let key = SigningKey::from_bytes((&seed).into()).unwrap();
+    let sig: P256Signature = key.sign(&subject.canonical_signing_bytes().unwrap());
+    let sig = sig.normalize_s().unwrap_or(sig);
+    KagemushaOrdinaryIssuerCircuitAdmissionV1 {
+        subject,
+        signature: KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap(),
+    }
+}
+/// Known-public independently selected circuit issuer point corresponding to seed61.
+/// # Panics
+/// Panics if the deterministic synthetic scalar is invalid.
+pub fn ordinary_test_issuer_public_key_v1() -> KagemushaDevicePublicKeyV1 {
+    let mut hash = Sha256::new();
+    hash.update(KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1);
+    hash.update([61; 32]);
+    let seed: [u8; 32] = hash.finalize().into();
+    let key = SigningKey::from_bytes((&seed).into()).unwrap();
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(
+        key.verifying_key().to_encoded_point(false).as_bytes(),
+    )
+    .unwrap()
+}
+
 /// Complete public-key fixture originals; no software monetary owner is constructed.
 pub struct KagemushaOrdinaryRetailEnrollmentFixtureV1 {
     /// Genuine threshold-authenticated release over explicit synthetic qualification reports.
@@ -39,7 +73,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
     /// Panics if a maintained fixture schema/admission invariant changes.
     #[must_use]
     pub fn new(apple: bool) -> Self {
-        Self::with_integrity(apple, false)
+        Self::with_integrity(apple, false, [19; 32])
     }
 
     /// Construct an Android fixture with an explicit synthetic separate Integrity policy.
@@ -47,10 +81,48 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
     /// Panics if a maintained native model invariant changes.
     #[must_use]
     pub fn android_with_integrity() -> Self {
-        Self::with_integrity(false, true)
+        Self::with_integrity(false, true, [19; 32])
     }
 
-    fn with_integrity(apple: bool, integrity: bool) -> Self {
+    /// Use an independently derived known-public Native financial commitment for circuit tests.
+    /// # Panics
+    /// Panics if the selected commitment is zero or the maintained native fixture changes.
+    #[must_use]
+    pub fn with_financial_commitment(apple: bool, commitment: [u8; 32]) -> Self {
+        assert_ne!(commitment, [0; 32]);
+        Self::with_integrity(apple, false, commitment)
+    }
+    /// Construct fully signed synthetic originals for a measured Apple release and financial opening.
+    /// This fixture grants no installed owner, physical evidence or monetary qualification.
+    /// # Errors
+    /// Rejects a category/version outside the maintained model release-digest policy.
+    /// # Panics
+    /// Panics for a zero financial commitment or another maintained native fixture invariant.
+    pub fn measured_apple_with_financial_commitment(
+        category: u32,
+        version: &str,
+        financial_commitment: [u8; 32],
+    ) -> Result<Self, String> {
+        assert_ne!(financial_commitment, [0; 32]);
+        let release = crate::kagemusha::app_attest_release_extensions_digest(category, version)
+            .map_err(|_| "fixture Apple release metadata differs".to_owned())?;
+        Ok(Self::with_integrity_and_release(
+            true,
+            false,
+            financial_commitment,
+            release,
+        ))
+    }
+
+    fn with_integrity(apple: bool, integrity: bool, financial_commitment: [u8; 32]) -> Self {
+        Self::with_integrity_and_release(apple, integrity, financial_commitment, [3; 32])
+    }
+    fn with_integrity_and_release(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+        app_release_digest: [u8; 32],
+    ) -> Self {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let app = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
@@ -67,7 +139,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             authority_key: issuer.public_key().clone(),
             platform_class: class,
             app_signing_identity_digest: [2; 32],
-            app_release_digest: [3; 32],
+            app_release_digest,
             maximum_lifetime_ms: 10000,
         };
         let trust = KagemushaOrdinaryAppTrustPolicyV1 {
@@ -99,6 +171,8 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             receipt.profile_qualifications[0].profile.vk_digest,
         );
         enabled.hardware_profile.platform_class = class;
+        enabled.hardware_profile.governance_credential_public_key =
+            ordinary_test_issuer_public_key_v1();
         enabled.hardware_profile.capability_mask = class.required_guarantees();
         enabled.hardware_profile.firmware_policy_digest = trust.canonical_digest().unwrap();
         enabled
@@ -115,6 +189,25 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         let profiles = vec![receipt.profile_qualifications[0].profile];
         receipt.hardware_policy_digest = kagemusha_hardware_policy_digest_v1(&profiles).unwrap();
         receipt.provider_policy = release_fixture::provider_policy(&profiles);
+        // The ordinary profile pins the separately derived issuer point. Re-sign the
+        // unchanged native provider-policy subject under that actual fixture key.
+        let mut issuer_seed = Sha256::new();
+        issuer_seed.update(KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1);
+        issuer_seed.update([61; 32]);
+        let issuer_seed: [u8; 32] = issuer_seed.finalize().into();
+        let issuer_p256 = SigningKey::from_bytes((&issuer_seed).into()).unwrap();
+        for entry in &mut receipt.provider_policy {
+            let message = kagemusha_provider_policy_signing_bytes_v1(
+                entry.hardware_profile_id,
+                entry.provider_profile_index,
+                entry.provider_authority_commitment,
+            )
+            .unwrap();
+            let signature: P256Signature = issuer_p256.sign(&message);
+            let signature = signature.normalize_s().unwrap_or(signature);
+            entry.issuer_signature =
+                KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
+        }
         receipt.provider_policy_root =
             kagemusha_provider_policy_root_v1(&profiles, &receipt.provider_policy).unwrap();
         let manifest = release_fixture::manifest(artifacts, &receipt);
@@ -188,7 +281,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             suite_id: enabled.suite_id,
             trust_policy_digest: trust.canonical_digest().unwrap(),
             app_authority_policy_digest: authority.canonical_digest().unwrap(),
-            financial_authority_commitment: [19; 32],
+            financial_authority_commitment: financial_commitment,
             issuer_policy_digest: kagemusha_ordinary_retail_issuer_policy_digest_v1(&policy)
                 .unwrap(),
             policy_epoch: enabled.policy_epoch,
@@ -290,13 +383,22 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
                 refresh_before_ms: 1200,
             }),
         };
-        let credential = KagemushaOrdinaryAppCredentialV1 {
-            subject: credential_subject,
-            signature: Signature::try_new(
-                issuer.private_key(),
-                &credential_subject.canonical_signing_bytes().unwrap(),
+        let signature = Signature::try_new(
+            issuer.private_key(),
+            &credential_subject.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
+        let circuit_admission = ordinary_test_issuer_admission_v1(
+            KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+                &credential_subject,
+                &signature,
             )
             .unwrap(),
+        );
+        let credential = KagemushaOrdinaryAppCredentialV1 {
+            subject: credential_subject,
+            signature,
+            circuit_admission,
         };
         let selection = KagemushaOrdinaryRetailEnrollmentSelectionV1 {
             owner,
@@ -381,6 +483,103 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         };
         fixture.verify(300).unwrap();
         fixture
+    }
+    /// Construct a separate genuine periodic lease for an Android Integrity fixture.
+    /// Google evidence remains synthetic; actual Core, platform, Ed and governed P256 signatures run.
+    /// # Panics
+    /// Panics for a fixture without Integrity or when an actual model invariant changes.
+    #[must_use]
+    pub fn integrity_refresh_originals(
+        &self,
+    ) -> (
+        KagemushaSignedPlayIntegrityRefreshChallengeV1,
+        KagemushaPlayIntegrityRefreshLeaseV1,
+    ) {
+        let enrolled = self.verify(300).unwrap();
+        let credential = enrolled.app_credential();
+        let s = credential.subject();
+        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let c = KagemushaPlayIntegrityRefreshChallengeV1 {
+            version: 1,
+            credential_digest: credential.digest(),
+            attested_key_id: s.attested_key_id,
+            account_binding: s.account_binding,
+            network_id: s.network_id,
+            lane_id: s.lane_id,
+            release_id: s.release_id,
+            hardware_profile_id: s.hardware_profile_id,
+            suite_id: s.suite_id,
+            trust_policy_digest: s.trust_policy_digest,
+            app_authority_policy_digest: s.app_authority_policy_digest,
+            play_integrity_policy_digest: self.trust.play_integrity_policy.unwrap().policy_digest,
+            nonce: [59; 32],
+            original_enrollment_challenge_digest: s.enrollment_challenge_digest,
+            policy_epoch: s.policy_epoch,
+            hardware_epoch: s.hardware_epoch,
+            issued_at_ms: 1300,
+            expires_at_ms: 2000,
+        };
+        let signed = KagemushaSignedPlayIntegrityRefreshChallengeV1 {
+            signature: Signature::new(issuer.private_key(), &c.canonical_signing_bytes().unwrap()),
+            challenge: c,
+        };
+        let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+        let signature: P256Signature = key.sign(&c.possession_signing_bytes().unwrap());
+        let der = signature.to_der().as_bytes().to_vec();
+        let subject = KagemushaPlayIntegrityRefreshLeaseSubjectV1 {
+            version: 1,
+            credential_digest: credential.digest(),
+            challenge_digest: c.attempt_id().unwrap(),
+            attested_key_id: c.attested_key_id,
+            release_id: c.release_id,
+            hardware_profile_id: c.hardware_profile_id,
+            trust_policy_digest: c.trust_policy_digest,
+            app_authority_policy_digest: c.app_authority_policy_digest,
+            binding: KagemushaPlayIntegrityBindingV1 {
+                request_hash: c.request_hash().unwrap(),
+                evidence_digest: [60; 32],
+                policy_digest: c.play_integrity_policy_digest,
+                verified_at_ms: 1400,
+                refresh_before_ms: 2400,
+            },
+            possession_original_digest: Sha256::digest(&der).into(),
+            policy_epoch: c.policy_epoch,
+            hardware_epoch: c.hardware_epoch,
+            issued_at_ms: 1400,
+            expires_at_ms: 2400,
+        };
+        let signature = Signature::new(
+            issuer.private_key(),
+            &subject.canonical_signing_bytes().unwrap(),
+        );
+        let app_possession =
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der: der };
+        let circuit_admission = ordinary_test_issuer_admission_v1(
+            KagemushaPlayIntegrityRefreshLeaseV1::circuit_admission_subject_for(
+                &subject,
+                &signature,
+                &app_possession,
+            )
+            .unwrap(),
+        );
+        let lease = KagemushaPlayIntegrityRefreshLeaseV1 {
+            subject,
+            signature,
+            app_possession,
+            circuit_admission,
+        };
+        lease
+            .authenticate(
+                credential,
+                &self.release,
+                &self.trust,
+                &self.app_authority,
+                &signed,
+                issuer.public_key(),
+                1500,
+            )
+            .unwrap();
+        (signed, lease)
     }
     /// Run actual public current credential/dual-possession/FI certificate admission again.
     /// # Errors
@@ -512,13 +711,34 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
             "attested_public_key_sec1_base64":(STANDARD.encode(subject.app_public_key.as_sec1_bytes())),
             "raw_attestation_base64":(STANDARD.encode(&f.proof.raw_attestation)),
             "app_possession":pop, "play_integrity_token":(if name=="android_keymint" { Some("synthetic-google-evidence-no-live-verdict") } else {None})});
+        let integrity_refresh = if name == "android_keymint" {
+            let (challenge, lease) = f.integrity_refresh_originals();
+            let c = &challenge.challenge;
+            Some(norito::json!({
+                "signed_refresh_challenge_base64":(STANDARD.encode(challenge.to_transport_bytes().unwrap())),
+                "refresh_signing_message_base64":(STANDARD.encode(c.canonical_signing_bytes().unwrap())),
+                "operation_id":(hex::encode(c.attempt_id().unwrap())),
+                "play_integrity_request_hash_hex":(hex::encode(c.request_hash().unwrap())),
+                "possession_signing_message_base64":(STANDARD.encode(c.possession_signing_bytes().unwrap())),
+                "lease_signing_body_base64":(STANDARD.encode(&lease.subject.canonical_signing_bytes().unwrap()[lease.subject.canonical_signing_bytes().unwrap().len()-402..])),
+                "lease_base64":(STANDARD.encode(lease.canonical_bytes().unwrap())),
+                "lease_ed_original_base64":(STANDARD.encode(lease.ed_only_canonical_bytes().unwrap())),
+                "lease_issuer_admission_base64":(STANDARD.encode(lease.circuit_admission.to_transport_bytes().unwrap())),
+                "possession_der_base64":(STANDARD.encode(match &lease.app_possession{KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore{signature_der}=>signature_der,_=>unreachable!()}))
+            }))
+        } else {
+            None
+        };
         vectors.push(norito::json!({
-                "platform":name, "operation_id":operation,
+                "platform":name, "operation_id":operation, "integrity_refresh":integrity_refresh,
                 "signed_preparation_base64":(STANDARD.encode(&prep_bytes)),
                 "preparation_signing_message_base64":(STANDARD.encode(c.canonical_signing_bytes().unwrap())),
                 "attestation_challenge_hex":(hex::encode(c.attestation_challenge().unwrap())),
                 "play_integrity_request_hash_hex":(hex::encode(c.play_integrity_request_hash(subject.attested_key_id).unwrap())),
                 "app_public_key_sec1_base64":(STANDARD.encode(subject.app_public_key.as_sec1_bytes())),
+                "ordinary_issuer_public_key_sec1_base64":(STANDARD.encode(verified.app_credential().circuit_admission().public_key().as_sec1_bytes())),
+                "ordinary_credential_ed_original_base64":(STANDARD.encode(credential.ed_only_canonical_bytes().unwrap())),
+                "ordinary_credential_issuer_admission_base64":(STANDARD.encode(credential.circuit_admission.to_transport_bytes().unwrap())),
                 "attested_key_id_hex":(hex::encode(subject.attested_key_id)),
                 "raw_attestation_base64":(STANDARD.encode(&f.proof.raw_attestation)),
                 "raw_attestation_sha256_hex":(hex::encode(raw_sha)),

@@ -59,19 +59,20 @@ fn fixture(
         ));
         parameters.commit();
     }
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut transaction = setup.transaction_for_callback_testing();
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-    for trigger in registrations {
-        Register::trigger(trigger)
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
+        for trigger in registrations {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    drop(setup);
     let header = output_fixture_header(&state);
     let mut builder = TransactionBuilder::new(
         state.network_id,
@@ -902,24 +903,25 @@ mod retry_and_periodic {
             ));
             parameters.commit();
         }
-        let (mut setup, _setup_recording) = output_fixture_setup(&state);
-        let mut transaction = setup.transaction_for_callback_testing();
-        Register::account(Account::new(ALICE_ID.clone()))
+        {
+            let (mut setup, _setup_recording) = output_fixture_setup(&state);
+            let mut transaction = setup.transaction_for_callback_testing();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+            Register::trigger(Trigger::new(
+                "periodic_repeat".parse().unwrap(),
+                scheduled_action(
+                    vec![Log::new(Level::INFO, "identical periodic body".into()).into()],
+                    3,
+                    0,
+                ),
+            ))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
-        Register::trigger(Trigger::new(
-            "periodic_repeat".parse().unwrap(),
-            scheduled_action(
-                vec![Log::new(Level::INFO, "identical periodic body".into()).into()],
-                3,
-                0,
-            ),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        transaction.apply();
-        setup.commit_world_overlay_for_testing().unwrap();
-        drop(setup);
+            transaction.apply();
+            setup.commit_world_overlay_for_testing().unwrap();
+        }
         assert_eq!(history.target_disk_bytes(), prior_wire);
         let previous = history.target();
         let timestamp =

@@ -89,6 +89,21 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     }
 
     @Test
+    fun `stale or substituted native inventories reject before installation`() {
+        for ((word, count) in listOf(4 to 50, 4 to 53, 4 to 55, 6 to 6, 6 to 8)) {
+            val endpoint = Endpoint().apply { contractWords[word] = count }
+            assertFailsWith<IllegalStateException> {
+                KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+            }
+            assertEquals(listOf("contract"), endpoint.openingCalls)
+            assertEquals(0, endpoint.installCalls)
+            assertEquals(0, endpoint.openCalls)
+            assertEquals(0, endpoint.invokeCalls)
+            assertEquals(0, endpoint.closeCalls)
+        }
+    }
+
+    @Test
     fun `invalid storage paths and requests fail before native calls`() {
         val endpoint = Endpoint()
         listOf("", " ", "nul\u0000path", "x".repeat(4097), "bad\ud800").forEach {
@@ -188,7 +203,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     }
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
-        val contractWords = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
+        val contractWords = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         var openCalls = 0
         var installCalls = 0
         var installStatus = 0

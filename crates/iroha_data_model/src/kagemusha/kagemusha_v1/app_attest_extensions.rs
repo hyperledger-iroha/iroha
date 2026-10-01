@@ -64,7 +64,17 @@ pub fn parse_app_attest_assertion(
     Ok((authenticator_data, signature_der))
 }
 
-impl AppAttestAssertionExtensions<'_> {
+impl<'a> AppAttestAssertionExtensions<'a> {
+    /// Untrusted parsed validation category; signature/policy admission remains separate.
+    #[must_use]
+    pub const fn validation_category(&self) -> u32 {
+        self.validation_category
+    }
+    /// Untrusted original UTF-8 release version; no local release authority is created.
+    #[must_use]
+    pub const fn bundle_version(&self) -> &'a str {
+        self.bundle_version
+    }
     /// Verify the digest of both signed values against the authenticated release digest.
     pub(crate) fn verify_release_digest(
         &self,

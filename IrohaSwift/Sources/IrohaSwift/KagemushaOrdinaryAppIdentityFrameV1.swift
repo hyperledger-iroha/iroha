@@ -6,11 +6,15 @@ enum KagemushaOrdinaryAppIdentityFrameV1 {
   static func validateRequest(_ f: [Data]) throws {
     guard !f.isEmpty else { throw invalid() }
     let phase=try number(f[0])
-    if phase == 11 { guard f.count == 1 else { throw invalid() }; return }
-    if phase == 1 { guard f.count == 2, digest(f[1]) else { throw invalid() }; return }
+    if phase == 11 || phase == 12 { guard f.count == 1 else { throw invalid() }; return }
+    if phase == 1 { throw invalid() }
     guard f.count >= 2, f[1].count == 8, f[1].contains(where:{$0 != 0}) else { throw invalid() }
     switch phase {
-    case 2,4,6,7,8,9: guard f.count == 2 else { throw invalid() }
+    case 2,4,7,8,9,14: guard f.count == 2 else { throw invalid() }
+    case 6: guard f.count == 3, f[2].count == 314 else { throw invalid() }
+    case 13:
+      guard f.count == 3 else { throw invalid() }
+      _ = try KagemushaOrdinaryAppIdentityPreparedProjectionV1.challenge(transport: f[2])
     case 3: guard f.count == 3 else { throw invalid() }; try reference(f[2])
     case 5:
       guard f.count == 5, point(f[2]), (1...65_536).contains(f[3].count),
@@ -23,7 +27,11 @@ enum KagemushaOrdinaryAppIdentityFrameV1 {
     try validateRequest(q)
     switch try number(q[0]) {
     case 11: guard r.count == 1, digest(r[0]) else { throw invalid() }
-    case 1: _ = try KagemushaOrdinaryAppIdentityPreparedProjectionV1(r,enrollmentID:q[1])
+    case 12: _ = try KagemushaOrdinaryAppIdentityReservationProjectionV1(r)
+    case 13:
+      let prepared = try KagemushaOrdinaryAppIdentityPreparedProjectionV1(r)
+      guard prepared.signedChallenge == q[2] else { throw invalid() }
+    case 14: guard r.count == 1, r[0].count <= 16_384 else { throw invalid() }
     case 2:
       guard r.count == 2, r[0].count == 1 else { throw invalid() }
       if r[0] == Data([1]) { guard r[1].isEmpty else { throw invalid() } }

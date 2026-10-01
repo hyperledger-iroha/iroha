@@ -147,6 +147,11 @@ pub struct KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
     pub bytes: Vec<Option<u8>>,
     /// Complete canonical original archive range within the digest preimage.
     pub original: core::ops::Range<usize>,
+    /// Complete encoded mandatory countersignature field; absent only for the Ed-only layout.
+    pub issuer_admission: Option<core::ops::Range<usize>>,
+    /// Absolute raw issuer counter fields in the same original digest preimage.
+    pub issuer_admission_layout:
+        Option<super::KagemushaOrdinaryIssuerCircuitAdmissionOriginalLayoutV1>,
     /// All 28 encoded subject field ranges in the actual declared model order.
     /// Platform/security fields are their actual Norito enum representation, not signing tags.
     pub subject_fields: [core::ops::Range<usize>; 28],
@@ -917,37 +922,37 @@ impl KagemushaOrdinaryAppCredentialSubjectV1 {
         }
         Ok(bytes)
     }
-    fn encoded_field_values(&self) -> [Vec<u8>; 28] {
-        [
-            self.version.encode(),
-            self.platform_class.encode(),
-            self.security_level.encode(),
-            self.enrollment_id.encode(),
-            self.client_nonce.encode(),
-            self.server_nonce.encode(),
-            self.account_binding.encode(),
-            self.network_id.encode(),
-            self.lane_id.encode(),
-            self.release_id.encode(),
-            self.hardware_profile_id.encode(),
-            self.suite_id.encode(),
-            self.trust_policy_digest.encode(),
-            self.app_authority_policy_digest.encode(),
-            self.app_signing_identity_digest.encode(),
-            self.app_release_digest.encode(),
-            self.attested_key_id.encode(),
-            self.app_key_reference.encode(),
-            self.financial_authority_commitment.encode(),
-            self.platform_evidence_digest.encode(),
-            self.enrollment_challenge_digest.encode(),
-            self.app_public_key.encode(),
-            self.policy_epoch.encode(),
-            self.hardware_epoch.encode(),
-            self.issued_at_ms.encode(),
-            self.expires_at_ms.encode(),
-            self.app_attest_counter_floor.encode(),
-            self.play_integrity.encode(),
-        ]
+    fn encoded_field_values(&self, flags: u8) -> Result<[Vec<u8>; 28], String> {
+        Ok([
+            layout_field_payload(&self.version, flags)?,
+            layout_field_payload(&self.platform_class, flags)?,
+            layout_field_payload(&self.security_level, flags)?,
+            layout_fixed_bytes_field(&self.enrollment_id, flags)?,
+            layout_fixed_bytes_field(&self.client_nonce, flags)?,
+            layout_fixed_bytes_field(&self.server_nonce, flags)?,
+            layout_fixed_bytes_field(&self.account_binding, flags)?,
+            layout_fixed_bytes_field(&self.network_id, flags)?,
+            layout_fixed_bytes_field(&self.lane_id, flags)?,
+            layout_fixed_bytes_field(&self.release_id, flags)?,
+            layout_fixed_bytes_field(&self.hardware_profile_id, flags)?,
+            layout_fixed_bytes_field(&self.suite_id, flags)?,
+            layout_fixed_bytes_field(&self.trust_policy_digest, flags)?,
+            layout_fixed_bytes_field(&self.app_authority_policy_digest, flags)?,
+            layout_fixed_bytes_field(&self.app_signing_identity_digest, flags)?,
+            layout_fixed_bytes_field(&self.app_release_digest, flags)?,
+            layout_fixed_bytes_field(&self.attested_key_id, flags)?,
+            layout_fixed_bytes_field(&self.app_key_reference, flags)?,
+            layout_fixed_bytes_field(&self.financial_authority_commitment, flags)?,
+            layout_fixed_bytes_field(&self.platform_evidence_digest, flags)?,
+            layout_fixed_bytes_field(&self.enrollment_challenge_digest, flags)?,
+            layout_field_payload(&self.app_public_key, flags)?,
+            layout_field_payload(&self.policy_epoch, flags)?,
+            layout_field_payload(&self.hardware_epoch, flags)?,
+            layout_field_payload(&self.issued_at_ms, flags)?,
+            layout_field_payload(&self.expires_at_ms, flags)?,
+            layout_field_payload(&self.app_attest_counter_floor, flags)?,
+            layout_field_payload(&self.play_integrity, flags)?,
+        ])
     }
 }
 
@@ -971,6 +976,15 @@ pub struct KagemushaOrdinaryAppCredentialV1 {
     pub subject: KagemushaOrdinaryAppCredentialSubjectV1,
     /// Ed25519 signature over canonical_signing_bytes, not an OEM compact P-256 signature.
     pub signature: Signature,
+    /// Mandatory governed P256 admission over the complete canonical Ed-only original.
+    pub circuit_admission: super::KagemushaOrdinaryIssuerCircuitAdmissionV1,
+}
+
+#[derive(Clone, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryAppCredentialEdOriginalV1")]
+struct CredentialEdOriginal {
+    subject: KagemushaOrdinaryAppCredentialSubjectV1,
+    signature: Signature,
 }
 
 /// Actual checked ordinary credential originals. No decoder, clone or public constructor exists.
@@ -979,8 +993,17 @@ pub struct KagemushaVerifiedOrdinaryAppCredentialV1 {
     original: Vec<u8>,
     digest: [u8; 32],
     static_binding_digest: [u8; 32],
+    circuit_admission: super::KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1,
 }
 impl KagemushaVerifiedOrdinaryAppCredentialV1 {
+    /// Borrow the genuine independent governed P256 issuer admission.
+    #[must_use]
+    pub const fn circuit_admission(
+        &self,
+    ) -> &super::KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1 {
+        &self.circuit_admission
+    }
+
     /// Borrow the actual checked credential subject.
     #[must_use]
     pub const fn subject(&self) -> &KagemushaOrdinaryAppCredentialSubjectV1 {
@@ -1037,7 +1060,11 @@ impl KagemushaVerifiedOrdinaryAppCredentialV1 {
         lease.recheck_at_trusted_time(now)
     }
 }
-fn sole_changed_raw_position(original: &[u8], changed: &[u8], raw: u8) -> Result<usize, String> {
+pub(crate) fn sole_changed_raw_position(
+    original: &[u8],
+    changed: &[u8],
+    raw: u8,
+) -> Result<usize, String> {
     if original.len() != changed.len() {
         return Err("ordinary credential raw field width differs".into());
     }
@@ -1056,6 +1083,61 @@ fn sole_changed_raw_position(original: &[u8], changed: &[u8], raw: u8) -> Result
 }
 
 impl KagemushaOrdinaryAppCredentialV1 {
+    /// Encode the complete canonical Ed-only original used by the independent issuer admission.
+    /// # Errors
+    /// Rejects malformed issuer subjects or another Ed signature width.
+    pub fn ed_only_bytes_for(
+        subject: &KagemushaOrdinaryAppCredentialSubjectV1,
+        signature: &Signature,
+    ) -> Result<Vec<u8>, String> {
+        subject.canonical_signing_bytes()?;
+        if signature.payload().len() != 64 {
+            return Err("ordinary Ed signature width differs".into());
+        }
+        bounded_encode(&CredentialEdOriginal {
+            subject: *subject,
+            signature: signature.clone(),
+        })
+    }
+    /// Borrow data-only canonical Ed-original encoding, excluding the countersignature.
+    /// # Errors
+    /// Rejects malformed original fields.
+    pub fn ed_only_canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        Self::ed_only_bytes_for(&self.subject, &self.signature)
+    }
+    /// Exact expected purpose-specific P256 subject; callers still need genuine signing custody.
+    /// # Errors
+    /// Rejects malformed original fields.
+    pub fn circuit_admission_subject_for(
+        subject: &KagemushaOrdinaryAppCredentialSubjectV1,
+        signature: &Signature,
+    ) -> Result<super::KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1, String> {
+        Ok(super::KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1 {
+            version: 1,
+            purpose: 1,
+            release_id: subject.release_id,
+            hardware_profile_id: subject.hardware_profile_id,
+            ed_original_sha256: Sha256::digest(Self::ed_only_bytes_for(subject, signature)?).into(),
+        })
+    }
+    /// Encoder-derived raw positions for SHA256 of the canonical Ed-only original (no digest domain).
+    /// # Errors
+    /// Rejects changes to the sole declared model encoder layout.
+    pub fn ed_only_preimage_layout(
+        &self,
+    ) -> Result<KagemushaOrdinaryAppCredentialOriginalLayoutV1, String> {
+        credential_original_layout(
+            &CredentialEdOriginal {
+                subject: self.subject,
+                signature: self.signature.clone(),
+            },
+            &self.subject,
+            &self.signature,
+            None,
+            false,
+        )
+    }
+
     /// Digest of the exact complete canonical original; it provides no issuer admission.
     /// # Errors
     /// Rejects invalid or oversized original archive shape.
@@ -1073,6 +1155,12 @@ impl KagemushaOrdinaryAppCredentialV1 {
         if self.signature.payload().len() != 64 {
             return Err("ordinary credential Ed signature width differs".into());
         }
+        if self.circuit_admission.subject
+            != Self::circuit_admission_subject_for(&self.subject, &self.signature)?
+        {
+            return Err("ordinary issuer admission original differs".into());
+        }
+        self.circuit_admission.to_transport_bytes()?;
         bounded_encode(self)
     }
     /// Decode a bounded exact original before any issuer or owner admission.
@@ -1100,256 +1188,14 @@ impl KagemushaOrdinaryAppCredentialV1 {
     pub fn original_preimage_layout(
         &self,
     ) -> Result<KagemushaOrdinaryAppCredentialOriginalLayoutV1, String> {
-        self.subject.canonical_signing_bytes()?;
-        if self.signature.payload().len() != 64 {
-            return Err("ordinary credential Ed signature width differs".into());
-        }
-        let frame = bounded_encode(self)?;
-        let payload = self.encode();
-        let root_offset = frame
-            .len()
-            .checked_sub(payload.len())
-            .ok_or("ordinary credential root layout differs")?;
-        if root_offset < norito::core::Header::SIZE
-            || frame.get(root_offset..) != Some(payload.as_slice())
-        {
-            return Err("ordinary credential canonical root layout differs".into());
-        }
-        let flags = frame[39];
-        let _layout_flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let mut offset = root_offset;
-        let subject_bytes =
-            crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
-        let subject_start = offset - subject_bytes.len();
-        if subject_bytes != self.subject.encode() {
-            return Err("ordinary credential subject encoder differs".into());
-        }
-        let signature_bytes =
-            crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
-        let signature_start = offset - signature_bytes.len();
-        let decoded_signature: Signature =
-            crate::isi::decode_aos_canonical_field(signature_bytes, flags)
-                .map_err(|error| error.to_string())?;
-        if offset != frame.len() || decoded_signature != self.signature {
-            return Err("ordinary credential original signature framing differs".into());
-        }
-        let prelude_len = CREDENTIAL_DIGEST_DOMAIN.len() + 8;
-        let signature = prelude_len + signature_start..prelude_len + offset;
-        let mut signature_positions = [0_usize; 64];
-        for (index, position) in signature_positions.iter_mut().enumerate() {
-            let mut changed = self.signature.payload().to_vec();
-            changed[index] ^= 1;
-            let encoded = {
-                let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-                Signature::from_bytes(&changed).encode()
-            };
-            if encoded.len() != signature_bytes.len() {
-                return Err("ordinary credential signature byte layout width differs".into());
-            }
-            let mut differences = encoded
-                .iter()
-                .zip(signature_bytes)
-                .enumerate()
-                .filter_map(|(offset, (left, right))| (left != right).then_some(offset));
-            let local = differences
-                .next()
-                .ok_or("ordinary credential signature byte absent")?;
-            if differences.next().is_some() || encoded[local] != changed[index] {
-                return Err("ordinary credential signature byte layout differs".into());
-            }
-            *position = prelude_len + signature_start + local;
-        }
-        let expected_fields = self.subject.encoded_field_values();
-        let mut subject_offset = 0;
-        let mut ranges: [core::ops::Range<usize>; 28] = core::array::from_fn(|_| 0..0);
-        for (index, (range, expected)) in ranges.iter_mut().zip(expected_fields).enumerate() {
-            let field = crate::isi::read_aos_field(subject_bytes, &mut subject_offset, flags)
-                .map_err(|e| e.to_string())?;
-            if field != expected {
-                return Err(format!(
-                    "ordinary credential declared field {index} layout differs"
-                ));
-            }
-            *range = prelude_len + subject_start + subject_offset - field.len()
-                ..prelude_len + subject_start + subject_offset;
-        }
-        if subject_offset != subject_bytes.len() {
-            return Err("ordinary credential subject trailing fields".into());
-        }
-        if &frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
-            != self.subject.version.to_le_bytes()
-        {
-            return Err("ordinary credential version scalar encoder differs".into());
-        }
-        let version_bytes = core::array::from_fn(|index| ranges[0].start + index);
-        let platform_class_bytes: Vec<usize> = ranges[1].clone().collect();
-        let security_level_bytes: Vec<usize> = ranges[2].clone().collect();
-        let selectors = [
-            self.subject.enrollment_id,
-            self.subject.client_nonce,
-            self.subject.server_nonce,
-            self.subject.account_binding,
-            self.subject.network_id,
-            self.subject.lane_id,
-            self.subject.release_id,
-            self.subject.hardware_profile_id,
-            self.subject.suite_id,
-            self.subject.trust_policy_digest,
-            self.subject.app_authority_policy_digest,
-            self.subject.app_signing_identity_digest,
-            self.subject.app_release_digest,
-            self.subject.attested_key_id,
-            self.subject.app_key_reference,
-            self.subject.financial_authority_commitment,
-            self.subject.platform_evidence_digest,
-            self.subject.enrollment_challenge_digest,
-        ];
-        let mut fixed_digest_bytes = [[0_usize; 32]; 18];
-        for (field_index, (raw, positions)) in
-            selectors.iter().zip(&mut fixed_digest_bytes).enumerate()
-        {
-            let range = &ranges[field_index + 3];
-            let encoded_original = &frame[range.start - prelude_len..range.end - prelude_len];
-            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-            if raw.encode() != encoded_original {
-                return Err("ordinary credential raw selector encoder differs".into());
-            }
-            for (byte_index, position) in positions.iter_mut().enumerate() {
-                let mut changed = *raw;
-                changed[byte_index] ^= 1;
-                let encoded_changed = changed.encode();
-                *position = range.start
-                    + sole_changed_raw_position(
-                        encoded_original,
-                        &encoded_changed,
-                        changed[byte_index],
-                    )?;
-            }
-        }
-        let key_range = &ranges[21];
-        let raw_key = self.subject.app_public_key.as_sec1_bytes();
-        if &frame[key_range.start - prelude_len..key_range.end - prelude_len] != raw_key {
-            return Err("ordinary credential raw SEC1 encoder differs".into());
-        }
-        let app_public_key_bytes = core::array::from_fn(|index| key_range.start + index);
-        let scalar_values = [
-            self.subject.policy_epoch.to_le_bytes().to_vec(),
-            self.subject.hardware_epoch.to_le_bytes().to_vec(),
-            self.subject.issued_at_ms.to_le_bytes().to_vec(),
-            self.subject.expires_at_ms.to_le_bytes().to_vec(),
-            self.subject.app_attest_counter_floor.to_le_bytes().to_vec(),
-        ];
-        let mut scalar_bytes: [Vec<usize>; 5] = core::array::from_fn(|_| Vec::new());
-        for (index, (raw, positions)) in scalar_values.iter().zip(&mut scalar_bytes).enumerate() {
-            let range = &ranges[index + 22];
-            if &frame[range.start - prelude_len..range.end - prelude_len] != raw {
-                return Err("ordinary credential raw scalar encoder differs".into());
-            }
-            positions.extend((0..raw.len()).map(|byte| range.start + byte));
-        }
-        let mut preimage = CREDENTIAL_DIGEST_DOMAIN.to_vec();
-        preimage.extend_from_slice(&(frame.len() as u64).to_le_bytes());
-        preimage.extend_from_slice(&frame);
-        let mut template: Vec<Option<u8>> = preimage.into_iter().map(Some).collect();
-        template[prelude_len + 31..prelude_len + 39].fill(None);
-        for position in version_bytes
-            .iter()
-            .chain(&platform_class_bytes)
-            .chain(&security_level_bytes)
-        {
-            template[*position] = None;
-        }
-        for position in fixed_digest_bytes.iter().flatten() {
-            template[*position] = None;
-        }
-        for position in app_public_key_bytes {
-            template[position] = None;
-        }
-        for position in scalar_bytes.iter().flatten() {
-            template[*position] = None;
-        }
-        for position in signature_positions {
-            template[position] = None;
-        }
-        let (pi_fields, pi_bytes) = if let Some(pi) = self.subject.play_integrity {
-            let encoded = pi.encode();
-            let option = &frame[ranges[27].start - prelude_len..ranges[27].end - prelude_len];
-            if !option.ends_with(&encoded) {
-                return Err("ordinary credential Integrity option encoder differs".into());
-            }
-            let start = ranges[27].end - encoded.len();
-            let mut cursor = 0;
-            let expected = [
-                pi.request_hash.encode(),
-                pi.evidence_digest.encode(),
-                pi.policy_digest.encode(),
-                pi.verified_at_ms.encode(),
-                pi.refresh_before_ms.encode(),
-            ];
-            let mut fields: [core::ops::Range<usize>; 5] = core::array::from_fn(|_| 0..0);
-            let mut raw_positions: [Vec<usize>; 5] = core::array::from_fn(|_| Vec::new());
-            let raw_digests = [pi.request_hash, pi.evidence_digest, pi.policy_digest];
-            let raw_scalars = [
-                pi.verified_at_ms.to_le_bytes(),
-                pi.refresh_before_ms.to_le_bytes(),
-            ];
-            for (index, (range, expected)) in fields.iter_mut().zip(expected).enumerate() {
-                let field = crate::isi::read_aos_field(&encoded, &mut cursor, flags)
-                    .map_err(|e| e.to_string())?;
-                if field != expected {
-                    return Err("ordinary credential Integrity field encoder differs".into());
-                }
-                *range = start + cursor - field.len()..start + cursor;
-                if index < 3 {
-                    let raw = raw_digests[index];
-                    for byte_index in 0..32 {
-                        let mut changed = raw;
-                        changed[byte_index] ^= 1;
-                        let encoded_changed = {
-                            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-                            changed.encode()
-                        };
-                        raw_positions[index].push(
-                            range.start
-                                + sole_changed_raw_position(
-                                    field,
-                                    &encoded_changed,
-                                    changed[byte_index],
-                                )?,
-                        );
-                    }
-                } else {
-                    if field != raw_scalars[index - 3] {
-                        return Err("ordinary credential Integrity scalar layout differs".into());
-                    }
-                    raw_positions[index].extend(range.clone());
-                }
-                for position in &raw_positions[index] {
-                    template[*position] = None;
-                }
-            }
-            if cursor != encoded.len() {
-                return Err("ordinary credential Integrity trailing bytes".into());
-            }
-            (Some(fields), Some(raw_positions))
-        } else {
-            (None, None)
-        };
-        Ok(KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
-            bytes: template,
-            original: prelude_len..prelude_len + frame.len(),
-            subject_fields: ranges,
-            signature,
-            signature_bytes: signature_positions,
-            version_bytes,
-            platform_class_bytes,
-            security_level_bytes,
-            fixed_digest_bytes,
-            app_public_key_bytes,
-            scalar_bytes,
-            play_integrity_fields: pi_fields,
-            play_integrity_bytes: pi_bytes,
-        })
+        self.canonical_bytes()?;
+        credential_original_layout(
+            self,
+            &self.subject,
+            &self.signature,
+            Some(&self.circuit_admission),
+            true,
+        )
     }
 
     /// Authenticate actual issuer, policy, release, original preparation and independently held key.
@@ -1473,7 +1319,11 @@ impl KagemushaOrdinaryAppCredentialV1 {
         self.signature
             .verify(&authority.authority_key, &message)
             .map_err(|_| "ordinary credential Ed authority signature rejected")?;
-        let original = bounded_encode(self)?;
+        let circuit_admission = self.circuit_admission.authenticate_for_profile(
+            &Self::circuit_admission_subject_for(s, &self.signature)?,
+            profile,
+        )?;
+        let original = self.canonical_bytes()?;
         let mut static_body = Vec::new();
         for field in [
             s.account_binding,
@@ -1493,6 +1343,7 @@ impl KagemushaOrdinaryAppCredentialV1 {
             static_body.extend_from_slice(&field);
         }
         let checked = KagemushaVerifiedOrdinaryAppCredentialV1 {
+            circuit_admission,
             subject: *s,
             digest: digest_original(CREDENTIAL_DIGEST_DOMAIN, &original),
             original,
@@ -1501,6 +1352,331 @@ impl KagemushaOrdinaryAppCredentialV1 {
         checked.recheck_at_trusted_time(now)?;
         Ok(checked)
     }
+}
+
+pub(crate) fn layout_field_payload<T: norito::SerializePayload>(
+    value: &T,
+    flags: u8,
+) -> Result<Vec<u8>, String> {
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    let mut raw = Vec::new();
+    norito::core::serialize_to_writer(value, &mut raw).map_err(|e| e.to_string())?;
+    Ok(raw)
+}
+pub(crate) fn layout_fixed_bytes_field(value: &[u8; 32], flags: u8) -> Result<Vec<u8>, String> {
+    // Derived named byte-array fields have their own raw-byte field codec. A standalone
+    // array value uses sequence framing, so derive the actual field rather than assume it.
+    #[derive(norito::Encode)]
+    struct Field {
+        value: [u8; 32],
+    }
+    let raw = layout_field_payload(&Field { value: *value }, flags)?;
+    let mut cursor = 0;
+    let field =
+        crate::isi::read_aos_field(&raw, &mut cursor, flags).map_err(|error| error.to_string())?;
+    if cursor != raw.len() {
+        return Err("fixed-byte field encoder trailing payload".into());
+    }
+    Ok(field.to_vec())
+}
+fn credential_original_layout<T: Encode + norito::NoritoSchema>(
+    encoded: &T,
+    subject: &KagemushaOrdinaryAppCredentialSubjectV1,
+    ed_signature: &Signature,
+    admission: Option<&super::KagemushaOrdinaryIssuerCircuitAdmissionV1>,
+    with_digest_domain: bool,
+) -> Result<KagemushaOrdinaryAppCredentialOriginalLayoutV1, String> {
+    subject.canonical_signing_bytes()?;
+    if ed_signature.payload().len() != 64 {
+        return Err("ordinary credential Ed signature width differs".into());
+    }
+    let frame = bounded_encode(encoded)?;
+    let payload = layout_field_payload(encoded, frame[39])?;
+    let root_offset = frame
+        .len()
+        .checked_sub(payload.len())
+        .ok_or("ordinary credential root layout differs")?;
+    if root_offset < norito::core::Header::SIZE
+        || frame.get(root_offset..) != Some(payload.as_slice())
+    {
+        return Err("ordinary credential canonical root layout differs".into());
+    }
+    let flags = frame[39];
+    let _layout_flags = norito::core::DecodeFlagsGuard::enter(flags);
+    let mut offset = root_offset;
+    let subject_bytes =
+        crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
+    let subject_start = offset - subject_bytes.len();
+    if subject_bytes != layout_field_payload(subject, flags)? {
+        return Err("ordinary credential subject encoder differs".into());
+    }
+    let signature_bytes =
+        crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
+    let signature_start = offset - signature_bytes.len();
+    let decoded_signature: Signature =
+        crate::isi::decode_aos_canonical_field(signature_bytes, flags)
+            .map_err(|error| error.to_string())?;
+    let signature_end = offset;
+    if decoded_signature != *ed_signature {
+        return Err("ordinary credential original signature framing differs".into());
+    }
+    let issuer_admission = if let Some(admission) = admission {
+        let field =
+            crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
+        if field != layout_field_payload(admission, flags)? {
+            return Err("ordinary issuer admission encoder differs".into());
+        }
+        Some(offset - field.len()..offset)
+    } else {
+        None
+    };
+    if offset != frame.len() {
+        return Err("ordinary credential original trailing fields".into());
+    }
+    let prelude_len = if with_digest_domain {
+        CREDENTIAL_DIGEST_DOMAIN.len() + 8
+    } else {
+        0
+    };
+    let issuer_admission =
+        issuer_admission.map(|range| prelude_len + range.start..prelude_len + range.end);
+    let signature = prelude_len + signature_start..prelude_len + signature_end;
+    let mut signature_positions = [0_usize; 64];
+    for (index, position) in signature_positions.iter_mut().enumerate() {
+        let mut changed = ed_signature.payload().to_vec();
+        changed[index] ^= 1;
+        let encoded = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            layout_field_payload(&Signature::from_bytes(&changed), flags)?
+        };
+        if encoded.len() != signature_bytes.len() {
+            return Err("ordinary credential signature byte layout width differs".into());
+        }
+        let mut differences = encoded
+            .iter()
+            .zip(signature_bytes)
+            .enumerate()
+            .filter_map(|(offset, (left, right))| (left != right).then_some(offset));
+        let local = differences
+            .next()
+            .ok_or("ordinary credential signature byte absent")?;
+        if differences.next().is_some() || encoded[local] != changed[index] {
+            return Err("ordinary credential signature byte layout differs".into());
+        }
+        *position = prelude_len + signature_start + local;
+    }
+    let expected_fields = subject.encoded_field_values(flags)?;
+    let mut subject_offset = 0;
+    let mut ranges: [core::ops::Range<usize>; 28] = core::array::from_fn(|_| 0..0);
+    for (index, (range, expected)) in ranges.iter_mut().zip(expected_fields).enumerate() {
+        let field = crate::isi::read_aos_field(subject_bytes, &mut subject_offset, flags)
+            .map_err(|e| e.to_string())?;
+        if field != expected {
+            return Err(format!(
+                "ordinary credential declared field {index} layout differs"
+            ));
+        }
+        *range = prelude_len + subject_start + subject_offset - field.len()
+            ..prelude_len + subject_start + subject_offset;
+    }
+    if subject_offset != subject_bytes.len() {
+        return Err("ordinary credential subject trailing fields".into());
+    }
+    if &frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
+        != subject.version.to_le_bytes()
+    {
+        return Err("ordinary credential version scalar encoder differs".into());
+    }
+    let version_bytes = core::array::from_fn(|index| ranges[0].start + index);
+    let platform_class_bytes: Vec<usize> = ranges[1].clone().collect();
+    let security_level_bytes: Vec<usize> = ranges[2].clone().collect();
+    let selectors = [
+        subject.enrollment_id,
+        subject.client_nonce,
+        subject.server_nonce,
+        subject.account_binding,
+        subject.network_id,
+        subject.lane_id,
+        subject.release_id,
+        subject.hardware_profile_id,
+        subject.suite_id,
+        subject.trust_policy_digest,
+        subject.app_authority_policy_digest,
+        subject.app_signing_identity_digest,
+        subject.app_release_digest,
+        subject.attested_key_id,
+        subject.app_key_reference,
+        subject.financial_authority_commitment,
+        subject.platform_evidence_digest,
+        subject.enrollment_challenge_digest,
+    ];
+    let mut fixed_digest_bytes = [[0_usize; 32]; 18];
+    for (field_index, (raw, positions)) in selectors.iter().zip(&mut fixed_digest_bytes).enumerate()
+    {
+        let range = &ranges[field_index + 3];
+        let encoded_original = &frame[range.start - prelude_len..range.end - prelude_len];
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+        if layout_fixed_bytes_field(raw, flags)? != encoded_original {
+            return Err("ordinary credential raw selector encoder differs".into());
+        }
+        for (byte_index, position) in positions.iter_mut().enumerate() {
+            let mut changed = *raw;
+            changed[byte_index] ^= 1;
+            let encoded_changed = layout_fixed_bytes_field(&changed, flags)?;
+            *position = range.start
+                + sole_changed_raw_position(
+                    encoded_original,
+                    &encoded_changed,
+                    changed[byte_index],
+                )?;
+        }
+    }
+    let key_range = &ranges[21];
+    let raw_key = subject.app_public_key.as_sec1_bytes();
+    if &frame[key_range.start - prelude_len..key_range.end - prelude_len] != raw_key {
+        return Err("ordinary credential raw SEC1 encoder differs".into());
+    }
+    let app_public_key_bytes = core::array::from_fn(|index| key_range.start + index);
+    let scalar_values = [
+        subject.policy_epoch.to_le_bytes().to_vec(),
+        subject.hardware_epoch.to_le_bytes().to_vec(),
+        subject.issued_at_ms.to_le_bytes().to_vec(),
+        subject.expires_at_ms.to_le_bytes().to_vec(),
+        subject.app_attest_counter_floor.to_le_bytes().to_vec(),
+    ];
+    let mut scalar_bytes: [Vec<usize>; 5] = core::array::from_fn(|_| Vec::new());
+    for (index, (raw, positions)) in scalar_values.iter().zip(&mut scalar_bytes).enumerate() {
+        let range = &ranges[index + 22];
+        if &frame[range.start - prelude_len..range.end - prelude_len] != raw {
+            return Err("ordinary credential raw scalar encoder differs".into());
+        }
+        positions.extend((0..raw.len()).map(|byte| range.start + byte));
+    }
+    let mut preimage = Vec::new();
+    if with_digest_domain {
+        preimage.extend_from_slice(CREDENTIAL_DIGEST_DOMAIN);
+        preimage.extend_from_slice(&(frame.len() as u64).to_le_bytes());
+    }
+    preimage.extend_from_slice(&frame);
+    let mut template: Vec<Option<u8>> = preimage.into_iter().map(Some).collect();
+    let issuer_admission_layout =
+        if let (Some(admission), Some(range)) = (admission, issuer_admission.as_ref()) {
+            let mut layout = admission.original_payload_layout(flags)?;
+            for p in layout
+                .version_bytes
+                .iter_mut()
+                .chain(core::iter::once(&mut layout.purpose_byte))
+                .chain(layout.fixed_digest_bytes.iter_mut().flatten())
+                .chain(layout.signature_bytes.iter_mut())
+            {
+                *p += range.start;
+                template[*p] = None;
+            }
+            Some(layout)
+        } else {
+            None
+        };
+    template[prelude_len + 31..prelude_len + 39].fill(None);
+    for position in version_bytes
+        .iter()
+        .chain(&platform_class_bytes)
+        .chain(&security_level_bytes)
+    {
+        template[*position] = None;
+    }
+    for position in fixed_digest_bytes.iter().flatten() {
+        template[*position] = None;
+    }
+    for position in app_public_key_bytes {
+        template[position] = None;
+    }
+    for position in scalar_bytes.iter().flatten() {
+        template[*position] = None;
+    }
+    for position in signature_positions {
+        template[position] = None;
+    }
+    let (pi_fields, pi_bytes) = if let Some(pi) = subject.play_integrity {
+        let encoded = layout_field_payload(&pi, flags)?;
+        let option = &frame[ranges[27].start - prelude_len..ranges[27].end - prelude_len];
+        if !option.ends_with(&encoded) {
+            return Err("ordinary credential Integrity option encoder differs".into());
+        }
+        let start = ranges[27].end - encoded.len();
+        let mut cursor = 0;
+        let expected = [
+            layout_fixed_bytes_field(&pi.request_hash, flags)?,
+            layout_fixed_bytes_field(&pi.evidence_digest, flags)?,
+            layout_fixed_bytes_field(&pi.policy_digest, flags)?,
+            layout_field_payload(&pi.verified_at_ms, flags)?,
+            layout_field_payload(&pi.refresh_before_ms, flags)?,
+        ];
+        let mut fields: [core::ops::Range<usize>; 5] = core::array::from_fn(|_| 0..0);
+        let mut raw_positions: [Vec<usize>; 5] = core::array::from_fn(|_| Vec::new());
+        let raw_digests = [pi.request_hash, pi.evidence_digest, pi.policy_digest];
+        let raw_scalars = [
+            pi.verified_at_ms.to_le_bytes(),
+            pi.refresh_before_ms.to_le_bytes(),
+        ];
+        for (index, (range, expected)) in fields.iter_mut().zip(expected).enumerate() {
+            let field = crate::isi::read_aos_field(&encoded, &mut cursor, flags)
+                .map_err(|e| e.to_string())?;
+            if field != expected {
+                return Err("ordinary credential Integrity field encoder differs".into());
+            }
+            *range = start + cursor - field.len()..start + cursor;
+            if index < 3 {
+                let raw = raw_digests[index];
+                for byte_index in 0..32 {
+                    let mut changed = raw;
+                    changed[byte_index] ^= 1;
+                    let encoded_changed = {
+                        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+                        layout_fixed_bytes_field(&changed, flags)?
+                    };
+                    raw_positions[index].push(
+                        range.start
+                            + sole_changed_raw_position(
+                                field,
+                                &encoded_changed,
+                                changed[byte_index],
+                            )?,
+                    );
+                }
+            } else {
+                if field != raw_scalars[index - 3] {
+                    return Err("ordinary credential Integrity scalar layout differs".into());
+                }
+                raw_positions[index].extend(range.clone());
+            }
+            for position in &raw_positions[index] {
+                template[*position] = None;
+            }
+        }
+        if cursor != encoded.len() {
+            return Err("ordinary credential Integrity trailing bytes".into());
+        }
+        (Some(fields), Some(raw_positions))
+    } else {
+        (None, None)
+    };
+    Ok(KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
+        bytes: template,
+        issuer_admission,
+        issuer_admission_layout,
+        original: prelude_len..prelude_len + frame.len(),
+        subject_fields: ranges,
+        signature,
+        signature_bytes: signature_positions,
+        version_bytes,
+        platform_class_bytes,
+        security_level_bytes,
+        fixed_digest_bytes,
+        app_public_key_bytes,
+        scalar_bytes,
+        play_integrity_fields: pi_fields,
+        play_integrity_bytes: pi_bytes,
+    })
 }
 
 /// Derive the ordinary native financial epoch identity from the exact signed credential.
@@ -1663,7 +1839,8 @@ mod tests {
             attestation_trust_roots_digest: [7; 32],
             allowed_suite_commitment: [8; 32],
             policy_epoch: 1,
-            governance_credential_public_key: key,
+            governance_credential_public_key:
+                crate::testing::ordinary_app_enrollment::ordinary_test_issuer_public_key_v1(),
             capability_mask: class.required_guarantees(),
             qualification_report_digest: [9; 32],
             valid_from_ms: 1,
@@ -1737,14 +1914,24 @@ mod tests {
             app_attest_counter_floor: if apple { 5 } else { 0 },
             play_integrity: None,
         };
+        let signature = Signature::try_new(
+            issuer.private_key(),
+            &subject.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
+        let circuit_admission =
+            crate::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+                KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+                    &subject, &signature,
+                )
+                .unwrap(),
+            );
         let certificate = KagemushaOrdinaryAppCredentialV1 {
             subject,
-            signature: Signature::try_new(
-                issuer.private_key(),
-                &subject.canonical_signing_bytes().unwrap(),
-            )
-            .unwrap(),
+            signature,
+            circuit_admission,
         };
+
         Fixture {
             authority,
             trust,
@@ -1771,6 +1958,77 @@ mod tests {
             &f.certificate.subject.canonical_signing_bytes().unwrap(),
         )
         .unwrap();
+        f.certificate.circuit_admission =
+            crate::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+                KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+                    &f.certificate.subject,
+                    &f.certificate.signature,
+                )
+                .unwrap(),
+            );
+    }
+    #[test]
+    fn ordinary_issuer_admission_requires_both_signers_and_exact_ed_original() {
+        let mut f = fixture(false);
+        let admitted = admit(&f, 300).unwrap();
+        assert_eq!(
+            admitted.circuit_admission().public_key(),
+            &f.profile.governance_credential_public_key
+        );
+        let ed = f.certificate.ed_only_canonical_bytes().unwrap();
+        assert_eq!(
+            f.certificate.circuit_admission.subject.ed_original_sha256,
+            <[u8; 32]>::from(Sha256::digest(&ed))
+        );
+        let layout = f.certificate.ed_only_preimage_layout().unwrap();
+        assert_eq!(layout.original, 0..ed.len());
+        assert!(layout.issuer_admission_layout.is_none());
+        for (i, pinned) in layout.bytes.iter().enumerate() {
+            if let Some(value) = pinned {
+                assert_eq!(ed[i], *value);
+            }
+        }
+        let full = f.certificate.original_preimage_layout().unwrap();
+        let raw = f.certificate.circuit_admission.signature.as_raw_bytes();
+        let bytes = f.certificate.canonical_bytes().unwrap();
+        let prelude = CREDENTIAL_DIGEST_DOMAIN.len() + 8;
+        for (i, p) in full
+            .issuer_admission_layout
+            .unwrap()
+            .signature_bytes
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(bytes[*p - prelude], raw[i]);
+            assert_eq!(full.bytes[*p], None);
+        }
+        let encoded = f.certificate.canonical_bytes().unwrap();
+        assert_eq!(
+            KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&encoded).unwrap(),
+            f.certificate
+        );
+        assert!(KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&ed).is_err());
+        // A valid issuer Ed signature alone cannot authorize a fabricated circuit issuer original.
+        f.certificate.subject.financial_authority_commitment = [87; 32];
+        f.preparation.challenge.financial_authority_commitment = [87; 32];
+        f.certificate.signature = Signature::new(
+            f.issuer.private_key(),
+            &f.certificate.subject.canonical_signing_bytes().unwrap(),
+        );
+        assert!(admit(&f, 300).is_err());
+        resign(&mut f);
+        assert!(admit(&f, 300).is_ok());
+        let expected = KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+            &f.certificate.subject,
+            &f.certificate.signature,
+        )
+        .unwrap();
+        let wrong_key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+        let sig: P256Signature = wrong_key.sign(&expected.canonical_signing_bytes().unwrap());
+        let sig = sig.normalize_s().unwrap_or(sig);
+        f.certificate.circuit_admission.signature =
+            super::super::KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap();
+        assert!(admit(&f, 300).is_err());
     }
     fn approval(
         f: &Fixture,

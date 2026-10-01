@@ -5,6 +5,7 @@
 //! genuinely admitted Ed credential original; no provider-secret or P256 private scalar is used.
 //! Full original DER/App Attest CBOR authenticates the wrapper's normalized statement and S.
 
+use super::super::ordinary_issuer_config::OrdinaryIssuerTableV1;
 use super::super::{
     DigestV1,
     composite::{assigned_digest_bytes_v1, assigned_uint_bytes_v1},
@@ -14,45 +15,40 @@ use super::super::{
     },
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
     ordinary_app_guard_binding::{
-        OrdinaryApprovalOriginalCellsV1, OrdinaryCredentialOriginalCellsV1,
-        constrain_ordinary_approval_wrapper_v1, constrain_ordinary_credential_original_v1,
+        OrdinaryApprovalOriginalCellsV1, OrdinaryCredentialIssuerCellsV1,
+        OrdinaryCredentialOriginalCellsV1, constrain_ordinary_approval_wrapper_v1,
     },
-    ordinary_approval_proof_binding::constrain_ordinary_approval_proof_binding_v1,
-    ordinary_platform_equation::{
-        OrdinaryPlatformSignatureCellsV1, constrain_original_android_approval_stream_v1,
-        constrain_original_apple_approval_stream_v1,
+    ordinary_approval_proof_binding::{
+        constrain_ordinary_authorization_proof_binding_v1,
+        constrain_ordinary_selected_approval_proof_binding_v1,
     },
+    ordinary_credential_union::{
+        assign_ordinary_credential_union_v1, reconstruct_ordinary_credential_union_v1,
+    },
+    ordinary_integrity_binding::{
+        constrain_ordinary_initial_integrity_interval_v1, constrain_ordinary_integrity_lease_v1,
+    },
+    ordinary_issuer_equation::constrain_ordinary_issuer_original_v1,
 };
 use super::{KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1};
 use crate::{
-    kagemusha_p256_curve_gadget::{P256_LIMB_BITS, P256_NUM_LIMBS},
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
-use ff::{Field as _, PrimeField as _};
+use ff::Field as _;
 use halo2_base::{
     AssignedValue,
     gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
-use halo2_ecc::{
-    ecc::EcPoint,
-    fields::{FieldChip as _, fp::FpChip},
-};
 use halo2_proofs::{
-    halo2curves::{
-        pasta::{EpAffine, EqAffine, Fp, Fq},
-        secp256r1::{Fp as P256Base, Fq as P256Scalar},
-    },
+    halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
     poly::ipa::commitment::ParamsIPA,
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_HALO2_K_V1, KagemushaAppOperationApprovalEvidenceV1,
-    KagemushaAppOperationApprovalSigningLayoutV1 as A, KagemushaAppOperationApprovalV1,
-    KagemushaHardwareSelectionSigningLayoutV1 as S, KagemushaOrdinaryAppCredentialV1,
-    kagemusha_app_attest_original_parts_v1,
+    KAGEMUSHA_HALO2_K_V1, KagemushaAppOperationApprovalSigningLayoutV1 as A,
+    KagemushaAppOperationApprovalV1, KagemushaHardwareSelectionSigningLayoutV1 as S,
+    KagemushaOrdinaryAppCredentialV1, KagemushaPlayIntegrityRefreshLeaseV1,
 };
-use p256::ecdsa::Signature;
-use sha2::{Digest as _, Sha256};
 
 /// Original bounded proof material; it is not an enrollment, Native owner, or spending capability.
 /// The production caller must lend it from the actual selected witness/approval holder.
@@ -61,6 +57,7 @@ pub(crate) struct OrdinaryGuardWitnessV1<'a> {
     pub(crate) credential: &'a KagemushaOrdinaryAppCredentialV1,
     pub(crate) approval: &'a KagemushaAppOperationApprovalV1,
     pub(crate) previous_app_attest_counter: Option<u32>,
+    pub(crate) integrity_lease: Option<&'a KagemushaPlayIntegrityRefreshLeaseV1>,
 }
 
 pub(crate) fn build_ordinary_app_guard_pair_v1(
@@ -68,6 +65,7 @@ pub(crate) fn build_ordinary_app_guard_pair_v1(
     ep_parameters: &ParamsIPA<EpAffine>,
     witness: OrdinaryGuardWitnessV1<'_>,
     provider_policy_root: DigestV1,
+    issuer_table: &OrdinaryIssuerTableV1,
 ) -> Result<
     (
         KagemushaOrdinaryAppGuardEqCircuitV1,
@@ -84,20 +82,31 @@ pub(crate) fn build_ordinary_app_guard_pair_v1(
         initial_kagemusha_eq_accumulator_v1(eq_parameters).map_err(|e| e.to_string())?;
     let ep_history =
         initial_kagemusha_ep_accumulator_v1(ep_parameters).map_err(|e| e.to_string())?;
-    let (eq_builder, eq_jobs, eq_provider) = build_half::<Fp>(&witness, eq_history.as_bytes())?;
-    let (ep_builder, ep_jobs, ep_provider) = build_half::<Fq>(&witness, ep_history.as_bytes())?;
+    let issuer_index = issuer_table.selected(witness.credential.subject.hardware_profile_id)?;
+    let (eq_builder, eq_jobs, eq_provider, eq_issuer, eq_profile) =
+        build_half::<Fp>(&witness, eq_history.as_bytes(), issuer_table)?;
+    let (ep_builder, ep_jobs, ep_provider, ep_issuer, ep_profile) =
+        build_half::<Fq>(&witness, ep_history.as_bytes(), issuer_table)?;
     Ok((
         KagemushaOrdinaryAppGuardEqCircuitV1 {
             builder: eq_builder,
             jobs: eq_jobs,
             provider_policy_root,
             provider_cells: eq_provider,
+            issuer_table: issuer_table.clone(),
+            issuer_index,
+            issuer_cells: eq_issuer,
+            profile_cells: eq_profile,
         },
         KagemushaOrdinaryAppGuardEpCircuitV1 {
             builder: ep_builder,
             jobs: ep_jobs,
             provider_policy_root,
             provider_cells: ep_provider,
+            issuer_table: issuer_table.clone(),
+            issuer_index,
+            issuer_cells: ep_issuer,
+            profile_cells: ep_profile,
         },
     ))
 }
@@ -120,10 +129,13 @@ fn equal_bytes<F: KagemushaPoseidonFieldV1>(
 fn build_half<F: KagemushaPoseidonFieldV1>(
     w: &OrdinaryGuardWitnessV1<'_>,
     history: &[u8; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    issuer_table: &OrdinaryIssuerTableV1,
 ) -> Result<
     (
         BaseCircuitBuilder<F>,
         PastaSha256JobsV1<F>,
+        [AssignedValue<F>; 2],
+        [AssignedValue<F>; 65],
         [AssignedValue<F>; 2],
     ),
     String,
@@ -134,54 +146,56 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
         .use_lookup_bits((KAGEMUSHA_HALO2_K_V1 - 1) as usize)
         .use_instance_columns(1);
     let mut jobs = PastaSha256JobsV1::default();
+    let issuer_index = issuer_table.selected(w.credential.subject.hardware_profile_id)?;
+    let issuer_raw = issuer_table.slots[issuer_index].issuer_sec1;
+    let issuer_cells = core::array::from_fn(|i| {
+        builder
+            .main(0)
+            .load_witness(F::from(u64::from(issuer_raw[i])))
+    });
     let guard = constrain_guard_bundle_semantics_v1(&mut builder, &mut jobs, w.relation)?;
-    let layout = w.credential.original_preimage_layout()?;
-    let mut preimage = layout.bytes[..layout.original.start]
-        .iter()
-        .copied()
-        .collect::<Option<Vec<_>>>()
-        .ok_or("ordinary original prefix differs")?;
-    preimage.extend(w.credential.canonical_bytes()?);
+    let mut union = assign_ordinary_credential_union_v1(&mut builder, w.credential)?;
     let range = builder.range_chip();
-    let ctx = builder.main(0);
-    let mut positions = |indices: &[usize]| {
-        let bytes = indices.iter().map(|i| preimage[*i]).collect::<Vec<_>>();
-        assign_bytes(ctx, &range, &bytes)
-    };
-    let credential = OrdinaryCredentialOriginalCellsV1 {
-        version: positions(&layout.version_bytes)
-            .try_into()
-            .map_err(|_| "ordinary version width")?,
-        platform_class: positions(&layout.platform_class_bytes),
-        security_level: positions(&layout.security_level_bytes),
-        fixed_digests: core::array::from_fn(|i| {
-            positions(&layout.fixed_digest_bytes[i])
-                .try_into()
-                .expect("model raw32")
-        }),
-        app_public_key: positions(&layout.app_public_key_bytes)
-            .try_into()
-            .map_err(|_| "ordinary SEC1 width")?,
-        scalars: core::array::from_fn(|i| positions(&layout.scalar_bytes[i])),
-        original_ed_signature: positions(&layout.signature_bytes)
-            .try_into()
-            .map_err(|_| "ordinary Ed signature width")?,
-        play_integrity_fields: layout
-            .play_integrity_bytes
-            .as_ref()
-            .map(|p| core::array::from_fn(|i| positions(&p[i]))),
-    };
-    let raw_digest = w.credential.canonical_digest()?;
-    let expected = assign_bytes(ctx, &range, &raw_digest)
-        .try_into()
-        .map_err(|_| "ordinary digest width")?;
-    let credential_digest = constrain_ordinary_credential_original_v1(
+    let ed_digest = reconstruct_ordinary_credential_union_v1(
         &mut builder,
         &mut jobs,
-        &layout,
-        &credential,
-        &expected,
+        w.credential,
+        &union,
+        false,
     )?;
+    let issuer_signature = assign_bytes(
+        builder.main(0),
+        &range,
+        w.credential.circuit_admission.signature.as_raw_bytes(),
+    )
+    .try_into()
+    .map_err(|_| "ordinary issuer signature width")?;
+    constrain_ordinary_issuer_original_v1(
+        &mut builder,
+        &mut jobs,
+        1,
+        &union.cells.fixed_digests[6],
+        &union.cells.fixed_digests[7],
+        &ed_digest,
+        &issuer_signature,
+        &w.credential.circuit_admission,
+        &issuer_raw,
+        &issuer_cells,
+    )?;
+    union.cells.issuer_admission = Some(OrdinaryCredentialIssuerCellsV1 {
+        ed_original_sha256: ed_digest,
+        signature: issuer_signature,
+    });
+    let credential_digest = reconstruct_ordinary_credential_union_v1(
+        &mut builder,
+        &mut jobs,
+        w.credential,
+        &union,
+        true,
+    )?;
+    let apple = union.apple;
+    let integrity = union.integrity;
+    let credential = union.cells;
     let static_binding = {
         let mut data = constant_bytes(b"iroha:kagemusha:v1:ordinary-app-static-binding\0");
         data.extend(constant_bytes(&416_u64.to_le_bytes()));
@@ -201,8 +215,7 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     let s_bytes = w
         .approval
         .challenge
-        .subject
-        .canonical_signing_bytes()
+        .canonical_subject_signing_bytes()
         .map_err(|e| e.to_string())?;
     let ctx = builder.main(0);
     let signed_s: [AssignedValue<F>; S::TOTAL_BYTES] =
@@ -243,101 +256,55 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
         &signed_s,
         &original,
     )?;
-    let (der, auth, tag) = match &w.approval.evidence {
-        KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
-            (signature_der.as_slice(), None, 1_u8)
-        }
-        KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
-            let (auth, der) = kagemusha_app_attest_original_parts_v1(raw_assertion)?;
-            (der, Some(auth), 2_u8)
-        }
+    let lease_digest = if let Some(lease) = w.integrity_lease {
+        Some(constrain_ordinary_integrity_lease_v1(
+            &mut builder,
+            &mut jobs,
+            &credential,
+            &credential_digest,
+            lease,
+            &issuer_raw,
+            &issuer_cells,
+            original.issued_at_ms,
+            original.expires_at_ms,
+        )?)
+    } else {
+        constrain_ordinary_initial_integrity_interval_v1(
+            &mut builder,
+            &credential,
+            integrity,
+            original.issued_at_ms,
+            original.expires_at_ms,
+        )?;
+        None
     };
-    let signature = Signature::from_der(der).map_err(|_| "ordinary original DER shape")?;
-    let r = field_be::<P256Scalar>(&signature.r().to_bytes())?;
-    let s = field_be::<P256Scalar>(&signature.s().to_bytes())?;
-    let sec1 = w.credential.subject.app_public_key.as_sec1_bytes();
-    let qx = field_be::<P256Base>(&sec1[1..33])?;
-    let qy = field_be::<P256Base>(&sec1[33..65])?;
-    let mut prehash: DigestV1 = Sha256::digest(&wrapper_bytes).into();
-    if let Some(auth) = auth {
-        let mut bytes = auth.to_vec();
-        bytes.extend_from_slice(&prehash);
-        prehash = Sha256::digest(bytes).into();
-    }
-    let z = prehash.iter().fold(P256Scalar::ZERO, |value, b| {
-        value * P256Scalar::from(256) + P256Scalar::from(u64::from(*b))
-    });
-    let mut little = prehash;
-    little.reverse();
-    let quotient = u64::from(Option::<P256Scalar>::from(P256Scalar::from_repr(little)).is_none());
-    let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
-    let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
-    let ctx = builder.main(0);
-    let key = EcPoint::new(
-        base_chip.load_private(ctx, qx),
-        base_chip.load_private(ctx, qy),
+    let evidence = super::super::ordinary_platform_union::constrain_ordinary_platform_union_v1(
+        &mut builder,
+        &mut jobs,
+        &credential,
+        w.credential.subject.app_public_key.as_sec1_bytes(),
+        w.approval,
+        &bound_wrapper,
+        apple,
+        w.previous_app_attest_counter,
+    )?;
+    let tag = range.gate().add(
+        builder.main(0),
+        apple,
+        halo2_base::QuantumCell::Constant(F::ONE),
     );
-    let r = scalar_chip.load_private(ctx, r);
-    let s = scalar_chip.load_private(ctx, s);
-    let z = scalar_chip.load_private(ctx, z);
-    let key_cells: [AssignedValue<F>; 65] = credential
-        .app_public_key
-        .map(|b| b.assigned().expect("assigned original SEC1"));
-    let signature = OrdinaryPlatformSignatureCellsV1 {
-        signature_public_key: &key,
-        enrolled_public_key: &key,
-        enrolled_public_key_sec1: &key_cells,
-        r: &r,
-        s: &s,
-        z: &z,
-        digest_reduction_quotient: ctx.load_witness(F::from(quotient)),
-    };
-    let evidence = match &w.approval.evidence {
-        KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
-            constrain_original_android_approval_stream_v1(
-                &mut builder,
-                &mut jobs,
-                signature_der,
-                &bound_wrapper,
-                &signature,
-            )?
-        }
-        KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
-            let auth = auth.ok_or("ordinary Apple authData absent")?;
-            let auth: [u8; 37] = auth
-                .try_into()
-                .map_err(|_| "ordinary App Attest authData must be exact37")?;
-            let ctx = builder.main(0);
-            let auth_cells =
-                core::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
-            let rp = credential.fixed_digests[11]
-                .map(|b| b.assigned().expect("assigned governed RP digest"));
-            let floor = ctx.load_witness(F::from(u64::from(
-                w.previous_app_attest_counter
-                    .ok_or("ordinary Apple counter floor absent")?,
-            )));
-            let counter = ctx.load_witness(F::from(u64::from(u32::from_be_bytes(
-                auth[33..37].try_into().expect("auth counter"),
-            ))));
-            constrain_original_apple_approval_stream_v1(
-                &mut builder,
-                &mut jobs,
-                raw_assertion,
-                &wrapper,
-                &auth_cells,
-                &rp,
-                floor,
-                counter,
-                &signature,
-            )?
-        }
-    };
-    let approval_digest = constrain_ordinary_approval_proof_binding_v1(
+    let approval_digest = constrain_ordinary_selected_approval_proof_binding_v1(
         &mut builder,
         &mut jobs,
         &bound_wrapper,
         tag,
         &evidence,
+    )?;
+    let authorization_digest = constrain_ordinary_authorization_proof_binding_v1(
+        &mut builder,
+        &mut jobs,
+        &approval_digest,
+        lease_digest.as_ref(),
     )?;
     let subject_bytes = signed_s
         .map(|b| PastaSha256ByteV1::range_checked(builder.main(0), &range, b))
@@ -350,7 +317,7 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     for digest in [
         guard.guard_digest.to_vec(),
         credential_digest.to_vec(),
-        approval_digest.to_vec(),
+        authorization_digest.to_vec(),
         subject_digest.to_vec(),
         provider,
     ] {
@@ -367,21 +334,16 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     builder.assigned_instances = vec![public];
     super::super::base_packing::finalize_base_params_v1(&mut builder, 9)?;
     jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)?;
-    Ok((builder, jobs, provider_cells))
+    Ok((
+        builder,
+        jobs,
+        provider_cells,
+        issuer_cells,
+        guard.hardware_profile_id,
+    ))
 }
 
-fn field_be<F: ff::PrimeField>(bytes: &[u8]) -> Result<F, String> {
-    let mut repr = F::Repr::default();
-    if repr.as_ref().len() != bytes.len() {
-        return Err("P256 field width".into());
-    }
-    for (a, b) in repr.as_mut().iter_mut().zip(bytes.iter().rev()) {
-        *a = *b;
-    }
-    Option::<F>::from(F::from_repr(repr)).ok_or("noncanonical P256 field".into())
-}
-
-fn bind_credential<F: KagemushaPoseidonFieldV1>(
+pub(crate) fn bind_credential<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     g: &KagemushaAssignedGuardBundleV1<F>,
@@ -439,7 +401,7 @@ fn bind_credential<F: KagemushaPoseidonFieldV1>(
     let expected = assigned_digest_bytes_v1(ctx, range.gate(), g.successor_epoch);
     equal_bytes(ctx, &range, &epoch_sha, &expected)
 }
-fn bind_subject<F: KagemushaPoseidonFieldV1>(
+pub(crate) fn bind_subject<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
     g: &KagemushaAssignedGuardBundleV1<F>,

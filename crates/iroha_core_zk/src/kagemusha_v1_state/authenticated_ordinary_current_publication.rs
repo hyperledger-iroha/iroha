@@ -32,7 +32,7 @@ struct Record {
     retail_certificate_original: Vec<u8>,
     app_credential_original: Vec<u8>,
     approval_original: Vec<u8>,
-    approval_proof_binding_digest: DigestV1,
+    authorization_transcript_digest: DigestV1,
     subject_signing_digest: DigestV1,
     normalized_guard_digest: DigestV1,
     state_proof: KagemushaPairedProofV1,
@@ -62,14 +62,14 @@ impl PublishedGuard {
             Self::Initial(g) => [
                 g.normalized_guard_digest(),
                 g.credential_digest(),
-                g.approval_proof_binding_digest(),
+                g.authorization_transcript_digest(),
                 g.subject_signing_digest(),
                 g.provider_policy_root(),
             ],
             Self::Restored(g) => [
                 g.normalized_guard_digest(),
                 g.credential_digest(),
-                g.approval_proof_binding_digest(),
+                g.authorization_transcript_digest(),
                 g.subject_signing_digest(),
                 g.provider_policy_root(),
             ],
@@ -135,7 +135,8 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         if verified_guard.normalized_guard_digest() != normalized_guard_digest
             || verified_guard.credential_digest()
                 != selection.enrollment().app_credential().digest()
-            || verified_guard.approval_proof_binding_digest() != approval.proof_binding_digest()
+            || verified_guard.authorization_transcript_digest()
+                != approval.authorization_binding_digest()?
             || verified_guard.subject_signing_digest()
                 != approval.challenge().subject_signing_digest
             || verified_guard.provider_policy_root()
@@ -158,7 +159,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
                 .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?,
             app_credential_original: selection.enrollment().app_credential().original().to_vec(),
             approval_original: approval.original().to_vec(),
-            approval_proof_binding_digest: approval.proof_binding_digest(),
+            authorization_transcript_digest: approval.authorization_binding_digest()?,
             subject_signing_digest: approval.challenge().subject_signing_digest,
             normalized_guard_digest,
             state_proof,
@@ -218,7 +219,7 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         let approval =
             approvals.approved_at_original_publication_time(record.published_at_ms, now)?;
         if approval.original() != record.approval_original
-            || approval.proof_binding_digest() != record.approval_proof_binding_digest
+            || approval.authorization_binding_digest()? != record.authorization_transcript_digest
             || approval.challenge().subject_signing_digest != record.subject_signing_digest
         {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
@@ -271,13 +272,14 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
                     .retained_enrollment()
                     .app_credential()
                     .digest(),
-                self.record.approval_proof_binding_digest,
+                self.record.authorization_transcript_digest,
                 self.record.subject_signing_digest,
                 self.approvals.retained_release().provider_policy_root(),
             ]
             || self.verified_guard.original() != self.record.paired_ordinary_guard_original
             || approval.original() != self.record.approval_original
-            || approval.proof_binding_digest() != self.record.approval_proof_binding_digest
+            || approval.authorization_binding_digest()?
+                != self.record.authorization_transcript_digest
             || approval.challenge().subject_signing_digest != self.record.subject_signing_digest
             || self.approvals.bootstrap_preview().state != self.record.initial_state
             || self.approvals.bootstrap_preview().statement != self.record.statement

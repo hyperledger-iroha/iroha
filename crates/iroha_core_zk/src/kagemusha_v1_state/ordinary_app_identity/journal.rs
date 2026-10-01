@@ -116,7 +116,29 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
         owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
         reference_ms: u64,
     ) -> Result<Self> {
-        owner.recheck_at_trusted_time(reference_ms)?;
+        Self::open_mode(root, owner, reference_ms, false)
+    }
+    /// Recover only an already accepted raw prefix; never create or resume a hardware effect.
+    /// Current policies/descriptors remain required although the original C may have expired.
+    /// # Errors
+    /// Rejects every incomplete/unknown/cancelled prefix or invalid historical admission.
+    pub fn open_retained_originals(
+        root: &Path,
+        owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
+        reference_ms: u64,
+    ) -> Result<Self> {
+        Self::open_mode(root, owner, reference_ms, true)
+    }
+    fn open_mode(
+        root: &Path,
+        owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
+        reference_ms: u64,
+        retained_only: bool,
+    ) -> Result<Self> {
+        owner.recheck_retained_originals_at_trusted_time(reference_ms)?;
+        if !retained_only {
+            owner.recheck_at_trusted_time(reference_ms)?;
+        }
         let clock = continuous_clock::Reading::now()?;
         let mut journal = PrivateJournal::open_existing(
             &root.join(hex::encode(owner.preparation.challenge.enrollment_id)),
@@ -186,7 +208,11 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
                 _ => return Err(Custody),
             }
         }
-        this.recheck()?;
+        if retained_only {
+            this.recheck_retained_originals()?;
+        } else {
+            this.recheck()?;
+        }
         Ok(this)
     }
     fn now(&self) -> Result<u64> {
@@ -204,6 +230,29 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
             return Err(Rejected);
         }
         Ok(())
+    }
+    /// Recheck only an accepted raw original for possession/final credential recovery.
+    /// No generation/attestation/signing method uses this check instead of fresh C admission.
+    /// # Errors
+    /// Rejects an incomplete prefix, stale current policy, changed descriptor or raw original.
+    pub fn recheck_retained_originals(&self) -> Result<()> {
+        self.journal.check_owned().map_err(|_| Custody)?;
+        if self.stage != 5 {
+            return Err(Rejected);
+        }
+        self.owner
+            .recheck_retained_originals_at_trusted_time(self.now()?)?;
+        self.pending
+            .as_ref()
+            .ok_or(Custody)?
+            .recheck_retained_originals_at_trusted_time(self.now()?)
+    }
+    /// Borrow the already accepted exact pending raw holder for completed E recovery only.
+    /// # Errors
+    /// Rejects incomplete/unknown original custody or stale current policy.
+    pub fn retained_pending_identity(&self) -> Result<&KagemushaPendingAppIdentityV1> {
+        self.recheck_retained_originals()?;
+        self.pending.as_ref().ok_or(Custody)
     }
     /// Process-local retained original ticket; exposing it does not admit another preparation.
     pub const fn ticket(&self) -> u64 {
@@ -353,7 +402,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
         ]))
     }
     /// Verify an independently fetched issuer raw original and durably admit it before E.
-    /// Native source selects this314-byte original; the mobile phase6 request supplies none.
+    /// The phase6 transport supplies an untrusted314-byte original; native admission is mandatory.
     /// # Errors
     /// Rejects altered original, issuer/time/policy/key/evidence or uncertain durable append.
     pub fn accept_raw_admission(&mut self, original: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -704,10 +753,11 @@ mod tests {
         assert_eq!(retained.len(), 2);
         assert_eq!(retained[1], Sha256::digest(&original).to_vec());
         assert_eq!(attempt.accept_raw_admission(&original).unwrap(), retained);
+        let after_raw_admission = attempt.now().unwrap();
         let e = attempt
             .pending_identity()
             .unwrap()
-            .possession_challenge(300)
+            .possession_challenge(after_raw_admission)
             .unwrap();
         assert_eq!(e.enrollment_attempt_id, c.attestation_challenge().unwrap());
         assert_ne!(e.enrollment_attempt_id, c.enrollment_id);
@@ -715,9 +765,11 @@ mod tests {
             e.raw_platform_evidence_digest,
             Sha256::digest(&raw).as_slice()
         );
+        let recovery_time = attempt.now().unwrap();
         drop(attempt);
         let attempt =
-            KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(&root, owner(&f), 300).unwrap();
+            KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(&root, owner(&f), recovery_time)
+                .unwrap();
         let recovered = attempt.recovery_fields().unwrap();
         assert_eq!(recovered[0], vec![5]);
         assert_eq!(recovered[5], original);

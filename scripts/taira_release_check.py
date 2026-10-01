@@ -18,7 +18,8 @@ Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
 explicitly selected. This preference never changes Linux release compilation.
 Cargo and native test children create owner-private locks, directories and
 outputs independently of the caller's umask; existing unsafe artifacts still
-fail custody admission. Test fixtures retain the production custody guards.
+fail custody admission. Test fixtures retain the production custody guards. Localnet/genesis engine
+checks run in the owning iroha_deploy library; Kagami retains CLI/signing checks.
 Temporary executable copies are released after their last subprocess exits,
 including non-CLI native network binaries and failed checks; observations and logs
 remain. The published native `iroha` CLI is retained for operator consumers; the
@@ -1224,13 +1225,6 @@ HARNESS_TARGETS = {
 }
 
 
-KAGAMI_STAGES = (("native Taira genesis and independent localnet profiles", (
-    "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
-    "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
-    "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
-)),)
-
-
 DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
@@ -1243,7 +1237,13 @@ DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", 
     "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
-)),)
+)), )
+
+KAGAMI_STAGES = (("native Kagami bootstrap signing and key custody", (
+    "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
+    "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
+    "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
+)), )
 
 
 KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (

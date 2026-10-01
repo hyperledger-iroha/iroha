@@ -9602,7 +9602,8 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            // Ordinary component execution follows genesis; height one requires signed genesis custody.
+            // Use a height-two component overlay with synthetic Global scope metadata.
+            // This fixture does not apply signed genesis or establish Network finality.
             let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
@@ -9716,7 +9717,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -9939,7 +9941,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -10142,7 +10145,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,

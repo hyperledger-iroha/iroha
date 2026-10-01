@@ -21,7 +21,8 @@ PROVIDER_SCHEMA = "iroha.kagemusha.ordinary-app-provider-selection.v1"
 PROFILE_FIELDS = {"version", "release_id", "network_id", "hardware_profile_id", "platform_class",
     "suite_id", "policy_epoch", "profile_valid_from_ms", "profile_expires_at_ms", "provider_policy_root",
     "authority_policy_digest", "trust_policy_digest", "issuer_policy_digest", "app_signing_identity_digest",
-    "app_release_digest", "authority_public_key", "core_preparation_public_key", "maximum_credential_lifetime_ms",
+    "app_release_digest", "authority_public_key", "ordinary_issuer_public_key_sec1_base64",
+    "core_preparation_public_key", "maximum_credential_lifetime_ms",
     "allowed_android_security_levels", "play_integrity_policy", "play_integrity_policy_base64",
     "ordinary_trust_policy_base64", "app_authority_policy_base64", "original_sha256"}
 
@@ -137,6 +138,7 @@ def decode_native_policy_projection(original: bytes) -> NativePolicyProjection:
             entry["policy_epoch"],entry["profile_valid_from_ms"],entry["profile_expires_at_ms"],
             _hex(entry["app_signing_identity_digest"],"app signing identity"),_hex(entry["app_release_digest"],"app release"),
             _hex(entry["core_preparation_public_key"],"Core preparation signer"),_hex(entry["authority_public_key"],"app authority signer"),
+            _decode_base64(entry["ordinary_issuer_public_key_sec1_base64"],"governed ordinary circuit issuer",65),
             entry["maximum_credential_lifetime_ms"],platform,integrity)
         policy.validate(); policies.append(policy)
     require(seen == configurations.keys(),"Native provider includes unserved profile")

@@ -39,13 +39,18 @@ mod mint_transport_decider;
 mod native_backend;
 #[cfg(all(
     feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
 ))]
 mod ordinary_app_guard_binding;
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_circuit;
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_verifier;
+mod ordinary_issuer_config;
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
@@ -54,14 +59,78 @@ pub(crate) use ordinary_guard_verifier::{
 };
 #[cfg(all(
     feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
 ))]
 mod ordinary_approval_proof_binding;
 #[cfg(all(
     feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_credential_union;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_guard_data_binding;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_integrity_binding;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_issuer_equation;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+pub(crate) use ordinary_guard_data_binding::{
+    KagemushaOrdinaryGuardDataBindingV1, constrain_ordinary_guard_data_binding_v1,
+};
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
 ))]
 mod ordinary_platform_equation;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_platform_union;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
 // live Claim/Terminal fold before any partial-MSM shard can authorize value.
@@ -74,7 +143,11 @@ mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
 #[cfg(all(
-    any(test, feature = "kagemusha-production-prover"),
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    ),
     feature = "zk-halo2-ipa"
 ))]
 mod terminal_body_commitment;
@@ -148,11 +221,14 @@ pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
 #[cfg(feature = "kagemusha-production-prover")]
+pub use generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1;
+#[cfg(feature = "kagemusha-production-prover")]
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
-    KagemushaProductionProverV1, KagemushaProductionTerminalProofV1,
-    register_kagemusha_native_outgoing_witness_source_v1,
+    KagemushaOrdinaryBootstrapAuxiliaryConsumerV1,
+    KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1, KagemushaProductionProverV1,
+    KagemushaProductionTerminalProofV1, register_kagemusha_native_outgoing_witness_source_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 #[cfg(test)]
@@ -1547,17 +1623,56 @@ impl KagemushaRecursionArtifactsV1 {
         }
     }
 
+    /// Select the distinct signed ordinary Guard roles for the first production State family.
+    /// This pure artifact projection does not admit a Native owner or relabel an OEM proof.
+    /// The State roles must contain newly compiled ordinary State keys; old keys cannot prove
+    /// the ordinary builder's fixed role and complete same-original relation.
+    /// # Errors
+    /// Rejects absent, malformed or colliding ordinary helper identities.
+    pub fn from_authenticated_ordinary_release(
+        release: &KagemushaAuthenticatedReleaseV1,
+        canonical_empty_effect_digest: DigestV1,
+    ) -> Result<Self, KagemushaRecursionErrorV1> {
+        let mut artifacts =
+            Self::from_authenticated_release(release, canonical_empty_effect_digest);
+        let helper = release
+            .helper_protocol(KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard)
+            .ok_or(KagemushaRecursionErrorV1::InvalidArtifacts)?;
+        artifacts.guard_bundle_eq_protocol_digest = helper.eq_protocol_digest;
+        artifacts.guard_bundle_ep_protocol_digest = helper.ep_protocol_digest;
+        artifacts.guard_bundle_verifying_key_eq =
+            release.artifact(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq);
+        artifacts.guard_bundle_verifying_key_ep =
+            release.artifact(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp);
+        artifacts.validate()?;
+        Ok(artifacts)
+    }
+
     fn validate(self) -> Result<(), KagemushaRecursionErrorV1> {
         self.mint_finality.validate()?;
-        let guard_bindings = [
+        let guard_roles = match (
+            self.guard_bundle_verifying_key_eq.role,
+            self.guard_bundle_verifying_key_ep.role,
+        ) {
             (
-                self.guard_bundle_verifying_key_eq,
                 KagemushaArtifactRoleV1::GuardBundleVkEq,
-            ),
-            (
-                self.guard_bundle_verifying_key_ep,
                 KagemushaArtifactRoleV1::GuardBundleVkEp,
-            ),
+            ) => [
+                KagemushaArtifactRoleV1::GuardBundleVkEq,
+                KagemushaArtifactRoleV1::GuardBundleVkEp,
+            ],
+            (
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+            ) => [
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+            ],
+            _ => return Err(KagemushaRecursionErrorV1::InvalidArtifacts),
+        };
+        let guard_bindings = [
+            (self.guard_bundle_verifying_key_eq, guard_roles[0]),
+            (self.guard_bundle_verifying_key_ep, guard_roles[1]),
         ];
         let wrapper_bindings = [
             (

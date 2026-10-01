@@ -123,6 +123,12 @@ use core::{fmt, str::FromStr};
 pub use public_key_allocation::{ChargedPublicKey, PublicKeyAllocationError};
 pub use public_key_input::PublicKeyEnvelopeError;
 pub use signature::admission::{SignatureVerificationError, verify_signature_borrowed};
+#[cfg(feature = "bls")]
+pub use signature::admission::{
+    verify_bls_normal_pop_borrowed, verify_bls_normal_signature_borrowed,
+};
+#[cfg(feature = "bls")]
+pub use signature::bls::aggregate_custody::BlsNormalAggregateScratch;
 #[cfg(any(feature = "bls", feature = "pqc"))]
 use std::sync::Arc;
 #[cfg(feature = "bls")]
@@ -1517,7 +1523,7 @@ pub fn bls_normal_verify_preaggregated_same_message(
 }
 /// A BLS-normal public key whose Proof-of-Possession (`PoP`) verified, parsed once.
 ///
-/// Only [`BlsNormalPopVerifiedKey::new`] creates one, and it verifies the `PoP` first, so the
+/// Each constructor verifies the `PoP` first, so the
 /// type witnesses the rogue-key precondition of aggregate verification: consensus verifies a
 /// committee member's `PoP` once, when the member is admitted, and then aggregates its key in
 /// every certificate without re-checking or re-parsing it.
@@ -1525,7 +1531,7 @@ pub fn bls_normal_verify_preaggregated_same_message(
 #[derive(Clone)]
 pub struct BlsNormalPopVerifiedKey {
     public_key: PublicKey,
-    point: signature::bls::BlsNormalPublicKey,
+    point: blstrs::G1Affine,
 }
 #[cfg(feature = "bls")]
 impl BlsNormalPopVerifiedKey {
@@ -1537,12 +1543,32 @@ impl BlsNormalPopVerifiedKey {
     pub fn new(public_key: &PublicKey, pop: &[u8]) -> Result<Self, Error> {
         bls_normal_pop_verify(public_key, pop)?;
         let payload = bls_public_key_payload(public_key, Algorithm::BlsNormal)?;
-        let point = signature::bls::BlsNormal::parse_public_key(payload)?;
+        let point = signature::bls::parsed_normal_key_borrowed(payload)
+            .map_err(signature::bls::uncached::Rejection::into_error)?;
         Ok(Self {
             public_key: public_key.clone(),
             point,
         })
     }
+    /// Verify original owned key material without copying it or retaining a cache entry.
+    ///
+    /// Success moves the same key backing into the credential. Failure returns
+    /// that exact original owner with an unformatted rejection. Both outcomes
+    /// allocate no Rust heap backing; the caller retains its existing custody.
+    ///
+    /// # Errors
+    /// Returns the original key and typed envelope/parser/relation rejection if
+    /// the BLS-normal proof does not verify. No credential is partially admitted.
+    pub fn from_owned_uncached(
+        public_key: PublicKey,
+        pop: &[u8],
+    ) -> Result<Self, (PublicKey, SignatureVerificationError)> {
+        match signature::admission::verify_bls_normal_pop_key_borrowed(&public_key, pop) {
+            Ok(point) => Ok(Self { public_key, point }),
+            Err(error) => Err((public_key, error)),
+        }
+    }
+
     /// The verified public key.
     pub fn public_key(&self) -> &PublicKey {
         &self.public_key
@@ -1590,33 +1616,16 @@ pub fn bls_normal_verify_preaggregated_multi_message(
     groups: &[(&[&BlsNormalPopVerifiedKey], &[u8])],
     aggregated_signature: &[u8],
 ) -> Result<(), Error> {
-    use std::collections::BTreeSet;
-    if groups.is_empty() {
-        return Err(Error::BadSignature);
-    }
-    let mut messages = BTreeSet::new();
-    let mut points: Vec<Vec<&signature::bls::BlsNormalPublicKey>> =
-        Vec::with_capacity(groups.len());
-    for (keys, message) in groups {
-        if keys.is_empty() || !messages.insert(*message) {
-            return Err(Error::BadSignature);
-        }
-        let mut seen = BTreeSet::new();
-        let mut group = Vec::with_capacity(keys.len());
-        for key in *keys {
-            if !seen.insert(key.payload()) {
-                return Err(Error::BadSignature);
-            }
-            group.push(&key.point);
-        }
-        points.push(group);
-    }
-    let parsed: Vec<(&[&signature::bls::BlsNormalPublicKey], &[u8])> = points
-        .iter()
-        .zip(groups)
-        .map(|(group, (_, message))| (group.as_slice(), *message))
-        .collect();
-    signature::bls::verify_preaggregated_multi_message_normal(&parsed, aggregated_signature)
+    let mut scratch = BlsNormalAggregateScratch::new(|_| Ok::<_, core::convert::Infallible>(()))
+        .unwrap_or_else(|never| match never {});
+    scratch
+        .verify(
+            groups
+                .iter()
+                .map(|(keys, message)| (keys.iter().copied(), *message)),
+            aggregated_signature,
+        )
+        .map_err(SignatureVerificationError::into_error)
 }
 // Note: small-variant pre-aggregated helpers are not exposed; consensus uses BLS-normal only.
 /// Verify BLS-Normal Proof-of-Possession (`PoP`) for a given public key.

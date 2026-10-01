@@ -17,6 +17,11 @@ enum KagemushaAppPlatformFrameV1 {
       guard f.count == 3, ticket(f[1]), (1...4096).contains(f[2].count) else {
         throw invalid("invalid original platform evidence")
       }
+    case 8:
+      guard method == .appEnrollmentPossession, f.count == 3, ticket(f[1]),
+        (1...16384).contains(f[2].count) else {
+        throw invalid("invalid final app identity original")
+      }
     default: throw invalid("unknown app platform phase")
     }
   }
@@ -67,6 +72,11 @@ enum KagemushaAppPlatformFrameV1 {
       }
     case 7:
       guard f.isEmpty else { throw invalid("cancel response carries authority") }
+    case 8:
+      guard method == .appEnrollmentPossession, f.count == 2,
+        f.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
+        throw invalid("invalid retained final app identity response")
+      }
     default: throw invalid("unknown app platform phase")
     }
   }
@@ -108,5 +118,23 @@ struct KagemushaAppPlatformReceiptProjectionV1: Sendable {
     originalID = digests[0]; nativeScope = digests[1]; challengeDigest = digests[2]
     rawEvidenceDigest = digests[3]; originalScopeDigest = digests[4]
     appleCounter = bytes[179] == 1 ? counter : nil
+  }
+}
+
+/// Bounded public digest projection of native phase8. Parsing these fields alone
+/// creates no native holder, possession receipt or financial capability.
+struct KagemushaAppEnrollmentFinalIdentityProjectionV1: Sendable {
+  let credentialDigest: Data
+  let pendingScope: Data
+
+  init(nativeFields: [Data], originalPendingScope: Data) throws {
+    let fields = nativeFields.map { Data($0) }
+    guard KagemushaAppPlatformPreparedProjectionV1.digest(originalPendingScope),
+      fields.count == 2,
+      fields.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest),
+      fields[1] == originalPendingScope else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("final app identity substituted pending scope")
+    }
+    credentialDigest = fields[0]; pendingScope = fields[1]
   }
 }

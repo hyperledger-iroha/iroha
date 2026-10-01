@@ -86,19 +86,20 @@ class PlayIntegrityRefreshChallenge:
         issuer register. Publicly supplied copies cannot create that custody.
         """
         self.signing_bytes(); policy.validate()
-        require(type(signing_request) is bytes and len(signing_request) == 831
+        require(type(signing_request) is bytes and len(signing_request) == 896
                 and signing_request[:5] == b"KOAC\x01"
                 and type(certificate) is bytes and 0 < len(certificate) <= 16*1024
                 and type(now_ms) is int and 0 < now_ms < (1 << 64) and type(fresh) is bool,
                 "retained original ordinary credential absent")
-        body = signing_request[5:-32]
+        body = signing_request[5:799]
         fields = [body[4+i*32:4+(i+1)*32] for i in range(18)]
         point = body[580:645]
         credential_issued = int.from_bytes(body[661:669], "little")
         credential_expires = int.from_bytes(body[669:677], "little")
         integrity = policy.play_integrity_policy
         require(body[:3] == b"\x01\x00\x01" and body[3] in (1, 2)
-                and signing_request[-32:] == policy.authority_public_key
+                and signing_request[799:831] == policy.authority_public_key
+                and signing_request[831:] == policy.circuit_issuer_public_key
                 and self.credential_digest == hashlib.sha256(_message(CREDENTIAL_DOMAIN, certificate)).digest()
                 and self.attested_key_id == fields[13] == hashlib.sha256(point).digest()
                 and all(getattr(self, name) == fields[index] for name, index in
@@ -202,4 +203,5 @@ def refresh_lease_signing_request(selected: PlayIntegrityRefreshChallenge, origi
              refresh_before_ms, issued_at_ms, expires_at_ms)
     body = b"\x01\x00" + b"".join(fields) + b"".join(time.to_bytes(8, "little") for time in times)
     require(len(body) == LEASE_BODY_BYTES, "refresh lease layout differs")
-    return SIGNING_REQUEST_MAGIC + body + len(original_der).to_bytes(2, "little") + original_der + policy.authority_public_key
+    return (SIGNING_REQUEST_MAGIC + body + len(original_der).to_bytes(2, "little") + original_der
+            + policy.authority_public_key + policy.circuit_issuer_public_key)

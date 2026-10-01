@@ -6945,7 +6945,9 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             key_pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
             let mut config = TestChainConfig::new(World::with([], [account], []), 0);
-            config.chain_id = label.parse().expect("canonical routing fixture chain label");
+            config.chain_id = label
+                .parse()
+                .expect("canonical routing fixture chain label");
             config.pipeline.workers = workers;
             config.validator_keys = Some(key_pairs.clone());
             let chain =
@@ -7008,8 +7010,9 @@ pub(crate) mod valid {
                 "a missing authenticated route must refuse the source before policy routing",
             );
             assert!(
-                matches!(error, BlockValidationError::ExecutionContextInvalid(reason)
-                if reason == "Network source lacks its authenticated execution route")
+                matches!(&error, BlockValidationError::ExecutionContextInvalid(reason)
+                if reason == "Network source has an invalid execution context"),
+                "contextless source must fail before routing or execution: {error:?}"
             );
             assert_eq!(
                 state_block.transactions.get(&entrypoint_hash),

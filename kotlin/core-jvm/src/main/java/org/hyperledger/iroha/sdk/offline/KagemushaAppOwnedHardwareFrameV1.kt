@@ -15,16 +15,34 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
     private val wDomain = "iroha:kagemusha:v1:app-operation-approval\u0000".toByteArray(Charsets.US_ASCII)
     private val eDomain = "iroha:kagemusha:v1:app-enrollment-possession\u0000".toByteArray(Charsets.US_ASCII)
 
-    fun requireRequest(fields: List<ByteArray>) {
+    fun requireRequest(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>) {
         when (phase(fields)) {
             1 -> { count(fields, 2); digest(fields[1]) }
             2, 4, 5, 6, 7 -> { count(fields, 2); ticket(fields[1]) }
             3 -> { count(fields, 3); ticket(fields[1]); require(fields[2].size in 1..4096) }
+            8 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+                count(fields, 3); ticket(fields[1]); require(fields[2].size in 1..16 * 1024)
+            }
+            9 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+                count(fields, 4); ticket(fields[1]); require(fields[2].size in 1..32 * 1024); digest(fields[3])
+            }
+            10, 13, 14 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+                count(fields, 2); ticket(fields[1])
+            }
+            11, 12 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+                count(fields, 3); ticket(fields[1])
+                if (phase(fields) == 11) require(fields[2].size == 64) else require(fields[2].size in 1..16 * 1024)
+            }
             else -> error("Unknown native app-signing phase")
         }
     }
 
     fun requireResponse(method: KagemushaCoreCoordinatorMethodV1, request: List<ByteArray>, fields: List<ByteArray>) {
+        if (phase(request) >= 9) require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
         when (phase(request)) {
             1 -> prepare(method, request[1], fields)
             2 -> state(fields, fenced = true, method = method, ticket = request[1])
@@ -33,6 +51,31 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
             5 -> state(fields, fenced = false, method = method, ticket = request[1])
             6 -> { count(fields, 2); fields.forEach(::digest) }
             7 -> count(fields, 0)
+            8 -> {
+                require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+                count(fields, 2); fields.forEach(::digest)
+            }
+            9 -> {
+                count(fields, 5); ticket(fields[0]); equal(fields[1], request[2]); equal(fields[2], request[3])
+                digest(fields[3]); digest(fields[4])
+            }
+            10 -> {
+                count(fields, 2)
+                require(fields[0].contentEquals(byteArrayOf(1)) && fields[1].isEmpty() ||
+                    fields[0].contentEquals(byteArrayOf(2)) && fields[1].size == 64)
+            }
+            11 -> { count(fields, 1); equal(fields[0], sha(request[2])) }
+            12 -> { count(fields, 2); fields.forEach(::digest) }
+            13 -> {
+                count(fields, 3); require(fields[0].size == 1)
+                when (fields[0][0].toInt()) {
+                    0, 1 -> require(fields[1].isEmpty() && fields[2].isEmpty())
+                    2 -> require(fields[1].size == 64 && fields[2].isEmpty())
+                    3 -> require(fields[1].size == 64 && fields[2].size in 1..16 * 1024)
+                    else -> error("Invalid original native retail ceremony state")
+                }
+            }
+            14 -> count(fields, 0)
             else -> error("Unknown native app-signing phase")
         }
     }
@@ -110,6 +153,7 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
             require(fields[1].size in 1..4096 && fields[2].isEmpty())
         } else if ((fenced && state == 3) || (!fenced && state == 2)) {
             require(fields[1].size in 1..4096); receiptShape(fields[2], method, ticket)
+            equal(fields[2].copyOfRange(115, 147), sha(fields[1]))
         } else error("Invalid native original app-signing state")
     }
 
@@ -121,6 +165,7 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
         ticket(value.copyOfRange(11, 19)); repeat(5) { digest(value.copyOfRange(19 + it * 32, 51 + it * 32)) }
         require(value[179].toInt() in 0..1)
         if (value[179] == 0.toByte()) require(value.copyOfRange(180, 184).all { it == 0.toByte() })
+        else require(value.copyOfRange(180, 184).any { it != 0.toByte() })
     }
     private fun phase(fields: List<ByteArray>): Int {
         require(fields.isNotEmpty() && fields[0].size == 4)

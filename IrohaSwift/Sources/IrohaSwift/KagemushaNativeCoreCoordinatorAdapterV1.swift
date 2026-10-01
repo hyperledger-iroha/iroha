@@ -60,9 +60,12 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     try bridge.prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: originalEnrollmentChallengeHash)
   }
 
-  /// Resolve the independently installed original enrollment without choosing its ID or C.
-  public func prepareOriginalIdentity() throws -> KagemushaNativePreparedOrdinaryAppIdentityV1 {
-    try bridge.prepareOriginalIdentity()
+  /// Read the existing native selector without creating an identity or reservation.
+  public func originalEnrollmentID() throws -> Data { try bridge.originalEnrollmentID() }
+
+  /// Reserve the native-selected account and nonce for explicit signed-original intake.
+  public func reserveOriginalIdentity() throws -> KagemushaNativeReservedOrdinaryAppIdentityV1 {
+    try bridge.reserveOriginalIdentity()
   }
 
   /// Revoke this wallet's native handle on logout or account switch.

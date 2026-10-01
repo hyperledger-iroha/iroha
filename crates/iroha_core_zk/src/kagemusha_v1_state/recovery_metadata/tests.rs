@@ -754,10 +754,14 @@ fn bootstrap_stage(hardware: SimulatedHardware, change: usize) -> BootstrapStage
         ExactConsumedCreditIndex::empty().root(),
     )
     .unwrap();
+    let initial_credential = KagemushaAcceptedCredentialFloorV1::Oem {
+        credential,
+        release_id: original.accepted_credential_floor().release_id(),
+    };
     KagemushaBootstrapJournalStageV1::new(
         state,
         original.proof_release,
-        credential,
+        initial_credential,
         enrollment,
         KagemushaDurableCapacityV1 {
             inbox_bytes: 32 * 1024 * 1024,

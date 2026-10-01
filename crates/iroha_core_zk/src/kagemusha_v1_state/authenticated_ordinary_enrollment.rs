@@ -65,6 +65,24 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
                 .recheck_at_trusted_time(now)
                 .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
         }
+        self.recheck_original_bindings()
+    }
+
+    fn recheck_original_admission(&self) -> Result<(), KagemushaStateErrorV1> {
+        // Completed custody retains the original short possession ceremony. A later genuine
+        // refresh lease is checked only at actual current Native time, never backdated here.
+        let admitted = self.enrollment.authenticated_at_ms();
+        self.enrollment
+            .recheck_at_trusted_time(admitted)
+            .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        self.enrollment
+            .possession()
+            .recheck_at_trusted_time(admitted)
+            .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        self.recheck_original_bindings()
+    }
+
+    fn recheck_original_bindings(&self) -> Result<(), KagemushaStateErrorV1> {
         let retail = &self.enrollment.certificate().subject;
         let credential = self.enrollment.app_credential();
         let subject = credential.subject();
@@ -117,6 +135,29 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
         self.credential().subject().financial_authority_commitment
     }
 
+    pub(crate) fn approval_valid_until_ms(&self) -> u64 {
+        let subject = self.credential().subject();
+        let integrity_expiry = self.integrity_lease.map_or_else(
+            || {
+                subject
+                    .play_integrity
+                    .map_or(subject.expires_at_ms, |pi| pi.refresh_before_ms)
+            },
+            |lease| {
+                lease
+                    .subject()
+                    .expires_at_ms
+                    .min(lease.subject().binding.refresh_before_ms)
+            },
+        );
+        self.enrollment
+            .certificate()
+            .subject
+            .expires_at_ms
+            .min(subject.expires_at_ms)
+            .min(integrity_expiry)
+    }
+
     /// Original authenticated Apple enrollment counter floor, separate from financial indexes.
     pub fn app_attest_counter_floor(&self) -> Option<u32> {
         self.enrollment.possession().app_attest_counter()
@@ -158,7 +199,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryCredentialFloorV1<'a> {
     fn checkpoint_floor(
         &self,
     ) -> Result<KagemushaAcceptedCredentialFloorV1, KagemushaStateErrorV1> {
-        self.recheck_at_trusted_time(self.enrollment.authenticated_at_ms())?;
+        self.recheck_original_admission()?;
         Ok(KagemushaAcceptedCredentialFloorV1::OrdinaryApp {
             credential: iroha_data_model::kagemusha::KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(
                 self.credential().original(),
@@ -226,8 +267,28 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
         self.floor
             .enrollment
             .possession()
-            .recheck_at_trusted_time(now)
+            .recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())
             .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
+        let release = admitted_release(&self.recursive_verifier)?;
+        if release.release_id() != self.floor.release.release_id()
+            || release.attestation_digest() != self.floor.release.attestation_digest()
+            || release.authority_policy_digest() != self.floor.release.authority_policy_digest()
+        {
+            return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
+        }
+        let (proof_release, preview) = derive_preview(
+            &self.floor,
+            self.preview.statement.state_nonce_commitment,
+            self.capacity,
+        )?;
+        if preview != self.preview || proof_release.artifacts != self.proof_release.artifacts {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
+    }
+
+    fn recheck_original_selection(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.floor.recheck_original_admission()?;
         let release = admitted_release(&self.recursive_verifier)?;
         if release.release_id() != self.floor.release.release_id()
             || release.attestation_digest() != self.floor.release.attestation_digest()
@@ -248,7 +309,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
 
     /// Complete genuine initial semantic instance; proving does not initialize its storage.
     pub fn preview(&self) -> Result<&BootstrapPreviewV1, KagemushaStateErrorV1> {
-        self.recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())?;
+        self.recheck_original_selection()?;
         Ok(&self.preview)
     }
     /// Exact verified issuer/app credential original retained throughout proving.
@@ -267,7 +328,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
     pub fn authenticated_release(
         &self,
     ) -> Result<Arc<KagemushaAuthenticatedReleaseV1>, KagemushaStateErrorV1> {
-        self.recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())?;
+        self.recheck_original_selection()?;
         Ok(Arc::clone(&self.floor.release))
     }
 
@@ -281,7 +342,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
         &self,
         proof: &KagemushaPairedProofV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        self.recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())?;
+        self.recheck_original_selection()?;
         let inputs =
             bootstrap_state_public_inputs(self.proof_release.artifacts, &self.preview, proof)?;
         verify_kagemusha_state_proof_v1(
@@ -291,7 +352,7 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
             proof,
         )
         .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?;
-        self.recheck_at_trusted_time(self.floor.enrollment.authenticated_at_ms())
+        self.recheck_original_selection()
     }
 }
 
@@ -315,7 +376,8 @@ fn derive_preview(
         .release
         .enabled_profile(subject.hardware_profile_id)
         .ok_or(KagemushaStateErrorV1::InvalidHardwareProfile)?;
-    let proof_release = KagemushaStateProofReleaseV1::from_authenticated_release(&floor.release)?;
+    let proof_release =
+        KagemushaStateProofReleaseV1::from_authenticated_ordinary_release(&floor.release)?;
     let context = KagemushaStateContextV1 {
         protocol_version: KAGEMUSHA_STATE_VERSION_V1,
         suite_id: enabled.suite_id,
@@ -500,6 +562,49 @@ mod tests {
     }
 
     #[test]
+    fn completed_original_floor_does_not_backdate_a_current_integrity_lease() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let enrollment = fixture.verify(300).unwrap();
+        let (challenge, raw_lease) = fixture.integrity_refresh_originals();
+        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let lease = raw_lease
+            .authenticate(
+                enrollment.app_credential(),
+                &fixture.release,
+                &fixture.trust,
+                &fixture.app_authority,
+                &challenge,
+                issuer.public_key(),
+                1500,
+            )
+            .unwrap();
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment_with_integrity_lease(
+            &enrollment, Arc::clone(&fixture.release), &lease, 2100).unwrap();
+        // The original two-minute possession is over. This projection retains its actual
+        // original admission and performs separate genuine current lease admission at 2100.
+        assert!(
+            enrollment
+                .possession()
+                .recheck_at_trusted_time(2100)
+                .is_err()
+        );
+        assert!(floor.recheck_at_trusted_time(300).is_err());
+        let checkpoint = floor.checkpoint_floor().unwrap();
+        assert_eq!(
+            checkpoint
+                .ordinary_original()
+                .unwrap()
+                .canonical_bytes()
+                .unwrap(),
+            enrollment.app_credential().original()
+        );
+        let (_, preview) = derive_preview(&floor, [41; 32], capacity()).unwrap();
+        floor.validate_current(&preview.state).unwrap();
+        assert!(floor.recheck_at_trusted_time(2400).is_err());
+    }
+
+    #[test]
     fn closed_checkpoint_floor_retains_exact_ordinary_original_without_oem_conversion() {
         for apple in [false, true] {
             let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
@@ -512,8 +617,10 @@ mod tests {
             let original = floor.checkpoint_floor().unwrap();
             assert!(original.oem_original().is_err());
             assert_eq!(
-                original.ordinary_original(),
-                Some(enrollment.app_credential().original())
+                original
+                    .ordinary_original()
+                    .map(|credential| credential.canonical_bytes().unwrap()),
+                Some(enrollment.app_credential().original().to_vec())
             );
             assert_eq!(
                 original.original_digest().unwrap(),

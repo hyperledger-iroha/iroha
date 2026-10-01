@@ -29,6 +29,27 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
   /// These bytes are correlation data and cannot recreate this capability.
   public func signingBytes() throws -> Data { try recheck().signingBytes }
 
+  /// Return an original issuer-signed canonical credential archive to the same native
+  /// pending owner. Native Core authenticates, correlates and durably retains it.
+  /// A completed E may recover the identical previously issued credential after C's
+  /// short interval; current native policy, credential and Integrity still must pass.
+  /// This method makes no issuer request, device assertion or financial-ready result.
+  public func acceptOriginalFinalCredential(_ canonicalSignedCredential: Data) throws
+    -> KagemushaNativeOrdinaryAppIdentityConfirmationV1 {
+    // Reject before dispatch and retain a defensive copy of the untrusted original.
+    // Swift does not decode this archive into authority or select its issuer/policy.
+    guard (1...16384).contains(canonicalSignedCredential.count) else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid final app identity original size")
+    }
+    let originalCredential = Data(canonicalSignedCredential)
+    _ = try recheck()
+    let fields = try call(8, raw: originalCredential)
+    let accepted = try KagemushaAppEnrollmentFinalIdentityProjectionV1(
+      nativeFields: fields, originalPendingScope: original.nativeScope)
+    _ = try recheck()
+    return KagemushaNativeOrdinaryAppIdentityConfirmationV1(accepted: accepted)
+  }
+
   /// Cancel this original ticket. Native Core rejects cancellation after invocation.
   public func cancel() throws { _ = try call(7) }
 
@@ -114,6 +135,18 @@ public struct KagemushaNativeAppEnrollmentPossessionReceiptV1: Sendable {
     enrollmentChallengeHash = receipt.originalID; keyID = original.keyID; keyAlias = original.keyAlias
     signingDigest = receipt.challengeDigest; rawAssertionDigest = receipt.rawEvidenceDigest
     observedCounter = receipt.appleCounter!; canonicalReceipt = receipt.canonicalBytes
+  }
+}
+
+/// Native confirmation that the same pending E owner retained a current signed app
+/// identity. It grants no financial readiness and is distinct from the E receipt.
+/// Only the genuine prepared holder's guarded phase8 path can create this value.
+public struct KagemushaNativeOrdinaryAppIdentityConfirmationV1: Sendable {
+  public let credentialDigest: Data
+  public let pendingScope: Data
+
+  fileprivate init(accepted: KagemushaAppEnrollmentFinalIdentityProjectionV1) {
+    credentialDigest = accepted.credentialDigest; pendingScope = accepted.pendingScope
   }
 }
 

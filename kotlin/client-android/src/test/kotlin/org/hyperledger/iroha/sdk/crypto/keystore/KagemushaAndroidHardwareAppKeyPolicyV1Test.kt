@@ -13,6 +13,11 @@ class KagemushaAndroidHardwareAppKeyPolicyV1Test {
         remaining: Int = KeyProperties.UNRESTRICTED_USAGE_COUNT, exportable: Boolean = false,
         policy: KagemushaAndroidAppKeyHardwarePolicyV1 = KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY) =
         requirePersistentHardwareAppKeyV1(level, origin, purposes, digests, remaining, exportable, policy)
+    @Test fun provisioningApiEligibilityHasNoOmapiStrongBoxOrOneUseQualificationClaim() {
+        assertEquals(false, persistentHardwareAppKeyApiAvailableV1(27))
+        assertEquals(true, persistentHardwareAppKeyApiAvailableV1(28))
+        assertEquals(true, persistentHardwareAppKeyApiAvailableV1(35))
+    }
     @Test fun persistentGeneratedStrongBoxDoesNotRequireFiniteUsageOrRollbackTags() { check() }
     @Test fun genuineTeeIsAcceptedOnlyUnderItsExplicitPolicy() {
         check(level = KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT, policy = KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX)

@@ -148,7 +148,8 @@ fn install_current_lane_manifest_registry(state: &State) {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
-// The stored-manifest component has an explicit committed global root.
+// This component World/height overlay uses synthetic Global scope metadata.
+// It does not apply signed genesis or establish an authenticated root or Network finality.
 fn manifest_admission_root_parameter() -> iroha_data_model::parameter::Parameter {
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
@@ -320,8 +321,8 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
-    // Register and activate the exact self-describing artifact so raw dispatch
-    // resolves through a live production contract identity.
+    // Register and activate the exact artifact in the synthetic scoped component
+    // World so raw dispatch exercises the canonical local identity lookup.
     iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
         artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,

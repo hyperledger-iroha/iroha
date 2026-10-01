@@ -2456,9 +2456,9 @@ mod tests {
             0,
         )
     }
-    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
-        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-    }
+    // Direct ISI component tests explicitly retain a bounded source invocation
+    // before borrowing State. This grants no Network or publication authority;
+    // executor_asset_lock_admission_tests exercises signed certified execution.
     fn state_with_parties(
         seller: &AccountId,
         buyer: &AccountId,
@@ -2532,26 +2532,31 @@ mod tests {
             amount: Quantity::from(40_u32),
             evidence_hashes: Vec::new(),
         };
+        // Missing invocation custody poisons its carrier. Keep that refusal intact;
+        // a successful independent component attempt needs its own pristine owner.
+        {
+            let mut block = state.block(block_header(1_000));
+            let mut unretained = block.transaction();
+            unretained.tx_call_hash = Some(call_hash);
+            let error = instruction
+                .clone()
+                .execute(&seller, &mut unretained)
+                .expect_err("a hash alone does not own its invocation");
+            assert!(
+                error
+                    .to_string()
+                    .contains("no retained producer invocation"),
+                "unexpected source refusal: {error}"
+            );
+            assert_eq!(
+                balance(&unretained, &seller, &asset_definition),
+                Quantity::from(100_u32)
+            );
+            assert!(unretained.world.asset_escrows.get(&escrow_id).is_none());
+            drop(unretained);
+            assert_eq!(block.committed_fragment_count(), 0);
+        }
         let mut block = state.block(block_header(1_000));
-        let mut unretained = block.transaction();
-        unretained.tx_call_hash = Some(call_hash);
-        let error = instruction
-            .clone()
-            .execute(&seller, &mut unretained)
-            .expect_err("a hash alone does not own its invocation");
-        assert!(
-            error
-                .to_string()
-                .contains("no retained producer invocation"),
-            "unexpected source refusal: {error}"
-        );
-        assert_eq!(
-            balance(&unretained, &seller, &asset_definition),
-            Quantity::from(100_u32)
-        );
-        assert!(unretained.world.asset_escrows.get(&escrow_id).is_none());
-        drop(unretained);
-
         let mut retained = block.transaction_for_fastpq_testing(call_hash);
         instruction
             .execute(&seller, &mut retained)
@@ -2967,9 +2972,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::prehashed([0xA2; Hash::LENGTH]));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -3021,9 +3024,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC1; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC1);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC1; Hash::LENGTH]));
         OpenAssetLock::with_options(
             escrow_id,
             asset_definition.clone(),
@@ -3147,13 +3148,11 @@ mod tests {
         .expect("dataspace catalog");
         let mut block = state.block(block_header(1_000));
         block.nexus.dataspace_catalog = catalog.clone();
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC9; Hash::LENGTH]));
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC9; Hash::LENGTH]));
         tx.nexus.dataspace_catalog = catalog.clone();
         tx.world.dataspace_catalog = catalog;
         tx.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
-        seed_test_call_hash(&mut tx, 0xC9);
         OpenAssetLock::new(
             escrow_id,
             asset_definition.clone(),
@@ -3237,9 +3236,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC2);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
             asset_definition.clone(),
@@ -3316,9 +3313,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC3);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
         OpenAssetLock::new(
             no_deadline_id,
             asset_definition.clone(),
@@ -3405,9 +3400,7 @@ mod tests {
             Quantity::from(40_u32),
         );
         let mut block = state.block(block_header(3_100));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC4);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
         let zero_id = fixture_escrow_id("lock-open-zero");
         let err = OpenAssetLock::new(
             zero_id,
@@ -3506,9 +3499,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_200));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC5);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
         let marketplace_id = fixture_escrow_id("lock-drawdown-marketplace");
         OpenAssetEscrow {
             escrow_id: marketplace_id,
@@ -3641,9 +3632,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_300));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC6);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
         OpenAssetLock::new(
             drawdown_id,
             asset_definition.clone(),
@@ -3762,9 +3751,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_400));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC7; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC7);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC7; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
             asset_definition.clone(),
@@ -3852,9 +3839,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xA3; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::prehashed([0xA3; Hash::LENGTH]));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA3; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4046,9 +4031,7 @@ mod tests {
         );
         let mut block = state.block(block_header(1_000));
         let call_hash = Hash::prehashed([0xA1; Hash::LENGTH]);
-        block.admit_fastpq_source_for_testing(call_hash);
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(call_hash);
+        let mut tx = block.transaction_for_fastpq_testing(call_hash);
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4116,9 +4099,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB1);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4166,9 +4147,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(1_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB2);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4217,9 +4196,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB3; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB3);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB3; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4258,9 +4235,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(2_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB4);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4306,9 +4281,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB5; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB5);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB5; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4391,9 +4364,7 @@ mod tests {
         );
         let mut block = state.block(block_header(3_000));
         let call_hash = Hash::prehashed([0xA2; Hash::LENGTH]);
-        block.admit_fastpq_source_for_testing(call_hash);
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(call_hash);
+        let mut tx = block.transaction_for_fastpq_testing(call_hash);
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4469,9 +4440,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(3_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB6);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4533,9 +4502,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(4_000));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xB7);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
         OpenAssetEscrow {
             escrow_id,
             asset_definition: asset_definition.clone(),
@@ -4627,9 +4594,7 @@ mod tests {
             Quantity::from(100_u32),
         );
         let mut block = state.block(block_header(4_100));
-        block.admit_fastpq_source_for_testing(Hash::prehashed([0xC8; Hash::LENGTH]));
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0xC8);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC8; Hash::LENGTH]));
         OpenAssetLock::new(
             escrow_id,
             asset_definition.clone(),

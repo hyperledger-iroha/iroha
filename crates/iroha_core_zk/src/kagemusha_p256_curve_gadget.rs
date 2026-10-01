@@ -269,7 +269,7 @@ pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
 ///
 /// The top five bits of the 87-by-three limb layout must be zero. This works
 /// for canonical P-256 base coordinates and scalar residues alike.
-fn p256_uint_bits_le<F: BigPrimeField>(
+pub(crate) fn p256_uint_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
     value: &ProperCrtUint<F>,
@@ -1560,7 +1560,10 @@ mod apple_assertion_tests {
             provider_policy_root: [2; 32],
             app_policy_digest: [3; 32],
             credential_id: [4; 32],
-            network_id: NetworkId::from_bytes([5; 32]),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::from_marked_bytes([5; 32])
+                    .expect("marked network identity fixture"),
+            )),
             lane_commitment: [6; 32],
             hardware_profile_id: [7; 32],
             policy_epoch: 1,

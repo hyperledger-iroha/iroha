@@ -77,9 +77,10 @@ pub(super) enum Signature {
 // w3f-bls 0.1.9 prefixes the Basic ciphersuite and MESSAGE_CONTEXT to the
 // message, then hashes with the single-byte DST [1]. These are augmentation
 // INPUT, not IETF/Ethereum ciphersuite DSTs.
-const NORMAL_PREFIX: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
+pub(super) const NORMAL_PREFIX: &[u8] =
+    b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
 const SMALL_PREFIX: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_for signing messages";
-const HASH_TO_FIELD_DST: &[u8] = &[1];
+pub(super) const HASH_TO_FIELD_DST: &[u8] = &[1];
 
 fn g1(bytes: &[u8]) -> Option<G1Affine> {
     let encoded: &[u8; 48] = bytes.try_into().ok()?;

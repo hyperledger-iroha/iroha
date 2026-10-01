@@ -153,6 +153,28 @@ pub(super) fn validate_request(
         }
     } else {
         match phase {
+            9 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
+                count(f, 4)?;
+                check(!f[2].is_empty() && f[2].len() <= 32 * 1024)?;
+                digest(&f[3])
+            }
+            10 | 13 | 14
+                if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession =>
+            {
+                count(f, 2)
+            }
+            11 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
+                count(f, 3)?;
+                check(f[2].len() == 64)
+            }
+            12 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
+                count(f, 3)?;
+                check(!f[2].is_empty() && f[2].len() <= 16 * 1024)
+            }
+            8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
+                count(f, 3)?;
+                check(!f[2].is_empty() && f[2].len() <= 16 * 1024)
+            }
             2 | 4 | 5 | 6 | 7 => count(f, 2),
             3 => {
                 count(f, 3)?;
@@ -170,6 +192,42 @@ pub(super) fn validate_response(
     let phase = number(&q[0])?;
     if method == KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity {
         return c_response(phase, q, r);
+    }
+    if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession && phase >= 9 {
+        return match phase {
+            9 => {
+                count(r, 5)?;
+                ticket(&r[0])?;
+                check(r[1] == q[2] && r[2] == q[3])?;
+                digest(&r[3])?;
+                digest(&r[4])
+            }
+            10 => {
+                count(r, 2)?;
+                check(r[0] == [1] && r[1].is_empty() || r[0] == [2] && r[1].len() == 64)
+            }
+            11 => {
+                count(r, 1)?;
+                check(r[0] == Sha256::digest(&q[2])[..])
+            }
+            12 => {
+                count(r, 2)?;
+                digest(&r[0])?;
+                digest(&r[1])
+            }
+            13 => {
+                count(r, 3)?;
+                check(r[0].len() == 1)?;
+                match r[0][0] {
+                    0 | 1 => check(r[1].is_empty() && r[2].is_empty()),
+                    2 => check(r[1].len() == 64 && r[2].is_empty()),
+                    3 => check(r[1].len() == 64 && !r[2].is_empty() && r[2].len() <= 16 * 1024),
+                    _ => Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+                }
+            }
+            14 => count(r, 0),
+            _ => Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+        };
     }
     match phase {
         1 => approval_projection(method, &q[1], r),
@@ -198,6 +256,11 @@ pub(super) fn validate_response(
             receipt(method, &q[1], &r[0])
         }
         6 => {
+            count(r, 2)?;
+            digest(&r[0])?;
+            digest(&r[1])
+        }
+        8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
             count(r, 2)?;
             digest(&r[0])?;
             digest(&r[1])
@@ -532,8 +595,11 @@ mod tests {
     fn identity_phase_six_has_no_app_admission_or_verdict() {
         let m = KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity;
         let mut f = vec![6u32.to_le_bytes().to_vec(), 1u64.to_le_bytes().to_vec()];
-        validate_request(m, &f).unwrap();
+        assert!(validate_request(m, &f).is_err());
         f.push(vec![7; 314]);
+        // These are untrusted exact-width issuer originals, never an app admission verdict.
+        validate_request(m, &f).unwrap();
+        f[2].pop();
         assert!(validate_request(m, &f).is_err());
     }
     #[test]
@@ -554,5 +620,33 @@ mod tests {
         let mut changed = r;
         changed[1] = vec![];
         assert!(validate_response(m, &q, &changed).is_err());
+    }
+    #[test]
+    fn final_identity_intake_is_e20_only_and_keeps_legacy_field_limits() {
+        let ticket = 7u64.to_le_bytes().to_vec();
+        let request = vec![
+            8u32.to_le_bytes().to_vec(),
+            ticket.clone(),
+            vec![23; 16 * 1024],
+        ];
+        let e = KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession;
+        assert!(validate_request(e, &request).is_ok());
+        assert!(
+            validate_request(
+                KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval,
+                &request
+            )
+            .is_err()
+        );
+        assert!(validate_request(e, &request[..2]).is_err());
+        let mut oversized = request.clone();
+        oversized[2].push(23);
+        assert!(validate_request(e, &oversized).is_err());
+        assert!(validate_response(e, &request, &[vec![11; 32], vec![12; 32]]).is_ok());
+        assert!(validate_response(e, &request, &[vec![11; 32]]).is_err());
+        assert!(validate_response(e, &request, &[vec![0; 32], vec![12; 32]]).is_err());
+        // Framing/shape only: these arbitrary archive bytes establish no identity or signature.
+        let q = super::super::kagemusha_core_coordinator_encode_request_v1(&request).unwrap();
+        assert!(q.len() <= KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1);
     }
 }

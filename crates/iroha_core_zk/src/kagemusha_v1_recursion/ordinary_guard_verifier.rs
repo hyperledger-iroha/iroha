@@ -56,7 +56,7 @@ pub(super) struct OrdinaryGuardProofWireV1 {
     pub(super) ep_protocol_digest: DigestV1,
     pub(super) normalized_guard_digest: DigestV1,
     pub(super) credential_digest: DigestV1,
-    pub(super) approval_proof_binding_digest: DigestV1,
+    pub(super) authorization_transcript_digest: DigestV1,
     pub(super) subject_signing_digest: DigestV1,
     pub(super) provider_policy_root: DigestV1,
     pub(super) eq_proof: Vec<u8>,
@@ -84,7 +84,7 @@ impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
     pub(crate) fn credential_digest(&self) -> DigestV1 {
         self.credential
     }
-    pub(crate) fn approval_proof_binding_digest(&self) -> DigestV1 {
+    pub(crate) fn authorization_transcript_digest(&self) -> DigestV1 {
         self.approval
     }
     pub(crate) fn subject_signing_digest(&self) -> DigestV1 {
@@ -121,7 +121,7 @@ pub(crate) fn verify_ordinary_bootstrap_guard_v1(
     let admitted = verify_selected_original(
         selection,
         approval.challenge(),
-        approval.proof_binding_digest(),
+        approval.authorization_binding_digest()?,
         approval.retained_release(),
         paired_guard,
     )?;
@@ -143,8 +143,8 @@ impl KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     pub(crate) fn credential_digest(&self) -> DigestV1 {
         self.verified.credential_digest()
     }
-    pub(crate) fn approval_proof_binding_digest(&self) -> DigestV1 {
-        self.verified.approval_proof_binding_digest()
+    pub(crate) fn authorization_transcript_digest(&self) -> DigestV1 {
+        self.verified.authorization_transcript_digest()
     }
     pub(crate) fn subject_signing_digest(&self) -> DigestV1 {
         self.verified.subject_signing_digest()
@@ -177,7 +177,10 @@ pub(crate) fn verify_ordinary_bootstrap_guard_historical_v1(
     trusted_native_now_ms: u64,
 ) -> Result<KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1> {
     approval.recheck_originals(publication_time_ms, trusted_native_now_ms)?;
-    selection.recheck_at_trusted_time(publication_time_ms)?;
+    // The original approval's own lease is checked at its retained publication instant by the
+    // historical holder. The selection's latest lease must be checked at actual native now;
+    // a later refresh must never be backdated to the initial publication time.
+    selection.recheck_at_trusted_time(trusted_native_now_ms)?;
     if !core::ptr::eq(
         selection.enrollment(),
         approval.retained_enrollment().as_ref(),
@@ -187,11 +190,11 @@ pub(crate) fn verify_ordinary_bootstrap_guard_historical_v1(
     let verified = verify_selected_original(
         selection,
         approval.challenge(),
-        approval.proof_binding_digest(),
+        approval.authorization_binding_digest()?,
         approval.retained_release(),
         paired_guard,
     )?;
-    selection.recheck_at_trusted_time(publication_time_ms)?;
+    selection.recheck_at_trusted_time(trusted_native_now_ms)?;
     approval.recheck_originals(publication_time_ms, trusted_native_now_ms)?;
     Ok(KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
         verified,
@@ -248,7 +251,7 @@ fn verify_selected_original(
     if [
         wire.normalized_guard_digest,
         wire.credential_digest,
-        wire.approval_proof_binding_digest,
+        wire.authorization_transcript_digest,
         wire.subject_signing_digest,
         wire.provider_policy_root,
     ] != expected
@@ -331,7 +334,7 @@ fn verify_wire(w: &OrdinaryGuardProofWireV1, m: &OrdinaryGuardMaterialV1<'_>) ->
     let digests = [
         w.normalized_guard_digest,
         w.credential_digest,
-        w.approval_proof_binding_digest,
+        w.authorization_transcript_digest,
         w.subject_signing_digest,
         w.provider_policy_root,
     ];

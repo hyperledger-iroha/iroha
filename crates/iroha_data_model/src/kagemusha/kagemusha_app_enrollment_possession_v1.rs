@@ -137,6 +137,7 @@ pub struct KagemushaVerifiedAppEnrollmentPossessionV1 {
     original: Vec<u8>,
     digest: [u8; 32],
     app_attest_counter: Option<u32>,
+    app_attest_release_measurement: Option<super::KagemushaAppAttestReleaseMeasurementV1>,
 }
 impl KagemushaVerifiedAppEnrollmentPossessionV1 {
     /// Borrow exact E for native scope checks.
@@ -159,6 +160,13 @@ impl KagemushaVerifiedAppEnrollmentPossessionV1 {
     pub const fn app_attest_counter(&self) -> Option<u32> {
         self.app_attest_counter
     }
+    /// Actual signed release measurement; limited37-byte assertions explicitly report unavailable.
+    #[must_use]
+    pub const fn app_attest_release_measurement(
+        &self,
+    ) -> Option<super::KagemushaAppAttestReleaseMeasurementV1> {
+        self.app_attest_release_measurement
+    }
 }
 impl KagemushaAppEnrollmentPossessionV1 {
     /// Authenticate E under independently held pending enrollment selectors.
@@ -175,6 +183,7 @@ impl KagemushaAppEnrollmentPossessionV1 {
         original_key: &KagemushaDevicePublicKeyV1,
         platform: KagemushaHardwarePlatformClassV1,
         app_signing_identity_digest: [u8; 32],
+        app_release_digest: [u8; 32],
         original_apple_counter_floor: Option<u32>,
         trusted_now_ms: u64,
     ) -> Result<KagemushaVerifiedAppEnrollmentPossessionV1, String> {
@@ -188,10 +197,11 @@ impl KagemushaAppEnrollmentPossessionV1 {
         {
             return Err("app enrollment possession original binding differs".into());
         }
-        let counter = self.evidence.authenticate_signature(
+        let (counter, release_measurement) = self.evidence.authenticate_signature(
             platform,
             original_key,
             app_signing_identity_digest,
+            app_release_digest,
             original_apple_counter_floor,
             &message,
         )?;
@@ -209,6 +219,7 @@ impl KagemushaAppEnrollmentPossessionV1 {
             original,
             digest: digest.finalize().into(),
             app_attest_counter: counter,
+            app_attest_release_measurement: release_measurement,
         })
     }
 }
@@ -338,6 +349,7 @@ mod tests {
                 &key,
                 KagemushaHardwarePlatformClassV1::AndroidKeyMint,
                 [12; 32],
+                [13; 32],
                 None,
                 1000,
             )
@@ -354,6 +366,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AndroidKeyMint,
                     [12; 32],
+                    [13; 32],
                     None,
                     121000
                 )
@@ -368,6 +381,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AndroidKeyMint,
                     [12; 32],
+                    [13; 32],
                     None,
                     1000
                 )
@@ -380,6 +394,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AndroidKeyMint,
                     [12; 32],
+                    [13; 32],
                     Some(0),
                     1000
                 )
@@ -423,6 +438,7 @@ mod tests {
                 &key,
                 KagemushaHardwarePlatformClassV1::AppleAppAttest,
                 [12; 32],
+                [13; 32],
                 Some(0),
                 1000,
             )
@@ -440,6 +456,7 @@ mod tests {
                         &key,
                         KagemushaHardwarePlatformClassV1::AppleAppAttest,
                         rp,
+                        [13; 32],
                         floor,
                         1000
                     )
@@ -455,6 +472,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AppleAppAttest,
                     [12; 32],
+                    [13; 32],
                     Some(0),
                     1000
                 )
@@ -470,6 +488,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AppleAppAttest,
                     [12; 32],
+                    [13; 32],
                     Some(0),
                     1000
                 )
@@ -482,6 +501,7 @@ mod tests {
                     &key,
                     KagemushaHardwarePlatformClassV1::AndroidKeyMint,
                     [12; 32],
+                    [13; 32],
                     None,
                     1000
                 )

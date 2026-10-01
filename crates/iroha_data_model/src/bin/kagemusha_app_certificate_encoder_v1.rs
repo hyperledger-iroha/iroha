@@ -4,10 +4,14 @@ use std::io::{self, Read, Write};
 
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1, KagemushaAppOperationApprovalEvidenceV1,
-    KagemushaOrdinaryAppCredentialSubjectV1, KagemushaOrdinaryAppCredentialV1,
-    KagemushaPlayIntegrityRefreshLeaseSubjectV1, KagemushaPlayIntegrityRefreshLeaseV1,
+    KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1, KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1,
+    KagemushaAppOperationApprovalEvidenceV1, KagemushaDevicePublicKeyV1,
+    KagemushaDeviceSignatureV1, KagemushaOrdinaryAppCredentialSubjectV1,
+    KagemushaOrdinaryAppCredentialV1, KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1,
+    KagemushaOrdinaryIssuerCircuitAdmissionV1, KagemushaPlayIntegrityRefreshLeaseSubjectV1,
+    KagemushaPlayIntegrityRefreshLeaseV1,
 };
+use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 use sha2::{Digest as _, Sha256};
 /// Secret bytes retained until the native key implementation consumes them.
 struct SecretSeed(Vec<u8>);
@@ -18,7 +22,7 @@ impl Drop for SecretSeed {
 }
 
 const REQUEST_MAGIC: &[u8; 5] = b"KOAC\x01";
-const REQUEST_LEN: usize = 5 + KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1 + 32;
+const REQUEST_LEN: usize = 5 + KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1 + 32 + 65;
 const MAX_CERTIFICATE_LEN: usize = 16 * 1024;
 const REFRESH_MAGIC: &[u8; 5] = b"KRPI\x01";
 const REFRESH_BODY_LEN: usize = 402;
@@ -56,34 +60,79 @@ fn duplicate_inherited_descriptor(descriptor: i32) -> io::Result<std::fs::File> 
     Ok(unsafe { std::fs::File::from_raw_fd(owned) })
 }
 
-fn parse_request(input: &[u8]) -> io::Result<(KagemushaOrdinaryAppCredentialSubjectV1, [u8; 32])> {
+fn parse_request(
+    input: &[u8],
+) -> io::Result<(
+    KagemushaOrdinaryAppCredentialSubjectV1,
+    [u8; 32],
+    KagemushaDevicePublicKeyV1,
+)> {
     if input.len() != REQUEST_LEN || &input[..5] != REQUEST_MAGIC {
         return Err(fail("invalid ordinary credential signing request"));
     }
     let subject =
-        KagemushaOrdinaryAppCredentialSubjectV1::from_signing_body(&input[5..REQUEST_LEN - 32])
+        KagemushaOrdinaryAppCredentialSubjectV1::from_signing_body(&input[5..REQUEST_LEN - 97])
             .map_err(|_| fail("invalid ordinary credential subject"))?;
-    let pin: [u8; 32] = input[REQUEST_LEN - 32..]
+    let pin: [u8; 32] = input[REQUEST_LEN - 97..REQUEST_LEN - 65]
         .try_into()
-        .expect("checked request length");
+        .expect("checked width");
+    let circuit_pin = KagemushaDevicePublicKeyV1::from_sec1_bytes(&input[REQUEST_LEN - 65..])
+        .map_err(|_| fail("invalid governed circuit issuer point"))?;
     if pin == [0; 32] {
         return Err(fail("empty app authority signer pin"));
     }
-    Ok((subject, pin))
+    Ok((subject, pin, circuit_pin))
+}
+fn signing_keys(
+    seed: Vec<u8>,
+    ed_pin: [u8; 32],
+    circuit_pin: KagemushaDevicePublicKeyV1,
+) -> io::Result<(KeyPair, SigningKey)> {
+    let mut seed = SecretSeed(seed);
+    if seed.0.len() != 32 {
+        return Err(fail("authority seed width differs"));
+    }
+    let mut hash = Sha256::new();
+    hash.update(KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1);
+    hash.update(&seed.0);
+    let mut derived = SecretSeed(hash.finalize().to_vec());
+    let circuit = SigningKey::from_slice(&derived.0)
+        .map_err(|_| fail("derived circuit issuer scalar invalid"))?;
+    iroha_crypto::zeroize_value_for_confidential_discard(&mut derived.0);
+    let ed = KeyPair::try_from_seed(std::mem::take(&mut seed.0), Algorithm::Ed25519)
+        .map_err(|_| fail("invalid authority signing seed"))?;
+    let (algorithm, public) = ed.public_key().to_bytes();
+    if algorithm != Algorithm::Ed25519
+        || public != ed_pin
+        || circuit.verifying_key().to_encoded_point(false).as_bytes() != circuit_pin.as_sec1_bytes()
+    {
+        return Err(fail(
+            "authority signers differ from independently governed pins",
+        ));
+    }
+    Ok((ed, circuit))
+}
+fn countersign(
+    subject: KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1,
+    circuit: &SigningKey,
+) -> io::Result<KagemushaOrdinaryIssuerCircuitAdmissionV1> {
+    let signature: P256Signature = circuit.sign(
+        &subject
+            .canonical_signing_bytes()
+            .map_err(|_| fail("issuer admission subject rejected"))?,
+    );
+    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes())
+        .map_err(|_| fail("issuer admission signature rejected"))?;
+    Ok(KagemushaOrdinaryIssuerCircuitAdmissionV1 { subject, signature })
 }
 
 fn sign(input: &[u8], seed: Vec<u8>) -> io::Result<Vec<u8>> {
     if input.starts_with(REFRESH_MAGIC) {
         return sign_refresh(input, seed);
     }
-    let mut seed = SecretSeed(seed);
-    let (subject, pinned_key) = parse_request(input)?;
-    let key = KeyPair::try_from_seed(std::mem::take(&mut seed.0), Algorithm::Ed25519)
-        .map_err(|_| fail("invalid authority signing seed"))?;
-    let (algorithm, public) = key.public_key().to_bytes();
-    if algorithm != Algorithm::Ed25519 || public != pinned_key {
-        return Err(fail("authority signer differs from pinned release policy"));
-    }
+    let (subject, pinned_key, circuit_pin) = parse_request(input)?;
+    let (key, circuit) = signing_keys(seed, pinned_key, circuit_pin)?;
     let message = subject
         .canonical_signing_bytes()
         .map_err(|_| fail("ordinary credential signing subject rejected"))?;
@@ -91,7 +140,16 @@ fn sign(input: &[u8], seed: Vec<u8>) -> io::Result<Vec<u8>> {
     signature
         .verify(key.public_key(), &message)
         .map_err(|_| fail("ordinary credential signature self-check failed"))?;
-    let certificate = KagemushaOrdinaryAppCredentialV1 { subject, signature };
+    let circuit_admission = countersign(
+        KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(&subject, &signature)
+            .map_err(|_| fail("ordinary Ed original encoding rejected"))?,
+        &circuit,
+    )?;
+    let certificate = KagemushaOrdinaryAppCredentialV1 {
+        subject,
+        signature,
+        circuit_admission,
+    };
     let canonical = norito::encode_canonical(&certificate)
         .map_err(|_| fail("canonical app-enrollment certificate encoding failed"))?;
     if canonical.len() > MAX_CERTIFICATE_LEN {
@@ -113,13 +171,14 @@ fn parse_refresh_request(
     KagemushaPlayIntegrityRefreshLeaseSubjectV1,
     Vec<u8>,
     [u8; 32],
+    KagemushaDevicePublicKeyV1,
 )> {
     const PREFIX: usize = 5 + REFRESH_BODY_LEN + 2;
-    if !input.starts_with(REFRESH_MAGIC) || input.len() < PREFIX + 8 + 32 {
+    if !input.starts_with(REFRESH_MAGIC) || input.len() < PREFIX + 8 + 97 {
         return Err(fail("invalid Integrity lease signing request"));
     }
     let der_len = u16::from_le_bytes(input[407..409].try_into().expect("checked prefix")) as usize;
-    if !(8..=72).contains(&der_len) || input.len() != PREFIX + der_len + 32 {
+    if !(8..=72).contains(&der_len) || input.len() != PREFIX + der_len + 97 {
         return Err(fail("Integrity possession width differs"));
     }
     let subject = KagemushaPlayIntegrityRefreshLeaseSubjectV1::from_signing_body(&input[5..407])
@@ -134,24 +193,20 @@ fn parse_refresh_request(
             "Integrity possession original differs from signed subject",
         ));
     }
-    let pin: [u8; 32] = input[PREFIX + der_len..]
+    let pin: [u8; 32] = input[PREFIX + der_len..PREFIX + der_len + 32]
         .try_into()
         .expect("checked request length");
     if pin == [0; 32] {
         return Err(fail("empty app authority signer pin"));
     }
-    Ok((subject, der, pin))
+    let circuit_pin = KagemushaDevicePublicKeyV1::from_sec1_bytes(&input[PREFIX + der_len + 32..])
+        .map_err(|_| fail("invalid governed circuit issuer point"))?;
+    Ok((subject, der, pin, circuit_pin))
 }
 
 fn sign_refresh(input: &[u8], seed: Vec<u8>) -> io::Result<Vec<u8>> {
-    let mut seed = SecretSeed(seed);
-    let (subject, signature_der, pinned_key) = parse_refresh_request(input)?;
-    let key = KeyPair::try_from_seed(std::mem::take(&mut seed.0), Algorithm::Ed25519)
-        .map_err(|_| fail("invalid authority signing seed"))?;
-    let (algorithm, public) = key.public_key().to_bytes();
-    if algorithm != Algorithm::Ed25519 || public != pinned_key {
-        return Err(fail("authority signer differs from pinned release policy"));
-    }
+    let (subject, signature_der, pinned_key, circuit_pin) = parse_refresh_request(input)?;
+    let (key, circuit) = signing_keys(seed, pinned_key, circuit_pin)?;
     let message = subject
         .canonical_signing_bytes()
         .map_err(|_| fail("Integrity lease signing subject rejected"))?;
@@ -159,10 +214,21 @@ fn sign_refresh(input: &[u8], seed: Vec<u8>) -> io::Result<Vec<u8>> {
     signature
         .verify(key.public_key(), &message)
         .map_err(|_| fail("Integrity lease signature self-check failed"))?;
+    let app_possession = KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der };
+    let circuit_admission = countersign(
+        KagemushaPlayIntegrityRefreshLeaseV1::circuit_admission_subject_for(
+            &subject,
+            &signature,
+            &app_possession,
+        )
+        .map_err(|_| fail("Integrity Ed original encoding rejected"))?,
+        &circuit,
+    )?;
     let lease = KagemushaPlayIntegrityRefreshLeaseV1 {
         subject,
         signature,
-        app_possession: KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der },
+        app_possession,
+        circuit_admission,
     };
     let canonical = lease
         .canonical_bytes()
@@ -275,6 +341,12 @@ mod tests {
             play_integrity: None,
         }
     }
+    fn test_circuit_key() -> SigningKey {
+        let mut hash = Sha256::new();
+        hash.update(KAGEMUSHA_ORDINARY_ISSUER_P256_SEED_DOMAIN_V1);
+        hash.update([73; 32]);
+        SigningKey::from_slice(&hash.finalize()).unwrap()
+    }
     fn frame() -> Vec<u8> {
         let message = subject().canonical_signing_bytes().unwrap();
         let mut frame = REQUEST_MAGIC.to_vec();
@@ -282,6 +354,12 @@ mod tests {
             &message[message.len() - KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1..],
         );
         frame.extend_from_slice(&[73; 32]);
+        frame.extend_from_slice(
+            test_circuit_key()
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
         frame
     }
     #[test]
@@ -312,7 +390,7 @@ mod tests {
     #[test]
     fn refuses_ambiguous_frame_and_key_role_substitution() {
         let original = frame();
-        let (parsed, pin) = parse_request(&original).unwrap();
+        let (parsed, pin, _) = parse_request(&original).unwrap();
         assert_eq!(parsed, subject());
         assert_eq!(pin, [73; 32]);
         for malformed in [&original[..original.len() - 1], &original[..4]] {
@@ -328,7 +406,7 @@ mod tests {
         wrong[5 + 4 + 13 * 32..5 + 4 + 14 * 32].fill(0);
         assert!(parse_request(&wrong).is_err());
         wrong = original;
-        wrong[REQUEST_LEN - 32..].fill(0);
+        wrong[REQUEST_LEN - 97..REQUEST_LEN - 65].fill(0);
         assert!(parse_request(&wrong).is_err());
     }
     #[test]
@@ -336,7 +414,7 @@ mod tests {
         let seed = vec![73; 32];
         let key = KeyPair::try_from_seed(seed.clone(), Algorithm::Ed25519).unwrap();
         let mut request = frame();
-        request[REQUEST_LEN - 32..].copy_from_slice(key.public_key().to_bytes().1);
+        request[REQUEST_LEN - 97..REQUEST_LEN - 65].copy_from_slice(key.public_key().to_bytes().1);
         let first = sign(&request, seed.clone()).unwrap();
         assert_eq!(first, sign(&request, seed).unwrap());
         let certificate: KagemushaOrdinaryAppCredentialV1 =
@@ -349,7 +427,37 @@ mod tests {
                 &certificate.subject.canonical_signing_bytes().unwrap(),
             )
             .unwrap();
-        request[REQUEST_LEN - 32..].fill(42);
+        let expected_circuit = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            test_circuit_key()
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            certificate.circuit_admission.subject,
+            KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+                &certificate.subject,
+                &certificate.signature
+            )
+            .unwrap()
+        );
+        certificate
+            .circuit_admission
+            .signature
+            .verify(
+                &expected_circuit,
+                &certificate
+                    .circuit_admission
+                    .subject
+                    .canonical_signing_bytes()
+                    .unwrap(),
+            )
+            .unwrap();
+        let mut wrong_circuit = request.clone();
+        wrong_circuit[REQUEST_LEN - 65..].copy_from_slice(subject().app_public_key.as_sec1_bytes());
+        assert!(sign(&wrong_circuit, vec![73; 32]).is_err());
+        request[REQUEST_LEN - 97..REQUEST_LEN - 65].fill(42);
         assert!(sign(&request, vec![73; 32]).is_err());
     }
 
@@ -390,13 +498,19 @@ mod tests {
         frame.extend_from_slice(der.as_bytes());
         let authority = KeyPair::try_from_seed(vec![73; 32], Algorithm::Ed25519).unwrap();
         frame.extend_from_slice(authority.public_key().to_bytes().1);
+        frame.extend_from_slice(
+            test_circuit_key()
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
         frame
     }
 
     #[test]
     fn refresh_preserves_full_possession_and_real_authority_signature_in_model_archive() {
         let frame = refresh_frame();
-        let (subject, original_der, _) = parse_refresh_request(&frame).unwrap();
+        let (subject, original_der, _, _) = parse_refresh_request(&frame).unwrap();
         let archive = sign(&frame, vec![73; 32]).unwrap();
         assert_eq!(archive, sign(&frame, vec![73; 32]).unwrap());
         let decoded: KagemushaPlayIntegrityRefreshLeaseV1 =
@@ -416,9 +530,37 @@ mod tests {
                 &subject.canonical_signing_bytes().unwrap(),
             )
             .unwrap();
+        let expected_circuit = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            test_circuit_key()
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.circuit_admission.subject,
+            KagemushaPlayIntegrityRefreshLeaseV1::circuit_admission_subject_for(
+                &decoded.subject,
+                &decoded.signature,
+                &decoded.app_possession
+            )
+            .unwrap()
+        );
+        decoded
+            .circuit_admission
+            .signature
+            .verify(
+                &expected_circuit,
+                &decoded
+                    .circuit_admission
+                    .subject
+                    .canonical_signing_bytes()
+                    .unwrap(),
+            )
+            .unwrap();
         let mut wrong_pin = frame;
         let end = wrong_pin.len();
-        wrong_pin[end - 32..].fill(42);
+        wrong_pin[end - 97..end - 65].fill(42);
         assert!(sign(&wrong_pin, vec![73; 32]).is_err());
     }
 
@@ -435,7 +577,7 @@ mod tests {
         wrong_width[407..409].copy_from_slice(&7u16.to_le_bytes());
         let mut empty_key = frame.clone();
         let end = empty_key.len();
-        empty_key[end - 32..].fill(0);
+        empty_key[end - 97..end - 65].fill(0);
         for original in [
             &frame[..frame.len() - 1],
             &trailing,

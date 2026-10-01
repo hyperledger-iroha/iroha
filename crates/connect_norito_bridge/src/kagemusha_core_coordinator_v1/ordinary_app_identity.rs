@@ -11,8 +11,11 @@ use super::{
 };
 use iroha_core_zk::kagemusha_v1_state::{
     KagemushaOrdinaryAppEnrollmentAttemptV1 as Attempt,
+    KagemushaOrdinaryAppPossessionAttemptV1 as Possession,
+    KagemushaOrdinaryEnrolledFinancialOwnerV1 as FinancialOwner,
     KagemushaOrdinaryPreparationReservationV1 as Reservation,
     KagemushaOrdinaryPreparationSelectedOriginalsV1 as Selected,
+    KagemushaOrdinaryRetailEnrollmentAttemptV1 as Retail,
 };
 use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1;
 use std::{
@@ -78,7 +81,11 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             (Some(expected), Some(raw))
                 if !raw.is_empty()
                     && raw.len() <= 16 * 1024
-                    && <[u8; 32]>::from(Sha256::digest(raw)) == expected => {}
+                    && <[u8; 32]>::from(Sha256::digest(raw)) == expected =>
+            {
+                iroha_data_model::kagemusha::kagemusha_play_integrity_provider_policy_projection_v1(raw)
+                    .map_err(|_| Error::Rejected)?;
+            }
             _ => return Err(Error::Rejected),
         }
         let this = Self {
@@ -162,6 +169,49 @@ pub fn register_kagemusha_native_ordinary_app_identity_source_v1(
         .set(source)
         .map_err(|_| KagemushaOrdinaryAppIdentityInstallErrorV1::AlreadyInstalled)
 }
+/// Bootstrap the existing native installer from an already independently admitted account selection.
+/// This Rust-only path calls actual source registration and the same production install dispatch
+/// used by mobile startup. No C/JNI frame or decoded public policy can supply `selected`.
+/// The selected root/account policies and native Fresh/Recover choice must come from product
+/// provisioning; this function does not create them or grant an offline financial capability.
+/// # Errors
+/// Rejects foreign directory/policy/originals, occupied registration, or uncertain installation.
+pub fn bootstrap_kagemusha_native_ordinary_app_identity_v1(
+    path: PathBuf,
+    selected: Arc<Selected>,
+    preparation_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
+    integrity_policy_original: Option<Vec<u8>>,
+) -> Result<(), Error> {
+    let source = Arc::new(
+        KagemushaNativeOrdinaryAppIdentitySourceV1::from_native_selected_originals(
+            path,
+            selected,
+            preparation_disposition,
+            platform_disposition,
+            integrity_policy_original,
+        )?,
+    );
+    bootstrap_registered_source(
+        source,
+        |original| {
+            register_kagemusha_native_ordinary_app_identity_source_v1(original)
+                .map_err(|_| Error::Rejected)
+        },
+        super::provision_and_install_kagemusha_native_enrollment_v1,
+    )
+}
+fn bootstrap_registered_source(
+    source: Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>,
+    register: impl FnOnce(Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>) -> Result<(), Error>,
+    install: impl FnOnce(&str) -> Result<(), Error>,
+) -> Result<(), Error> {
+    source.recheck_originals(&source.path)?;
+    register(source.clone())?;
+    source.recheck_originals(&source.path)?;
+    install(source.path.to_str().ok_or(Error::Rejected)?)?;
+    source.recheck_originals(&source.path)
+}
 pub(super) fn has_registered_source() -> bool {
     SOURCE.get().is_some()
 }
@@ -199,6 +249,11 @@ struct Owner {
     reservation_started: bool,
     reservation: Option<Reservation>,
     attempt: Option<Attempt>,
+    possession_started: bool,
+    possession: Option<Possession>,
+    retail_started: bool,
+    retail: Option<Retail>,
+    financial: Option<FinancialOwner>,
 }
 struct OrdinaryBackend {
     path: PathBuf,
@@ -206,6 +261,318 @@ struct OrdinaryBackend {
     owner: Mutex<Owner>,
 }
 impl OrdinaryBackend {
+    fn invoke_retail(&self, handle: u64, frame: &[u8]) -> Result<Vec<u8>, Error> {
+        let method = Method::PreparedAppEnrollmentPossession;
+        let f = kagemusha_core_coordinator_decode_request_v1(frame).map_err(|_| Error::Rejected)?;
+        let phase = u32::from_le_bytes(f[0].as_slice().try_into().map_err(|_| Error::Rejected)?);
+        self.source.recheck_originals(&self.path)?;
+        let mut owner = self.owner.lock().map_err(|_| Error::Rejected)?;
+        if owner.handle != Some(handle) {
+            return Err(Error::Rejected);
+        }
+        if phase == 9 {
+            let Owner {
+                attempt,
+                possession,
+                reservation,
+                retail_started,
+                retail,
+                ..
+            } = &mut *owner;
+            let pending = attempt
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .retained_pending_identity()
+                .map_err(|_| Error::Rejected)?;
+            let app = possession.as_ref().ok_or(Error::Rejected)?;
+            if app.ticket()
+                != u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?)
+            {
+                return Err(Error::Rejected);
+            }
+            if retail.is_none() {
+                if *retail_started {
+                    return Err(Error::Rejected);
+                }
+                *retail_started = true;
+                let root = self
+                    .path
+                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?));
+                let reserve = reservation.as_ref().ok_or(Error::Rejected)?;
+                *retail = Some(
+                    match self.source.platform_disposition {
+                        KagemushaOrdinaryEnrollmentDispositionV1::Fresh => Retail::create(
+                            &root,
+                            pending,
+                            app,
+                            reserve,
+                            &f[2],
+                            f[3].as_slice().try_into().map_err(|_| Error::Rejected)?,
+                        ),
+                        KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
+                            Retail::open_existing(&root, pending, app, reserve)
+                        }
+                    }
+                    .map_err(|_| Error::Rejected)?,
+                );
+            }
+            let fields = retail
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .preparation_fields(pending, app)
+                .map_err(|_| Error::Rejected)?;
+            if fields[1] != f[2] || fields[2] != f[3] {
+                return Err(Error::Rejected);
+            }
+        }
+        let response = {
+            let Owner {
+                attempt,
+                possession,
+                reservation,
+                retail,
+                financial,
+                ..
+            } = &mut *owner;
+            let pending = attempt
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .retained_pending_identity()
+                .map_err(|_| Error::Rejected)?;
+            let app = possession.as_ref().ok_or(Error::Rejected)?;
+            let held = retail.as_mut().ok_or(Error::Rejected)?;
+            if phase != 9
+                && held.ticket()
+                    != u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?)
+            {
+                return Err(Error::Rejected);
+            }
+            let response = match phase {
+                9 => held
+                    .preparation_fields(pending, app)
+                    .map_err(|_| Error::Rejected)?,
+                10 => held.fence(pending, app).map_err(|_| Error::Rejected)?,
+                11 => vec![
+                    held.retain_account_signature(
+                        pending,
+                        app,
+                        f[2].as_slice().try_into().map_err(|_| Error::Rejected)?,
+                    )
+                    .map_err(|_| Error::Rejected)?
+                    .to_vec(),
+                ],
+                12 => {
+                    let enrollment = held
+                        .accept_certificate(pending, app, &f[2])
+                        .map_err(|_| Error::Rejected)?;
+                    if let Some(fin) = financial {
+                        fin.recheck().map_err(|_| Error::Rejected)?;
+                        if !Arc::ptr_eq(fin.enrollment(), &enrollment) {
+                            return Err(Error::Rejected);
+                        }
+                    } else {
+                        let reserve = reservation.take().ok_or(Error::Rejected)?;
+                        match reserve.complete_enrollment_or_retain(enrollment.clone()) {
+                            Ok(fin) => *financial = Some(fin),
+                            Err((original, _)) => {
+                                *reservation = Some(original);
+                                return Err(Error::Rejected);
+                            }
+                        }
+                    }
+                    vec![
+                        enrollment.certificate().subject.enrollment_id.to_vec(),
+                        pending.native_scope().to_vec(),
+                    ]
+                }
+                13 => held
+                    .recovery_fields(pending, app)
+                    .map_err(|_| Error::Rejected)?,
+                14 => {
+                    held.cancel(pending, app).map_err(|_| Error::Rejected)?;
+                    Vec::new()
+                }
+                _ => return Err(Error::Rejected),
+            };
+            if phase != 14 {
+                held.recheck(pending, app).map_err(|_| Error::Rejected)?;
+            }
+            response
+        };
+        self.source.recheck_originals(&self.path)?;
+        let response = kagemusha_core_coordinator_encode_response_v1(&response)
+            .map_err(|_| Error::Rejected)?;
+        kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
+            .map_err(|_| Error::Rejected)?;
+        Ok(response)
+    }
+    fn invoke_possession(&self, handle: u64, frame: &[u8]) -> Result<Vec<u8>, Error> {
+        let method = Method::PreparedAppEnrollmentPossession;
+        kagemusha_core_coordinator_validate_method_request_v1(method, frame)
+            .map_err(|_| Error::Rejected)?;
+        let f = kagemusha_core_coordinator_decode_request_v1(frame).map_err(|_| Error::Rejected)?;
+        let phase = u32::from_le_bytes(f[0].as_slice().try_into().map_err(|_| Error::Rejected)?);
+        if phase >= 9 {
+            return self.invoke_retail(handle, frame);
+        }
+        self.source.recheck_originals(&self.path)?;
+        let mut owner = self.owner.lock().map_err(|_| Error::Rejected)?;
+        // Waiting for another native holder never backdates a new E consumption.
+        let now = self
+            .source
+            .selected
+            .trusted_time_ms()
+            .map_err(|_| Error::Rejected)?;
+        if owner.handle != Some(handle) {
+            return Err(Error::Rejected);
+        }
+        if phase == 1 {
+            let selector: [u8; 32] = f[1].as_slice().try_into().map_err(|_| Error::Rejected)?;
+            // Cold recovery reads existing originals only. It never reserves another secret,
+            // generates C/key, fetches issuer data or retries an unknown device invocation.
+            if owner.attempt.is_none() {
+                if owner.attempted.is_some()
+                    || self.source.platform_disposition
+                        != KagemushaOrdinaryEnrollmentDispositionV1::Recover
+                {
+                    return Err(Error::Rejected);
+                }
+                owner.attempted = Some(self.source.original_enrollment_id(&self.path)?);
+                if owner.reservation.is_none() {
+                    owner.reservation_started = true;
+                    owner.reservation = Some(
+                        Reservation::open_retained_originals(
+                            &self.path,
+                            self.source.selected.clone(),
+                            now,
+                        )
+                        .map_err(|_| Error::Rejected)?,
+                    );
+                }
+                let prepared = owner
+                    .reservation
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .retained_prepared_owner()
+                    .map_err(|_| Error::Rejected)?;
+                owner.attempt = Some(
+                    Attempt::open_retained_originals(&self.path, prepared, now)
+                        .map_err(|_| Error::Rejected)?,
+                );
+            }
+            let pending = owner
+                .attempt
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .retained_pending_identity()
+                .map_err(|_| Error::Rejected)?;
+            if pending
+                .preparation()
+                .retained_preparation(now)
+                .map_err(|_| Error::Rejected)?
+                .challenge
+                .attestation_challenge()
+                .map_err(|_| Error::Rejected)?
+                != selector
+            {
+                return Err(Error::Rejected);
+            }
+            if owner.possession.is_none() {
+                if owner.possession_started {
+                    return Err(Error::Rejected);
+                }
+                owner.possession_started = true;
+                let pending = owner
+                    .attempt
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .retained_pending_identity()
+                    .map_err(|_| Error::Rejected)?;
+                let root = self
+                    .path
+                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?));
+                let result = match self.source.platform_disposition {
+                    KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
+                        Possession::create(&root, pending, now)
+                    }
+                    KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
+                        Possession::open_existing(&root, pending, now)
+                    }
+                }
+                .map_err(|_| Error::Rejected)?;
+                owner.possession = Some(result);
+            }
+        }
+        let Owner {
+            attempt,
+            possession,
+            ..
+        } = &mut *owner;
+        let pending = attempt
+            .as_ref()
+            .ok_or(Error::Rejected)?
+            .retained_pending_identity()
+            .map_err(|_| Error::Rejected)?;
+        let held = possession.as_mut().ok_or(Error::Rejected)?;
+        let response = if phase == 1 {
+            held.preparation_fields(
+                pending,
+                f[1].as_slice().try_into().map_err(|_| Error::Rejected)?,
+                now,
+            )
+            .map_err(|_| Error::Rejected)?
+        } else {
+            if held.ticket()
+                != u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?)
+            {
+                return Err(Error::Rejected);
+            }
+            match phase {
+                2 => held.fence(pending, now).map_err(|_| Error::Rejected)?,
+                3 => vec![
+                    held.retain(pending, &f[2], now)
+                        .map_err(|_| Error::Rejected)?
+                        .to_vec(),
+                ],
+                4 => vec![held.consume(pending, now).map_err(|_| Error::Rejected)?],
+                5 => held
+                    .recovery_fields(pending, now)
+                    .map_err(|_| Error::Rejected)?,
+                6 => held
+                    .recheck_fields(pending, now)
+                    .map_err(|_| Error::Rejected)?,
+                7 => {
+                    held.cancel(pending, now).map_err(|_| Error::Rejected)?;
+                    Vec::new()
+                }
+                8 => held
+                    .accept_final_credential(pending, &f[2], now)
+                    .map_err(|_| Error::Rejected)?,
+                _ => return Err(Error::Rejected),
+            }
+        };
+        self.source.recheck_originals(&self.path)?;
+        let after = self
+            .source
+            .selected
+            .trusted_time_ms()
+            .map_err(|_| Error::Rejected)?;
+        if phase == 1 {
+            held.preparation_fields(
+                pending,
+                f[1].as_slice().try_into().map_err(|_| Error::Rejected)?,
+                after,
+            )
+            .map_err(|_| Error::Rejected)?;
+        } else if phase != 7 {
+            held.recheck(pending, after).map_err(|_| Error::Rejected)?;
+        }
+        let response = kagemusha_core_coordinator_encode_response_v1(&response)
+            .map_err(|_| Error::Rejected)?;
+        kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
+            .map_err(|_| Error::Rejected)?;
+        Ok(response)
+    }
     fn invoke_identity(&self, handle: u64, frame: &[u8]) -> Result<Vec<u8>, Error> {
         let method = Method::PreparedOrdinaryAppIdentity;
         kagemusha_core_coordinator_validate_method_request_v1(method, frame)
@@ -422,13 +789,13 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
         Ok(1)
     }
     fn invoke(&self, handle: u64, method: Method, frame: &[u8]) -> Result<Vec<u8>, Error> {
-        if method != Method::PreparedOrdinaryAppIdentity {
-            // Identity enrollment supplies no recursive proof, mint or financial StateGuard.
-            // TODO: compose19/20 with genuine admitted original owners and constrained Eq/Ep/mint
-            // before changing monetary rejection; no host-decoded archive is that owner.
-            return Err(Error::Unavailable);
+        match method {
+            Method::PreparedOrdinaryAppIdentity => self.invoke_identity(handle, frame),
+            Method::PreparedAppEnrollmentPossession => self.invoke_possession(handle, frame),
+            // No ordinary identity credential or possession receipt supplies the independently
+            // constrained State/Guard, nonce and protection owner required by financial methods.
+            _ => Err(Error::Unavailable),
         }
-        self.invoke_identity(handle, frame)
     }
     fn close(&self, handle: u64) -> Result<(), Error> {
         let mut owner = self.owner.lock().map_err(|_| Error::Rejected)?;
@@ -436,6 +803,9 @@ impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
             return Err(Error::Rejected);
         }
         owner.handle = None;
+        owner.financial = None;
+        owner.retail = None;
+        owner.possession = None;
         owner.attempt = None;
         owner.reservation = None;
         self.source.recheck_originals(&self.path)
@@ -660,5 +1030,333 @@ mod tests {
             .is_err()
         );
         assert!(call(&b, h, 8, vec![2u64.to_le_bytes().to_vec()]).is_err());
+    }
+    fn possession_call(
+        b: &OrdinaryBackend,
+        h: u64,
+        phase: u32,
+        mut fields: Vec<Vec<u8>>,
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        fields.insert(0, phase.to_le_bytes().to_vec());
+        let q = super::super::kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+        let response = b.invoke(h, Method::PreparedAppEnrollmentPossession, &q)?;
+        super::super::kagemusha_core_coordinator_decode_response_v1(&response)
+            .map_err(|_| Error::Rejected)
+    }
+    #[test]
+    fn called_e20_joins_existing_c21_raw_original_and_final_identity_without_money() {
+        use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+        let (_temp, b, f) = backend();
+        let h = b.open(b.path.to_str().unwrap()).unwrap();
+        let prep = prepare(&b, h, &f);
+        let t = prep[0].clone();
+        let c = KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&prep[1])
+            .unwrap()
+            .challenge;
+        let app = f.selection.issuance.credential.subject;
+        let alias = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            app.attested_key_id,
+        );
+        call(&b, h, 2, vec![t.clone()]).unwrap();
+        call(&b, h, 3, vec![t.clone(), alias.as_bytes().to_vec()]).unwrap();
+        call(&b, h, 4, vec![t.clone()]).unwrap();
+        // Fixture-only opaque raw bytes are governed by a real signed raw admission; they are
+        // explicitly not a claim of physical Apple enrollment or deployment qualification.
+        let raw = vec![23; 100];
+        call(
+            &b,
+            h,
+            5,
+            vec![
+                t.clone(),
+                app.app_public_key.as_sec1_bytes().to_vec(),
+                raw.clone(),
+                vec![],
+            ],
+        )
+        .unwrap();
+        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let subject = KagemushaRawAppAttestationAdmissionSubjectV1 {
+            version: 1,
+            enrollment_challenge_digest: c.attestation_challenge().unwrap(),
+            authority_policy_digest: f.app_authority.canonical_digest().unwrap(),
+            platform_class: c.platform_class,
+            security_level: app.security_level,
+            app_public_key: app.app_public_key,
+            attested_key_id: app.attested_key_id,
+            raw_platform_evidence_digest: Sha256::digest(&raw).into(),
+            app_signing_identity_digest: f.app_authority.app_signing_identity_digest,
+            original_app_attest_counter: 0,
+            issued_at_ms: c.issued_at_ms,
+            expires_at_ms: c.expires_at_ms,
+        };
+        let signed = KagemushaRawAppAttestationAdmissionV1 {
+            subject,
+            signature: Signature::try_new(
+                issuer.private_key(),
+                &subject.canonical_signing_bytes().unwrap(),
+            )
+            .unwrap(),
+        }
+        .to_transport_bytes()
+        .unwrap();
+        let pending = call(&b, h, 6, vec![t, signed]).unwrap();
+        // A stable enrollment ID cannot substitute for the sole SHA(full C) E selector.
+        assert!(possession_call(&b, h, 1, vec![c.enrollment_id.to_vec()]).is_err());
+        let fields =
+            possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).unwrap();
+        assert_eq!(fields.len(), 14);
+        assert!(fields[8].is_empty());
+        assert_eq!(fields[9], pending[0]);
+        assert_eq!(fields[12], subject.app_signing_identity_digest);
+        let et = fields[0].clone();
+        assert_eq!(
+            possession_call(&b, h, 6, vec![et.clone()]).unwrap()[0],
+            pending[0]
+        );
+        possession_call(&b, h, 2, vec![et.clone()]).unwrap();
+        assert!(possession_call(&b, h, 5, vec![et.clone()]).is_err());
+        let mut auth = f.app_authority.app_signing_identity_digest.to_vec();
+        auth.push(0x40);
+        auth.extend_from_slice(&11u32.to_be_bytes());
+        let mut n = Sha256::new();
+        n.update(&auth);
+        n.update(Sha256::digest(&fields[1]));
+        let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+        let sig: P256Signature = key.sign(&n.finalize());
+        let der = sig.to_der();
+        let mut assertion = vec![0xa2, 0x71];
+        assertion.extend_from_slice(b"authenticatorData");
+        assertion.extend_from_slice(&[0x58, 37]);
+        assertion.extend_from_slice(&auth);
+        assertion.push(0x69);
+        assertion.extend_from_slice(b"signature");
+        assertion.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+        assertion.extend_from_slice(der.as_bytes());
+        possession_call(&b, h, 3, vec![et.clone(), assertion.clone()]).unwrap();
+        let receipt = possession_call(&b, h, 4, vec![et.clone()]).unwrap();
+        assert_eq!(receipt[0].len(), 184);
+        assert_eq!(&receipt[0][147..179], pending[0]);
+        let mut cred = app;
+        cred.client_nonce = c.client_nonce;
+        cred.server_nonce = c.server_nonce;
+        cred.financial_authority_commitment = c.financial_authority_commitment;
+        cred.enrollment_challenge_digest = c.attestation_challenge().unwrap();
+        cred.platform_evidence_digest =
+            kagemusha_ordinary_app_enrollment_evidence_digest_v1(&raw, &assertion).unwrap();
+        cred.issued_at_ms = b.source.selected.trusted_time_ms().unwrap();
+        cred.expires_at_ms = cred.issued_at_ms + 9000;
+        let signature = Signature::try_new(
+            issuer.private_key(),
+            &cred.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
+        let circuit_admission =
+            iroha_data_model::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+                KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(&cred, &signature)
+                    .unwrap(),
+            );
+        let original = norito::encode_canonical(&KagemushaOrdinaryAppCredentialV1 {
+            subject: cred,
+            signature,
+            circuit_admission,
+        })
+        .unwrap();
+        let identity = possession_call(&b, h, 8, vec![et.clone(), original.clone()]).unwrap();
+        assert_eq!(identity.len(), 2);
+        assert_eq!(identity[1], pending[0]);
+        assert_eq!(
+            possession_call(&b, h, 8, vec![et.clone(), original.clone()]).unwrap(),
+            identity
+        );
+        // Native FI admission reuses the same C, key, consumed platform original and financial
+        // witness; wallet/issuer signatures are real known-public synthetic signatures.
+        let signed_c =
+            KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&prep[1])
+                .unwrap();
+        let credential: KagemushaOrdinaryAppCredentialV1 =
+            norito::decode_from_bytes(&original).unwrap();
+        let core = SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        let core_point = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            core.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap();
+        let selection = KagemushaOrdinaryRetailEnrollmentSelectionV1 {
+            owner: f.selection.owner.clone(),
+            issuance: KagemushaOrdinaryRetailEnrollmentIssuanceV1 {
+                release_id: f.release.release_id(),
+                hardware_policy_digest: f.release.hardware_policy_digest(),
+                core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
+                    &core_point,
+                ),
+                credential,
+            },
+            preparation: signed_c,
+        };
+        let now = b.source.selected.trusted_time_ms().unwrap();
+        let mut challenge = f.challenge.clone();
+        challenge.issuance = selection.issuance.clone();
+        challenge.preparation = selection.preparation.clone();
+        challenge.issued_at_ms = now;
+        challenge.expires_at_ms = c.expires_at_ms;
+        let challenge_original = challenge.canonical_bytes().unwrap();
+        let message = challenge.account_signing_message().unwrap();
+        let prepared_fi = possession_call(
+            &b,
+            h,
+            9,
+            vec![et, challenge_original.clone(), message.to_vec()],
+        )
+        .unwrap();
+        assert_eq!(prepared_fi[1], challenge_original);
+        assert_eq!(prepared_fi[2], message);
+        let mut wrong = message;
+        wrong[0] ^= 1;
+        assert!(
+            possession_call(
+                &b,
+                h,
+                9,
+                vec![
+                    fields[0].clone(),
+                    challenge_original.clone(),
+                    wrong.to_vec()
+                ]
+            )
+            .is_err()
+        );
+        let ft = prepared_fi[0].clone();
+        assert_eq!(
+            possession_call(&b, h, 10, vec![ft.clone()]).unwrap(),
+            vec![vec![1], vec![]]
+        );
+        assert!(possession_call(&b, h, 10, vec![ft.clone()]).is_err());
+        let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
+        let wallet_signature = Signature::try_new(wallet.private_key(), &message).unwrap();
+        let wallet_raw = wallet_signature.payload().to_vec();
+        assert_eq!(
+            possession_call(&b, h, 11, vec![ft.clone(), wallet_raw.clone()]).unwrap(),
+            vec![Sha256::digest(&wallet_raw).to_vec()]
+        );
+        let now = b.source.selected.trusted_time_ms().unwrap();
+        let app = selection
+            .issuance
+            .credential
+            .authenticate(
+                &f.release,
+                &f.trust,
+                &f.app_authority,
+                &c,
+                &cred.app_public_key,
+                now,
+            )
+            .unwrap();
+        let proof = KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
+            challenge: challenge.clone(),
+            account_signature: iroha_crypto::SignatureOf::from_signature(wallet_signature),
+            raw_attestation: raw,
+            app_possession: KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+                raw_assertion: assertion,
+            },
+        };
+        let possession = proof
+            .authenticate(
+                &challenge,
+                &selection,
+                &f.issuer_policy,
+                &f.release,
+                &app,
+                Some(0),
+                now,
+            )
+            .unwrap();
+        let mut certificate = f.certificate.clone();
+        certificate.subject.issuance = selection.issuance;
+        certificate.subject.challenge_evidence_digest = possession.evidence_digest();
+        certificate.subject.ordinary_app_credential_digest = app.digest();
+        certificate.subject.issued_at_ms = now;
+        certificate.subject.expires_at_ms = cred.expires_at_ms;
+        certificate.signature = iroha_crypto::SignatureOf::try_new(
+            issuer.private_key(),
+            &certificate.subject.approval_payload().unwrap(),
+        )
+        .unwrap();
+        let fi_original = certificate.canonical_bytes().unwrap();
+        let mut foreign = certificate.clone();
+        foreign.subject.ordinary_app_credential_digest[0] ^= 1;
+        assert!(
+            possession_call(
+                &b,
+                h,
+                12,
+                vec![ft.clone(), foreign.canonical_bytes().unwrap()]
+            )
+            .is_err()
+        );
+        let accepted = possession_call(&b, h, 12, vec![ft.clone(), fi_original.clone()]).unwrap();
+        assert_eq!(
+            accepted,
+            vec![
+                certificate.subject.enrollment_id.to_vec(),
+                identity[1].clone()
+            ]
+        );
+        assert_eq!(
+            possession_call(&b, h, 12, vec![ft.clone(), fi_original.clone()]).unwrap(),
+            accepted
+        );
+        assert_eq!(
+            possession_call(&b, h, 13, vec![ft.clone()]).unwrap(),
+            vec![vec![3], wallet_raw, fi_original]
+        );
+        assert!(possession_call(&b, h, 14, vec![ft]).is_err());
+        assert!(b.owner.lock().unwrap().financial.is_some());
+        assert_eq!(
+            b.invoke(h, Method::PreparedAppOperationApproval, &[]),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            b.invoke(h, Method::InitialEnrollment, &[]),
+            Err(Error::Unavailable)
+        );
+    }
+    #[test]
+    fn ordinary_bootstrap_calls_existing_registration_then_install_for_same_native_source() {
+        use std::cell::RefCell;
+        let (_temp, b, _f) = backend();
+        let steps = RefCell::new(Vec::new());
+        bootstrap_registered_source(
+            b.source.clone(),
+            |source| {
+                assert!(Arc::ptr_eq(&source, &b.source));
+                source.recheck_originals(&b.path)?;
+                steps.borrow_mut().push("register");
+                Ok(())
+            },
+            |path| {
+                assert_eq!(path, b.path.to_str().unwrap());
+                assert_eq!(*steps.borrow(), vec!["register"]);
+                steps.borrow_mut().push("install");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*steps.borrow(), vec!["register", "install"]);
+        let called = RefCell::new(false);
+        assert!(
+            bootstrap_registered_source(
+                b.source.clone(),
+                |_| Err(Error::Rejected),
+                |_| {
+                    *called.borrow_mut() = true;
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        assert!(!*called.borrow());
+        // Only called ordering/current native custody is tested; closures do not manufacture
+        // a globally installed backend, root account authority or physical platform qualification.
     }
 }

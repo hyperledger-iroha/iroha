@@ -14,6 +14,11 @@ mod native_outgoing_witness;
 mod production_incoming;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
+#[path = "production_ordinary_state.rs"]
+mod production_ordinary_state;
+pub use production_ordinary_state::{
+    KagemushaOrdinaryBootstrapAuxiliaryConsumerV1, KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
+};
 #[path = "production_terminal.rs"]
 mod production_terminal;
 use super::super::{
@@ -103,6 +108,23 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         profile: KagemushaRecursiveVerifierProfileV1,
         resolver: R,
     ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        Self::from_selected_release_with_family(release, profile, resolver, false)
+    }
+
+    fn from_selected_ordinary_release(
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        Self::from_selected_release_with_family(release, profile, resolver, true)
+    }
+
+    fn from_selected_release_with_family(
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+        ordinary_state_family: bool,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
         if release.purpose() != KagemushaReleasePurposeV1::Production {
             return Err(proving_error(
                 "production prover refuses experimental release",
@@ -116,9 +138,12 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         profile.validate_against_artifacts(&artifacts)?;
         let mut verifier =
             KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile.clone())?;
-        verifier
-            .authorize_monetary_release(Arc::clone(&release))
-            .map_err(proving_error)?;
+        if ordinary_state_family {
+            verifier.authorize_ordinary_monetary_release(Arc::clone(&release))
+        } else {
+            verifier.authorize_monetary_release(Arc::clone(&release))
+        }
+        .map_err(proving_error)?;
         let enabled_hardware_profiles = release_profile_table(&release)?;
         Ok(Self {
             release,

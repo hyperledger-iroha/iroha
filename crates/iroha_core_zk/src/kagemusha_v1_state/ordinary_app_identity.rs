@@ -12,6 +12,12 @@ use std::sync::Arc;
 #[path = "ordinary_app_identity/journal.rs"]
 mod journal;
 pub use journal::KagemushaOrdinaryAppEnrollmentAttemptV1;
+#[path = "ordinary_app_identity/possession_journal.rs"]
+mod possession_journal;
+pub use possession_journal::KagemushaOrdinaryAppPossessionAttemptV1;
+#[path = "ordinary_app_identity/retail_enrollment_journal.rs"]
+mod retail_enrollment_journal;
+pub use retail_enrollment_journal::KagemushaOrdinaryRetailEnrollmentAttemptV1;
 #[path = "ordinary_app_identity/preparation_reservation.rs"]
 mod preparation_reservation;
 pub use preparation_reservation::{
@@ -47,6 +53,7 @@ pub struct KagemushaPreparedOrdinaryAppEnrollmentV1 {
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
     allowed_levels_mask: u8,
     native_scope: [u8; 32],
+    authenticated_at_ms: u64,
 }
 impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
     /// Admit signed C under the independently installed native account and governed policies.
@@ -136,35 +143,77 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             issuer,
             allowed_levels_mask,
             native_scope: hash.finalize().into(),
+            authenticated_at_ms: trusted_native_reference_ms,
         })
     }
 
-    /// Recheck original signed C and its exact account/release/policy without renewing it.
-    /// The source owner must additionally recheck its current account approval and held journal.
+    /// Recheck current policies and the retained original C at its actual admission time.
+    /// This read-only check does not admit key generation, signing or new issuer requests.
+    /// The installed source must also recheck its current account and descriptor custody.
     /// # Errors
-    /// Rejects expired or substituted original policy or release custody.
-    pub fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
+    /// Rejects changed scope, revoked/expired selected policy or invalid historical admission.
+    pub fn recheck_retained_originals_at_trusted_time(&self, now: u64) -> Result<()> {
         let c = &self.preparation.challenge;
+        self.issuer.validate().map_err(|_| Custody)?;
         self.preparation
-            .authenticate(&self.issuer.issuer_public_key, c, now)
+            .authenticate(&self.issuer.issuer_public_key, c, self.authenticated_at_ms)
             .map_err(|_| Custody)?;
-        if c.account_binding != kagemusha_ordinary_app_account_binding_v1(&self.owner.account_id)
-            || self.issuer.runtime != self.owner.runtime
-            || self.release.release_id() != c.release_id
-            || now < self.issuer.valid_from_ms
-            || now >= self.issuer.expires_at_ms
-        {
-            return Err(Custody);
-        }
         let enabled = self
             .release
             .enabled_profile(c.hardware_profile_id)
             .ok_or(Custody)?;
         self.trust
             .validate_for_profile(&enabled.hardware_profile, &self.authority)
+            .map_err(|_| Custody)?;
+        if now < self.authenticated_at_ms
+            || now < self.issuer.valid_from_ms
+            || now >= self.issuer.expires_at_ms
+            || now < enabled.hardware_profile.valid_from_ms
+            || now >= enabled.hardware_profile.expires_at_ms
+            || self.release.purpose() != KagemushaReleasePurposeV1::Production
+            || c.account_binding
+                != kagemusha_ordinary_app_account_binding_v1(&self.owner.account_id)
+            || self.issuer.runtime != self.owner.runtime
+            || self.release.release_id() != c.release_id
+            || c.network_id != *self.release.network_id().as_bytes()
+            || c.suite_id != enabled.suite_id
+            || c.policy_epoch != enabled.policy_epoch
+            || c.trust_policy_digest != self.trust.canonical_digest().map_err(|_| Custody)?
+            || c.app_authority_policy_digest
+                != self.authority.canonical_digest().map_err(|_| Custody)?
+        {
+            return Err(Custody);
+        }
+        Ok(())
+    }
+    /// Require the original short C interval for every new hardware or issuer effect.
+    /// # Errors
+    /// Rejects expired C even when an old completed original remains recoverable.
+    pub fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        self.preparation
+            .authenticate(
+                &self.issuer.issuer_public_key,
+                &self.preparation.challenge,
+                now,
+            )
             .map_err(|_| Custody)
     }
-
+    /// Borrow exact original C after current policy and historical admission recheck.
+    /// This projection cannot extend its interval or authorize a new platform invocation.
+    /// # Errors
+    /// Rejects missing current selected policy or original custody.
+    pub fn retained_preparation(
+        &self,
+        now: u64,
+    ) -> Result<&KagemushaSignedOrdinaryAppEnrollmentChallengeV1> {
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        Ok(&self.preparation)
+    }
+    /// Borrow the original governed authority, including its release measurement digest.
+    pub fn app_authority(&self) -> &KagemushaAppAttestationAuthorityPolicyV1 {
+        &self.authority
+    }
     /// Borrow C only after actual native recheck; this projection is not a factory.
     /// # Errors
     /// Rejects unavailable original interval/custody.
@@ -256,6 +305,7 @@ impl KagemushaPreparedOrdinaryAppEnrollmentV1 {
             raw,
             raw_attestation,
             original_alias,
+            admitted_at_ms: trusted_native_reference_ms,
         })
     }
 }
@@ -267,6 +317,7 @@ pub struct KagemushaPendingAppIdentityV1 {
     raw: KagemushaVerifiedRawAppAttestationAdmissionV1,
     raw_attestation: Vec<u8>,
     original_alias: String,
+    admitted_at_ms: u64,
 }
 impl KagemushaPendingAppIdentityV1 {
     /// Exact pending raw-admission scope for E and its non-monetary receipt.
@@ -285,6 +336,68 @@ impl KagemushaPendingAppIdentityV1 {
     pub fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
         self.preparation.recheck_at_trusted_time(now)?;
         self.raw.recheck_at_trusted_time(now).map_err(|_| Custody)
+    }
+    /// Recheck a previously admitted raw original under current independently selected policies.
+    /// Raw signature/time is checked at the retained admission time, never a caller timestamp.
+    /// This supplies no fresh E signing/consumption authority after C expiry.
+    /// # Errors
+    /// Rejects current policy expiry, altered raw evidence, or historical admission mismatch.
+    pub fn recheck_retained_originals_at_trusted_time(&self, now: u64) -> Result<()> {
+        self.preparation
+            .recheck_retained_originals_at_trusted_time(now)?;
+        self.raw
+            .recheck_at_trusted_time(self.admitted_at_ms)
+            .map_err(|_| Custody)?;
+        if now < self.admitted_at_ms
+            || self.raw.subject().raw_platform_evidence_digest
+                != <[u8; 32]>::from(Sha256::digest(&self.raw_attestation))
+        {
+            return Err(Custody);
+        }
+        validate_original_alias(
+            &self.preparation.preparation.challenge,
+            self.raw.subject().attested_key_id,
+            &self.original_alias,
+        )
+    }
+    pub(super) fn retained_possession_challenge(
+        &self,
+        now: u64,
+    ) -> Result<KagemushaAppEnrollmentPossessionChallengeV1> {
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
+            &self.preparation.preparation.challenge,
+            &self.raw.subject().app_public_key,
+            self.raw.subject().raw_platform_evidence_digest,
+        )
+        .map_err(|_| Rejected)
+    }
+    pub(super) fn authenticate_final_credential(
+        &self,
+        original: &[u8],
+        now: u64,
+    ) -> Result<KagemushaVerifiedOrdinaryAppCredentialV1> {
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        if original.is_empty() || original.len() > 16 * 1024 {
+            return Err(Rejected);
+        }
+        let offered = KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(original)
+            .map_err(|_| Rejected)?;
+        let checked = offered
+            .authenticate(
+                &self.preparation.release,
+                &self.preparation.trust,
+                &self.preparation.authority,
+                &self.preparation.preparation.challenge,
+                &self.raw.subject().app_public_key,
+                now,
+            )
+            .map_err(|_| Rejected)?;
+        if checked.original() != original {
+            return Err(Rejected);
+        }
+        self.recheck_retained_originals_at_trusted_time(now)?;
+        Ok(checked)
     }
     /// Derive the sole E371 from genuine raw admission, original C and original point.
     /// # Errors

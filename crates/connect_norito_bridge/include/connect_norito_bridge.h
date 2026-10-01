@@ -719,7 +719,10 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARE_INCOMING_FOLD_V1 = 15,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_COMPLETE_INCOMING_FOLD_V1 = 16,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_STAGE_INCOMING_ORIGINAL_V1 = 17,
-  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_AUTHENTICATED_HARDWARE_POLICY_V1 = 18
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_AUTHENTICATED_HARDWARE_POLICY_V1 = 18,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_APP_OPERATION_APPROVAL_V1 = 19,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_APP_ENROLLMENT_POSSESSION_V1 = 20,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_ORDINARY_APP_IDENTITY_V1 = 21
 } ConnectNoritoKagemushaCoreCoordinatorMethodV1;
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
@@ -738,7 +741,8 @@ int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
     const uint8_t* request_frame, size_t request_frame_length,
     uint8_t** output_frame, size_t* output_frame_length);
 int32_t connect_norito_kagemusha_core_coordinator_close_v1(uint64_t handle);
-// Generic builds provide no native OEM provisioner and fail closed as unavailable.
+// Without a separately registered trusted Rust owner, installation returns UNAVAILABLE.
+// Ordinary app identity alone grants no monetary authority.
 // The path-only installer composes the independently retained Rust owner exactly
 // once; it provides no caller-selected backend, replacement, uninstall or monetary
 // software fallback. Contract words are metadata only; successful install and

@@ -10,6 +10,8 @@ struct ObservedAllocator;
 thread_local! {
     pub(crate) static OBSERVE: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static DEALLOCATION_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+    static DEALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn record_allocation() {
@@ -40,6 +42,9 @@ unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: forwarded unchanged from GlobalAlloc's caller.
         unsafe { System.dealloc(ptr, layout) }
+        if DEALLOCATION_SIZE.try_with(Cell::get).unwrap_or(None) == Some(layout.size()) {
+            let _ = DEALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+        }
     }
 }
 
@@ -81,4 +86,46 @@ fn allocation_observer_detects_backing_and_retires_during_unwind() {
     assert!(unwind.is_err());
     assert!(!OBSERVE.with(Cell::get));
     without_allocations(|| ());
+}
+
+/// Observe completed deallocations of one exact layout size on this test thread.
+pub fn with_deallocation_observation<T>(bytes: usize, body: impl FnOnce() -> T) -> (T, usize) {
+    struct EndObservation;
+    impl Drop for EndObservation {
+        fn drop(&mut self) {
+            DEALLOCATION_SIZE.with(|size| size.set(None));
+        }
+    }
+    assert!(DEALLOCATION_SIZE.with(Cell::get).is_none());
+    DEALLOCATIONS.with(|count| count.set(0));
+    DEALLOCATION_SIZE.with(|size| size.set(Some(bytes)));
+    let guard = EndObservation;
+    let result = body();
+    drop(guard);
+    (result, observed_deallocations())
+}
+
+/// Completed matching deallocations, including while a custody token is dropping.
+pub fn observed_deallocations() -> usize {
+    DEALLOCATIONS.with(Cell::get)
+}
+
+#[test]
+fn deallocation_observer_counts_completed_exact_size_release() {
+    let ((), count) = with_deallocation_observation(97, || {
+        let observed = vec![0x71_u8; 97];
+        let other = vec![0x72_u8; 98];
+        std::hint::black_box((&observed, &other));
+        assert_eq!(observed_deallocations(), 0);
+        drop(other);
+        assert_eq!(observed_deallocations(), 0);
+        drop(observed);
+        assert_eq!(observed_deallocations(), 1);
+    });
+    assert_eq!(count, 1);
+    let unwind = std::panic::catch_unwind(|| {
+        with_deallocation_observation(97, || panic!("deallocation observation unwind"));
+    });
+    assert!(unwind.is_err());
+    assert!(DEALLOCATION_SIZE.with(Cell::get).is_none());
 }

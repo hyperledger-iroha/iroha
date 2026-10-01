@@ -129,6 +129,7 @@ class OrdinaryReleasePolicy:
     app_release_digest: bytes
     core_preparation_public_key: bytes
     authority_public_key: bytes
+    circuit_issuer_public_key: bytes
     maximum_credential_lifetime_ms: int
     platform_policy: AppleAppPolicy | GoogleKeyMintPolicy | OemKeyMintPolicy
     play_integrity_policy: PlayIntegrityPolicy | None
@@ -147,6 +148,9 @@ class OrdinaryReleasePolicy:
                       "app_authority_policy_digest", "issuer_policy_digest", "app_signing_identity_digest",
                       "app_release_digest", "core_preparation_public_key", "authority_public_key"):
             require(any(fixed32(getattr(self, field), field)), "empty ordinary policy selector")
+        require(type(self.circuit_issuer_public_key) is bytes and len(self.circuit_issuer_public_key) == 65
+                and self.circuit_issuer_public_key[0] == 4 and any(self.circuit_issuer_public_key[1:]),
+                "actual governed ordinary issuer P256 key absent")
         require(type(self.policy_epoch) is int and 0 < self.policy_epoch < (1 << 64)
                 and type(self.profile_valid_from_ms) is int and type(self.profile_expires_at_ms) is int
                 and 0 < self.profile_valid_from_ms < self.profile_expires_at_ms < (1 << 64)
@@ -211,7 +215,8 @@ class VerifiedOrdinaryEvidence:
             self.policy.app_signing_identity_digest, self.policy.app_release_digest,
             self.policy.authority_public_key, issued_at_ms, expires_at_ms,
             self.policy.maximum_credential_lifetime_ms, self.policy.profile_expires_at_ms,
-            self.policy.allowed_android_levels, self.policy.play_integrity_policy, integrity)
+            self.policy.allowed_android_levels, self.policy.play_integrity_policy, integrity,
+            self.policy.circuit_issuer_public_key)
 
 
 class GovernedOrdinaryEvidenceProvider:
@@ -305,6 +310,9 @@ class GovernedOrdinaryEvidenceProvider:
         possession = verify_enrollment_possession(challenge, proof, request.raw_attestation,
             request.raw_possession, self._openssl,
             apple_app_id=platform.app_id if type(platform) is AppleAppPolicy else None,
+            app_release_digest=policy.app_release_digest,
+            expected_validation_category=platform.expected_validation_category if type(platform) is AppleAppPolicy else None,
+            expected_bundle_version=platform.expected_bundle_version if type(platform) is AppleAppPolicy else None,
             possession_issued_at_ms=challenge.issued_at_ms,
             possession_expires_at_ms=challenge.expires_at_ms)
         require((policy.play_integrity_policy is None) == (request.play_integrity_token is None),

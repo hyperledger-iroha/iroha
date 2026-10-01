@@ -1,11 +1,7 @@
 //! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
 
 use super::*;
-use crate::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, StateBlock, StateReadOnly, World},
-};
+use crate::state::{State, StateBlock, StateReadOnly, World};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
@@ -36,9 +32,66 @@ fn owner(index: u16) -> AccountId {
     )
 }
 
+/// Freeze a finite component corpus bound through the same governed source policy.
+fn set_source_delta_limit(
+    world: &World,
+    max_deltas: u32,
+) -> iroha_data_model::parameter::FastpqSourcePolicyV1 {
+    use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
+
+    let mut parameters = world.parameters.block();
+    let previous = parameters.get().block().fastpq_source();
+    let mut intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
+    // Every complete transcript also owns its canonical input and statement bytes.
+    // Scale those finite corpus bounds together; changing only D leaves I/M/S at
+    // the sixteen-transfer bootstrap size. Both 254 and 255 use the same byte
+    // envelope, so the one-delta-short regression isolates the D limit.
+    let chunks = u64::from(max_deltas.div_ceil(intrinsic.max_deltas).max(1));
+    intrinsic.max_deltas = max_deltas;
+    intrinsic.max_input_transcript_bytes = intrinsic
+        .max_input_transcript_bytes
+        .checked_mul(chunks)
+        .expect("bounded input corpus");
+    intrinsic.max_statement_bytes = intrinsic
+        .max_statement_bytes
+        .checked_mul(chunks)
+        .expect("bounded statement corpus");
+    intrinsic.max_total_statement_bytes = intrinsic.max_statement_bytes;
+    let profile = FastpqSourcePolicyV1::from_sizing(
+        parameters.get().block().execution_output(),
+        intrinsic,
+        previous.mandatory,
+        FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+    )
+    .expect("explicit finite source profile fits the component corpus");
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+    parameters.commit();
+    profile
+}
+
 fn fixture(
     count: usize,
     final_scope_mismatch: bool,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    SettleAtomic,
+    AccountId,
+) {
+    fixture_with_source_delta_limit(
+        count,
+        final_scope_mismatch,
+        u32::try_from(count)
+            .expect("bounded movement count")
+            .max(16),
+    )
+}
+
+fn fixture_with_source_delta_limit(
+    count: usize,
+    final_scope_mismatch: bool,
+    max_deltas: u32,
 ) -> (
     crate::sumeragi::test_chain::CertifiedTestChain,
     SettleAtomic,
@@ -100,12 +153,19 @@ fn fixture(
         assets,
         [],
     );
-    let state = State::new(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let chain = crate::block::tests::component_chain(state);
+    // The 255-movement corpus exceeds bootstrap's sixteen transfer deltas.
+    // Reserve its deltas and complete framing before StateBlock freezes its source owner.
+    let source_policy = set_source_delta_limit(&world, max_deltas);
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    // Genesis installs its signed parameter snapshot. Carry this finite corpus
+    // policy in that snapshot so bootstrap defaults cannot replace its owner.
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Block(
+            iroha_data_model::parameter::BlockParameter::FastpqSource(source_policy),
+        ));
+    let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("signed atomic settlement corpus policy");
     let instruction = SettleAtomic::new(
         chain.network_id(),
         "overlay_atomic_business".parse().expect("id"),
@@ -364,4 +424,26 @@ fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
         .expect_err("carrier cannot grant itself a foreign owner's exact consent");
     assert!(matches!(error, ValidationFail::NotPermitted(_)));
     assert_eq!(observable(&state_tx), before);
+}
+
+#[test]
+fn atomic_overlay_intrinsic_capacity_rejects_without_partial_execution() {
+    for direct in [false, true] {
+        let (chain, instruction, sponsor) = fixture_with_source_delta_limit(255, false, 254);
+        let state = chain.state();
+        let mut block = next_block(state);
+        grant_consents(&mut block, &instruction, &sponsor, None);
+        let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-delta-limit"));
+        let before = observable(&state_tx);
+        assert_eq!(before.1, 0);
+        let error = overlay(instruction, direct)
+            .apply(&mut state_tx, &sponsor)
+            .expect_err("all 255 deltas must fit the original source owner");
+        assert!(
+            matches!(&error, ValidationFail::InstructionFailed(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message))
+                if message.as_ref() == crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION),
+            "{error:?}"
+        );
+        assert_eq!(observable(&state_tx), before);
+    }
 }

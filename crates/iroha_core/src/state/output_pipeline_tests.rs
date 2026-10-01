@@ -44,16 +44,17 @@ fn pipeline_fixture(bytes: u64, triggers: Vec<Trigger>) -> (Box<State>, SignedBl
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut tx = setup.transaction_for_callback_testing();
-    for trigger in triggers {
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut tx)
-            .unwrap();
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        for trigger in triggers {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut tx)
+                .unwrap();
+        }
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    tx.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    drop(setup);
     let source = carrier(
         &state,
         vec![input(

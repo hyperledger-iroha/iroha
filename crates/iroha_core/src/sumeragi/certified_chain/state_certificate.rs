@@ -166,7 +166,24 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let config = scheduled
             .height_config()
             .map_err(|error| malformed(error.to_string()))?;
-        let authority = VerifiedAuthority::new(scheduled.epoch.clone(), height)?;
+        // Resource admission precedes the boolean signature relation and keeps
+        // the original inherited cumulative allowance. No refusal is converted
+        // to an invalid certificate or hidden in a new per-frame scope.
+        let scratch = iroha_crypto::BlsNormalAggregateScratch::new(|bytes| {
+            #[cfg(all(test, sumeragi_core_mutation = "HC13"))]
+            {
+                let _ = bytes;
+                Ok(())
+            }
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC13")))]
+            query_scratch_admission(bytes)
+        })
+        .map_err(VerificationReadError::Resource)?;
+        let authority = VerifiedAuthority::with_crypto(
+            scheduled.epoch.clone(),
+            height,
+            BlsCrypto::with_aggregate_scratch(scratch),
+        )?;
         let certified = self
             .verification_context()
             .verify_certificate_with_scratch_admission(

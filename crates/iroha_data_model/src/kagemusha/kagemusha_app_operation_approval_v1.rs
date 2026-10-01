@@ -29,6 +29,32 @@ const ORIGINAL_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-operation-approval-origi
 /// It is not a platform signing domain and grants no admission.
 pub const KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:ordinary-app-approval-proof-binding\0";
+/// Proof transcript joining platform approval and its exact selected Integrity lease original.
+/// This is not a signing domain and does not authenticate either input.
+pub const KAGEMUSHA_ORDINARY_AUTHORIZATION_PROOF_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:ordinary-authorization-proof-binding\0";
+
+/// Bind platform approval to the full original of the independently admitted Integrity lease.
+/// `None` denotes an original credential verdict or Apple approval. Native callers select
+/// the lease from their retained reservation; this data helper grants no authority.
+/// # Errors
+/// Rejects an absent platform identity or a zero digest offered as a selected lease.
+pub fn kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+    platform_proof_binding: [u8; 32],
+    selected_lease_original_digest: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    if platform_proof_binding == [0; 32]
+        || selected_lease_original_digest.is_some_and(|digest| digest == [0; 32])
+    {
+        return Err("ordinary authorization proof-binding identity absent".into());
+    }
+    let mut hash = Sha256::new();
+    hash.update(KAGEMUSHA_ORDINARY_AUTHORIZATION_PROOF_BINDING_DOMAIN_V1);
+    hash.update(64_u64.to_le_bytes());
+    hash.update(platform_proof_binding);
+    hash.update(selected_lease_original_digest.unwrap_or([0; 32]));
+    Ok(hash.finalize().into())
+}
 
 /// Borrow exact authData and DER slices using the maintained bounded CBOR parser.
 /// This is data-only parsing; callers separately verify the original signature.
@@ -50,8 +76,22 @@ pub fn kagemusha_app_attest_original_parts_v1(
 /// Rejects malformed or trailing CBOR, a different authenticator shape or flag.
 pub fn kagemusha_app_attest_original_counter_v1(raw_assertion: &[u8]) -> Result<u32, String> {
     let (auth_data, _) = kagemusha_app_attest_original_parts_v1(raw_assertion)?;
-    if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] == [0; 32] {
+    if raw_assertion.len() > KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1
+        || !(37..=206).contains(&auth_data.len())
+        || auth_data[..32] == [0; 32]
+    {
         return Err("App Attest authenticator shape differs".into());
+    }
+    if auth_data.len() == 37 {
+        if auth_data[32] != 0x40 {
+            return Err("limited App Attest flags differ".into());
+        }
+    } else {
+        if !matches!(auth_data[32], 0x40 | 0xc0) {
+            return Err("extended App Attest flags differ".into());
+        }
+        super::kagemusha_v1::parse_app_attest_assertion_extensions(auth_data)
+            .map_err(|_| "App Attest release extension shape differs")?;
     }
     Ok(u32::from_be_bytes(
         auth_data[33..37]
@@ -131,6 +171,8 @@ impl KagemushaAppOperationApprovalSigningLayoutV1 {
 pub enum KagemushaAppOperationApprovalPurposeV1 {
     /// Approve the exact native monetary transition; its operation is in the signed subject.
     MonetaryTransition,
+    /// Approve the exact native prepared State before candidate and terminal generation.
+    PrepareTransition,
 }
 
 /// Public native challenge. Decoding or constructing it grants no authority.
@@ -192,16 +234,13 @@ impl KagemushaAppOperationApprovalChallengeV1 {
 
     /// Return the exact bytes consumed by Android SHA256withECDSA.
     ///
-    /// `DOMAIN || LE64(275) || LE16(version) || 01 || eight raw32 fields
+    /// `DOMAIN || LE64(275) || LE16(version) || purpose(01/02) || eight raw32 fields
     /// || LE64(issued) || LE64(expires)`. The subject digest binds the full
     /// existing S, including its domain and length, rather than a Norito frame.
     /// # Errors
     /// Rejects missing selectors, another version, invalid subject or time interval.
     pub fn canonical_signing_bytes(&self) -> Result<Vec<u8>, String> {
-        let subject = self
-            .subject
-            .canonical_signing_bytes()
-            .map_err(|e| e.to_string())?;
+        let subject = self.canonical_subject_signing_bytes()?;
         if self.version != 1
             || [
                 self.operation_id,
@@ -229,6 +268,7 @@ impl KagemushaAppOperationApprovalChallengeV1 {
         bytes.extend_from_slice(&self.version.to_le_bytes());
         match self.purpose {
             KagemushaAppOperationApprovalPurposeV1::MonetaryTransition => bytes.push(1),
+            KagemushaAppOperationApprovalPurposeV1::PrepareTransition => bytes.push(2),
         }
         for field in [
             self.operation_id,
@@ -245,6 +285,20 @@ impl KagemushaAppOperationApprovalChallengeV1 {
         bytes.extend_from_slice(&self.issued_at_ms.to_le_bytes());
         bytes.extend_from_slice(&self.expires_at_ms.to_le_bytes());
         Ok(bytes)
+    }
+    /// Sole purpose-selected signing subject, preserving the existing domain and fixed layout.
+    /// # Errors
+    /// Rejects a terminal subject in the preparation phase or an incomplete terminal subject.
+    pub fn canonical_subject_signing_bytes(&self) -> Result<Vec<u8>, String> {
+        match self.purpose {
+            KagemushaAppOperationApprovalPurposeV1::MonetaryTransition => {
+                self.subject.canonical_signing_bytes()
+            }
+            KagemushaAppOperationApprovalPurposeV1::PrepareTransition => {
+                self.subject.canonical_prepare_signing_bytes()
+            }
+        }
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -320,7 +374,7 @@ pub fn kagemusha_ordinary_app_approval_proof_binding_digest_v1(
         }
         KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion }
             if !raw_assertion.is_empty()
-                && raw_assertion.len() <= KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 =>
+                && raw_assertion.len() <= KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1 =>
         {
             (2_u8, raw_assertion.as_slice())
         }
@@ -336,6 +390,78 @@ pub fn kagemusha_ordinary_app_approval_proof_binding_digest_v1(
     Ok(hash.finalize().into())
 }
 
+/// Fixed ordinary Apple profile bounds derived from the exact two release-extension keys.
+/// A 128-byte UTF-8 bundle version gives a 169-byte suffix and 206-byte authenticator data.
+/// The outer two-key map with maximum canonical DER72 is at most 311 bytes.
+pub const KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1: usize = 311;
+
+/// Parsed same-original Apple data, without signature, release or native authority.
+/// The release measurement describes only the signed fields checked against the supplied digest.
+#[derive(Debug, Clone, Copy)]
+pub struct KagemushaOrdinaryAppleOriginalPartsV1<'a> {
+    /// Entire original authenticator byte string, including any signed extension map.
+    pub authenticator_data: &'a [u8],
+    /// Entire original canonical DER byte string; high-S is not normalized here.
+    pub signature_der: &'a [u8],
+    /// Explicitly unavailable for the limited 37-byte form.
+    pub release_measurement: super::KagemushaAppAttestReleaseMeasurementV1,
+    /// Parsed category only when extensions were checked against the supplied release digest.
+    pub validation_category: Option<u32>,
+    /// Parsed original version only when extensions were checked against that same digest.
+    pub bundle_version: Option<&'a str>,
+}
+
+/// Parse exact bounded Apple originals and correlate signed release fields to an external digest.
+/// This formatter/parser never authenticates a signature or constructs an enrolled/native owner.
+/// # Errors
+/// Rejects malformed/nonminimal/duplicate/trailing CBOR, wrong flags or a different release.
+pub fn kagemusha_ordinary_apple_original_parts_v1(
+    raw: &[u8],
+    expected_app_release_digest: [u8; 32],
+) -> Result<KagemushaOrdinaryAppleOriginalPartsV1<'_>, String> {
+    if raw.is_empty()
+        || raw.len() > KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1
+        || expected_app_release_digest == [0; 32]
+    {
+        return Err("ordinary Apple original/release bound differs".into());
+    }
+    let (auth, der) = super::kagemusha_v1::parse_app_attest_assertion(raw)
+        .map_err(|_| "ordinary Apple original CBOR differs")?;
+    if der.len() > 72 || !(37..=206).contains(&auth.len()) {
+        return Err("ordinary Apple original fields exceed fixed profile".into());
+    }
+    let (measurement, category, version) = if auth.len() == 37 {
+        if auth[32] != 0x40 {
+            return Err("ordinary Apple limited flags differ".into());
+        }
+        (
+            super::KagemushaAppAttestReleaseMeasurementV1::Unavailable,
+            None,
+            None,
+        )
+    } else {
+        if !matches!(auth[32], 0x40 | 0xc0) {
+            return Err("ordinary Apple extension flag absent".into());
+        }
+        let ext = super::kagemusha_v1::parse_app_attest_assertion_extensions(auth)
+            .map_err(|_| "ordinary Apple release extensions malformed")?;
+        ext.verify_release_digest(expected_app_release_digest)
+            .map_err(|_| "ordinary Apple signed release differs")?;
+        (
+            super::KagemushaAppAttestReleaseMeasurementV1::SignedExtensions,
+            Some(ext.validation_category()),
+            Some(ext.bundle_version()),
+        )
+    };
+    Ok(KagemushaOrdinaryAppleOriginalPartsV1 {
+        authenticator_data: auth,
+        signature_der: der,
+        release_measurement: measurement,
+        validation_category: category,
+        bundle_version: version,
+    })
+}
+
 /// Successful signature and original enrollment correlation, without a spending grant.
 /// It has no public constructor, decoder or clone implementation. The genuine
 /// native Guard owner must additionally match its current release/credential,
@@ -346,6 +472,7 @@ pub struct KagemushaVerifiedAppOperationApprovalV1 {
     digest: [u8; 32],
     proof_binding_digest: [u8; 32],
     app_attest_counter: Option<u32>,
+    app_attest_release_measurement: Option<super::KagemushaAppAttestReleaseMeasurementV1>,
     authenticated_at_ms: u64,
     valid_until_ms: u64,
 }
@@ -374,6 +501,14 @@ impl KagemushaVerifiedAppOperationApprovalV1 {
     #[must_use]
     pub const fn app_attest_counter(&self) -> Option<u32> {
         self.app_attest_counter
+    }
+    /// Signed Apple release fields, or explicit unavailable measurement for the limited form.
+    /// This fact does not qualify a monetary profile or establish native current ownership.
+    #[must_use]
+    pub const fn app_attest_release_measurement(
+        &self,
+    ) -> Option<super::KagemushaAppAttestReleaseMeasurementV1> {
+        self.app_attest_release_measurement
     }
     /// Check the original exclusive interval without renewing it.
     /// # Errors
@@ -476,10 +611,11 @@ impl KagemushaAppOperationApprovalV1 {
         {
             return Err("native app approval original binding differs".into());
         }
-        let counter = self.evidence.authenticate_signature(
+        let (counter, release_measurement) = self.evidence.authenticate_signature(
             selection.platform_class,
             &selection.app_public_key,
             selection.app_signing_identity_digest,
+            selection.app_release_digest,
             original_app_attest_counter_floor,
             &message,
         )?;
@@ -503,6 +639,7 @@ impl KagemushaAppOperationApprovalV1 {
             digest: hash.finalize().into(),
             proof_binding_digest: kagemusha_ordinary_app_approval_proof_binding_digest_v1(self)?,
             app_attest_counter: counter,
+            app_attest_release_measurement: release_measurement,
             authenticated_at_ms: trusted_now_ms,
             valid_until_ms: valid_until_ms.min(self.challenge.expires_at_ms),
         };
@@ -521,13 +658,21 @@ impl KagemushaAppOperationApprovalEvidenceV1 {
         platform: super::KagemushaHardwarePlatformClassV1,
         key: &KagemushaDevicePublicKeyV1,
         app_identity: [u8; 32],
+        expected_app_release_digest: [u8; 32],
         original_app_attest_counter_floor: Option<u32>,
         message: &[u8],
-    ) -> Result<Option<u32>, String> {
+    ) -> Result<
+        (
+            Option<u32>,
+            Option<super::KagemushaAppAttestReleaseMeasurementV1>,
+        ),
+        String,
+    > {
         key.validate().map_err(|e| e.to_string())?;
         if message.is_empty()
             || message.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1
             || app_identity == [0; 32]
+            || expected_app_release_digest == [0; 32]
         {
             return Err("app approval message or identity absent".into());
         }
@@ -545,23 +690,22 @@ impl KagemushaAppOperationApprovalEvidenceV1 {
                     .map_err(|e| e.to_string())?
                     .verify(key, message)
                     .map_err(|e| e.to_string())?;
-                Ok(None)
+                Ok((None, None))
             }
             (
                 Self::AppleAppAttest { raw_assertion },
                 super::KagemushaHardwarePlatformClassV1::AppleAppAttest,
             ) => {
-                if raw_assertion.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 {
-                    return Err("App Attest original oversized".into());
-                }
-                let (auth_data, der) =
-                    super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
-                        .map_err(|error| format!("App Attest assertion parse failed: {error:?}"))?;
+                let parts = kagemusha_ordinary_apple_original_parts_v1(
+                    raw_assertion,
+                    expected_app_release_digest,
+                )?;
+                let auth_data = parts.authenticator_data;
+                let der = parts.signature_der;
                 let floor = original_app_attest_counter_floor
                     .ok_or("App Attest original counter floor absent")?;
-                if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] != app_identity
-                {
-                    return Err("App Attest application or authenticator shape differs".into());
+                if auth_data[..32] != app_identity {
+                    return Err("App Attest application differs".into());
                 }
                 let counter = u32::from_be_bytes(
                     auth_data[33..37]
@@ -579,9 +723,70 @@ impl KagemushaAppOperationApprovalEvidenceV1 {
                     .map_err(|e| e.to_string())?
                     .verify(key, &nonce)
                     .map_err(|e| e.to_string())?;
-                Ok(Some(counter))
+                Ok((Some(counter), Some(parts.release_measurement)))
             }
             _ => Err("app approval platform equation differs".into()),
         }
+    }
+}
+
+#[cfg(test)]
+#[path = "ordinary_apple_release_original_tests.rs"]
+mod ordinary_apple_release_original_tests;
+
+#[cfg(test)]
+mod authorization_binding_tests {
+    use super::*;
+
+    #[test]
+    fn authorization_binding_uses_exact_fixed_transcript_and_selected_original() {
+        let platform = [1; 32];
+        let lease = [2; 32];
+        let actual = kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+            platform,
+            Some(lease),
+        )
+        .unwrap();
+        let mut original = KAGEMUSHA_ORDINARY_AUTHORIZATION_PROOF_BINDING_DOMAIN_V1.to_vec();
+        original.extend_from_slice(&64_u64.to_le_bytes());
+        original.extend_from_slice(&platform);
+        original.extend_from_slice(&lease);
+        assert_eq!(actual, <[u8; 32]>::from(Sha256::digest(original)));
+        assert_ne!(
+            actual,
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(platform, None)
+                .unwrap()
+        );
+        assert_ne!(
+            actual,
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+                platform,
+                Some([3; 32])
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            actual,
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+                [4; 32],
+                Some(lease)
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn authorization_binding_rejects_zero_identity_and_zero_selected_lease() {
+        assert!(
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1([0; 32], None)
+                .is_err()
+        );
+        assert!(
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+                [1; 32],
+                Some([0; 32])
+            )
+            .is_err()
+        );
     }
 }

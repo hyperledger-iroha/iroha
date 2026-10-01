@@ -6,7 +6,7 @@ use iroha_allocation::AllocationBudget;
 use iroha_data_model::{block::SignedBlock, sumeragi_finality::result_of_preimage};
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
-    message::VoteKind,
+    message::{ByteAdmissionError, Qc, VoteKind},
 };
 
 use super::certificate_read::{CertificateRead, CertificateReadError, DecodedCertificate};
@@ -17,6 +17,14 @@ use crate::sumeragi::{
         payload_build::{PayloadBuild, PayloadBuildError},
     },
 };
+
+/// The same original decode/projection can either return its QC to a committed reader or
+/// let the ordinary body-read adapter release it before returning untrusted restoration input.
+pub(super) enum StoredBodyReadPoll {
+    Absent,
+    Pending(ByteAdmissionError),
+    Ready(BodyRestoration, Qc),
+}
 
 enum Stage {
     Absent,
@@ -100,18 +108,17 @@ impl StoredBodyRead {
     }
 }
 
-impl BodyReadJob for StoredBodyRead {
-    fn source(&self) -> &AvailabilitySource {
-        &self.source
-    }
-
-    fn poll(&mut self, budget: &AllocationBudget) -> Result<BodyReadPoll, BodyReadError> {
+impl StoredBodyRead {
+    pub(super) fn poll_with_qc(
+        &mut self,
+        budget: &AllocationBudget,
+    ) -> Result<StoredBodyReadPoll, BodyReadError> {
         if !self.budget.same_pool(budget) {
             return Err(BodyReadError::ForeignBudget);
         }
         loop {
             match std::mem::replace(&mut self.stage, Stage::Consumed) {
-                Stage::Absent => return Ok(BodyReadPoll::Absent),
+                Stage::Absent => return Ok(StoredBodyReadPoll::Absent),
                 Stage::Certificate(job) => match job.complete(budget) {
                     Ok(decoded) => self.stage = Stage::Decoded(decoded),
                     Err((job, error)) => {
@@ -130,7 +137,7 @@ impl BodyReadJob for StoredBodyRead {
                                 Err(BodyReadError::Decode(error))
                             }
                             CertificateReadError::Admission(error) if error.is_local_refusal() => {
-                                Ok(BodyReadPoll::Pending(error))
+                                Ok(StoredBodyReadPoll::Pending(error))
                             }
                             CertificateReadError::Admission(error) => {
                                 Err(BodyReadError::Admission(error))
@@ -154,18 +161,24 @@ impl BodyReadJob for StoredBodyRead {
                     |decoded, writer| decoded.source.write_resultless_proposal_wire(writer),
                 ) {
                     Ok((decoded, payload)) => {
-                        return Ok(BodyReadPoll::Ready(BodyRestoration::new(
-                            self.source.clone(),
-                            decoded.header,
-                            decoded.availability,
-                            payload,
-                        )));
+                        let qc = decoded.commit_qc;
+                        #[cfg(all(test, sumeragi_core_mutation = "HC15"))]
+                        let qc = qc.clone();
+                        return Ok(StoredBodyReadPoll::Ready(
+                            BodyRestoration::new(
+                                self.source.clone(),
+                                decoded.header,
+                                decoded.availability,
+                                payload,
+                            ),
+                            qc,
+                        ));
                     }
                     Err((job, error)) => {
                         self.stage = Stage::Projecting(job);
                         return match error {
                             PayloadBuildError::Admission(error) if error.is_local_refusal() => {
-                                Ok(BodyReadPoll::Pending(error))
+                                Ok(StoredBodyReadPoll::Pending(error))
                             }
                             PayloadBuildError::Admission(error) => {
                                 Err(BodyReadError::Admission(error))
@@ -183,6 +196,25 @@ impl BodyReadJob for StoredBodyRead {
                 Stage::Consumed => return Err(BodyReadError::Completed),
             }
         }
+    }
+}
+
+impl BodyReadJob for StoredBodyRead {
+    fn source(&self) -> &AvailabilitySource {
+        &self.source
+    }
+
+    fn poll(&mut self, budget: &AllocationBudget) -> Result<BodyReadPoll, BodyReadError> {
+        Ok(match self.poll_with_qc(budget)? {
+            StoredBodyReadPoll::Absent => BodyReadPoll::Absent,
+            StoredBodyReadPoll::Pending(error) => BodyReadPoll::Pending(error),
+            StoredBodyReadPoll::Ready(restoration, qc) => {
+                // This caller requested only a body. Release the original proof owners before
+                // returning, including any last original-pool ResultWitness backing/control.
+                drop(qc);
+                BodyReadPoll::Ready(restoration)
+            }
+        })
     }
 }
 

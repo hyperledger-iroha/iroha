@@ -34,7 +34,7 @@ pub use native_core_work::{
 #[cfg(unix)]
 pub use ordinary_app_identity::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
-    KagemushaOrdinaryEnrollmentDispositionV1,
+    KagemushaOrdinaryEnrollmentDispositionV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod recovered_backend;
@@ -1827,6 +1827,9 @@ mod tests {
                     "incoming-complete\t",
                     "incoming-stage\t",
                     "authenticated-hardware-policy\t",
+                    "app-approval-recheck\t",
+                    "app-possession-recheck\t",
+                    "ordinary-identity-recheck\t",
                 ]
                 .iter()
                 .any(|name| line.starts_with(name))
@@ -3512,6 +3515,34 @@ mod tests {
     #[test]
     fn header_and_jni_names_pin_the_kagemusha_only_boundary() {
         let header = include_str!("../include/connect_norito_bridge.h");
+        let compact: String = header.split_whitespace().collect();
+        let header_methods = compact
+            .split_once("typedefenumConnectNoritoKagemushaCoreCoordinatorMethodV1{")
+            .expect("C coordinator method enum")
+            .1
+            .split_once("}ConnectNoritoKagemushaCoreCoordinatorMethodV1;")
+            .expect("C coordinator method enum end")
+            .0
+            .split(',')
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let native_methods = KagemushaCoreCoordinatorMethodV1::ALL
+            .map(|method| {
+                let mut name = String::from("CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_");
+                for (index, character) in format!("{method:?}").chars().enumerate() {
+                    if index != 0 && character.is_ascii_uppercase() {
+                        name.push('_');
+                    }
+                    name.push(character.to_ascii_uppercase());
+                }
+                format!("{name}_V1={}", method.code())
+            })
+            .to_vec();
+        assert_eq!(
+            header_methods, native_methods,
+            "C coordinator method inventory"
+        );
         let version = KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1;
         assert!(header.contains(&format!(
             "#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C({version})"

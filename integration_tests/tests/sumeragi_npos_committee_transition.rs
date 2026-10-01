@@ -87,6 +87,9 @@ struct NativeProviderManifest {
     policy_digest: [u8; 32],
 }
 
+#[path = "support/committee_status.rs"]
+mod committee_status;
+
 const EPOCH: u64 = 24;
 const SELECTION: u64 = EPOCH;
 const CUTOFF: u64 = EPOCH * 2;
@@ -369,7 +372,8 @@ fn admit_candidates(
         .collect::<Vec<InstructionBox>>();
     admin.submit_all(funding, FeePaymentIntent::authority(Vec::new(), None))?;
     for operator in candidates {
-        let inclusion_height = admin.status().get()?.blocks + 1;
+        let inclusion_height =
+            committee_status::height_until_blocking(admin, Instant::now() + WAIT)? + 1;
         ensure!(
             inclusion_height < SELECTION,
             "candidate missed the unfrozen selecting prestate"
@@ -477,7 +481,7 @@ async fn advance_to_height(
     loop {
         let mut heights = Vec::new();
         for peer in &peers {
-            heights.push(peer.status().await?.blocks);
+            heights.push(committee_status::height_until(peer.client().client(), deadline).await?);
         }
         let reached = heights.iter().filter(|height| **height >= target).count();
         if reached == peers.len() {
@@ -536,9 +540,10 @@ async fn advance_exact_rotation_phase(
         "rotation phase requires an exact current quorum geometry"
     );
     let peers = exact_process_roster(network, voters)?;
+    let deadline = Instant::now() + WAIT;
     let mut before = Vec::with_capacity(peers.len());
     for peer in &peers {
-        before.push(peer.status().await?.blocks);
+        before.push(committee_status::height_until(peer.client().client(), deadline).await?);
     }
     ensure!(
         before.iter().all(|observed| *observed == height - 1),
@@ -553,11 +558,10 @@ async fn advance_exact_rotation_phase(
     })
     .await
     .wrap_err("rotation DKG phase submit worker failed")?;
-    let deadline = Instant::now() + WAIT;
     loop {
         let mut observed = Vec::with_capacity(peers.len());
         for peer in &peers {
-            observed.push(peer.status().await?.blocks);
+            observed.push(committee_status::height_until(peer.client().client(), deadline).await?);
         }
         ensure!(
             observed.iter().all(|current| *current <= height),
@@ -582,9 +586,10 @@ async fn advance_exact_genesis_phase(
         (2..=4).contains(&height),
         "invalid genesis DKG phase height"
     );
+    let deadline = Instant::now() + WAIT;
     let mut before = Vec::new();
     for peer in network.validators() {
-        before.push(peer.status().await?.blocks);
+        before.push(committee_status::height_until(peer.client().client(), deadline).await?);
     }
     ensure!(
         before.iter().all(|observed| *observed == height - 1),
@@ -599,11 +604,10 @@ async fn advance_exact_genesis_phase(
     })
     .await
     .wrap_err("genesis DKG phase submit worker failed")?;
-    let deadline = Instant::now() + WAIT;
     loop {
         let mut observed = Vec::new();
         for peer in network.validators() {
-            observed.push(peer.status().await?.blocks);
+            observed.push(committee_status::height_until(peer.client().client(), deadline).await?);
         }
         ensure!(
             observed.iter().all(|current| *current <= height),
@@ -1075,7 +1079,12 @@ async fn execute_rotation_preparation(
                 advance_exact_rotation_phase(network, &voters, height).await?;
                 let observed = read_on_dedicated_thread({
                     let admin = admin.clone();
-                    move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
+                    move || -> Result<u64> {
+                        Ok(committee_status::height_until_blocking(
+                            &admin,
+                            Instant::now() + WAIT,
+                        )?)
+                    }
                 })
                 .await
                 .wrap_err("rotation phase status worker failed")?;
@@ -1112,7 +1121,9 @@ async fn execute_rotation_preparation(
         .clone();
     let at_height = read_on_dedicated_thread({
         let admin = admin.clone();
-        move || -> Result<u64> { Ok(admin.status().get()?.blocks + 1) }
+        move || -> Result<u64> {
+            Ok(committee_status::height_until_blocking(&admin, Instant::now() + WAIT)? + 1)
+        }
     })
     .await
     .wrap_err("rotation certificate height worker failed")?;
@@ -1227,12 +1238,23 @@ async fn execute_rotation_preparation(
     )
     .map_err(|error| eyre!("native custody evidence was not independently authorized: {error}"))?;
     let mut prepared = Vec::with_capacity(target.len());
+    let mut readiness_proofs = BTreeMap::new();
     for seat in &dkg.seats {
         if missing_custody == Some(&seat.validator) {
             fs::remove_file(&seat.pending_share_path)?;
             fs::remove_file(&seat.credential_path)?;
             continue;
         }
+        let process = network
+            .validators()
+            .iter()
+            .chain(network.committee_validators())
+            .find(|peer| peer.id() == seat.validator)
+            .ok_or_else(|| eyre!("prepared seat has no owner-private Pasta seed process"))?;
+        // Bind the public proof to this exact prepared challenge before native import
+        // consumes the one-shot share. Only public evidence survives the restart.
+        let admission =
+            prove_exact_target_readiness(&prepared_transition, &dkg.public_session, seat, process)?;
         let retained = current_custody.get(&seat.validator).map(|current| {
             DisposableRetainedBeaconCredential {
                 credential_path: &current.credential_path,
@@ -1257,6 +1279,16 @@ async fn execute_rotation_preparation(
             )
             .await?,
         );
+        ensure!(
+            fs::metadata(&seat.pending_share_path)?.len() == 0,
+            "native custody import did not consume its one-shot pending share"
+        );
+        ensure!(
+            readiness_proofs
+                .insert(seat.validator.clone(), admission)
+                .is_none(),
+            "target custody contains a duplicate seat"
+        );
     }
     network.shutdown().await;
     stage_prepared_brokers(network, &prepared, provider_revision).await?;
@@ -1266,14 +1298,9 @@ async fn execute_rotation_preparation(
         if missing_custody == Some(&seat.validator) {
             continue;
         }
-        let process = network
-            .validators()
-            .iter()
-            .chain(network.committee_validators())
-            .find(|peer| peer.id() == seat.validator)
-            .ok_or_else(|| eyre!("prepared seat has no owner-private Pasta seed process"))?;
-        let admission =
-            prove_exact_target_readiness(&prepared_transition, &dkg.public_session, seat, process)?;
+        let admission = readiness_proofs
+            .remove(&seat.validator)
+            .ok_or_else(|| eyre!("prepared seat lost its exact public readiness proof"))?;
         let owner = operators
             .get(&seat.validator)
             .ok_or_else(|| eyre!("prepared seat lacks a real owning operator"))?
@@ -1290,6 +1317,10 @@ async fn execute_rotation_preparation(
         .await
         .wrap_err("target seat readiness admission worker failed")?;
     }
+    ensure!(
+        readiness_proofs.is_empty(),
+        "target custody left an unsubmitted public readiness proof"
+    );
     let readiness = read_validator_committee(&admin, target_epoch).await?;
     ensure!(
         readiness.selected.as_ref().is_some_and(|selected| {
@@ -1387,7 +1418,12 @@ async fn run_custody_or_activation_scenario(
         }
         let before_cutoff = read_on_dedicated_thread({
             let admin = admin.clone();
-            move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
+            move || -> Result<u64> {
+                Ok(committee_status::height_until_blocking(
+                    &admin,
+                    Instant::now() + WAIT,
+                )?)
+            }
         })
         .await
         .wrap_err("pre-cutoff height worker failed")?;
@@ -1710,7 +1746,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                     advance_exact_genesis_phase(network_ref, height).await?;
                     let observed = read_on_dedicated_thread({
                         let admin = admin.clone();
-                        move || -> Result<u64> { Ok(admin.status().get()?.blocks) }
+                        move || -> Result<u64> { Ok(committee_status::height_until_blocking(&admin, Instant::now() + WAIT)?) }
                     })
                     .await
                     .wrap_err("genesis phase status worker failed")?;
@@ -1732,7 +1768,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         ensure!(install.len() == 1, "native genesis install must emit one instruction");
         let next_height = read_on_dedicated_thread({
             let admin = admin.clone();
-            move || -> Result<u64> { Ok(admin.status().get()?.blocks + 1) }
+            move || -> Result<u64> { Ok(committee_status::height_until_blocking(&admin, Instant::now() + WAIT)? + 1) }
         })
         .await
         .wrap_err("genesis install height worker failed")?;
@@ -1829,7 +1865,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                 .collect::<Vec<_>>();
             move || -> Result<u64> {
                 admit_candidates(&admin, &candidates, network_id, &xor, &escrow)?;
-                Ok(admin.status().get()?.blocks)
+                Ok(committee_status::height_until_blocking(&admin, Instant::now() + WAIT)?)
             }
         })
         .await

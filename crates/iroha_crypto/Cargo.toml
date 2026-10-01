@@ -75,7 +75,7 @@ hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
 ark-serialize = { version = "0.4.2", default-features = false, optional = true, features = ["std"] }
 w3f-bls = { version = "0.1.9", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
-blst = { version = "0.3.16", default-features = false, optional = true }
+blst = { version = "=0.3.16", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
 group = { version = "0.13", default-features = false, optional = true }
 subtle = { version = "2.6.1", default-features = false }

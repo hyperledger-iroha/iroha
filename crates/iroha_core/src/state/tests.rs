@@ -11283,17 +11283,22 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
             ..LaneConfig::default()
         },
     ]).expect("original configured lane baseline");
-    let mut config = TestChainConfig::new(World::default(), 0);
-    let signer = config.genesis_key.clone();
-    let authority = AccountId::new(signer.public_key().clone());
-    config.world.account_permissions.insert(authority, BTreeSet::from([Permission::from(CanSetParameters)]));
-    let mut nexus = startup_nexus_for_catalog(configured.clone());
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    config.nexus = Some(nexus);
-    let mut original = CertifiedTestChain::start(config.clone()).expect("original signed configured genesis");
+    // Rebuild the same explicit source inputs: World/config custody is move-only.
+    let genesis_config = || {
+        let mut config = TestChainConfig::new(World::default(), 0);
+        let authority = AccountId::new(config.genesis_key.public_key().clone());
+        config.world.account_permissions.insert(authority, BTreeSet::from([Permission::from(CanSetParameters)]));
+        let mut nexus = startup_nexus_for_catalog(configured.clone());
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        config.nexus = Some(nexus);
+        config
+    };
+    let original_config = genesis_config();
+    let signer = original_config.genesis_key.clone();
+    let mut original = CertifiedTestChain::start(original_config).expect("original signed configured genesis");
     while original.height() < 4 {
         // The maintained owner inserts real signed Log work, never an empty block.
         assert_eq!(original.commit(Vec::new()), vec![true]);
@@ -11325,7 +11330,9 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
         #[cfg(feature = "telemetry")]
         telemetry: Default::default(),
     }.into_state_from_json(snapshot), Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)));
-    let mut restarted = CertifiedTestChain::start(config).expect("same original signed genesis");
+    let mut restarted = CertifiedTestChain::start(genesis_config()).expect("same original signed genesis");
+    assert_eq!(restarted.state().network_id_ref(), state.network_id_ref(),
+        "both independently built configurations bind the same signed genesis");
     restarted.replay_from(&original).expect("replay the original certified lifecycle history");
     let replayed = restarted.state();
     assert_eq!(replayed.committed_height(), 5);
@@ -11344,7 +11351,6 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(replayed).unwrap(),
         crate::snapshot::canonical_state_snapshot_hash(state).unwrap());
 }
-
 state_test! { sync restored_runtime_catalog_must_match_the_authenticated_snapshot_topology
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let configured = configured_baseline_test_catalog("snapshot-configured-lane", None);

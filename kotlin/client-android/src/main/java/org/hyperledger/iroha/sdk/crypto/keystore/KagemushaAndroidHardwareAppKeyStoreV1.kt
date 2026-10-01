@@ -14,9 +14,11 @@ import java.security.PrivateKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryAppIdentityV1
-import org.hyperledger.iroha.sdk.offline.KagemushaNativeRawAppIdentityAdmissionV1
+import org.hyperledger.iroha.sdk.offline.KagemushaNativeCollectedAppIdentityOriginalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppApprovalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppEnrollmentPossessionV1
+import org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryIdentityOriginalTransportV1
+import org.hyperledger.iroha.sdk.offline.KagemushaNativeRawAppIdentityAdmissionV1
 import java.security.MessageDigest
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
@@ -96,14 +98,21 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         check(MessageDigest.isEqual(evidence.attestedKeyId(), original.attestedKeyId())) { "Original app approval key changed" }
         original.requireOriginal()
     }
-    /** Generate/recover only the native-held ordinary C identity; the native issuer admits its raw chain. */
-    fun enroll(prepared: KagemushaNativePreparedOrdinaryAppIdentityV1): KagemushaNativeRawAppIdentityAdmissionV1 =
-        prepared.performAndroidEnrollment { alias, challenge, policy, recoverOnly, guard ->
+    /** Collect only the native-held C identity; issuer response intake is a separate explicit native step. */
+    fun collectIdentity(prepared: KagemushaNativePreparedOrdinaryAppIdentityV1): KagemushaNativeCollectedAppIdentityOriginalV1 =
+        prepared.performAndroidCollection { alias, challenge, policy, recoverOnly, guard ->
             if (recoverOnly) checkNotNull(recoverExact(alias, challenge, policy, guard)) {
                 "Original app key is missing; an uncertain native identity cannot generate a replacement"
             }
             else issueExact(alias, challenge, policy, guard)
         }
+
+    /** Collect only native-selected originals and let native Core admit the protected issuer reply. */
+    suspend fun enroll(prepared: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        transport: KagemushaOrdinaryIdentityOriginalTransportV1): KagemushaNativeRawAppIdentityAdmissionV1 {
+        collectIdentity(prepared)
+        return prepared.admitOriginalAttestation(transport)
+    }
 
     /** Sign the exact native-owned W once; returned bytes are the original non-monetary native receipt. */
     fun approve(prepared: KagemushaNativePreparedAppApprovalV1): ByteArray =
@@ -157,7 +166,7 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         }
     }
 
-    private fun requireAvailable() { check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) { "Hardware app-key API28 support is unavailable" } }
+    private fun requireAvailable() { check(isPlatformApiAvailable()) { "Hardware app-key API28 support is unavailable" } }
     private fun keyStore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     private fun loadExact(store: KeyStore, alias: String, challenge: ByteArray,
         policy: KagemushaAndroidAppKeyHardwarePolicyV1): KagemushaAndroidHardwareAppKeyEvidenceV1 {
@@ -186,6 +195,8 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         return KagemushaAndroidHardwareAppKeyEvidenceV1(level, MessageDigest.getInstance("SHA-256").digest(point), point, der)
     }
     companion object {
+        /** Provisioning API eligibility only; actual key custody, attestation and Native admission are separate. */
+        @JvmStatic fun isPlatformApiAvailable(): Boolean = persistentHardwareAppKeyApiAvailableV1(Build.VERSION.SDK_INT)
         private val lock = Any()
         @JvmStatic fun originalAlias(account: String, clientNonceHex: String, signedPreparation: ByteArray): String {
             require(account.isNotBlank() && account.toByteArray(Charsets.UTF_8).size <= 512 &&
@@ -196,6 +207,8 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         }
     }
 }
+
+internal fun persistentHardwareAppKeyApiAvailableV1(apiLevel: Int): Boolean = apiLevel >= Build.VERSION_CODES.P
 
 internal fun persistentHardwareAppKeyParametersV1(alias: String, challenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec {
     require(alias.isNotBlank() && challenge.size == 32)

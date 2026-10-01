@@ -84,8 +84,6 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut tx = setup.transaction_for_callback_testing();
     let write = |key: &str| {
         vec![InstructionBox::from(SetKeyValue::account(
             ALICE_ID.clone(),
@@ -93,35 +91,38 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
             Json::new(1),
         ))]
     };
-    for trigger in [
-        Trigger::new(
-            "seal_pipeline".parse().unwrap(),
-            Action::new(
-                write("pipeline"),
-                Repeats::Exactly(1),
-                ALICE_ID.clone(),
-                BlockEventFilter::new().for_status(BlockStatus::Approved),
-            )
-            .unwrap(),
-        ),
-        Trigger::new(
-            "seal_time".parse().unwrap(),
-            Action::new(
-                write("time"),
-                Repeats::Exactly(1),
-                ALICE_ID.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-            )
-            .unwrap(),
-        ),
-    ] {
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut tx)
-            .unwrap();
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        for trigger in [
+            Trigger::new(
+                "seal_pipeline".parse().unwrap(),
+                Action::new(
+                    write("pipeline"),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    BlockEventFilter::new().for_status(BlockStatus::Approved),
+                )
+                .unwrap(),
+            ),
+            Trigger::new(
+                "seal_time".parse().unwrap(),
+                Action::new(
+                    write("time"),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter::new(ExecutionTime::PreCommit),
+                )
+                .unwrap(),
+            ),
+        ] {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut tx)
+                .unwrap();
+        }
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    tx.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    drop(setup);
     let source = carrier(
         &state,
         vec![input(

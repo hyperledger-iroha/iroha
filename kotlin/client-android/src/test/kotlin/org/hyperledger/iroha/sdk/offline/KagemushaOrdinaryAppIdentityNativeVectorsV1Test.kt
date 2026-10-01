@@ -43,7 +43,7 @@ class KagemushaOrdinaryAppIdentityNativeVectorsV1Test {
                 if (nativeTag == 5) alias.toByteArray(Charsets.UTF_8) else byteArrayOf(),
                 byteArrayOf(if (nativeTag == 5) 3 else 0), ByteArray(32) { 0x42 })
             val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY,
-                listOf(KagemushaCoreCoordinatorFrameV1.u32(1), id))
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(13), le64(6), transport))
             KagemushaCoreCoordinatorFrameV1.encodeResponse(KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY, request, fields)
 
             val e = vector(name + "_possession_signing")

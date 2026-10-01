@@ -15,10 +15,19 @@ Ed25519 signature. It binds account, network, lane, release, profile, suite, pol
 and financial epochs, nonces, attempt and the separate financial commitment.
 The first E371 possession field is SHA256 of the full model-owned challenge
 signing message; it is not the stable enrollment ID or the hash of the signed
-515-byte transport. The final `KOAC01` encoder request is exactly 831 bytes.
+515-byte transport. The final `KOAC01` encoder request is exactly 896 bytes,
+including the separate Ed25519 identity and the 65-byte governed issuer P256 point.
 Raw platform admission uses a separate `KRAC01` request and 314-byte signed
 admission, retained before possession and final credential admission. Both native
 encoders sign the actual Rust model and emit its canonical Norito originals.
+
+Enrollment credentials and integrity leases also require a purpose-specific
+issuer P256 countersignature over the SHA256 of the complete canonical Ed25519
+original. The issuer point comes from the actual signed hardware profile; the
+Native encoder checks it against the held issuer seed before signing. Both
+recursive Guard parities verify this equation and keep credential identifiers
+private. This signature authenticates the software issuer's admission, while the
+separate platform signature proves possession of the generated hardware key.
 
 `ordinary_provider.py` composes actual preparation, platform, possession and
 current-policy checks. `ordinary_issuance.py` commits the exact original Google

@@ -476,6 +476,17 @@ pub struct KagemushaPlayIntegrityRefreshLeaseV1 {
     pub signature: Signature,
     /// Full exact Android possession DER, retained independently of Google evidence.
     pub app_possession: KagemushaAppOperationApprovalEvidenceV1,
+    /// Mandatory governed P256 admission over the complete canonical Ed-only lease original.
+    pub circuit_admission: super::KagemushaOrdinaryIssuerCircuitAdmissionV1,
+}
+#[derive(Clone, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseEdOriginalV1"
+)]
+struct LeaseEdOriginal {
+    subject: KagemushaPlayIntegrityRefreshLeaseSubjectV1,
+    signature: Signature,
+    app_possession: KagemushaAppOperationApprovalEvidenceV1,
 }
 /// Genuine current periodic lease; no constructor, decoder or financial capability.
 pub struct KagemushaVerifiedPlayIntegrityRefreshLeaseV1 {
@@ -483,8 +494,23 @@ pub struct KagemushaVerifiedPlayIntegrityRefreshLeaseV1 {
     original: Vec<u8>,
     digest: [u8; 32],
     authenticated_at_ms: u64,
+    circuit_admission: super::KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1,
 }
 impl KagemushaVerifiedPlayIntegrityRefreshLeaseV1 {
+    /// Exact retained native admission instant, distinct from the issuer's signed issue time.
+    #[must_use]
+    pub const fn authenticated_at_ms(&self) -> u64 {
+        self.authenticated_at_ms
+    }
+
+    /// Borrow the genuine independent governed P256 issuer admission.
+    #[must_use]
+    pub const fn circuit_admission(
+        &self,
+    ) -> &super::KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1 {
+        &self.circuit_admission
+    }
+
     /// Borrow the exact verified original issuer subject.
     #[must_use]
     pub const fn subject(&self) -> &KagemushaPlayIntegrityRefreshLeaseSubjectV1 {
@@ -515,6 +541,61 @@ impl KagemushaVerifiedPlayIntegrityRefreshLeaseV1 {
     }
 }
 impl KagemushaPlayIntegrityRefreshLeaseV1 {
+    /// Sole complete canonical Ed-only lease original, including original platform possession.
+    /// # Errors
+    /// Rejects malformed original fields or another Ed signature width.
+    pub fn ed_only_bytes_for(
+        subject: &KagemushaPlayIntegrityRefreshLeaseSubjectV1,
+        signature: &Signature,
+        app_possession: &KagemushaAppOperationApprovalEvidenceV1,
+    ) -> Result<Vec<u8>, String> {
+        subject.canonical_signing_bytes()?;
+        if signature.payload().len() != 64 {
+            return Err("Integrity Ed signature width differs".into());
+        }
+        match app_possession {
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der }
+                if (8..=72).contains(&signature_der.len()) =>
+            {
+                ()
+            }
+            _ => return Err("Integrity Ed original possession shape differs".into()),
+        }
+        norito::encode_canonical(&LeaseEdOriginal {
+            subject: *subject,
+            signature: signature.clone(),
+            app_possession: app_possession.clone(),
+        })
+        .map_err(|e| e.to_string())
+    }
+    /// Data-only Ed-original encoding, excluding its P256 admission.
+    /// # Errors
+    /// Rejects malformed original fields.
+    pub fn ed_only_canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        Self::ed_only_bytes_for(&self.subject, &self.signature, &self.app_possession)
+    }
+    /// Exact expected issuer admission subject, never a signer or current authority.
+    /// # Errors
+    /// Rejects malformed original fields.
+    pub fn circuit_admission_subject_for(
+        subject: &KagemushaPlayIntegrityRefreshLeaseSubjectV1,
+        signature: &Signature,
+        app_possession: &KagemushaAppOperationApprovalEvidenceV1,
+    ) -> Result<super::KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1, String> {
+        Ok(super::KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1 {
+            version: 1,
+            purpose: 2,
+            release_id: subject.release_id,
+            hardware_profile_id: subject.hardware_profile_id,
+            ed_original_sha256: Sha256::digest(Self::ed_only_bytes_for(
+                subject,
+                signature,
+                app_possession,
+            )?)
+            .into(),
+        })
+    }
+
     /// Canonical original bytes only; no verification or current capability is returned.
     /// # Errors
     /// Rejects malformed, missing or oversized original fields.
@@ -523,11 +604,28 @@ impl KagemushaPlayIntegrityRefreshLeaseV1 {
         if self.signature.payload().len() != 64 {
             return Err("Integrity issuer signature width differs".into());
         }
+        if self.circuit_admission.subject
+            != Self::circuit_admission_subject_for(
+                &self.subject,
+                &self.signature,
+                &self.app_possession,
+            )?
+        {
+            return Err("Integrity issuer admission original differs".into());
+        }
+        self.circuit_admission.to_transport_bytes()?;
         let original = norito::encode_canonical(self).map_err(|e| e.to_string())?;
         if original.len() > 4096 {
             return Err("Integrity lease original oversized".into());
         }
         Ok(original)
+    }
+    /// Digest the complete canonical original with the same domain as native verified leases.
+    /// This data identity does not verify signatures, current policy or lease ownership.
+    /// # Errors
+    /// Rejects malformed or oversized original fields.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], String> {
+        Ok(digest_original(&self.canonical_bytes()?))
     }
     /// Authenticate real Core/issuer/platform signatures against actual selected original custody.
     /// The native caller still owns freshness, original nonce reservation and replay consumption.
@@ -602,25 +700,35 @@ impl KagemushaPlayIntegrityRefreshLeaseV1 {
             KagemushaHardwarePlatformClassV1::AndroidKeyMint,
             &credential.subject().app_public_key,
             credential.subject().app_signing_identity_digest,
+            credential.subject().app_release_digest,
             None,
             &c.possession_signing_bytes()?,
         )?;
         self.signature
             .verify(&authority.authority_key, &s.canonical_signing_bytes()?)
             .map_err(|_| "Integrity lease issuer signature rejected")?;
-        let mut hash = Sha256::new();
-        hash.update(ORIGINAL_DOMAIN);
-        hash.update((original.len() as u64).to_le_bytes());
-        hash.update(&original);
+        let digest = digest_original(&original);
+        let circuit_admission = self.circuit_admission.authenticate(
+            &Self::circuit_admission_subject_for(s, &self.signature, &self.app_possession)?,
+            release,
+        )?;
         let token = KagemushaVerifiedPlayIntegrityRefreshLeaseV1 {
+            circuit_admission,
             subject: *s,
             original,
-            digest: hash.finalize().into(),
+            digest,
             authenticated_at_ms: now,
         };
         token.recheck_at_trusted_time(now)?;
         Ok(token)
     }
+}
+fn digest_original(original: &[u8]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(ORIGINAL_DOMAIN);
+    hash.update((original.len() as u64).to_le_bytes());
+    hash.update(original);
+    hash.finalize().into()
 }
 fn message(domain: &[u8], body: &[u8]) -> Result<Vec<u8>, String> {
     let mut message = domain.to_vec();
@@ -715,17 +823,173 @@ mod tests {
             issued_at_ms: 1400,
             expires_at_ms: 2400,
         };
+        let signature = Signature::new(
+            issuer.private_key(),
+            &subject.canonical_signing_bytes().unwrap(),
+        );
+        let app_possession =
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der: der };
+        let circuit_admission =
+            crate::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+                KagemushaPlayIntegrityRefreshLeaseV1::circuit_admission_subject_for(
+                    &subject,
+                    &signature,
+                    &app_possession,
+                )
+                .unwrap(),
+            );
         let lease = KagemushaPlayIntegrityRefreshLeaseV1 {
-            signature: Signature::new(
-                issuer.private_key(),
-                &subject.canonical_signing_bytes().unwrap(),
-            ),
             subject,
-            app_possession: KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
-                signature_der: der,
-            },
+            signature,
+            app_possession,
+            circuit_admission,
         };
+
         (signed, lease, issuer)
+    }
+    #[test]
+    fn integrity_canonical_stream_segments_match_sole_encoder_at_every_der_width() {
+        let f = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
+        let admitted = f.verify(300).unwrap();
+        let (_, original, _) = lease(&f, admitted.app_credential());
+        for complete in [false, true] {
+            let grammar = if complete {
+                original.original_canonical_stream_grammar().unwrap()
+            } else {
+                original.ed_only_canonical_stream_grammar().unwrap()
+            };
+            assert_eq!(grammar.lengths.len(), 65);
+            for variant in grammar.lengths {
+                let mut template = original.clone();
+                let der: Vec<u8> = (0..variant.der_length)
+                    .map(|i| (i as u8).wrapping_mul(17))
+                    .collect();
+                template.app_possession =
+                    KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                        signature_der: der.clone(),
+                    };
+                template.circuit_admission.subject =
+                    KagemushaPlayIntegrityRefreshLeaseV1::circuit_admission_subject_for(
+                        &template.subject,
+                        &template.signature,
+                        &template.app_possession,
+                    )
+                    .unwrap();
+                let expected = if complete {
+                    let raw = template.canonical_bytes().unwrap();
+                    let mut bytes = ORIGINAL_DOMAIN.to_vec();
+                    bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+                    bytes.extend_from_slice(&raw);
+                    bytes
+                } else {
+                    template.ed_only_canonical_bytes().unwrap()
+                };
+                let mut stream = variant.prefix.clone();
+                for byte in &der[..der.len() - 1] {
+                    let mut unit = grammar.repeated_der_byte_unit.clone();
+                    unit[0] = Some(*byte);
+                    stream.extend(unit);
+                }
+                stream.push(Some(*der.last().unwrap()));
+                stream.extend(variant.suffix);
+                assert_eq!(stream.len(), expected.len());
+                for (i, byte) in stream.iter_mut().enumerate() {
+                    if byte.is_none() {
+                        *byte = Some(expected[i]);
+                    }
+                }
+                assert_eq!(
+                    stream.into_iter().map(Option::unwrap).collect::<Vec<_>>(),
+                    expected
+                );
+                assert_eq!(variant.layout.possession_signature_bytes.len(), der.len());
+                for (position, byte) in variant.layout.possession_signature_bytes.iter().zip(&der) {
+                    assert_eq!(expected[*position], *byte);
+                }
+            }
+        }
+    }
+    #[test]
+    fn integrity_issuer_admission_layout_binds_exact_ed_and_platform_originals() {
+        let f = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
+        let enrolled = f.verify(300).unwrap();
+        let (c, mut lease, issuer) = lease(&f, enrolled.app_credential());
+        let token = lease
+            .authenticate(
+                enrolled.app_credential(),
+                &f.release,
+                &f.trust,
+                &f.app_authority,
+                &c,
+                issuer.public_key(),
+                1500,
+            )
+            .unwrap();
+        assert_eq!(lease.canonical_digest().unwrap(), token.digest());
+        assert_eq!(
+            token.circuit_admission().public_key(),
+            &f.release
+                .enabled_profile(lease.subject.hardware_profile_id)
+                .unwrap()
+                .hardware_profile
+                .governance_credential_public_key
+        );
+        let ed = lease.ed_only_canonical_bytes().unwrap();
+        let layout = lease.ed_only_preimage_layout().unwrap();
+        assert_eq!(
+            lease.circuit_admission.subject.ed_original_sha256,
+            <[u8; 32]>::from(Sha256::digest(&ed))
+        );
+        for (i, pinned) in layout.bytes.iter().enumerate() {
+            if let Some(value) = pinned {
+                assert_eq!(ed[i], *value);
+            }
+        }
+        let der = match &lease.app_possession {
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
+                signature_der
+            }
+            _ => unreachable!(),
+        };
+        for (i, p) in layout.possession_signature_bytes.iter().enumerate() {
+            assert_eq!(ed[*p], der[i]);
+            assert_eq!(layout.bytes[*p], None);
+        }
+        let full = lease.original_preimage_layout().unwrap();
+        let raw = lease.canonical_bytes().unwrap();
+        let prelude = ORIGINAL_DOMAIN.len() + 8;
+        for (i, p) in full
+            .issuer_admission_layout
+            .unwrap()
+            .signature_bytes
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(
+                raw[*p - prelude],
+                lease.circuit_admission.signature.as_raw_bytes()[i]
+            );
+            assert_eq!(full.bytes[*p], None);
+        }
+        assert!(norito::decode_from_bytes::<KagemushaPlayIntegrityRefreshLeaseV1>(&ed).is_err());
+        lease.subject.binding.evidence_digest = [88; 32];
+        lease.signature = Signature::new(
+            issuer.private_key(),
+            &lease.subject.canonical_signing_bytes().unwrap(),
+        );
+        assert!(
+            lease
+                .authenticate(
+                    enrolled.app_credential(),
+                    &f.release,
+                    &f.trust,
+                    &f.app_authority,
+                    &c,
+                    issuer.public_key(),
+                    1500
+                )
+                .is_err()
+        );
     }
     #[test]
     fn ordinary_integrity_periodic_refresh_after_initial_deadline_preserves_credential() {
@@ -995,4 +1259,467 @@ mod tests {
                 .is_err()
         );
     }
+}
+
+/// Encoder-owned raw positions in the complete original lease or its Ed-only frame.
+/// All framing and enum tags are pinned; values and CRC positions remain witness cells.
+#[derive(Debug, Clone)]
+pub struct KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1 {
+    /// Original digest preimage (or bare Ed-only frame) with exact fixed framing bytes.
+    pub bytes: Vec<Option<u8>>,
+    /// Complete canonical archive range.
+    pub original: core::ops::Range<usize>,
+    /// Raw LE16 version positions.
+    pub version_bytes: [usize; 2],
+    /// Eleven raw32 subject fields in lease signing-body order.
+    pub fixed_digest_bytes: [[usize; 32]; 11],
+    /// Six raw LE64 fields in lease signing-body order.
+    pub scalar_bytes: [[usize; 8]; 6],
+    /// Original issuer Ed signature raw64 positions.
+    pub signature_bytes: [usize; 64],
+    /// Original platform DER bytes, retaining actual variable length and enum framing.
+    pub possession_signature_bytes: Vec<usize>,
+    /// Mandatory issuer counter raw fields in the complete original; absent for Ed-only layout.
+    pub issuer_admission_layout:
+        Option<super::KagemushaOrdinaryIssuerCircuitAdmissionOriginalLayoutV1>,
+}
+/// Encoder-derived segments for one selected canonical stream at a bounded DER length.
+/// These are data-only codec metadata; selecting a segment authenticates no issuer or lease.
+#[derive(Debug, Clone)]
+pub struct KagemushaPlayIntegrityRefreshLeaseStreamLengthV1 {
+    /// Actual DER byte count, in the closed 8..=72 codec bound.
+    pub der_length: usize,
+    /// Exact prefix before the first raw DER byte, including encoder-produced length framing.
+    pub prefix: Vec<Option<u8>>,
+    /// Exact suffix immediately after the final raw DER byte, including any outer field framing.
+    pub suffix: Vec<Option<u8>>,
+    /// Semantic positions in this complete stream, including issuer admission when present.
+    pub layout: KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1,
+    /// Header payload-length LE64 positions relative to the prefix segment.
+    pub header_payload_length_bytes: [usize; 8],
+    /// Header CRC64-XZ positions relative to the prefix segment; computed over `archive_payload`.
+    pub header_crc_bytes: [usize; 8],
+    /// Canonical frame payload range in the assembled stream, excluding header and digest domain.
+    pub archive_payload: core::ops::Range<usize>,
+    /// Optional full-original archive-length LE64 prefix, before the canonical frame.
+    pub original_length_bytes: Option<[usize; 8]>,
+}
+/// Relative coordinate for a semantic byte outside the active DER units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KagemushaPlayIntegrityRefreshLeaseStreamPositionV1 {
+    /// A byte in the selected prefix segment.
+    Prefix(usize),
+    /// A byte in the selected suffix segment.
+    Suffix(usize),
+}
+impl KagemushaPlayIntegrityRefreshLeaseStreamLengthV1 {
+    /// Convert an encoder-owned semantic map position to its selected segment coordinate.
+    /// # Errors
+    /// Rejects DER positions (which use the active DER units) or out-of-stream positions.
+    pub fn relative_semantic_position(
+        &self,
+        position: usize,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseStreamPositionV1, String> {
+        if position < self.prefix.len() {
+            Ok(KagemushaPlayIntegrityRefreshLeaseStreamPositionV1::Prefix(
+                position,
+            ))
+        } else {
+            let suffix_start = self.layout.bytes.len() - self.suffix.len();
+            if position < suffix_start || position >= self.layout.bytes.len() {
+                return Err("lease position is outside a semantic segment".into());
+            }
+            Ok(KagemushaPlayIntegrityRefreshLeaseStreamPositionV1::Suffix(
+                position - suffix_start,
+            ))
+        }
+    }
+}
+/// A single canonical bounded lease stream assembled from encoder-owned segments.
+/// Use one length-selected prefix, `der_length - 1` repeated byte units, the final DER byte,
+/// then the selected suffix. Hash and CRC that one active stream; these are not 65 proof copies.
+#[derive(Debug, Clone)]
+pub struct KagemushaPlayIntegrityRefreshLeaseStreamGrammarV1 {
+    /// A raw DER byte (`None`) followed by the actual framing up to the next DER byte.
+    pub repeated_der_byte_unit: Vec<Option<u8>>,
+    /// Raw DER byte position within the repeated unit; derived from the encoder.
+    pub der_byte_in_unit: usize,
+    /// Maximum active prefix size over every supported width; fixes circuit capacity.
+    pub maximum_prefix_bytes: usize,
+    /// Maximum active suffix size over every supported width; fixes circuit capacity.
+    pub maximum_suffix_bytes: usize,
+    /// Maximum assembled canonical stream size over every supported width.
+    pub maximum_stream_bytes: usize,
+    /// Exact length-indexed framing and semantic maps for every supported DER width.
+    pub lengths: Vec<KagemushaPlayIntegrityRefreshLeaseStreamLengthV1>,
+}
+impl KagemushaPlayIntegrityRefreshLeaseV1 {
+    /// Exact bare canonical Ed-only frame layout for the issuer admission SHA256 relation.
+    /// # Errors
+    /// Rejects malformed originals or another declared canonical field layout.
+    pub fn ed_only_preimage_layout(
+        &self,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1, String> {
+        lease_original_layout(
+            &LeaseEdOriginal {
+                subject: self.subject,
+                signature: self.signature.clone(),
+                app_possession: self.app_possession.clone(),
+            },
+            &self.subject,
+            &self.signature,
+            &self.app_possession,
+            None,
+            false,
+        )
+    }
+    /// Exact complete original lease digest layout, including mandatory governed countersignature.
+    /// # Errors
+    /// Rejects malformed originals or another canonical field layout.
+    pub fn original_preimage_layout(
+        &self,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1, String> {
+        self.canonical_bytes()?;
+        lease_original_layout(
+            self,
+            &self.subject,
+            &self.signature,
+            &self.app_possession,
+            Some(&self.circuit_admission),
+            true,
+        )
+    }
+    /// Derive one bounded canonical stream grammar from the sole Ed-only lease encoder.
+    /// Every DER width is validated; no hand-written Norito length or element framing is used.
+    /// # Errors
+    /// Rejects a codec topology that cannot be represented by one repeated raw-byte unit.
+    pub fn ed_only_canonical_stream_grammar(
+        &self,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseStreamGrammarV1, String> {
+        self.canonical_stream_grammar(false)
+    }
+    /// Derive the complete original digest stream, with its mandatory issuer admission.
+    /// The returned selected stream includes the exact original domain and archive length prefix.
+    /// # Errors
+    /// Rejects malformed fields or a codec topology that changes the repeated DER-byte unit.
+    pub fn original_canonical_stream_grammar(
+        &self,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseStreamGrammarV1, String> {
+        self.canonical_stream_grammar(true)
+    }
+    fn canonical_stream_grammar(
+        &self,
+        complete: bool,
+    ) -> Result<KagemushaPlayIntegrityRefreshLeaseStreamGrammarV1, String> {
+        let mut lengths = Vec::with_capacity(65);
+        let mut common_unit: Option<Vec<Option<u8>>> = None;
+        for length in 8..=72 {
+            let mut template = self.clone();
+            // Deliberately inert bytes supply codec width only. No signature/authentication is
+            // performed or implied; all original evidence cells remain unassigned in the layout.
+            template.app_possession = KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                signature_der: vec![0x5a; length],
+            };
+            template.circuit_admission.subject = Self::circuit_admission_subject_for(
+                &template.subject,
+                &template.signature,
+                &template.app_possession,
+            )?;
+            let layout = if complete {
+                template.original_preimage_layout()?
+            } else {
+                template.ed_only_preimage_layout()?
+            };
+            let positions = &layout.possession_signature_bytes;
+            if positions.len() != length {
+                return Err("lease DER stream width differs".into());
+            }
+            let first = positions[0];
+            let stride = positions[1]
+                .checked_sub(first)
+                .ok_or("lease DER ordering differs")?;
+            if stride == 0
+                || positions
+                    .iter()
+                    .enumerate()
+                    .any(|(i, p)| *p != first + i * stride)
+            {
+                return Err("lease DER byte framing is not uniform".into());
+            }
+            let unit = layout.bytes[first..first + stride].to_vec();
+            if unit.first() != Some(&None) || unit.iter().skip(1).any(Option::is_none) {
+                return Err("lease DER framing contains another semantic byte".into());
+            }
+            if common_unit
+                .as_ref()
+                .is_some_and(|original| *original != unit)
+            {
+                return Err("lease DER byte framing changes with width".into());
+            }
+            let last = *positions.last().ok_or("lease DER stream absent")?;
+            let prefix = layout.bytes[..first].to_vec();
+            let suffix = layout.bytes[last + 1..].to_vec();
+            let mut reconstructed = prefix.clone();
+            for _ in 0..length - 1 {
+                reconstructed.extend_from_slice(&unit);
+            }
+            reconstructed.push(None);
+            reconstructed.extend_from_slice(&suffix);
+            if reconstructed != layout.bytes {
+                return Err("lease canonical stream reconstruction differs".into());
+            }
+            common_unit = Some(unit);
+            let frame_start = layout.original.start;
+            let frame = if complete {
+                template.canonical_bytes()?
+            } else {
+                template.ed_only_canonical_bytes()?
+            };
+            let header = norito::core::Header::read(frame.as_slice()).map_err(|e| e.to_string())?;
+            if frame[23..31] != header.length.to_le_bytes()
+                || frame[31..39] != header.checksum.to_le_bytes()
+                || frame_start + norito::core::Header::SIZE > prefix.len()
+            {
+                return Err("lease stream header framing differs".into());
+            }
+            let archive_payload = frame_start + norito::core::Header::SIZE..layout.original.end;
+            if header.length as usize != archive_payload.len() {
+                return Err("lease stream header payload width differs".into());
+            }
+            lengths.push(KagemushaPlayIntegrityRefreshLeaseStreamLengthV1 {
+                der_length: length,
+                prefix,
+                suffix,
+                header_payload_length_bytes: core::array::from_fn(|i| frame_start + 23 + i),
+                header_crc_bytes: core::array::from_fn(|i| frame_start + 31 + i),
+                archive_payload,
+                original_length_bytes: complete
+                    .then(|| core::array::from_fn(|i| ORIGINAL_DOMAIN.len() + i)),
+                layout,
+            });
+        }
+        Ok(KagemushaPlayIntegrityRefreshLeaseStreamGrammarV1 {
+            repeated_der_byte_unit: common_unit.ok_or("lease DER stream grammar absent")?,
+            der_byte_in_unit: 0,
+            maximum_prefix_bytes: lengths
+                .iter()
+                .map(|v| v.prefix.len())
+                .max()
+                .ok_or("lease stream absent")?,
+            maximum_suffix_bytes: lengths
+                .iter()
+                .map(|v| v.suffix.len())
+                .max()
+                .ok_or("lease stream absent")?,
+            maximum_stream_bytes: lengths
+                .iter()
+                .map(|v| v.layout.bytes.len())
+                .max()
+                .ok_or("lease stream absent")?,
+            lengths,
+        })
+    }
+}
+fn lease_original_layout<T: Encode + norito::NoritoSchema>(
+    encoded: &T,
+    subject: &KagemushaPlayIntegrityRefreshLeaseSubjectV1,
+    signature: &Signature,
+    evidence: &KagemushaAppOperationApprovalEvidenceV1,
+    admission: Option<&super::KagemushaOrdinaryIssuerCircuitAdmissionV1>,
+    digest_domain: bool,
+) -> Result<KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1, String> {
+    use super::kagemusha_ordinary_app_enrollment_v1::{
+        layout_field_payload, layout_fixed_bytes_field, sole_changed_raw_position,
+    };
+    subject.canonical_signing_bytes()?;
+    if signature.payload().len() != 64 {
+        return Err("lease Ed signature width differs".into());
+    }
+    let frame = norito::encode_canonical(encoded).map_err(|e| e.to_string())?;
+    let flags = frame[39];
+    let payload = layout_field_payload(encoded, flags)?;
+    let root = frame
+        .len()
+        .checked_sub(payload.len())
+        .ok_or("lease canonical root differs")?;
+    if root < norito::core::Header::SIZE || frame.get(root..) != Some(payload.as_slice()) {
+        return Err("lease canonical root differs".into());
+    }
+    let prelude = if digest_domain {
+        ORIGINAL_DOMAIN.len() + 8
+    } else {
+        0
+    };
+    let mut raw = Vec::new();
+    if digest_domain {
+        raw.extend_from_slice(ORIGINAL_DOMAIN);
+        raw.extend_from_slice(&(frame.len() as u64).to_le_bytes());
+    }
+    raw.extend_from_slice(&frame);
+    let mut bytes: Vec<Option<u8>> = raw.into_iter().map(Some).collect();
+    bytes[prelude + 31..prelude + 39].fill(None);
+    let mut cursor = root;
+    let s = crate::isi::read_aos_field(&frame, &mut cursor, flags).map_err(|e| e.to_string())?;
+    let subject_start = prelude + cursor - s.len();
+    if s != layout_field_payload(subject, flags)? {
+        return Err("lease subject layout differs".into());
+    }
+    let mut sub = 0;
+    let mut fields = Vec::new();
+    for _ in 0..14 {
+        let f = crate::isi::read_aos_field(s, &mut sub, flags).map_err(|e| e.to_string())?;
+        fields.push((f, subject_start + sub - f.len()));
+    }
+    if sub != s.len() || fields[0].0 != subject.version.to_le_bytes() {
+        return Err("lease subject fields differ".into());
+    }
+    let version_bytes = core::array::from_fn(|i| fields[0].1 + i);
+    let mut binding = 0;
+    let mut pi_fields = Vec::new();
+    for _ in 0..5 {
+        let f = crate::isi::read_aos_field(fields[8].0, &mut binding, flags)
+            .map_err(|e| e.to_string())?;
+        pi_fields.push((f, fields[8].1 + binding - f.len()));
+    }
+    if binding != fields[8].0.len() {
+        return Err("lease Integrity fields differ".into());
+    }
+    let digests = [
+        subject.credential_digest,
+        subject.challenge_digest,
+        subject.attested_key_id,
+        subject.release_id,
+        subject.hardware_profile_id,
+        subject.trust_policy_digest,
+        subject.app_authority_policy_digest,
+        subject.binding.request_hash,
+        subject.binding.evidence_digest,
+        subject.binding.policy_digest,
+        subject.possession_original_digest,
+    ];
+    let scalar_values = [
+        subject.policy_epoch,
+        subject.hardware_epoch,
+        subject.binding.verified_at_ms,
+        subject.binding.refresh_before_ms,
+        subject.issued_at_ms,
+        subject.expires_at_ms,
+    ];
+    let mut fixed_digest_bytes = [[0usize; 32]; 11];
+    for (index, (value, positions)) in digests.iter().zip(&mut fixed_digest_bytes).enumerate() {
+        let (field, start) = if index < 7 {
+            fields[index + 1]
+        } else if index < 10 {
+            pi_fields[index - 7]
+        } else {
+            fields[9]
+        };
+        if field != layout_fixed_bytes_field(value, flags)? {
+            return Err("lease selector encoder differs".into());
+        }
+        for (index, position) in positions.iter_mut().enumerate() {
+            let mut changed = *value;
+            changed[index] ^= 1;
+            *position = start
+                + sole_changed_raw_position(
+                    field,
+                    &layout_fixed_bytes_field(&changed, flags)?,
+                    changed[index],
+                )?;
+        }
+    }
+    let mut scalar_bytes = [[0usize; 8]; 6];
+    for (index, (value, positions)) in scalar_values.iter().zip(&mut scalar_bytes).enumerate() {
+        let (field, start) = match index {
+            0 => fields[10],
+            1 => fields[11],
+            2 => pi_fields[3],
+            3 => pi_fields[4],
+            4 => fields[12],
+            _ => fields[13],
+        };
+        if field != value.to_le_bytes() {
+            return Err("lease scalar layout differs".into());
+        }
+        *positions = core::array::from_fn(|i| start + i);
+    }
+    let sig = crate::isi::read_aos_field(&frame, &mut cursor, flags).map_err(|e| e.to_string())?;
+    let sig_start = prelude + cursor - sig.len();
+    if sig != layout_field_payload(signature, flags)? {
+        return Err("lease original Ed layout differs".into());
+    }
+    let mut signature_bytes = [0usize; 64];
+    for (index, p) in signature_bytes.iter_mut().enumerate() {
+        let mut changed = signature.payload().to_vec();
+        changed[index] ^= 1;
+        let enc = layout_field_payload(&Signature::from_bytes(&changed), flags)?;
+        *p = sig_start + sole_changed_raw_position(sig, &enc, changed[index])?;
+    }
+    let original_evidence =
+        crate::isi::read_aos_field(&frame, &mut cursor, flags).map_err(|e| e.to_string())?;
+    let evidence_start = prelude + cursor - original_evidence.len();
+    if original_evidence != layout_field_payload(evidence, flags)? {
+        return Err("lease possession encoder differs".into());
+    }
+    let der = match evidence {
+        KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => signature_der,
+        _ => return Err("Integrity lease possession must be Android".into()),
+    };
+    let mut possession_signature_bytes = Vec::new();
+    for i in 0..der.len() {
+        let mut changed = der.clone();
+        changed[i] ^= 1;
+        let enc = layout_field_payload(
+            &KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                signature_der: changed.clone(),
+            },
+            flags,
+        )?;
+        possession_signature_bytes
+            .push(evidence_start + sole_changed_raw_position(original_evidence, &enc, changed[i])?);
+    }
+    let issuer_admission_layout = if let Some(admission) = admission {
+        let a =
+            crate::isi::read_aos_field(&frame, &mut cursor, flags).map_err(|e| e.to_string())?;
+        let start = prelude + cursor - a.len();
+        if a != layout_field_payload(admission, flags)? {
+            return Err("lease issuer admission encoder differs".into());
+        }
+        let mut layout = admission.original_payload_layout(flags)?;
+        for p in layout
+            .version_bytes
+            .iter_mut()
+            .chain(core::iter::once(&mut layout.purpose_byte))
+            .chain(layout.fixed_digest_bytes.iter_mut().flatten())
+            .chain(layout.signature_bytes.iter_mut())
+        {
+            *p += start;
+            bytes[*p] = None;
+        }
+        Some(layout)
+    } else {
+        None
+    };
+    if cursor != frame.len() {
+        return Err("lease trailing fields".into());
+    }
+    for p in version_bytes
+        .iter()
+        .chain(fixed_digest_bytes.iter().flatten())
+        .chain(scalar_bytes.iter().flatten())
+        .chain(&signature_bytes)
+        .chain(&possession_signature_bytes)
+    {
+        bytes[*p] = None;
+    }
+    Ok(KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1 {
+        bytes,
+        original: prelude..prelude + frame.len(),
+        version_bytes,
+        fixed_digest_bytes,
+        scalar_bytes,
+        signature_bytes,
+        possession_signature_bytes,
+        issuer_admission_layout,
+    })
 }

@@ -146,13 +146,13 @@ fn digest_le<F: KagemushaPoseidonFieldV1>(
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
-fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
+pub(super) fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     witness: &KagemushaStateRelationWitnessV1,
     expected: [AssignedValue<F>; 2],
-) -> Result<(), String> {
+) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
     // Use the successor's typed asset for every operation so Bootstrap builds the
     // same SHA circuit shape. The State relation constrains predecessor and
     // successor asset identity to remain equal on non-bootstrap transitions.
@@ -197,7 +197,7 @@ fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     {
         ctx.constrain_equal(&actual, &committed);
     }
-    Ok(())
+    Ok(uuid)
 }
 
 #[cfg(any(

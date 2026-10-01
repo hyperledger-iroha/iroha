@@ -1319,7 +1319,18 @@ impl RuntimeApiRouterFixture {
         state: Arc<IrohaState>,
         runtime_deps: ToriiRuntimeDeps,
     ) -> Self {
-        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        Self::with_configured_runtime(chain_id, kura, state, runtime_deps, |_| {})
+    }
+
+    fn with_configured_runtime(
+        chain_id: &'static str,
+        kura: Arc<Kura>,
+        state: Arc<IrohaState>,
+        runtime_deps: ToriiRuntimeDeps,
+        configure: impl FnOnce(&mut iroha_config::parameters::actual::Root),
+    ) -> Self {
+        let mut cfg = crate::test_utils::mk_minimal_root_cfg();
+        configure(&mut cfg);
         let (kiso, child) = KisoHandle::start(cfg.clone());
         let queue = Arc::new(Queue::from_config(
             iroha_config::parameters::actual::Queue {
@@ -1544,7 +1555,7 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn appeal_finance_publication_routes_are_read_only() {
+async fn appeal_finance_publication_routes_authenticate_before_decoding() {
     use axum::{
         body::Body,
         extract::ConnectInfo,
@@ -1565,12 +1576,12 @@ async fn appeal_finance_publication_routes_are_read_only() {
         key_pair: KeyPair,
     }
     impl RouterGovernanceDagSigner {
-        const HANDLE: &'static str = "provider:governance-dag:retired-appeal-route-primary";
-        const PEER_ID: &'static [u8] = b"12D3KooWRetiredAppealRoutePublisher";
+        const HANDLE: &'static str = "provider:governance-dag:appeal-route-primary";
+        const PEER_ID: &'static [u8] = b"12D3KooWAppealRoutePublisher";
         fn new() -> Self {
             Self {
                 key_pair: KeyPair::try_from_seed(vec![0x4D; 32], Algorithm::Ed25519)
-                    .expect("derive retired-route Governance DAG signer"),
+                    .expect("derive publication-route Governance DAG signer"),
             }
         }
         fn public_key_bytes(&self) -> [u8; 32] {
@@ -1578,7 +1589,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
                 .key_pair
                 .public_key()
                 .try_to_bytes()
-                .expect("serialize retired-route Governance DAG public key");
+                .expect("serialize publication-route Governance DAG public key");
             assert_eq!(algorithm, Algorithm::Ed25519);
             bytes.try_into().expect("Ed25519 public key width")
         }
@@ -1605,10 +1616,10 @@ async fn appeal_finance_publication_routes_are_read_only() {
             payload: &[u8],
         ) -> Result<[u8; 64], String> {
             Signature::try_new(self.key_pair.private_key(), payload)
-                .map_err(|_| "retired-route Governance DAG signing failed".to_owned())?
+                .map_err(|_| "publication-route Governance DAG signing failed".to_owned())?
                 .payload()
                 .try_into()
-                .map_err(|_| "retired-route Governance DAG signature width changed".to_owned())
+                .map_err(|_| "publication-route Governance DAG signature width changed".to_owned())
         }
     }
     #[derive(Debug)]
@@ -1629,7 +1640,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
         state: std::sync::Mutex<RouterGovernanceDagCheckpointState>,
     }
     impl RouterGovernanceDagCheckpointStore {
-        const HANDLE: &'static str = "sealed:governance-dag:retired-appeal-route-primary";
+        const HANDLE: &'static str = "sealed:governance-dag:appeal-route-primary";
         const POLICY_DIGEST: [u8; 32] = [0x86; 32];
         const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
             match slot {
@@ -1732,12 +1743,34 @@ async fn appeal_finance_publication_routes_are_read_only() {
         visit(root, root, &mut snapshot);
         snapshot
     }
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let caller_key =
+        checked_torii_test_ed25519_keypair(0xb5, "rejected publication caller fixture");
+    let caller = AccountId::new(caller_key.public_key().clone());
+    let publisher_key = checked_torii_test_ed25519_keypair(0xb6, "publication publisher fixture");
+    let publisher = AccountId::new(publisher_key.public_key().clone());
+    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let mut world = World::with(
+        [Domain::new(domain_id).build(&caller)],
+        [
+            Account::new(caller.clone()).build(&caller),
+            Account::new(publisher.clone()).build(&publisher),
+        ],
+        [],
+    );
+    world.grant_role_for_tests(
+        publisher.clone(),
+        "sorafs_appeal_finance_publisher"
+            .parse()
+            .expect("publisher role"),
+    );
     let kura = Kura::blank_kura_for_testing();
     let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
+        world,
         kura.clone(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *state.network_id_ref();
     let storage_dir = tempfile::tempdir().expect("appeal publication storage tempdir");
     let storage_root = storage_dir
         .path()
@@ -1752,7 +1785,7 @@ async fn appeal_finance_publication_routes_are_read_only() {
             .governance_dir(Some(storage_root.join("governance")))
             .governance_dag_publisher_peer_id(Some(
                 String::from_utf8(RouterGovernanceDagSigner::PEER_ID.to_vec())
-                    .expect("retired-route publisher peer id is UTF-8"),
+                    .expect("publication-route publisher peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(RouterGovernanceDagSigner::HANDLE.to_owned()))
             .governance_dag_signer_qualification(Some(
@@ -1772,16 +1805,85 @@ async fn appeal_finance_publication_routes_are_read_only() {
     )
     .expect("initialise runtime-signed Governance DAG publisher");
     assert!(sorafs_node.has_governance_publisher());
+    let native_signer = |role: SorafsNativeTransactionSignerRoleV1, seed| {
+        Arc::new(
+            crate::sorafs::native_transaction_signer::tests::TestProvider::new(
+                role,
+                format!("runtime://sorafs/publication-router/{}", role.as_str()),
+                seed,
+            ),
+        )
+    };
+    let proof_signer = native_signer(SorafsNativeTransactionSignerRoleV1::ProofOutcome, 0x91);
+    let repair_signer = native_signer(SorafsNativeTransactionSignerRoleV1::Repair, 0x92);
+    let reserve_signer = native_signer(SorafsNativeTransactionSignerRoleV1::Reserve, 0x93);
+    let orderbook_signer = native_signer(SorafsNativeTransactionSignerRoleV1::Orderbook, 0x94);
+    let configured_signer =
+        |signer: &crate::sorafs::native_transaction_signer::tests::TestProvider| {
+            let binding = signer.expected_binding();
+            iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+                software_credential: None,
+                handle: binding.handle().to_owned(),
+                authority: binding.authority().clone(),
+                algorithm: binding.public_key().algorithm(),
+                public_key: binding.public_key().clone(),
+                revision: binding.qualification().revision(),
+                policy_digest: binding.qualification().policy_digest(),
+            }
+        };
     let runtime_deps = ToriiRuntimeDeps::new(
         crate::build_identity_test_fixture::build_identity(),
         routing::MaybeTelemetry::disabled(),
     )
-    .with_sorafs_node(sorafs_node.clone());
-    let fixture = RuntimeApiRouterFixture::with_runtime(
-        "sorafs-retired-appeal-publication-router-test",
+    .with_sorafs_proof_outcome_signer(proof_signer.clone())
+    .with_sorafs_repair_transaction_signer(repair_signer.clone())
+    .with_sorafs_reserve_transaction_signer(reserve_signer.clone())
+    .with_sorafs_orderbook_transaction_signer(orderbook_signer.clone())
+    .with_sorafs_node(sorafs_node.clone())
+    .with_sorafs_gateway_compliance_feed_transport(Arc::new(
+        crate::gateway_runtime_config_tests::TestComplianceFeedTransport,
+    ));
+    let fixture = RuntimeApiRouterFixture::with_configured_runtime(
+        "sorafs-appeal-publication-router-test",
         kura,
         state,
         runtime_deps,
+        |cfg| {
+            // The mounted runtime must retain the exact public signer and sealed
+            // checkpoint-store policy of this fixture's prebuilt publisher.
+            let expected = sorafs_node.config();
+            cfg.torii.sorafs_gateway.compliance =
+                Some(crate::gateway_runtime_config_tests::compliance_config(
+                    storage_root.join("compliance.json"),
+                ));
+            let storage = &mut cfg.torii.sorafs_storage;
+            storage.enabled = expected.enabled();
+            storage.native_transaction_signers.proof_outcome =
+                Some(configured_signer(&proof_signer));
+            storage.native_transaction_signers.repair = Some(configured_signer(&repair_signer));
+            storage.native_transaction_signers.reserve = Some(configured_signer(&reserve_signer));
+            storage.native_transaction_signers.orderbook =
+                Some(configured_signer(&orderbook_signer));
+            storage.data_dir = expected.data_dir().clone();
+            storage.governance_dag_dir = expected.governance_dir().cloned();
+            storage.governance_dag_publisher_peer_id =
+                expected.governance_dag_publisher_peer_id().cloned();
+            storage.governance_dag_publisher_public_key_hex =
+                expected.governance_dag_publisher_public_key_hex().cloned();
+            storage.governance_dag_signer_handle = expected.governance_dag_signer_handle().cloned();
+            let signer = expected.governance_dag_signer_qualification().unwrap();
+            storage.governance_dag_signer_revision = Some(signer.revision);
+            storage.governance_dag_signer_policy_digest = Some(signer.policy_digest);
+            let store = expected
+                .governance_dag_checkpoint_store_qualification()
+                .unwrap();
+            storage.governance_dag_service.checkpoint_store_handle =
+                expected.governance_dag_checkpoint_store_handle().cloned();
+            storage.governance_dag_service.checkpoint_store_revision = Some(store.revision);
+            storage
+                .governance_dag_service
+                .checkpoint_store_policy_digest = Some(store.policy_digest);
+        },
     );
     let router = fixture.router.router();
     let files_before = snapshot_files(&storage_root);
@@ -1790,31 +1892,70 @@ async fn appeal_finance_publication_routes_are_read_only() {
         "/v1/sorafs/appeals/finance/reports",
         "/v1/sorafs/appeals/finance/weekly-rollups",
     ] {
-        let mut request = Request::builder()
-            .method(Method::POST)
-            .uri(path)
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .expect("retired appeal-finance publication route probe");
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let response = router
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("retired appeal-finance publication route response");
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{path}");
+        for (identity, expected, expected_error) in [
+            (None, StatusCode::UNAUTHORIZED, None),
+            (
+                Some((&caller, &caller_key)),
+                StatusCode::FORBIDDEN,
+                Some(("forbidden", "The request is not permitted.")),
+            ),
+            (
+                Some((&publisher, &publisher_key)),
+                StatusCode::BAD_REQUEST,
+                Some(("bad_request", "The request is invalid.")),
+            ),
+        ] {
+            let uri = path.parse().expect("publication URI");
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(&uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(axum::http::header::ACCEPT, "application/json")
+                .body(Body::from("{}"))
+                .expect("appeal-finance publication route probe");
+            if let Some((authority, key)) = identity {
+                request.headers_mut().extend(signed_network_app_headers(
+                    &network_id,
+                    authority,
+                    key,
+                    &Method::POST,
+                    &uri,
+                    b"{}",
+                ));
+            }
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("appeal-finance publication route response");
+            assert_eq!(response.status(), expected, "{path}, expected={expected}");
+            if let Some((code, message)) = expected_error {
+                let body = torii_body_bytes(response, "publication rejection body").await;
+                let body: norito::json::Value =
+                    norito::json::from_slice(&body).expect("publication rejection JSON");
+                // The mounted HTTP boundary redacts handler diagnostics. The exact
+                // 403-to-400 change proves the publisher passed the role guard.
+                assert_eq!(
+                    body,
+                    norito::json!({ "code": code, "message": message }),
+                    "{path}: canonical public error envelope"
+                );
+            }
+        }
     }
+
     assert_eq!(
         sorafs_node.pending_governance_publication_count(),
         pending_before,
-        "retired publication routes must not enqueue durable Governance work"
+        "rejected publication routes must not enqueue durable Governance work"
     );
     assert_eq!(
         snapshot_files(&storage_root),
         files_before,
-        "retired publication routes must not mutate the Governance DAG, publish index, or durable outbox"
+        "rejected publication routes must not mutate the Governance DAG, publish index, or durable outbox"
     );
     fixture.shutdown().await;
 }

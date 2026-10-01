@@ -4516,6 +4516,7 @@
         "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
         "actor_helpers_lower_to_test_host_intrinsics",
         "lower_if",
+        "conditional_environment_joins_copy_each_arm_to_the_returned_value",
         "logical_operators_lower_to_short_circuit_cfg",
         "lower_bounded_range_loop",
         "bounded_loop_only_materializes_live_mutated_phi_slots",
@@ -4572,8 +4573,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "c81746da478346de610f5c69d5b656e256945c47278ad603d3dd902877d3535e"
+      "test_names_sha256": "c91653088b7adbd805f50f4bd6a5d2d95a3879ff1a89580b86ced6fb82a0148f"
     }
   ],
-  "test_inventory_sha256": "fcd9f47c5374c30483e3c45d7910109336349cc373772791e529f28b43dcf667"
+  "test_inventory_sha256": "dd480313c627492563c4acafeb2231c377f4310a71772cdbdb78528959c8696b"
 }

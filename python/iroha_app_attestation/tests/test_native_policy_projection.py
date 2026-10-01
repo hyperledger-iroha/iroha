@@ -8,6 +8,7 @@ from pathlib import Path
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.native_policy_projection import decode_native_policy_projection, PROVIDER_SCHEMA, SCHEMA
 from iroha_app_attestation.provider import _apple_release_digest
+from test_ordinary_enrollment import CIRCUIT_ISSUER_POINT
 
 
 def encoded(value):return base64.b64encode(value).decode()
@@ -35,7 +36,8 @@ def fixture(apple=False):
         'provider_policy_root':'33'*32,'authority_policy_digest':'06'*32,'trust_policy_digest':'05'*32,'issuer_policy_digest':'07'*32,
         'app_signing_identity_digest':hashlib.sha256(config['app_id'].encode()).hexdigest() if apple else '22'*32,
         'app_release_digest':_apple_release_digest(3,'28').hex() if apple else '08'*32,
-        'authority_public_key':'74'*32,'core_preparation_public_key':'73'*32,'maximum_credential_lifetime_ms':3600000,
+        'authority_public_key':'74'*32,'core_preparation_public_key':'73'*32,
+        'ordinary_issuer_public_key_sec1_base64':encoded(CIRCUIT_ISSUER_POINT),'maximum_credential_lifetime_ms':3600000,
         'allowed_android_security_levels':[] if apple else [1,2],'play_integrity_policy':None if apple else integrity,
         'play_integrity_policy_base64':None if apple else encoded(public_google),
         'ordinary_trust_policy_base64':encoded(trust),'app_authority_policy_base64':encoded(authority),
@@ -52,6 +54,7 @@ class NativePolicyProjectionTests(unittest.TestCase):
         self.assertEqual(len(projection.policies),1);policy=projection.policies[0]
         self.assertEqual(policy.allowed_android_levels,frozenset({1,2}))
         self.assertEqual(policy.platform_policy.package_version,28)
+        self.assertEqual(policy.circuit_issuer_public_key,CIRCUIT_ISSUER_POINT)
         self.assertEqual(len(projection.google_public_originals),1)
         self.assertEqual(policy.platform_policy.root_for_chain(policy.platform_policy.attestation_root_der),policy.platform_policy.attestation_root_der)
         with self.assertRaises(AttestationRejected):policy.platform_policy.root_for_chain(b'caller supplied root')
@@ -72,6 +75,9 @@ class NativePolicyProjectionTests(unittest.TestCase):
             lambda v:v['profiles'][0].update({'play_integrity_policy_base64':None}),
             lambda v:v['profiles'][0].update({'maximum_credential_lifetime_ms':True}),
             lambda v:v['profiles'][0].update({'allowed_android_security_levels':[1,1]}),
+            lambda v:v['profiles'][0].pop('ordinary_issuer_public_key_sec1_base64'),
+            lambda v:v['profiles'][0].update({'ordinary_issuer_public_key_sec1_base64':encoded(bytes(65))}),
+            lambda v:v['profiles'][0].update({'ordinary_issuer_public_key_sec1_base64':encoded(CIRCUIT_ISSUER_POINT[:-1])}),
             lambda v:v['profiles'][0]['play_integrity_policy'].update({'minimum_device_integrity':True}),
         ):
             value=fixture();mutate(value)

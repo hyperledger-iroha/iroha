@@ -130,6 +130,8 @@ mod raw_ivm_work {
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let error = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -249,6 +251,8 @@ seiyaku RawMeteredFailure {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut cache)
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -374,6 +378,8 @@ seiyaku UnverifiedBallot {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -441,6 +447,14 @@ seiyaku UnverifiedBallot {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        // Authorize the real role instruction so its missing target, not permission admission,
+        // tests rollback after the preceding account write.
+        tx.world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([executor_permission::role::CanManageRoles.into()]),
+        );
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -486,6 +500,8 @@ seiyaku UnverifiedBallot {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -540,6 +556,14 @@ seiyaku UnverifiedBallot {
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            // Authorize the real role instruction so its missing target, not permission admission,
+            // tests rollback after the preceding account write.
+            tx.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([executor_permission::role::CanManageRoles.into()]),
+            );
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = count_cap;
             tx.pipeline.overlay_max_bytes = byte_cap;
             let error = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache).map_err(crate::execution_attempt::expect_completed_rejection)
@@ -636,6 +660,8 @@ seiyaku UnverifiedBallot {
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.quarantine_tx_max_cycles = cap;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)

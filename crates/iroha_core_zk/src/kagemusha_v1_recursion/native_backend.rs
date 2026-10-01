@@ -733,6 +733,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .as_ref(),
             profile.guard_eq.clone(),
             provider_policy_root,
+            artifacts.ordinary_issuer_table(),
         )?;
         let ep_ordinary_guard_vk = read_ep_ordinary_guard_vk(
             artifacts
@@ -740,6 +741,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .as_ref(),
             profile.guard_ep.clone(),
             provider_policy_root,
+            artifacts.ordinary_issuer_table(),
         )?;
         let eq_guard_vk = read_eq_guard_vk(
             artifacts
@@ -1138,6 +1140,39 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         self.authorize_release_proof_material(release)
     }
 
+    /// Admit the first production ordinary State family against its distinct signed Guard.
+    /// State roles must contain actual ordinary State keys; this operation cannot convert a
+    /// verifier already authorized under another family or relabel an OEM helper proof.
+    /// # Errors
+    /// Rejects another purpose, changed authority, wrong loaded originals or family replacement.
+    pub fn authorize_ordinary_monetary_release(
+        &mut self,
+        release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<(), String> {
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ProductionMonetary,
+        )?;
+        let ordinary = super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
+            &release,
+            self.state_checkpoint_artifacts
+                .canonical_empty_effect_digest,
+        )
+        .map_err(|error| error.to_string())?;
+        if self.authenticated_release.is_some() {
+            if self.state_checkpoint_artifacts != ordinary {
+                return Err("native State family is already authorized".to_owned());
+            }
+            return self.authorize_release_proof_material(release);
+        }
+        // The common check authenticates every already-loaded role and actual ordinary
+        // compiled protocol before any authority/family is installed. Nothing fallible
+        // remains after it returns, so a failed admission cannot half-change this owner.
+        self.authorize_release_proof_material(release)?;
+        self.state_checkpoint_artifacts = ordinary;
+        Ok(())
+    }
+
     /// Install a threshold-signed testnet release solely for proof-lineage experiments.
     ///
     /// The verified purpose must be `TestnetExperiment`. This cannot create a production
@@ -1161,11 +1196,33 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &mut self,
         release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
     ) -> Result<(), String> {
-        let expected = super::KagemushaRecursionArtifactsV1::from_authenticated_release(
-            &release,
+        let expected = match (
             self.state_checkpoint_artifacts
-                .canonical_empty_effect_digest,
-        );
+                .guard_bundle_verifying_key_eq
+                .role,
+            self.state_checkpoint_artifacts
+                .guard_bundle_verifying_key_ep
+                .role,
+        ) {
+            (
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+            ) => super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
+                &release,
+                self.state_checkpoint_artifacts
+                    .canonical_empty_effect_digest,
+            )
+            .map_err(|error| error.to_string())?,
+            (
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::GuardBundleVkEq,
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::GuardBundleVkEp,
+            ) => super::KagemushaRecursionArtifactsV1::from_authenticated_release(
+                &release,
+                self.state_checkpoint_artifacts
+                    .canonical_empty_effect_digest,
+            ),
+            _ => return Err("native State helper roles are mixed".to_owned()),
+        };
         expected.validate().map_err(|error| error.to_string())?;
         let ordinary = release
             .helper_protocol(
@@ -2010,9 +2067,18 @@ pub(super) fn read_eq_ordinary_guard_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
     root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
-    let params = KagemushaProviderRootCircuitParamsV1::new(params, root)
-        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary provider root is absent".into(),
+        ));
+    }
+    let params = super::ordinary_guard_circuit::KagemushaOrdinaryGuardCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
     read_recursive_vk_checked::<
         EqAffine,
         super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEqCircuitV1,
@@ -2027,9 +2093,18 @@ pub(super) fn read_ep_ordinary_guard_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
     root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
-    let params = KagemushaProviderRootCircuitParamsV1::new(params, root)
-        .map_err(KagemushaArtifactErrorV1::InvalidRelease)?;
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary provider root is absent".into(),
+        ));
+    }
+    let params = super::ordinary_guard_circuit::KagemushaOrdinaryGuardCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
     read_recursive_vk_checked::<
         EpAffine,
         super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEpCircuitV1,

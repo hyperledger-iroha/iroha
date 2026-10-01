@@ -560,11 +560,18 @@ struct VerifiedAuthority {
 
 impl VerifiedAuthority {
     fn new(material: ValidatorEpochContextV1, height: u64) -> Result<Self, ChainReadError> {
+        Self::with_crypto(material, height, BlsCrypto::new())
+    }
+
+    fn with_crypto(
+        material: ValidatorEpochContextV1,
+        height: u64,
+        crypto: BlsCrypto,
+    ) -> Result<Self, ChainReadError> {
         let malformed = |reason: String| ChainReadError::Committee { height, reason };
         let epoch = schedule::core_epoch(&material)
             .map_err(|error| malformed(error.to_string()))?
             .id;
-        let crypto = BlsCrypto::new();
         let keys = material
             .committee
             .iter()
@@ -723,7 +730,10 @@ impl PrefixVerifierContext<'_> {
         if header.instance != self.instance || commit_qc.instance != self.instance {
             return Err(ChainReadError::WrongInstance { height }.into());
         }
-        let native = super::attestation::NativePastaVerifier::new(self.instance, self.network);
+        let native = OriginalResultVerifier {
+            source: &committed,
+            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
+        };
         let verifier = self.attestations.unwrap_or(&native);
         #[cfg(test)]
         relation_counts::qc(height);
@@ -753,6 +763,51 @@ impl PrefixVerifierContext<'_> {
             verification: QcVerification::Verified,
             certificate_len,
         })
+    }
+}
+
+/// A certificate-local borrow of the original structurally decoded frame. Only the reader
+/// constructs this capability; equality of caller-supplied bytes and graphs grants no authority.
+/// The exact quorum, independent parent authority and signed availability checks still run.
+struct OriginalResultVerifier<'a> {
+    source: &'a CommittedBlock,
+    native: super::attestation::NativePastaVerifier,
+}
+
+impl AttestationVerifier for OriginalResultVerifier<'_> {
+    fn verify(
+        &self,
+        height: u64,
+        signer: iroha_sumeragi::types::ValidatorIndex,
+        key: &iroha_sumeragi::types::PublicKey,
+        statement: &[u8],
+        witness: &iroha_sumeragi::message::ResultWitness,
+        signature: &[u8],
+    ) -> bool {
+        let Some(statement) = iroha_sumeragi::preimage::AttestationStatement::parse(statement)
+        else {
+            return false;
+        };
+        let Some(certificate) = self.source.block.commit_certificate() else {
+            return false;
+        };
+        if height != self.source.height || statement.result != self.source.result {
+            return false;
+        }
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC14")))]
+        if witness.as_slice() != certificate.result_preimage() {
+            return false;
+        }
+        #[cfg(all(test, sumeragi_core_mutation = "HC14"))]
+        let _ = (witness, certificate);
+        self.native.verify_decoded_share(
+            height,
+            signer,
+            key,
+            statement,
+            &self.source.commitment,
+            signature,
+        )
     }
 }
 

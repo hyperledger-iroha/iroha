@@ -3,7 +3,10 @@
 
 use super::super::{PrivateJournal, PrivateJournalFormat};
 use super::journal::continuous_clock::Reading;
-use super::{Custody, KagemushaPreparedOrdinaryAppEnrollmentV1, Rejected, Result};
+use super::{
+    Custody, KagemushaOrdinaryIdentityErrorV1, KagemushaPreparedOrdinaryAppEnrollmentV1, Rejected,
+    Result,
+};
 use iroha_data_model::kagemusha::*;
 use rand_core_06::{OsRng, RngCore as _};
 use std::{path::Path, sync::Arc};
@@ -92,6 +95,10 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
             .play_integrity_policy
             .as_ref()
             .map(|p| p.policy_digest))
+    }
+    pub(super) fn core_authorization_key_reference(&self) -> Result<[u8; 32]> {
+        self.trusted_time_ms()?;
+        Ok(self.core_authorization_key_reference)
     }
     fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
         self.issuer.validate().map_err(|_| Rejected)?;
@@ -219,6 +226,12 @@ pub struct KagemushaOrdinaryPreparationReservationV1 {
     completed: Option<Zeroizing<Vec<u8>>>,
 }
 impl KagemushaOrdinaryPreparationReservationV1 {
+    pub(super) fn selected_originals(
+        &self,
+    ) -> Result<&Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>> {
+        self.recheck_originals()?;
+        Ok(&self.selected)
+    }
     /// Reserve exactly one native secret/client nonce and fsync them before exposing a carrier.
     /// `root` and `selected` are native provisioning originals, never mobile path/response fields.
     /// # Errors
@@ -329,6 +342,20 @@ impl KagemushaOrdinaryPreparationReservationV1 {
     ) -> Result<Self> {
         let this = Self::open_originals(root, selected, now)?;
         this.recheck()?;
+        Ok(this)
+    }
+    /// Reopen only a previously retained signed C under current native Selected originals.
+    /// The actual WAL admission time authenticates C; no nonce/secret/preparation is generated.
+    /// # Errors
+    /// Rejects absent signed preparation, foreign policy/secret/descriptor or corrupt completion.
+    pub fn open_retained_originals(
+        root: &Path,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+        now: u64,
+    ) -> Result<Self> {
+        let this = Self::open_originals(root, selected, now)?;
+        this.preparation.as_ref().ok_or(Custody)?;
+        this.recheck_originals()?;
         Ok(this)
     }
     fn open_originals(
@@ -606,39 +633,99 @@ impl KagemushaOrdinaryPreparationReservationV1 {
     /// Rejects absent, completed or expired preparation custody.
     pub fn prepared_owner(&self) -> Result<KagemushaPreparedOrdinaryAppEnrollmentV1> {
         self.recheck()?;
-        self.prepared_from_original(self.original_preparation()?, self.now()?)
+        let owner = self.retained_prepared_owner()?;
+        owner.recheck_at_trusted_time(self.now()?)?;
+        Ok(owner)
+    }
+    /// Read the original admitted C holder for completed platform-original recovery only.
+    /// Its fresh signing/generation methods still require C's original short interval.
+    /// # Errors
+    /// Rejects absent signed C or changed current selected policy/private original custody.
+    pub fn retained_prepared_owner(&self) -> Result<KagemushaPreparedOrdinaryAppEnrollmentV1> {
+        self.recheck_originals()?;
+        let (p, admitted_at) = self.preparation.as_ref().ok_or(Custody)?;
+        let owner = self.prepared_from_original(p, *admitted_at)?;
+        owner.recheck_retained_originals_at_trusted_time(self.now()?)?;
+        Ok(owner)
     }
     /// Consume original financial custody only after genuine complete FI/wallet/platform admission.
     /// No signed credential alone or raw application archive can create the resulting owner.
     /// # Errors
     /// Rejects another enrollment, expired preparation or an uncertain durable completion.
     pub fn complete_enrollment(
-        mut self,
+        self,
         enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
     ) -> Result<KagemushaOrdinaryEnrolledFinancialOwnerV1> {
-        self.recheck()?;
-        let now = self.now()?;
-        enrollment
-            .recheck_at_trusted_time(now)
-            .map_err(|_| Rejected)?;
-        self.require_enrollment(&enrollment)?;
-        let completed = encode(&Record::EnrollmentComplete {
-            certificate_original: enrollment
-                .certificate()
-                .canonical_bytes()
-                .map_err(|_| Rejected)?,
-            possession_original: enrollment.possession().original().to_vec(),
-            authenticated_at_ms: enrollment.authenticated_at_ms(),
-            captured_at_ms: now,
-        })?;
-        self.journal.append(&completed).map_err(|_| Custody)?;
-        self.completed = Some(completed);
+        self.complete_enrollment_or_retain(enrollment)
+            .map_err(|(_, error)| error)
+    }
+    /// Complete this original or retain its actual custody for exact recovery on failure.
+    /// A completed WAL is matched to the identical FI original without another append.
+    /// Poisoned storage remains held and must be reopened from its surviving original prefix.
+    /// # Errors
+    /// Returns the unchanged financial witness holder with the refusal; no new reservation is made.
+    pub fn complete_enrollment_or_retain(
+        mut self,
+        enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+    ) -> std::result::Result<
+        KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        (Self, KagemushaOrdinaryIdentityErrorV1),
+    > {
+        let result = (|| {
+            self.recheck_originals()?;
+            let now = self.now()?;
+            enrollment
+                .recheck_at_trusted_time(now)
+                .map_err(|_| Rejected)?;
+            self.require_enrollment(&enrollment)?;
+            if let Some(raw) = &self.completed {
+                let Record::EnrollmentComplete {
+                    certificate_original,
+                    possession_original,
+                    authenticated_at_ms,
+                    captured_at_ms,
+                } = decode(raw)?
+                else {
+                    return Err(Custody);
+                };
+                if certificate_original
+                    != enrollment
+                        .certificate()
+                        .canonical_bytes()
+                        .map_err(|_| Rejected)?
+                    || possession_original != enrollment.possession().original()
+                    || authenticated_at_ms != enrollment.authenticated_at_ms()
+                    || captured_at_ms > now
+                {
+                    return Err(Custody);
+                }
+            } else {
+                self.recheck()?;
+                let completed = encode(&Record::EnrollmentComplete {
+                    certificate_original: enrollment
+                        .certificate()
+                        .canonical_bytes()
+                        .map_err(|_| Rejected)?,
+                    possession_original: enrollment.possession().original().to_vec(),
+                    authenticated_at_ms: enrollment.authenticated_at_ms(),
+                    captured_at_ms: now,
+                })?;
+                self.journal.append(&completed).map_err(|_| Custody)?;
+                self.completed = Some(completed);
+            }
+            self.recheck_originals()
+        })();
+        if let Err(error) = result {
+            return Err((self, error));
+        }
         let this = KagemushaOrdinaryEnrolledFinancialOwnerV1 {
             reservation: self,
             enrollment,
             integrity_lease: None,
         };
-        this.recheck()?;
+        if let Err(error) = this.recheck() {
+            return Err((this.reservation, error));
+        }
         Ok(this)
     }
     fn require_enrollment(
@@ -861,6 +948,8 @@ mod tests {
         f.selection.issuance.credential.signature =
             Signature::try_new(issuer.private_key(), &a.canonical_signing_bytes().unwrap())
                 .unwrap();
+        f.selection.issuance.credential.circuit_admission = iroha_data_model::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+            iroha_data_model::kagemusha::KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(&a, &f.selection.issuance.credential.signature).unwrap());
         f.selection.issuance.core_authorization_key_reference =
             kagemusha_core_authorization_key_reference_v1(&core_key());
         f.challenge.preparation = f.selection.preparation.clone();

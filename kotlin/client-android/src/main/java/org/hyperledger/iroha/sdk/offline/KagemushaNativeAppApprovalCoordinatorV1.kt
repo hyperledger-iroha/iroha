@@ -5,7 +5,10 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppKeyHardwarePolicyV1
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityProviderV1
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidPlayIntegrityTokenOriginalV1
 import org.hyperledger.iroha.sdk.crypto.keystore.requireOriginalP256DerV1
 
 /**
@@ -22,17 +25,16 @@ class KagemushaNativeAppApprovalCoordinatorV1 internal constructor(
         listOf(KagemushaCoreCoordinatorFrameV1.u32(11)),
     ).single().copyOf()
 
-    /** Select the same native reservation before preparing C; never allocate or construct a client subject. */
-    fun prepareOriginalIdentity(): KagemushaNativePreparedOrdinaryAppIdentityV1 =
-        prepareOrdinaryIdentity(originalEnrollmentAttemptId())
-
-    /** Obtain the native signed C and durable generation/attestation attempt; no caller subject or key. */
-    fun prepareOrdinaryIdentity(enrollmentAttemptId: ByteArray): KagemushaNativePreparedOrdinaryAppIdentityV1 {
-        val id = enrollmentAttemptId.copyOf()
+    /** Native Core fsyncs the separate financial secret and client nonce before exposing this carrier. */
+    fun reserveOriginalIdentity(): KagemushaNativeReservedOrdinaryAppIdentityV1 {
         val fields = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY,
-            listOf(KagemushaCoreCoordinatorFrameV1.u32(1), id))
-        return KagemushaNativePreparedOrdinaryAppIdentityV1.fromNative(bridge, fields)
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(12)))
+        return KagemushaNativeReservedOrdinaryAppIdentityV1.fromNative(bridge, fields)
     }
+
+    /** Carry the reserved public original to the protected issuer, then authenticate signed C natively. */
+    suspend fun prepareOriginalIdentity(transport: KagemushaOrdinaryIdentityOriginalTransportV1): KagemushaNativePreparedOrdinaryAppIdentityV1 =
+        reserveOriginalIdentity().prepare(transport)
 
     /** Derive W and its original key selection from the native checked operation. */
     fun prepareApproval(operationId: ByteArray): KagemushaNativePreparedAppApprovalV1 {
@@ -79,6 +81,33 @@ class KagemushaNativePreparedAppEnrollmentPossessionV1 private constructor(priva
     fun signingBytes(): ByteArray = state.signingBytes()
     /** Recover the same retained possession receipt; never invoke the platform again during recovery. */
     fun recoverOriginalPossession(): ByteArray? = state.recover()
+    /** Read the original DER/CBOR only after native consumption, with no hardware or issuer call. */
+    fun originalPlatformEvidence(): ByteArray = state.completedOriginalEvidence()
+    /** Native authenticates and retains this exact opaque credential; the returned digest is data only. */
+    fun acceptOriginalCredential(originalCredential: ByteArray): ByteArray = state.acceptCredential(originalCredential)
+    /** Native-paired public originals select the exact certificate carrier; null token requires absent Native PI policy. */
+    fun certificateRequestOriginal(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        integrityToken: KagemushaAndroidPlayIntegrityTokenOriginalV1? = null): KagemushaOrdinaryIdentityHttpOriginalV1 =
+        state.certificateRequest(reservation, identity, integrityToken)
+    /** Request Google's opaque original using only the paired Native policy/project and exact C/key request hash. */
+    fun requestOriginalIntegrityToken(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        provider: KagemushaAndroidPlayIntegrityProviderV1): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> =
+        state.requestIntegrity(reservation, identity, provider)
+    /** Exact protected HTTP response is still untrusted until same-held Native phase8 admits it. */
+    suspend fun issueOriginalCredential(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        integrityToken: KagemushaAndroidPlayIntegrityTokenOriginalV1?,
+        transport: KagemushaOrdinaryIdentityOriginalTransportV1): ByteArray {
+        val request = certificateRequestOriginal(reservation, identity, integrityToken)
+        request.requireCurrent()
+        val response = transport.exchange(request)
+        request.requireCurrent()
+        val original = KagemushaOrdinaryIdentityHttpCodecV1.certificateResponse(response)
+        request.requireCurrent()
+        return acceptOriginalCredential(original)
+    }
     /** Cancel only the native pending attempt; existing enrolled key custody remains native policy. */
     fun cancel() = state.cancel()
 
@@ -106,6 +135,7 @@ private class NativeAppPreparedStateV1(
     private val scope = original[9].copyOf()
     private val messageDigest = sha(message)
     private var unusable = false
+    private var certificateBody: ByteArray? = null
 
     @Synchronized fun signingBytes(): ByteArray { recheck(); return message.copyOf() }
     @Synchronized fun financialSelectionOriginal(): ByteArray { recheck(); return original[13].copyOf() }
@@ -159,6 +189,93 @@ private class NativeAppPreparedStateV1(
             2 -> checkedReceipt(recovered[2], recovered[1])
             else -> error("Invalid native app original recovery")
         }
+    }
+
+    @Synchronized fun completedOriginalEvidence(): ByteArray {
+        check(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+        recheck()
+        val recovered = invoke(5)
+        check(recovered[0].contentEquals(byteArrayOf(2))) { "Original platform evidence has not been consumed by native Core" }
+        checkedReceipt(recovered[2], recovered[1])
+        if (original[2][0] == 5.toByte()) {
+            try { requireOriginalP256DerV1(recovered[1]) }
+            catch (failure: Throwable) {
+                unusable = true
+                try { bridge.close() } catch (_: Throwable) { /* Preserve the original evidence failure. */ }
+                throw failure
+            }
+        }
+        recheck()
+        return recovered[1].copyOf()
+    }
+
+    @Synchronized fun acceptCredential(originalCredential: ByteArray): ByteArray {
+        check(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
+        val held = originalCredential.copyOf()
+        require(held.size in 1..16 * 1024) { "Original ordinary credential exceeds its native bound" }
+        recheck()
+        val admitted = invoke(8, held)
+        same(admitted[1], scope)
+        recheck()
+        return admitted[0].copyOf()
+    }
+
+    @Synchronized fun certificateRequest(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        token: KagemushaAndroidPlayIntegrityTokenOriginalV1?): KagemushaOrdinaryIdentityHttpOriginalV1 {
+        val (selected, policy) = certificateInputs(reservation, identity)
+        if (policy.isEmpty()) {
+            require(token == null) { "Native policy did not select Play Integrity" }
+        } else {
+            val originalToken = checkNotNull(token) { "Native policy requires the original Google evidence" }
+            require(originalToken.cloudProjectNumber == KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy)) {
+                "Original Google token belongs to another Native-selected project"
+            }
+            same(originalToken.requestHash(), KagemushaOrdinaryAppEnrollmentPreparationV1.parseOriginal(selected[0])
+                .playIntegrityRequestHash(original[6]))
+        }
+        val body = KagemushaOrdinaryIdentityHttpCodecV1.certificateBody(selected[0], selected[1], selected[2],
+            selected[5], token?.opaqueToken())
+        certificateBody?.let { same(it, body) }
+        certificateBody = body.copyOf()
+        return KagemushaOrdinaryIdentityHttpOriginalV1.certificate(originalId, body) {
+            recheckCertificateInputs(reservation, identity, selected, policy)
+        }
+    }
+
+    @Synchronized fun requestIntegrity(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        provider: KagemushaAndroidPlayIntegrityProviderV1): CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1> {
+        val (selected, policy) = certificateInputs(reservation, identity)
+        check(policy.isNotEmpty()) { "Native policy did not select a Google request" }
+        val project = KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy)
+        val request = KagemushaOrdinaryAppEnrollmentPreparationV1.parseOriginal(selected[0]).playIntegrityRequestHash(original[6])
+        return provider.requestOriginal(project, request) { recheckCertificateInputs(reservation, identity, selected, policy) }
+    }
+
+    private fun certificateInputs(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1): Pair<List<ByteArray>, ByteArray> {
+        check(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION && original[2][0] == 5.toByte())
+        recheck()
+        val selected = identity.certificateOriginalsFor(bridge)
+        val c = KagemushaOrdinaryAppEnrollmentPreparationV1.parseOriginal(selected[0])
+        same(c.canonicalSigningBytes(), original[7]); same(c.attestationChallenge(), originalId)
+        same(selected[1], original[5]); same(sha(selected[1]), original[6])
+        same(selected[3], scope); same(selected[4], original[3])
+        val body = message.size - 371
+        same(sha(selected[2]), message.copyOfRange(body + 3 + 10 * 32, body + 35 + 10 * 32))
+        val policy = reservation.certificatePolicyFor(bridge, selected[0])
+        val fields = selected + listOf(completedOriginalEvidence())
+        recheck()
+        return fields to policy
+    }
+
+    @Synchronized private fun recheckCertificateInputs(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1, selected: List<ByteArray>, policy: ByteArray) {
+        val (current, currentPolicy) = certificateInputs(reservation, identity)
+        selected.indices.forEach { same(selected[it], current[it]) }
+        same(policy, currentPolicy)
+        recheck()
     }
 
     @Synchronized fun cancel() { recheck(); invoke(7); unusable = true }

@@ -13,6 +13,7 @@ use std::{
     os::unix::fs::MetadataExt as _,
     path::{Component, Path, PathBuf},
 };
+use zeroize::Zeroizing;
 
 pub(crate) const FRAME_HEADER_BYTES: usize = 88;
 type DigestV1 = [u8; 32];
@@ -193,6 +194,8 @@ impl PrivateJournal {
 
     /// Return the next exact payload and its sequence while replaying the acknowledged prefix.
     /// The caller validates its schema and semantics; no append is allowed before full replay.
+    /// Error paths erase the partial payload. A successful caller owns its disposal and must
+    /// retain secret-bearing payloads in its zeroizing record/custody type.
     pub(crate) fn replay_next(&mut self) -> Result<Option<(u64, Vec<u8>)>, PrivateJournalError> {
         if self.read_bytes == self.acknowledged_bytes {
             self.check_owned()?;
@@ -216,8 +219,11 @@ impl PrivateJournal {
         if length > remaining {
             return Err(PrivateJournalError::Corrupt);
         }
-        let mut payload =
-            vec![0; usize::try_from(length).map_err(|_| PrivateJournalError::Corrupt)?];
+        let mut payload = Zeroizing::new(vec![
+            0;
+            usize::try_from(length)
+                .map_err(|_| PrivateJournalError::Corrupt)?
+        ]);
         self.journal
             .read_exact(&mut payload)
             .map_err(|_| PrivateJournalError::Corrupt)?;
@@ -234,7 +240,7 @@ impl PrivateJournal {
             .checked_add(1)
             .ok_or(PrivateJournalError::Corrupt)?;
         self.previous_frame_hash = hash;
-        Ok(Some((sequence, payload)))
+        Ok(Some((sequence, std::mem::take(&mut *payload))))
     }
 
     fn frame_hash(&self, header: &[u8], payload: &[u8]) -> DigestV1 {
@@ -307,7 +313,7 @@ impl PrivateJournal {
     ) -> Result<bool, PrivateJournalError> {
         let mut offset = 0_u64;
         let mut previous = [0; 32];
-        let mut buffer = [0_u8; 8192];
+        let mut buffer = Zeroizing::new([0_u8; 8192]);
         for sequence in 0..expected.sequence {
             if expected.byte_len.saturating_sub(offset) < FRAME_HEADER_BYTES as u64 {
                 return Ok(false);
@@ -371,7 +377,7 @@ impl PrivateJournal {
             let mut digest = Sha256::new();
             digest.update(self.format.hash_domain);
             digest.update(&header[..56]);
-            let mut buffer = [0_u8; 8192];
+            let mut buffer = Zeroizing::new([0_u8; 8192]);
             let mut offset = 0_usize;
             while offset < expected.len() {
                 let count = buffer.len().min(expected.len() - offset);
@@ -454,7 +460,9 @@ impl PrivateJournal {
             }
             let length =
                 usize::try_from(parsed.length).map_err(|_| PrivateJournalError::Corrupt)?;
-            let mut payload = Vec::new();
+            // Ordinary preparation records include the Native financial seed. Erase this
+            // temporary complete-scan copy on success, callback failure and unwinding alike.
+            let mut payload = Zeroizing::new(Vec::new());
             payload
                 .try_reserve_exact(length)
                 .map_err(|_| PrivateJournalError::StorageUnavailable)?;

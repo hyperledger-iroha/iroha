@@ -6684,12 +6684,16 @@ pub mod tests {
         state
             .set_nexus(published_nexus)
             .expect("publish default-lane policy");
-        let routing = queue.routing_plans.get(&tx_hash).expect("routing plan");
-        assert_eq!(
-            routing.coordinator_route().lane_id,
-            LaneId::SINGLE,
-            "accepted work must retain its immutable routing plan across reconfiguration"
-        );
+        {
+            let routing = queue.routing_plans.get(&tx_hash).expect("routing plan");
+            assert_eq!(
+                routing.coordinator_route().lane_id,
+                LaneId::SINGLE,
+                "accepted work must retain its immutable routing plan across reconfiguration"
+            );
+        }
+        // Release the DashMap shard read guard before admitting the successor,
+        // which may need to write the same shard even for a different hash.
         assert_eq!(queue.queue_limits().for_lane(lane_b.id).teu_capacity, 123);
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         let successor = accepted_tx_with(

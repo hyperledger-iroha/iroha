@@ -27,6 +27,14 @@ mod apple_governed_policy_opening;
 #[path = "keymint_one_use_head_stage.rs"]
 mod keymint_one_use_head_stage;
 
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+#[path = "ordinary_state_subject_binding.rs"]
+mod ordinary_state_subject_binding;
+
 #[cfg(test)]
 use super::terminal_authorization::constrain_candidate_envelope_digest_v1;
 #[cfg(any(
@@ -550,6 +558,8 @@ where
     hash_claim: Option<KagemushaRecursiveHashClaimParityWitnessV1<'a, C>>,
     hardware_selection:
         Option<super::generation::KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
+    ordinary_selection:
+        Option<super::generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
@@ -596,6 +606,8 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) guard_relation: KagemushaGuardBundleRelationWitnessV1,
     pub(super) hardware_selection:
         Option<super::generation::KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
+    pub(super) ordinary_selection:
+        Option<super::generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a>>,
     pub(super) eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_parent_protocol: &'a PlonkProtocol<EpAffine>,
     pub(super) eq_parent_instances: &'a [Vec<Fp>],
@@ -1033,6 +1045,7 @@ fn build_recursive_state_pair_impl_v1(
                     },
                 ),
             hardware_selection: witness.hardware_selection,
+            ordinary_selection: witness.ordinary_selection,
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -1095,6 +1108,7 @@ fn build_recursive_state_pair_impl_v1(
                     },
                 ),
             hardware_selection: witness.hardware_selection,
+            ordinary_selection: witness.ordinary_selection,
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -1622,6 +1636,12 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
+    if witness.ordinary_selection.is_some() {
+        return Err(
+            "ordinary State requires the complete fixed-topology Guard original and current-lease consumer"
+                .to_owned(),
+        );
+    }
     require_complete_hardware_selection_fold_v1(
         state.predecessor.as_ref(),
         &state.successor,
@@ -1636,6 +1656,34 @@ where
     let assigned_guard =
         constrain_guard_bundle_semantics_v1(&mut builder, &mut sha_jobs, &guard_relation)?;
     constrain_state_guard_binding_v1(&mut builder, &assigned_state, &assigned_guard)?;
+    // Two release-selected State families use distinct constant commitments even when
+    // they share public widths. A serialized ordinary original never selects an OEM key.
+    let ordinary_data = match witness.ordinary_selection {
+        Some(original) => Some(
+            super::ordinary_guard_data_binding::constrain_ordinary_guard_data_binding_v1(
+                &mut builder,
+                &mut sha_jobs,
+                &assigned_guard,
+                original.credential,
+                original.approval,
+                original.integrity_lease,
+            )?,
+        ),
+        None => None,
+    };
+    {
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let role: u64 = if ordinary_data.is_some() {
+            0x4f_53_54_01
+        } else {
+            0
+        };
+        let held_role = ctx.load_witness(C::ScalarExt::from(role));
+        range
+            .gate()
+            .assert_is_const(ctx, &held_role, &C::ScalarExt::from(role));
+    }
     // Expose the exact SHA transcript derived from assigned State cells. Bootstrap
     // runs the same SHA graph but has no signed transition statement, so its two
     // public limbs are constrained to zero in both Pasta parities.
@@ -1645,6 +1693,16 @@ where
         &assigned_state,
         &state,
     )?;
+    if let Some(original) = &ordinary_data {
+        ordinary_state_subject_binding::constrain_ordinary_state_subject_v1(
+            &mut builder,
+            &mut sha_jobs,
+            &assigned_state,
+            &state,
+            &transition_digest,
+            original,
+        )?;
+    }
     let transition_limbs = {
         let range = builder.range_chip();
         let ctx = builder.main(0);
@@ -2015,14 +2073,19 @@ where
     let (guard_history_cells, guard_column) = {
         let mut ctx = loader.ctx_mut();
         let history = assign_history_limbs(ctx.main(), &range, witness.guard_history_bytes)?;
-        let column = assigned_guard_verifier_column_v1(
-            ctx.main(),
-            guard_digest,
-            guard_eq_audit,
-            guard_ep_audit,
-            &assigned_guard.credential_digests,
-            &history,
-        )?;
+        let column = match &ordinary_data {
+            Some(original) => {
+                assigned_ordinary_guard_verifier_column_v1(ctx.main(), &original.digests, &history)?
+            }
+            None => assigned_guard_verifier_column_v1(
+                ctx.main(),
+                guard_digest,
+                guard_eq_audit,
+                guard_ep_audit,
+                &assigned_guard.credential_digests,
+                &history,
+            )?,
+        };
         (history, column)
     };
     let guard_column = guard_column
@@ -4530,6 +4593,30 @@ where
         constrain_loader_equal_if_v1(loader, actual, expected, enabled);
     }
     Ok(())
+}
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+fn assigned_ordinary_guard_verifier_column_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    digests: &[[PastaSha256ByteV1<F>; 32]; 5],
+    history: &[AssignedValue<F>],
+) -> Result<Vec<AssignedValue<F>>, String> {
+    if history.len() != accumulator_limb_count() {
+        return Err("ordinary Guard history has wrong public shape".to_owned());
+    }
+    let column = digests
+        .iter()
+        .flat_map(|digest| digest_limbs_assigned(ctx, digest))
+        .chain(history.iter().copied())
+        .collect::<Vec<_>>();
+    if column.len() != super::ordinary_guard_circuit::ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1 {
+        return Err("ordinary Guard verifier column has wrong public shape".to_owned());
+    }
+    Ok(column)
 }
 
 #[cfg(any(

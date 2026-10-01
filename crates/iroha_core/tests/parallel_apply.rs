@@ -263,6 +263,18 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));
     assert_eq!(bal(&state_seq, &a_coin), Quantity::from(62_u64));
     assert_eq!(bal(&state_seq, &b_coin), Quantity::from(12_u64));
+    for state in [&state_seq, &state_par] {
+        let view = state.view();
+        assert_eq!(
+            view.world()
+                .asset_definitions()
+                .get(&rose)
+                .unwrap()
+                .total_quantity,
+            Quantity::from(74_u64),
+            "canonical supply includes the initial 70 units, then mint 7 and burn 3"
+        );
+    }
 }
 #[test]
 fn events_snapshot_kv_and_nft_match_between_modes() {

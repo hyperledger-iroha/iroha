@@ -12,15 +12,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use iroha_crypto::{
-    Algorithm, BlsNormalPopVerifiedKey, Hash, KeyPair, PrivateKey, PublicKey as IrohaPublicKey,
-    Signature as IrohaSignature, bls_normal_aggregate_signatures,
-    bls_normal_verify_preaggregated_multi_message,
+    Algorithm, BlsNormalAggregateScratch, BlsNormalPopVerifiedKey, Hash, KeyPair, PrivateKey,
+    PublicKey as IrohaPublicKey, Signature as IrohaSignature, bls_normal_aggregate_signatures,
+    verify_bls_normal_signature_borrowed,
 };
 use iroha_sumeragi::{
     crypto::{Crypto, Signer},
     types::{AggregateSignature, Hash32, PublicKey, SIGNATURE_LEN, Signature},
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 /// Why a key cannot be used as a Sumeragi consensus key.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -63,17 +63,47 @@ pub fn iroha_key(key: &PublicKey) -> Result<IrohaPublicKey, KeyError> {
 
 /// The production [`Crypto`]: `H = iroha_crypto::Hash` and BLS-normal signatures, with the
 /// `PoP`-verified keys admitted by the height schedule. Shared by every thread and instance of
-/// the node (`Send + Sync`). The admitted set holds one parsed key per key ever admitted (a few
+/// the node (`Send + Sync`). Admission retains credentials only in this explicit owner,
+/// never in the process-wide PoP or positive-signature caches. The admitted set holds
+/// one parsed key per key ever admitted (a few
 /// hundred bytes each); a key stays admitted, since certificates of old heights still name it.
 #[derive(Debug, Default)]
 pub struct BlsCrypto {
     admitted: RwLock<HashMap<PublicKey, Arc<BlsNormalPopVerifiedKey>>>,
+    // Request readers admit this exact backing before a boolean relation can
+    // run. Ordinary node instances keep independent per-call scratch, retaining
+    // their existing ability to verify certificates in parallel.
+    aggregate_scratch: Option<Mutex<BlsNormalAggregateScratch>>,
 }
 
 impl BlsCrypto {
     /// A crypto with no admitted key.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Use an already admitted, request-owned aggregate pairing context.
+    ///
+    /// The request must retain its original funding allowance through this
+    /// crypto owner's lifetime. This constructor does not fund the admitted-key
+    /// map, credentials or other caller-owned authority graphs.
+    #[must_use]
+    pub(crate) fn with_aggregate_scratch(scratch: BlsNormalAggregateScratch) -> Self {
+        Self {
+            admitted: RwLock::new(HashMap::new()),
+            aggregate_scratch: Some(Mutex::new(scratch)),
+        }
+    }
+
+    fn with_scratch(&self, verify: impl FnOnce(&mut BlsNormalAggregateScratch) -> bool) -> bool {
+        if let Some(scratch) = &self.aggregate_scratch {
+            verify(&mut scratch.lock())
+        } else {
+            let mut scratch =
+                BlsNormalAggregateScratch::new(|_| Ok::<_, core::convert::Infallible>(()))
+                    .unwrap_or_else(|never| match never {});
+            verify(&mut scratch)
+        }
     }
 
     /// Admit a committee key: verify its proof of possession `pop` once and keep the parsed
@@ -85,8 +115,8 @@ impl BlsCrypto {
     /// A key that is not BLS-normal, or a `PoP` that does not verify; nothing is admitted.
     pub fn admit(&self, key: &IrohaPublicKey, pop: &[u8]) -> Result<PublicKey, KeyError> {
         let core = core_key(key)?;
-        let verified =
-            BlsNormalPopVerifiedKey::new(key, pop).map_err(|e| KeyError::BadPop(e.to_string()))?;
+        let verified = BlsNormalPopVerifiedKey::from_owned_uncached(key.clone(), pop)
+            .map_err(|(_, error)| KeyError::BadPop(error.into_error().to_string()))?;
         self.admitted
             .write()
             .insert(core.clone(), Arc::new(verified));
@@ -104,8 +134,9 @@ impl BlsCrypto {
         let mut verified = Vec::new();
         for (position, (key, pop)) in members.into_iter().enumerate() {
             let core = core_key(key).map_err(|e| (position, e))?;
-            let key = BlsNormalPopVerifiedKey::new(key, pop)
-                .map_err(|e| (position, KeyError::BadPop(e.to_string())))?;
+            let key = BlsNormalPopVerifiedKey::from_owned_uncached(key.clone(), pop).map_err(
+                |(_, error)| (position, KeyError::BadPop(error.into_error().to_string())),
+            )?;
             verified.push((core, Arc::new(key)));
         }
         let mut admitted = self.admitted.write();
@@ -127,22 +158,6 @@ impl BlsCrypto {
     pub fn admitted_len(&self) -> usize {
         self.admitted.read().len()
     }
-
-    /// The admitted keys of `groups`, or `None` if one is not admitted.
-    fn admitted_groups(
-        &self,
-        groups: &[(Vec<&PublicKey>, Vec<u8>)],
-    ) -> Option<Vec<Vec<Arc<BlsNormalPopVerifiedKey>>>> {
-        let admitted = self.admitted.read();
-        groups
-            .iter()
-            .map(|(keys, _)| {
-                keys.iter()
-                    .map(|key| admitted.get(*key).cloned())
-                    .collect::<Option<Vec<_>>>()
-            })
-            .collect()
-    }
 }
 
 impl Crypto for BlsCrypto {
@@ -151,7 +166,7 @@ impl Crypto for BlsCrypto {
     }
 
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool {
-        iroha_key(pk).is_ok_and(|key| IrohaSignature::from_bytes(&sig.0).verify(&key, msg).is_ok())
+        verify_bls_normal_signature_borrowed(pk.as_bytes(), &sig.0, msg).is_ok()
     }
 
     fn aggregate(&self, sigs: &[Signature]) -> AggregateSignature {
@@ -171,7 +186,18 @@ impl Crypto for BlsCrypto {
     }
 
     fn verify_aggregate(&self, pks: &[&PublicKey], msg: &[u8], agg: &AggregateSignature) -> bool {
-        self.verify_aggregate_multi(&[(pks.to_vec(), msg.to_vec())], agg)
+        let admitted = self.admitted.read();
+        if pks.iter().any(|key| !admitted.contains_key(*key)) {
+            return false;
+        }
+        self.with_scratch(|scratch| {
+            let keys = pks
+                .iter()
+                .filter_map(|key| admitted.get(*key).map(AsRef::as_ref));
+            scratch
+                .verify(core::iter::once((keys, msg)), &agg.0)
+                .is_ok()
+        })
     }
 
     fn verify_aggregate_multi(
@@ -179,19 +205,27 @@ impl Crypto for BlsCrypto {
         groups: &[(Vec<&PublicKey>, Vec<u8>)],
         agg: &AggregateSignature,
     ) -> bool {
-        let Some(keys) = self.admitted_groups(groups) else {
+        let admitted = self.admitted.read();
+        if groups
+            .iter()
+            .any(|(keys, _)| keys.iter().any(|key| !admitted.contains_key(*key)))
+        {
             return false;
-        };
-        let refs: Vec<Vec<&BlsNormalPopVerifiedKey>> = keys
-            .iter()
-            .map(|group| group.iter().map(AsRef::as_ref).collect())
-            .collect();
-        let groups: Vec<(&[&BlsNormalPopVerifiedKey], &[u8])> = refs
-            .iter()
-            .zip(groups)
-            .map(|(keys, (_, msg))| (keys.as_slice(), msg.as_slice()))
-            .collect();
-        bls_normal_verify_preaggregated_multi_message(&groups, &agg.0).is_ok()
+        }
+        self.with_scratch(|scratch| {
+            scratch
+                .verify(
+                    groups.iter().map(|(keys, message)| {
+                        (
+                            keys.iter()
+                                .filter_map(|key| admitted.get(*key).map(AsRef::as_ref)),
+                            message.as_slice(),
+                        )
+                    }),
+                    &agg.0,
+                )
+                .is_ok()
+        })
     }
 }
 
@@ -576,5 +610,46 @@ mod tests {
                 .is_err(),
             "the signers' groups are bound"
         );
+    }
+
+    #[test]
+    fn borrowed_and_prepaid_crypto_preserve_parallel_and_reused_signature_verdicts() {
+        let (signers, crypto, _) = validators(4);
+        let scratch = BlsNormalAggregateScratch::new(|_| Ok::<_, ()>(())).unwrap();
+        let prepaid = BlsCrypto::with_aggregate_scratch(scratch);
+        for seed in 1..=4 {
+            let pair = key_pair(seed);
+            prepaid.admit(pair.public_key(), &pop(&pair)).unwrap();
+        }
+        let keys: Vec<_> = signers.iter().map(Signer::public_key).collect();
+        let first = b"first source certificate";
+        let second = b"second source certificate";
+        let first_signatures: Vec<_> = signers.iter().map(|signer| signer.sign(first)).collect();
+        let second_signatures: Vec<_> = signers.iter().map(|signer| signer.sign(second)).collect();
+        let first_aggregate = crypto.aggregate(&first_signatures);
+        let second_aggregate = crypto.aggregate(&second_signatures);
+        std::thread::scope(|scope| {
+            for reader in [&crypto, &prepaid] {
+                for _ in 0..4 {
+                    let keys = &keys;
+                    let first_aggregate = &first_aggregate;
+                    let second_aggregate = &second_aggregate;
+                    let first_signature = &first_signatures[0];
+                    scope.spawn(move || {
+                        assert!(reader.verify(keys[0], first, first_signature));
+                        assert!(!reader.verify(keys[0], second, first_signature));
+                        for _ in 0..3 {
+                            assert!(!reader.verify_aggregate(keys, second, first_aggregate));
+                            assert!(reader.verify_aggregate(keys, first, first_aggregate));
+                            assert!(reader.verify_aggregate(keys, second, second_aggregate));
+                            assert!(!reader.verify_aggregate(keys, first, second_aggregate));
+                        }
+                    });
+                }
+            }
+        });
+        let unadmitted = KeyPairSigner::new(&key_pair(11)).unwrap();
+        assert!(!prepaid.verify_aggregate(&[unadmitted.public_key()], first, &first_aggregate));
+        assert_eq!(prepaid.admitted_len(), 4);
     }
 }

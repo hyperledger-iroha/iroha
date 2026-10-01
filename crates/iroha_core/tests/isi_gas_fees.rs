@@ -38,6 +38,15 @@ fn new_state(
     query_handle: query::store::LiveQueryStoreHandle,
     chain_id: ChainId,
 ) -> State {
+    // Direct executor fixtures declare their immutable scope explicitly. Real
+    // genesis/finality cases below still use the signed CertifiedTestChain.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id);
 
     let nexus = state.nexus_snapshot();
@@ -59,7 +68,7 @@ fn fee_sponsor_setup_hash(program_id: &FeeSponsorProgramId) -> iroha_crypto::Has
     iroha_crypto::Hash::new(format!("iroha:test:fee-sponsor-program-setup:{program_id}").as_bytes())
 }
 fn provision_fee_sponsor_program(
-    state_transaction: &mut iroha_core::state::StateTransaction<'_, '_>,
+    state_block: &mut iroha_core::state::StateBlock<'_>,
     sponsor: &AccountId,
     beneficiary: &AccountId,
     program_id: &FeeSponsorProgramId,
@@ -69,7 +78,7 @@ fn provision_fee_sponsor_program(
     activate_at_height: u64,
 ) {
     let setup_call_hash = fee_sponsor_setup_hash(program_id);
-    let previous_call_hash = state_transaction.tx_call_hash.replace(setup_call_hash);
+    let mut state_transaction = state_block.transaction_for_fastpq_testing(setup_call_hash);
     let selector = FeeSponsorRuleSelector::NativeInstruction(
         iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
             wire_id: iroha_data_model::isi::instruction_wire_id(instruction)
@@ -102,32 +111,32 @@ fn provision_fee_sponsor_program(
     iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
         program: FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone()),
     }
-    .execute(sponsor, state_transaction)
+    .execute(sponsor, &mut state_transaction)
     .expect("create fee sponsor program");
     iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }
-        .execute(sponsor, state_transaction)
+        .execute(sponsor, &mut state_transaction)
         .expect("stage fee sponsor program revision");
     iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
         program_id: program_id.clone(),
         beneficiary: beneficiary.clone(),
     }
-    .execute(sponsor, state_transaction)
+    .execute(sponsor, &mut state_transaction)
     .expect("enroll fee sponsor beneficiary");
     iroha_data_model::isi::nexus::FundFeeSponsorProgram {
         program_id: program_id.clone(),
         asset_definition_id: asset_definition_id.clone(),
         amount: Quantity::from(allocation),
     }
-    .execute(sponsor, state_transaction)
+    .execute(sponsor, &mut state_transaction)
     .expect("fund fee sponsor program");
     iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision {
         program_id: program_id.clone(),
         revision: 1,
         activate_at_height,
     }
-    .execute(sponsor, state_transaction)
+    .execute(sponsor, &mut state_transaction)
     .expect("activate fee sponsor program revision");
-    state_transaction.tx_call_hash = previous_call_hash;
+    state_transaction.apply();
 }
 #[test]
 fn non_vm_instructions_charge_fees() {
@@ -212,7 +221,11 @@ fn non_vm_instructions_charge_fees() {
         0,
     );
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+    // Direct component execution supplies the same explicit route to both State owners.
+    state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
@@ -327,7 +340,8 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         0,
     );
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
     state_tx.current_dataspace_id = Some(route);
     state_tx.world.current_dataspace_id = Some(route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -463,10 +477,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         0,
     );
     let mut block = state.block(block_header);
-    // Setup is a bounded direct component invocation, separate from the signed fee intent.
-    let mut state_tx = block.transaction_for_fastpq_testing(fee_sponsor_setup_hash(&program_id));
     provision_fee_sponsor_program(
-        &mut state_tx,
+        &mut block,
         &sponsor_id,
         &alice_id,
         &program_id,
@@ -475,6 +487,11 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         init,
         2,
     );
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+    // Direct component execution supplies the same explicit route to both State owners.
+    state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
 
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
@@ -586,11 +603,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     // first block, so setup transfers cannot become unowned finalized sources.
     let mut setup_state_block = state.block(setup_block.header());
     {
-        let mut setup_state_tx =
-            setup_state_block.transaction_for_fastpq_testing(fee_sponsor_setup_hash(&program_id));
-
         provision_fee_sponsor_program(
-            &mut setup_state_tx,
+            &mut setup_state_block,
             &sponsor_id,
             &alice_id,
             &program_id,
@@ -599,7 +613,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
             init,
             1,
         );
-        setup_state_tx.apply();
     }
     let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
         dsid: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
@@ -761,12 +774,16 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     let init = 100_000u128;
     let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
     let tech_balance = Asset::new(tech_asset.clone(), Quantity::from(0_u64));
-    let world = World::with_assets(
+    let mut world = World::with_assets(
         [dom_w, dom_i],
         [alice, tech],
         [ad],
         [payer_balance, tech_balance],
         [],
+    );
+    crate::sns::seed_default_namespace_policies_for_payment_asset(
+        &mut world,
+        &asset_def_id.canonical_address(),
     );
     let query_handle = query::store::LiveQueryStore::start_test();
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
@@ -905,19 +922,26 @@ fn non_vm_gas_limit_too_low_rejects() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+    // Direct component execution supplies the same explicit route to both State owners.
+    state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
-    assert!(matches!(
-        res,
-        Err(
-            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
-                ValidationFail::NotPermitted(_)
-            )
-        )
-    ));
+    assert!(
+        matches!(
+            &res,
+            Err(
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                    ValidationFail::NotPermitted(message)
+                )
+            ) if message == &format!("out of gas: used {used} > limit {gas_limit}")
+        ),
+        "expected exact gas-limit rejection, got {res:?}"
+    );
 }
 #[test]
 fn ivm_syscall_charges_fees() {
@@ -1000,7 +1024,8 @@ fn ivm_syscall_charges_fees() {
         0,
     );
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
     let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
     state_tx.current_dataspace_id = Some(contract_route);
     state_tx.world.current_dataspace_id = Some(contract_route);
@@ -1188,7 +1213,11 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         0,
     );
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    let mut state_tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+    // Direct component execution supplies the same explicit route to both State owners.
+    state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)

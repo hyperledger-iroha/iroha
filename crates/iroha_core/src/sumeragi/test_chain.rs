@@ -133,6 +133,8 @@ pub struct TestChainConfig {
     pub zk: Option<iroha_config::parameters::actual::Zk>,
     /// Optional governance policy installed before deriving signed genesis execution policies.
     pub governance: Option<iroha_config::parameters::actual::Governance>,
+    /// Original lane manifest policy installed before deriving signed genesis execution policies.
+    pub lane_manifests: Option<Arc<LaneManifestRegistry>>,
     /// Signature algorithms admitted by the original signed genesis configuration.
     pub crypto: Option<iroha_config::parameters::actual::Crypto>,
     /// Fraud admission configuration fixed before signed genesis execution.
@@ -172,6 +174,7 @@ impl TestChainConfig {
             nexus: None,
             zk: None,
             governance: None,
+            lane_manifests: None,
             crypto: None,
             fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring::default(),
             lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
@@ -328,6 +331,7 @@ impl CertifiedTestChain {
             nexus,
             zk,
             governance,
+            lane_manifests,
             crypto,
             fraud_monitoring,
             lane_blocks,
@@ -402,6 +406,7 @@ impl CertifiedTestChain {
             zk.as_ref(),
             governance.as_ref(),
             crypto.as_ref(),
+            lane_manifests.as_ref(),
         )?;
         let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &genesis.encode_wire().expect("fixture genesis framing"),
@@ -1646,6 +1651,7 @@ pub(super) fn prepare_configured_genesis(
     zk: Option<&iroha_config::parameters::actual::Zk>,
     governance: Option<&iroha_config::parameters::actual::Governance>,
     crypto: Option<&iroha_config::parameters::actual::Crypto>,
+    lane_manifests: Option<&Arc<LaneManifestRegistry>>,
 ) -> Result<
     (
         SignedBlock,
@@ -1731,9 +1737,10 @@ pub(super) fn prepare_configured_genesis(
         state.set_pipeline(pipeline.clone());
         state.set_fraud_monitoring(fraud_monitoring.clone());
         let nexus = state.nexus_snapshot();
-        state.install_lane_manifests_for_testing(&Arc::new(
-            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-        ));
+        let manifests = lane_manifests.cloned().unwrap_or_else(|| {
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
+        });
+        state.install_lane_manifests_for_testing(&manifests);
         let policies = {
             let validation = crate::block::ValidBlock::validate_signed_genesis(
                 genesis.clone(),
@@ -2368,6 +2375,7 @@ mod tests {
             10_000,
             &iroha_config::parameters::actual::Pipeline::default(),
             &iroha_config::parameters::actual::FraudMonitoring::default(),
+            None,
             None,
             None,
             None,

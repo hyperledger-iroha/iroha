@@ -28,10 +28,20 @@ tests; 48 dependency-budget tests; Cargo feature hygiene, workspace target
 inventory and every configured feature-resolved dependency boundary. Separate
 source/fixture suites retain their own logs and counts. The normal graphs
 exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
-The [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
-describes these boundaries and remaining controls. These are scoped
-development checks during concurrent source changes; full completion is not
-yet established.
+Fresh privacy follow-up passes 39 targeted controls and preserves all 2,075
+original registered names, including their 40 ignored cases. Recorded normal
+native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
+inventory now admits 98 declared targets and 23 defaults. Recorded IVM-only,
+feature-hygiene, dependency-boundary and retired-codec pattern guards pass.
+The merged all-targets check stopped on an ordinary Guard composition source
+created during compilation. Subsequent Core ZK and metadata checks exposed
+issuer-type and API/fixture compilation errors. Source repairs are applied;
+fresh compiler and focused-test validation remain pending. The resolved SDK
+merge remains externally owned. A merge-free workspace retry, metadata
+freshness and observational warm timings also remain pending. The
+[current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
+describes the remaining controls. All evidence retains its scoped source and
+load qualifications; full completion is not yet established.
 
 Compiler-memory qualification remains the pinned-runner work described by
 roadmap A5. Measured limits must also cover newly extracted owner/library units;

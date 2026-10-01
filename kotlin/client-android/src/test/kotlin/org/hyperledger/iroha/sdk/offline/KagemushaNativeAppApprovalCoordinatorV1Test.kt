@@ -147,6 +147,129 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         }
     }
 
+    @Test fun `E original evidence reads only consumed native originals without invoking or consuming`() {
+        val endpoint = Endpoint(enrollment = true)
+        val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        assertFailsWith<IllegalStateException> { prepared.originalPlatformEvidence() }
+        assertEquals(0, endpoint.state); assertEquals(0, endpoint.consumes)
+        endpoint.state = 2; endpoint.raw = der.copyOf()
+        assertFailsWith<IllegalStateException> { prepared.originalPlatformEvidence() }
+        assertEquals(2, endpoint.state); assertEquals(0, endpoint.consumes)
+        prepared.recoverOriginalPossession()
+        assertEquals(1, endpoint.consumes)
+        val original = prepared.originalPlatformEvidence()
+        assertContentEquals(der, original)
+        original.fill(0)
+        assertContentEquals(der, prepared.originalPlatformEvidence())
+        assertEquals(1, endpoint.consumes); assertEquals(0, endpoint.retains)
+    }
+
+    @Test fun `E original evidence substitution closes the held ticket before data exposure`() {
+        val endpoint = Endpoint(enrollment = true).apply { state = 3; raw = der.copyOf() }
+        val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        endpoint.substituteReceipt = true
+        assertFailsWith<IllegalStateException> { prepared.originalPlatformEvidence() }
+        assertEquals(1, endpoint.closes); assertContentEquals(der, endpoint.raw)
+        assertFailsWith<IllegalStateException> { prepared.originalPlatformEvidence() }
+    }
+
+    @Test fun `E opaque credential intake retains exact bytes and retries a lost original result`() {
+        val endpoint = Endpoint(enrollment = true).apply { state = 3; raw = der.copyOf(); loseCredentialReturn = true }
+        val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        val original = byteArrayOf(0x71, 0x72, 0x73) // Inert scripted opaque carrier, never a native credential.
+        assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(original) }
+        assertContentEquals(original, endpoint.credential); assertEquals(1, endpoint.closes)
+        assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(original) }
+        endpoint.loseCredentialReturn = false
+        val recovered = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        val digest = recovered.acceptOriginalCredential(original)
+        assertContentEquals(sha(original), digest)
+        original.fill(0); digest.fill(0)
+        assertContentEquals(byteArrayOf(0x71, 0x72, 0x73), endpoint.credential)
+        assertContentEquals(sha(endpoint.credential), recovered.acceptOriginalCredential(endpoint.credential.copyOf()))
+        assertEquals(3, endpoint.state); assertEquals(0, endpoint.consumes); assertEquals(0, endpoint.retains)
+        assertFailsWith<IllegalStateException> { recovered.acceptOriginalCredential(byteArrayOf(0x74)) }
+        assertContentEquals(byteArrayOf(0x71, 0x72, 0x73), endpoint.credential)
+    }
+
+    @Test fun `E credential scope substitution cannot become a completed native identity`() {
+        val endpoint = Endpoint(enrollment = true).apply { state = 3; raw = der.copyOf(); substituteCredentialScope = true }
+        val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(byteArrayOf(1)) }
+        assertEquals(1, endpoint.closes); assertContentEquals(byteArrayOf(1), endpoint.credential)
+    }
+
+    @Test fun `E credential phase eight has exact widths and cannot be used by monetary W`() {
+        val e = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION
+        val w = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL
+        val fields = listOf(KagemushaCoreCoordinatorFrameV1.u32(8), le64(7), ByteArray(16 * 1024) { 1 })
+        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(e, fields)
+        assertContentEquals(fields[2], KagemushaCoreCoordinatorFrameV1.decodeRequest(e, request)[2])
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(w, fields) }
+        for (bad in listOf(fields.dropLast(1), fields + listOf(byteArrayOf(1)),
+            listOf(fields[0], ByteArray(32) { 1 }, fields[2]),
+            listOf(fields[0], fields[1], byteArrayOf()),
+            listOf(fields[0], fields[1], ByteArray(16 * 1024 + 1)))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(e, bad) }
+        }
+        val response = listOf(bytes(1), bytes(2))
+        KagemushaCoreCoordinatorFrameV1.encodeResponse(e, request, response)
+        for (bad in listOf(response.dropLast(1), response + listOf(bytes(3)), listOf(ByteArray(32), response[1]))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeResponse(e, request, bad) }
+        }
+    }
+
+    @Test fun `completed original frame rejects substituted raw evidence and a zero Apple counter`() {
+        val endpoint = Endpoint(enrollment = true).apply { state = 3; raw = der.copyOf() }
+        val method = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION
+        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(5), endpoint.fields[0]))
+        val receipt = endpoint.receipt()
+        val alternateRaw = der.copyOf().apply { this[lastIndex] = 2 }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request,
+                listOf(byteArrayOf(2), alternateRaw, receipt))
+        }
+        receipt[179] = 1
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request,
+                listOf(byteArrayOf(2), der.copyOf(), receipt))
+        }
+    }
+
+    @Test fun `E credential intake refuses unconsumed native states without signing or retention`() {
+        for (nativeState in listOf(0, 1, 2)) {
+            val endpoint = Endpoint(enrollment = true).apply {
+                state = nativeState; if (nativeState == 2) raw = der.copyOf()
+            }
+            val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+            assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(byteArrayOf(1)) }
+            assertEquals(nativeState, endpoint.state)
+            assertEquals(0, endpoint.retains); assertEquals(0, endpoint.consumes)
+            assertEquals(0, endpoint.credential.size); assertEquals(1, endpoint.closes)
+            assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(byteArrayOf(1)) }
+        }
+    }
+
+    @Test fun `E credential intake rejects malformed native returns and a changed fresh postcheck`() {
+        for (bad in listOf(arrayOf(bytes(1)), arrayOf(bytes(1), ByteArray(32)),
+            arrayOf(bytes(1), bytes(0x99), bytes(3)), arrayOf(ByteArray(31), bytes(0x99)))) {
+            val endpoint = Endpoint(enrollment = true).apply {
+                state = 3; raw = der.copyOf(); credentialResponseOverride = bad
+            }
+            val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+            assertFailsWith<IllegalArgumentException> { prepared.acceptOriginalCredential(byteArrayOf(1)) }
+            assertEquals(0, endpoint.consumes); assertEquals(0, endpoint.retains)
+            assertEquals(1, endpoint.closes)
+        }
+        val endpoint = Endpoint(enrollment = true).apply {
+            state = 3; raw = der.copyOf(); substituteScopeAfterCredential = true
+        }
+        val prepared = facade(endpoint).prepareEnrollmentPossession(endpoint.id)
+        assertFailsWith<IllegalStateException> { prepared.acceptOriginalCredential(byteArrayOf(1)) }
+        assertEquals(1, endpoint.closes); assertEquals(0, endpoint.consumes); assertEquals(0, endpoint.retains)
+    }
+
     private fun facade(endpoint: Endpoint) = KagemushaNativeAppApprovalCoordinatorV1(
         KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/native-owner", endpoint))
 
@@ -155,9 +278,11 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         var offeredId: ByteArray? = null
         val id: ByteArray get() = offeredId?.copyOf() ?: if (enrollment) sha(fields[7]) else bytes(0x11)
         var state = 0 // 0 uninvoked, 1 invoked/no original, 2 retained, 3 consumed
-        var raw = byteArrayOf(); var retains = 0; var closes = 0
+        var raw = byteArrayOf(); var retains = 0; var closes = 0; var consumes = 0
+        var credential = byteArrayOf(); var loseCredentialReturn = false; var substituteCredentialScope = false
+        var credentialResponseOverride: Array<ByteArray>? = null; var substituteScopeAfterCredential = false
         var loseRetainReturn = false; var substituteScope = false; var substituteReceipt = false
-        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
         override fun close(handle: Long): Int { closes++; return 0 }
@@ -175,7 +300,7 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
                 }
                 3 -> { check(state == 1); retains++; raw = request[2].copyOf(); state = 2
                     if (loseRetainReturn) null else arrayOf(sha(raw)) }
-                4 -> { check(state == 2 || state == 3); state = 3; arrayOf(receipt()) }
+                4 -> { check(state == 2 || state == 3); consumes++; state = 3; arrayOf(receipt()) }
                 5 -> when (state) {
                     0 -> arrayOf(byteArrayOf(0), byteArrayOf(), byteArrayOf())
                     2 -> arrayOf(byteArrayOf(1), raw.copyOf(), byteArrayOf())
@@ -184,6 +309,19 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
                 }
                 6 -> arrayOf(if (substituteScope) bytes(0x42) else fields[9].copyOf(), sha(fields[1]))
                 7 -> emptyArray()
+                8 -> {
+                    check(enrollment && state == 3)
+                    if (credential.isNotEmpty() && !credential.contentEquals(request[2])) null
+                    else {
+                        credential = request[2].copyOf()
+                        if (loseCredentialReturn) null else {
+                            val response = credentialResponseOverride ?: arrayOf(sha(credential),
+                                if (substituteCredentialScope) bytes(0x42) else fields[9].copyOf())
+                            if (substituteScopeAfterCredential) substituteScope = true
+                            response
+                        }
+                    }
+                }
                 else -> error("Unexpected fixture phase")
             }
         }

@@ -6,7 +6,7 @@
 
 use halo2_base::{
     AssignedValue,
-    gates::{GateInstructions as _, circuit::builder::BaseCircuitBuilder},
+    gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1,
@@ -14,8 +14,25 @@ use iroha_data_model::kagemusha::{
 };
 
 use super::{
-    canonical_preimage::stream::KagemushaBoundedByteStreamV1, guard_bundle::constant_bytes,
+    canonical_preimage::stream::KagemushaBoundedByteStreamV1,
+    guard_bundle::{constant_bytes, hash},
 };
+
+/// Bind the platform original to the exact full lease retained by the Native reservation.
+/// The platform digest remains independently available; this digest is the third Guard column.
+/// `None` is the initial-verdict/Apple branch only, represented by an exact zero lease slot.
+pub(super) fn constrain_ordinary_authorization_proof_binding_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    platform: &[PastaSha256ByteV1<F>; 32],
+    lease: Option<&[PastaSha256ByteV1<F>; 32]>,
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let mut bytes = constant_bytes(b"iroha:kagemusha:v1:ordinary-authorization-proof-binding\0");
+    bytes.extend(constant_bytes(&64_u64.to_le_bytes()));
+    bytes.extend_from_slice(platform);
+    bytes.extend_from_slice(lease.unwrap_or(&[PastaSha256ByteV1::constant(0); 32]));
+    hash(builder.main(0), jobs, bytes)
+}
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
@@ -31,15 +48,42 @@ pub(super) fn constrain_ordinary_approval_proof_binding_v1<F: KagemushaPoseidonF
     evidence_tag: u8,
     original: &KagemushaBoundedByteStreamV1<F>,
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    if !matches!(evidence_tag, 1 | 2) || original.bytes().len() > 142 {
+    if !matches!(evidence_tag, 1 | 2) {
         return Err("ordinary approval proof transcript platform/capacity differs".into());
+    }
+    let tag = builder
+        .main(0)
+        .load_constant(F::from(u64::from(evidence_tag)));
+    constrain_ordinary_selected_approval_proof_binding_v1(builder, jobs, wrapper, tag, original)
+}
+
+/// Same fixed topology for a platform tag constrained by the admitted credential union.
+pub(super) fn constrain_ordinary_selected_approval_proof_binding_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    wrapper: &[PastaSha256ByteV1<F>; A::TOTAL_BYTES],
+    evidence_tag: AssignedValue<F>,
+    original: &KagemushaBoundedByteStreamV1<F>,
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    if original.bytes().len() > 142 {
+        return Err("ordinary approval proof transcript capacity differs".into());
     }
     let range = builder.range_chip();
     let ctx = builder.main(0);
     let mut prefix = constant_bytes(KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1);
     prefix.extend(constant_bytes(&(A::TOTAL_BYTES as u64).to_le_bytes()));
     prefix.extend_from_slice(wrapper);
-    prefix.push(PastaSha256ByteV1::constant(evidence_tag));
+    let first = range
+        .gate()
+        .sub(ctx, evidence_tag, halo2_base::QuantumCell::Constant(F::ONE));
+    let second = range.gate().sub(
+        ctx,
+        evidence_tag,
+        halo2_base::QuantumCell::Constant(F::from(2)),
+    );
+    let invalid = range.gate().mul(ctx, first, second);
+    range.gate().assert_is_const(ctx, &invalid, &F::ZERO);
+    prefix.push(PastaSha256ByteV1::range_checked(ctx, &range, evidence_tag));
     let length_bits = PastaSha256BitV1::decompose(ctx, range.gate(), original.actual_len(), 64);
     prefix.extend(
         length_bits
@@ -146,7 +190,12 @@ mod tests {
             provider_policy_root: fixture.release.provider_policy_root(),
             app_policy_digest: credential.static_binding_digest(),
             credential_id: credential.digest(),
-            network_id: iroha_data_model::NetworkId::from_bytes(c.network_id),
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::from_marked_bytes(c.network_id)
+                        .expect("marked network identity fixture"),
+                ),
+            ),
             lane_commitment: c.lane_id,
             hardware_profile_id: c.hardware_profile_id,
             policy_epoch: c.policy_epoch,
@@ -289,6 +338,81 @@ mod tests {
             for mutation in [0, 1] {
                 assert!(!check::<Fp>(apple, Some(mutation)));
                 assert!(!check::<Fq>(apple, Some(mutation)));
+            }
+        }
+    }
+
+    fn check_authorization<F: KagemushaPoseidonFieldV1>(
+        selected_lease: Option<[u8; 32]>,
+        substituted_platform: bool,
+        substituted_lease: bool,
+    ) -> bool {
+        let platform = [0x35; 32];
+        let expected = iroha_data_model::kagemusha::
+            kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+                platform, selected_lease,
+            ).unwrap();
+        let mut platform_witness = platform;
+        if substituted_platform {
+            platform_witness[13] ^= 1;
+        }
+        let mut lease_witness = selected_lease;
+        if substituted_lease {
+            lease_witness = Some(selected_lease.map_or([0x46; 32], |mut lease| {
+                lease[7] ^= 1;
+                lease
+            }));
+        }
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(17)
+            .use_lookup_bits(16)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let platform =
+            super::super::guard_bundle::assign_bytes(builder.main(0), &range, &platform_witness)
+                .try_into()
+                .unwrap();
+        let lease = lease_witness.map(|lease| {
+            super::super::guard_bundle::assign_bytes(builder.main(0), &range, &lease)
+                .try_into()
+                .unwrap()
+        });
+        let mut jobs = PastaSha256JobsV1::default();
+        let digest = constrain_ordinary_authorization_proof_binding_v1(
+            &mut builder,
+            &mut jobs,
+            &platform,
+            lease.as_ref(),
+        )
+        .unwrap();
+        for (cell, byte) in digest.iter().zip(expected) {
+            range.gate().assert_is_const(
+                builder.main(0),
+                &cell.assigned().unwrap(),
+                &F::from(u64::from(byte)),
+            );
+        }
+        builder.calculate_params(Some(9));
+        MockProver::run(17, &BindingCircuit { builder, jobs }, vec![vec![]])
+            .unwrap()
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn native_selected_lease_authorization_transcript_matches_both_fields() {
+        for lease in [None, Some([0x45; 32])] {
+            assert!(check_authorization::<Fp>(lease, false, false));
+            assert!(check_authorization::<Fq>(lease, false, false));
+        }
+    }
+
+    #[test]
+    fn substituting_platform_or_reservation_lease_fails_both_fields() {
+        for lease in [None, Some([0x45; 32])] {
+            for (platform, lease_changed) in [(true, false), (false, true)] {
+                assert!(!check_authorization::<Fp>(lease, platform, lease_changed));
+                assert!(!check_authorization::<Fq>(lease, platform, lease_changed));
             }
         }
     }

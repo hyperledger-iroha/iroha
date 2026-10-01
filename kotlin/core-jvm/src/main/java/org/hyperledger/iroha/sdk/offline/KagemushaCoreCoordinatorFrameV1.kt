@@ -123,7 +123,7 @@ object KagemushaCoreCoordinatorFrameV1 {
                 KagemushaOrdinaryAppIdentityFrameV1.requireRequest(fields)
             KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
             KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION ->
-                KagemushaAppOwnedHardwareFrameV1.requireRequest(fields)
+                KagemushaAppOwnedHardwareFrameV1.requireRequest(method, fields)
             KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY -> count(fields, 0)
             KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
                 count(fields, 2); kind(fields, 0); digest(fields, 1)

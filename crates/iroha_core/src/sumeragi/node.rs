@@ -1225,13 +1225,13 @@ mod tests {
         governance::manifest::LaneManifestRegistry,
         query::store::LiveQueryStore,
         state::World,
-        sumeragi::driver::traits::{Frame, SendOutcome},
+        sumeragi::driver::traits::{Frame, PendingSend, SendOutcome},
         tx::AcceptedTransaction,
     };
     use iroha_sumeragi::types::PublicKey as CoreKey;
 
-    /// The in-memory transport: every node's handle, filled once the nodes started (frames
-    /// sent before are dropped, and the core rebroadcasts).
+    /// The in-memory transport: every node's handle, filled once the nodes start.
+    /// Missing routes and temporary ingress refusals retain their original send occurrence.
     #[derive(Default)]
     struct Registry(parking_lot::Mutex<HashMap<CoreKey, Arc<SumeragiIngress>>>);
 
@@ -1242,11 +1242,153 @@ mod tests {
 
     impl Net for MemNet {
         fn send(&self, to: &CoreKey, frame: &Frame) -> SendOutcome {
-            let ingress = self.registry.0.lock().get(to).cloned();
-            if let Some(ingress) = ingress {
-                ingress.deliver(&self.from, frame);
+            Box::new(PendingMemSend {
+                from: self.from.clone(),
+                to: to.clone(),
+                registry: Arc::clone(&self.registry),
+                frame: frame.clone(),
+            })
+            .retry()
+        }
+    }
+
+    /// One in-process occurrence keeps the same source, recipient and encoded frame on retry.
+    struct PendingMemSend {
+        from: CoreKey,
+        to: CoreKey,
+        registry: Arc<Registry>,
+        frame: Frame,
+    }
+
+    impl super::super::driver::traits::PendingSend for PendingMemSend {
+        fn retry(self: Box<Self>) -> SendOutcome {
+            let ingress = self.registry.0.lock().get(&self.to).cloned();
+            let Some(ingress) = ingress else {
+                return SendOutcome::Backpressured(self);
+            };
+            match ingress.deliver(&self.from, &self.frame) {
+                super::super::net::Routed::Delivered => SendOutcome::Admitted,
+                super::super::net::Routed::Refused | super::super::net::Routed::UnknownInstance => {
+                    SendOutcome::Backpressured(self)
+                }
+                _ => SendOutcome::Rejected,
             }
-            SendOutcome::Admitted
+        }
+    }
+
+    mod mem_net_tests {
+        use super::*;
+        use iroha_sumeragi::{
+            message::{PayloadRequest, TrafficClass, WireMessage},
+            types::Hash32,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        #[derive(Default)]
+        struct Gate {
+            accepts: AtomicBool,
+            attempts: parking_lot::Mutex<Vec<(CoreKey, Vec<u8>, usize)>>,
+        }
+
+        impl super::super::super::net::FrameSink for Gate {
+            fn deliver(&self, from: &CoreKey, bytes: &[u8]) -> bool {
+                self.attempts
+                    .lock()
+                    .push((from.clone(), bytes.to_vec(), bytes.as_ptr() as usize));
+                self.accepts.load(Ordering::Relaxed)
+            }
+        }
+
+        fn pending(outcome: SendOutcome) -> Box<dyn PendingSend> {
+            let SendOutcome::Backpressured(owner) = outcome else {
+                panic!("an unadmitted original frame must remain retryable");
+            };
+            owner
+        }
+
+        fn transport() -> (MemNet, CoreKey, Frame) {
+            let sender = KeyPair::from_seed(vec![0xD1; 32], Algorithm::BlsNormal);
+            let recipient = KeyPair::from_seed(vec![0xD2; 32], Algorithm::BlsNormal);
+            let instance = Hash32([0x31; 32]);
+            let frame = Frame {
+                instance,
+                class: TrafficClass::Control,
+                bytes: WireMessage::PayloadRequest(PayloadRequest {
+                    instance,
+                    height: 2,
+                    block_hash: Hash32([0x32; 32]),
+                })
+                .encode()
+                .expect("canonical original frame")
+                .into(),
+            };
+            (
+                MemNet {
+                    from: core_key(sender.public_key()).unwrap(),
+                    registry: Arc::new(Registry::default()),
+                },
+                core_key(recipient.public_key()).unwrap(),
+                frame,
+            )
+        }
+
+        #[test]
+        fn mem_net_retains_original_occurrence_until_actual_ingress_admission() {
+            let (net, recipient, frame) = transport();
+            let original_bytes = Arc::clone(&frame.bytes);
+            let owner = pending(net.send(&recipient, &frame));
+            let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
+            net.registry
+                .0
+                .lock()
+                .insert(recipient.clone(), Arc::clone(&ingress));
+            let owner = pending(owner.retry());
+            let gate = Arc::new(Gate::default());
+            ingress.register(frame.instance, gate.clone());
+            let owner = pending(owner.retry());
+            let owner = pending(owner.retry());
+            assert_eq!(ingress.stats().delivered, 0);
+            assert_eq!(ingress.stats().dropped, 3);
+            gate.accepts.store(true, Ordering::Relaxed);
+            assert!(matches!(owner.retry(), SendOutcome::Admitted));
+            let attempts = gate.attempts.lock();
+            assert_eq!(attempts.len(), 3);
+            for (from, bytes, address) in attempts.iter() {
+                assert_eq!(from, &net.from);
+                assert_eq!(bytes.as_slice(), original_bytes.as_ref());
+                assert_eq!(*address, original_bytes.as_ptr() as usize);
+            }
+            assert_eq!(ingress.stats().delivered, 1);
+            assert_eq!(ingress.stats().dropped, 3);
+        }
+
+        #[test]
+        fn mem_net_rejects_oversize_and_cancellation_releases_original_frame() {
+            let (net, recipient, frame) = transport();
+            let original_count = Arc::strong_count(&frame.bytes);
+            let owner = pending(net.send(&recipient, &frame));
+            assert_eq!(Arc::strong_count(&frame.bytes), original_count + 1);
+            drop(owner);
+            assert_eq!(Arc::strong_count(&frame.bytes), original_count);
+            let ingress = Arc::new(SumeragiIngress::new(FrameCaps {
+                control: frame.bytes.len() - 1,
+                ..FrameCaps::TRANSPORT
+            }));
+            let gate = Arc::new(Gate::default());
+            gate.accepts.store(true, Ordering::Relaxed);
+            ingress.register(frame.instance, gate.clone());
+            net.registry
+                .0
+                .lock()
+                .insert(recipient.clone(), Arc::clone(&ingress));
+            assert!(matches!(
+                net.send(&recipient, &frame),
+                SendOutcome::Rejected
+            ));
+            assert!(gate.attempts.lock().is_empty());
+            assert_eq!(ingress.stats().delivered, 0);
+            assert_eq!(ingress.stats().dropped, 1);
+            assert_eq!(Arc::strong_count(&frame.bytes), original_count);
         }
     }
 
@@ -1360,6 +1502,7 @@ mod tests {
             1_000,
             &iroha_config::parameters::actual::Pipeline::default(),
             &iroha_config::parameters::actual::FraudMonitoring::default(),
+            None,
             None,
             None,
             None,

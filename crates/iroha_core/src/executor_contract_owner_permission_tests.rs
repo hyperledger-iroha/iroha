@@ -293,6 +293,8 @@ seiyaku OwnerPermission {
     .sign(ALICE_KEYPAIR.private_key());
     let mut cache = IvmCache::new();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         !authority_has_permission(&tx.world, &authority, &contract_deployment_permission())
             .unwrap()
@@ -313,11 +315,15 @@ seiyaku OwnerPermission {
     )])
     .sign(ALICE_KEYPAIR.private_key());
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(grant.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, grant, &mut cache)
         .expect("ordinary owner self-grant executes without global permission");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, call.clone(), &mut cache)
         .expect("exact self-grant authorizes guarded mutable call");
@@ -366,6 +372,8 @@ seiyaku OwnerPermission {
         .sign(ALICE_KEYPAIR.private_key());
     let mut tx =
         block.transaction_for_fastpq_testing(Hash::from(forbidden_body.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let denied = super::Executor::Initial
         .execute_transaction(&mut tx, &authority, forbidden_body, &mut cache)
         .expect_err("scoped invocation does not grant caller metadata authority");
@@ -385,6 +393,8 @@ seiyaku OwnerPermission {
         .expect("owner revokes exact invocation grant");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         super::Executor::Initial
             .execute_transaction(&mut tx, &authority, call, &mut cache)

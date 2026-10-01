@@ -6,7 +6,9 @@ import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
+import java.nio.charset.CharacterCodingException
 import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * Structural ordinary-identity frame bounds shared by JVM and Android consumers.
@@ -19,9 +21,11 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
 
     fun requireRequest(fields: List<ByteArray>) {
         when (phase(fields)) {
-            1 -> { count(fields, 2); digest(fields[1]) }
-            11 -> count(fields, 1)
-            2, 4, 6, 7, 8, 9 -> { count(fields, 2); ticket(fields[1]) }
+            1 -> require(false) { "Implicit ordinary preparation is retired" }
+            11, 12 -> count(fields, 1)
+            2, 4, 7, 8, 9, 14 -> { count(fields, 2); ticket(fields[1]) }
+            6 -> { count(fields, 3); ticket(fields[1]); require(fields[2].size == 314) }
+            13 -> { count(fields, 3); ticket(fields[1]); signedPreparation(fields[2]) }
             3 -> { count(fields, 3); ticket(fields[1]); reference(fields[2]) }
             5 -> {
                 count(fields, 5); ticket(fields[1]); point(fields[2])
@@ -35,7 +39,9 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
 
     fun requireResponse(request: List<ByteArray>, fields: List<ByteArray>) {
         when (phase(request)) {
-            1 -> preparation(request[1], fields)
+            12 -> reservation(fields)
+            13 -> preparation(request[2], fields)
+            14 -> { count(fields, 1); require(fields[0].size <= 16 * 1024) }
             11 -> { count(fields, 1); digest(fields[0]) }
             2 -> {
                 count(fields, 2); require(fields[0].size == 1)
@@ -72,29 +78,45 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
         }
     }
 
-    private fun preparation(id: ByteArray, fields: List<ByteArray>) {
+    private fun reservation(fields: List<ByteArray>) {
+        count(fields, 8); ticket(fields[0]); text(fields[1], 2048)
+        for (index in 2..6) digest(fields[index])
+        val uuid = fields[2].copyOfRange(0, 16)
+        uuid[6] = ((uuid[6].toInt() and 0x0f) or 0x40).toByte()
+        uuid[8] = ((uuid[8].toInt() and 0x3f) or 0x80).toByte()
+        val expected = UUID(ByteBuffer.wrap(uuid).long, ByteBuffer.wrap(uuid, 8, 8).long)
+            .toString().toByteArray(Charsets.US_ASCII)
+        same(fields[7], expected)
+    }
+
+    private fun preparation(signedOriginal: ByteArray, fields: List<ByteArray>) {
         count(fields, 8); ticket(fields[0]); digest(fields[3]); digest(fields[7])
         require(fields[4].size == 1 && fields[4][0].toInt() in 4..5)
+        val body = signedPreparation(fields[1])
+        same(fields[1], signedOriginal)
+        require(body[2].toInt() == if (fields[4][0] == 5.toByte()) 1 else 2)
         val c = fields[2]
         require(c.size == domain.size + 8 + 451 && c.copyOfRange(0, domain.size).contentEquals(domain))
         require(unsigned(c.copyOfRange(domain.size, domain.size + 8)) == BigInteger.valueOf(451))
-        val body = c.copyOfRange(domain.size + 8, c.size)
-        require(body[0] == 1.toByte() && body[1] == 0.toByte())
-        require(body[2].toInt() == if (fields[4][0] == 5.toByte()) 1 else 2)
-        repeat(13) { digest(body.copyOfRange(3 + it * 32, 35 + it * 32)) }
-        same(body.copyOfRange(3, 35), id)
-        require(!body.copyOfRange(35, 67).contentEquals(body.copyOfRange(67, 99)))
-        require(unsigned(body.copyOfRange(419, 427)).signum() > 0 && unsigned(body.copyOfRange(427, 435)).signum() > 0)
-        val issue = unsigned(body.copyOfRange(435, 443)); val expiry = unsigned(body.copyOfRange(443, 451))
-        require(issue.signum() > 0 && expiry > issue && expiry.subtract(issue) <= BigInteger.valueOf(120_000))
-        require(fields[1].size == 515)
-        same(fields[1].copyOfRange(0, 451), body); same(fields[3], sha(c))
+        same(c.copyOfRange(domain.size + 8, c.size), body); same(fields[3], sha(c))
         if (fields[4][0] == 5.toByte()) {
             reference(fields[5]); require(fields[6].size == 1 && fields[6][0].toInt() in 1..3)
             require(fields[5].toString(Charsets.UTF_8) == KagemushaOrdinaryAppKeyAliasV1.originalAlias(c))
         } else {
             require(fields[5].isEmpty() && fields[6].contentEquals(byteArrayOf(0)))
         }
+    }
+
+    private fun signedPreparation(bytes: ByteArray): ByteArray {
+        require(bytes.size == 515)
+        val body = bytes.copyOfRange(0, 451)
+        require(body[0] == 1.toByte() && body[1] == 0.toByte() && body[2].toInt() in 1..2)
+        repeat(13) { digest(body.copyOfRange(3 + it * 32, 35 + it * 32)) }
+        require(!body.copyOfRange(35, 67).contentEquals(body.copyOfRange(67, 99)))
+        require(unsigned(body.copyOfRange(419, 427)).signum() > 0 && unsigned(body.copyOfRange(427, 435)).signum() > 0)
+        val issue = unsigned(body.copyOfRange(435, 443)); val expiry = unsigned(body.copyOfRange(443, 451))
+        require(issue.signum() > 0 && expiry > issue && expiry.subtract(issue) <= BigInteger.valueOf(120_000))
+        return body
     }
 
     private fun recovery(fields: List<ByteArray>) {
@@ -107,10 +129,15 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
         else require(fields[5].isEmpty() && fields[6].isEmpty())
     }
 
-    private fun reference(bytes: ByteArray) {
-        require(bytes.size in 1..255 && bytes.none { it == 0.toByte() })
-        val value = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
+    private fun reference(bytes: ByteArray) = text(bytes, 255)
+    private fun text(bytes: ByteArray, maximum: Int) {
+        require(bytes.size in 1..maximum && bytes.none { it == 0.toByte() })
+        val value = try {
+            Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
+        } catch (failure: CharacterCodingException) {
+            throw IllegalArgumentException("Invalid original UTF-8", failure)
+        }
         require(value.isNotBlank() && value.toByteArray(Charsets.UTF_8).contentEquals(bytes))
     }
     private fun point(bytes: ByteArray) = require(bytes.size == 65 && bytes[0] == 4.toByte())

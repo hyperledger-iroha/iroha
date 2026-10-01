@@ -38,63 +38,64 @@ fn fixture_with_fee_asset(
         fees.fee_sink_account_id = iroha_test_samples::BOB_ID.to_string();
     }
     let state = authenticate_output_state(state);
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut transaction = setup.transaction_for_callback_testing();
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-    if let Some(asset) = fee_asset {
-        use iroha_data_model::{
-            asset::{AssetBalancePolicy, AssetDefinition, AssetId},
-            domain::Domain,
-            isi::Mint,
-        };
-        use iroha_primitives::numeric::Quantity;
-        Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
-        Register::domain(Domain::new(
-            DomainId::try_new("network-fee", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        Register::asset_definition(AssetDefinition::numeric(
-            asset.clone(),
-            "Network fee".to_owned(),
-            AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        Mint::asset_quantity(Quantity::from(10_u32), AssetId::of(asset, ALICE_ID.clone()))
+        if let Some(asset) = fee_asset {
+            use iroha_data_model::{
+                asset::{AssetBalancePolicy, AssetDefinition, AssetId},
+                domain::Domain,
+                isi::Mint,
+            };
+            use iroha_primitives::numeric::Quantity;
+            Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("network-fee", "universal").unwrap(),
+            ))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
+            Register::asset_definition(AssetDefinition::numeric(
+                asset.clone(),
+                "Network fee".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .unwrap();
+            Mint::asset_quantity(Quantity::from(10_u32), AssetId::of(asset, ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        if let Some(bytes) = callback_bytes {
+            let id: TriggerId = "network_callback".parse().unwrap();
+            let action = Action::new(
+                vec![
+                    InstructionBox::from(SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        "callback_write".parse().unwrap(),
+                        Json::new(7),
+                    )),
+                    Log::new(Level::DEBUG, "x".repeat(bytes)).into(),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .unwrap();
+            Register::trigger(Trigger::new(id, action))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    if let Some(bytes) = callback_bytes {
-        let id: TriggerId = "network_callback".parse().unwrap();
-        let action = Action::new(
-            vec![
-                InstructionBox::from(SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    "callback_write".parse().unwrap(),
-                    Json::new(7),
-                )),
-                Log::new(Level::DEBUG, "x".repeat(bytes)).into(),
-            ],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(id.clone())
-                .under_authority(ALICE_ID.clone()),
-        )
-        .unwrap();
-        Register::trigger(Trigger::new(id, action))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-    }
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    drop(setup);
     state
 }
 
@@ -208,7 +209,11 @@ fn network_row<'a>(block: &'a StateBlock<'_>, index: usize) -> &'a NetworkExecut
 
 #[test]
 fn output_fixture_retains_original_genesis_and_successor_source() {
-    let unprepared = state(65_536);
+    let unprepared = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
     let mut unprepared_block = unprepared.block(BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         None,

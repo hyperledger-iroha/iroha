@@ -265,6 +265,20 @@ fn require_parliament_tle_capability_for_local_seat_v1(
     Ok(())
 }
 
+/// Await synchronous custody inspection on a blocking worker before consensus starts.
+/// The exact State and runtime provider handles stay owned until all checks finish.
+async fn preflight_threshold_signer_startup_readiness_v1(
+    state: Arc<iroha_core::state::State>,
+    local_peer: PeerId,
+    runtime_deps: IrohaRuntimeDeps,
+) -> Result<(), &'static str> {
+    tokio::task::spawn_blocking(move || {
+        validate_threshold_signer_startup_readiness_v1(&state, &local_peer, &runtime_deps)
+    })
+    .await
+    .map_err(|_| "threshold-signer startup worker failed")?
+}
+
 /// Validate runtime custody for every active or deadline-retained threshold session assigned to
 /// the local peer.
 ///
@@ -896,6 +910,7 @@ mod parliament_tle_release_tests {
     #[derive(Clone, Copy)]
     enum CapabilityMode {
         Exact,
+        BlockingRuntime,
         MismatchedSeat,
         Rejected,
     }
@@ -926,7 +941,7 @@ mod parliament_tle_release_tests {
                 .expect("beacon capability call journal lock")
                 .push((session.record().session_id, expected_signer_index));
             let signer_index = match self.mode {
-                CapabilityMode::Exact => expected_signer_index,
+                CapabilityMode::Exact | CapabilityMode::BlockingRuntime => expected_signer_index,
                 CapabilityMode::MismatchedSeat => {
                     if expected_signer_index == 1 {
                         2
@@ -991,14 +1006,27 @@ mod parliament_tle_release_tests {
                     expected_participant_index,
                 ));
             match self.mode {
-                CapabilityMode::Exact => {
+                CapabilityMode::Exact | CapabilityMode::BlockingRuntime => {
+                    if matches!(self.mode, CapabilityMode::BlockingRuntime) {
+                        // A broker reconnect owns this same synchronous runtime boundary.
+                        // Running it on an async executor must reproduce Tokio's nested-runtime panic.
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("provider runtime");
+                        runtime.block_on(std::future::ready(()));
+                    }
                     iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
                         session,
                         expected_participant_index,
                     )
                 }
                 CapabilityMode::MismatchedSeat => {
-                    let mismatched = if expected_participant_index == 1 { 2 } else { 1 };
+                    let mismatched = if expected_participant_index == 1 {
+                        2
+                    } else {
+                        1
+                    };
                     iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1::for_validated_session(
                         session,
                         mismatched,
@@ -1578,6 +1606,69 @@ mod parliament_tle_release_tests {
         assert_eq!(mismatched_signer.sign_calls.load(Ordering::Acquire), 0);
     }
 
+    #[tokio::test]
+    async fn threshold_signer_startup_preflight_runs_synchronous_provider_on_blocking_worker() {
+        let fixture = threshold_signer_readiness_fixture_v1(13);
+        let signer = Arc::new(CapabilityProbeSigner::new(CapabilityMode::BlockingRuntime));
+        let runtime_deps =
+            IrohaRuntimeDeps::default().with_parliament_tle_partial_release_signer(signer.clone());
+        let state = Arc::new(fixture.state);
+        preflight_threshold_signer_startup_readiness_v1(
+            Arc::clone(&state),
+            fixture.local_peer,
+            runtime_deps,
+        )
+        .await
+        .expect("active and retained custody complete outside the async runtime");
+        let mut calls = signer.attestation_calls();
+        calls.sort_unstable();
+        let mut expected = vec![
+            (
+                fixture.retained_key_session_id,
+                fixture.retained_participant_index,
+            ),
+            (
+                fixture.active_key_session_id,
+                fixture.active_participant_index,
+            ),
+        ];
+        expected.sort_unstable();
+        assert_eq!(calls, expected);
+        assert_eq!(signer.sign_calls.load(Ordering::Acquire), 0);
+        assert_eq!(
+            Arc::strong_count(&state),
+            1,
+            "completed worker releases the exact State owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn threshold_signer_startup_preflight_preserves_worker_custody_refusal() {
+        let fixture = threshold_signer_readiness_fixture_v1(14);
+        let signer = Arc::new(CapabilityProbeSigner::new(CapabilityMode::MismatchedSeat));
+        let runtime_deps =
+            IrohaRuntimeDeps::default().with_parliament_tle_partial_release_signer(signer.clone());
+        assert_eq!(
+            preflight_threshold_signer_startup_readiness_v1(
+                Arc::new(fixture.state),
+                fixture.local_peer,
+                runtime_deps,
+            )
+            .await,
+            Err(
+                "local Parliament TLE committee seat returned a mismatched runtime custody attestation"
+            )
+        );
+        assert_eq!(
+            signer.attestation_calls(),
+            vec![(
+                fixture.active_key_session_id,
+                fixture.active_participant_index
+            )]
+        );
+        assert_eq!(signer.sign_calls.load(Ordering::Acquire), 0);
+    }
+
     #[test]
     fn threshold_signer_preflight_rejects_before_consensus_startup() {
         let startup = include_str!("../main.rs")
@@ -1588,7 +1679,7 @@ mod parliament_tle_release_tests {
             .expect("consensus startup boundary")
             .0;
         let preflight = startup
-            .find("validate_threshold_signer_startup_readiness_v1")
+            .find("preflight_threshold_signer_startup_readiness_v1")
             .expect("threshold-signer startup preflight");
         let consensus_start = startup.find("start_on_network").expect("Sumeragi startup");
         let guarded_preflight: String = startup[preflight..consensus_start]

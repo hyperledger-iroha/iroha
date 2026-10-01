@@ -23,6 +23,24 @@ pub(super) use transition_statement_flat::constrain_transition_statement_digest_
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
+#[path = "bootstrap_statement_binding.rs"]
+mod bootstrap_statement_binding;
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+pub(super) use bootstrap_statement_binding::constrain_bootstrap_statement_digest_v1;
+
+#[cfg(test)]
+#[path = "bootstrap_statement_binding_tests.rs"]
+mod bootstrap_statement_binding_tests;
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_base::gates::GateInstructions as _;
 #[cfg(any(
     test,
@@ -2541,7 +2559,7 @@ mod tests {
     }
 
     // Projection-only values; these do not authenticate a monetary state or proof.
-    fn public_projection_fixture() -> KagemushaStateRelationPublicInputsV1 {
+    pub(super) fn public_projection_fixture() -> KagemushaStateRelationPublicInputsV1 {
         let header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"kagemusha-state-public-projection",
         ));

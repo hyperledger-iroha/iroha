@@ -17,6 +17,7 @@ from typing import Callable, Sequence
 from .apple_receipt import verify_apple_receipt
 from .attestation import (
     AttestationRejected, RawPlatformProof, cbor_exact, decode_android_chain,
+    app_attest_release_digest as _apple_release_digest,
     fixed32, require, verify_android_raw, verify_apple_raw,
     verify_issuer_preparation,
     GOOGLE_FACTORY_2016_ROOT_SHA256,
@@ -49,22 +50,6 @@ APPLE_RECEIPT_ROOT_SHA256 = bytes.fromhex(
 )
 
 
-def _apple_release_digest(category: int, bundle_version: str) -> bytes:
-    """Match the model's exact signed App Attest release-digest preimage."""
-    require(type(category) is int and category in (2, 3, 4, 5)
-            and type(bundle_version) is str,
-            "invalid Apple signed distribution values")
-    try:
-        version = bundle_version.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise AttestationRejected("invalid Apple signed bundle version") from error
-    require(0 < len(version) <= 128 and b"\0" not in version,
-            "invalid Apple signed bundle version")
-    return hashlib.sha256(
-        b"iroha:kagemusha:v1:app-attest-release\0"
-        + category.to_bytes(4, "little")
-        + len(version).to_bytes(2, "little") + version
-    ).digest()
 
 
 @dataclass(frozen=True)

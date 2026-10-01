@@ -154,6 +154,7 @@ pub struct KagemushaVerifiedOrdinaryRetailEnrollmentPossessionV1 {
     evidence_digest: [u8; 32],
     authenticated_at_ms: u64,
     app_attest_counter: Option<u32>,
+    app_attest_release_measurement: Option<super::KagemushaAppAttestReleaseMeasurementV1>,
 }
 impl KagemushaVerifiedOrdinaryRetailEnrollmentPossessionV1 {
     /// Borrow the independently checked original challenge.
@@ -175,6 +176,13 @@ impl KagemushaVerifiedOrdinaryRetailEnrollmentPossessionV1 {
     #[must_use]
     pub const fn app_attest_counter(&self) -> Option<u32> {
         self.app_attest_counter
+    }
+    /// Actual signed Apple release measurement; no version is claimed for the limited form.
+    #[must_use]
+    pub const fn app_attest_release_measurement(
+        &self,
+    ) -> Option<super::KagemushaAppAttestReleaseMeasurementV1> {
+        self.app_attest_release_measurement
     }
     /// Native supplied instant when the original current interval was checked.
     #[must_use]
@@ -489,10 +497,11 @@ impl KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
             &subject.app_public_key,
             Sha256::digest(&self.raw_attestation).into(),
         )?;
-        let counter = self.app_possession.authenticate_signature(
+        let (counter, release_measurement) = self.app_possession.authenticate_signature(
             subject.platform_class,
             &subject.app_public_key,
             subject.app_signing_identity_digest,
+            subject.app_release_digest,
             original_floor,
             &message,
         )?;
@@ -511,6 +520,7 @@ impl KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
             original,
             authenticated_at_ms: now,
             app_attest_counter: counter,
+            app_attest_release_measurement: release_measurement,
         })
     }
 }

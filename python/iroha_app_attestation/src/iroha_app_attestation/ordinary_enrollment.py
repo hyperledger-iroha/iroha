@@ -11,7 +11,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from .attestation import (RawPlatformProof, children, der_one, device_key_reference,
-                          fixed32, positive_integer, public_key_pem, require, verify_apple_assertion)
+                          fixed32, positive_integer, public_key_pem, require, verify_apple_assertion,
+                          app_attest_release_digest, cbor_exact)
 from .play_integrity import PlayIntegrityPolicy, PlayIntegrityProof
 
 CHALLENGE_DOMAIN = b'iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0'
@@ -21,9 +22,11 @@ POSSESSION_BODY_BYTES = 371
 EVIDENCE_DOMAIN = b'iroha:kagemusha:v1:ordinary-app-enrollment-evidence\0'
 CHALLENGE_BODY_BYTES = 451
 CHALLENGE_TRANSPORT_BYTES = 515
+# Exact model ordinary profile: suffix169/auth206 plus canonical two-key CBOR and DER72.
+ORDINARY_APPLE_ASSERTION_MAX_BYTES = 311
 CREDENTIAL_BODY_BYTES = 794
 SIGNING_REQUEST_MAGIC = b'KOAC\x01'
-SIGNING_REQUEST_BYTES = 831
+SIGNING_REQUEST_BYTES = 896
 _FIELDS = ('enrollment_id', 'client_nonce', 'server_nonce', 'account_binding',
            'network_id', 'lane_id', 'release_id', 'hardware_profile_id', 'suite_id',
            'trust_policy_digest', 'app_authority_policy_digest',
@@ -157,13 +160,33 @@ class EnrollmentPossession:
     raw_possession_sha256: bytes
     platform_evidence_digest: bytes
     app_attest_counter_floor: int
+    # Selected policy correlation only; this is not a platform-observed release measurement.
+    selected_app_release_digest: bytes
+    # None is explicitly unavailable for the limited37-byte original, not an inferred version.
+    apple_signed_release_digest: bytes | None
 
 
 def verify_enrollment_possession(challenge: OrdinaryEnrollmentChallenge, proof: RawPlatformProof,
                                  raw_attestation: bytes, raw_possession: bytes,
                                  openssl_path: Path, *, apple_app_id: str | None,
+                                 app_release_digest: bytes,
+                                 expected_validation_category: int | None = None,
+                                 expected_bundle_version: str | None = None,
                                  possession_issued_at_ms: int, possession_expires_at_ms: int) -> EnrollmentPossession:
-    """Verify possession of the exact attested key and commit both originals."""
+    """Verify exact attested-key possession under independently selected release policy.
+
+    A legacy assertion carries no signed release measurement. The provider supplies these
+    expectations from its existing governed policy; requests cannot choose a legacy allowance.
+    Original CBOR/DER are retained without normalization and their counter remains independent.
+    """
+    selected_release = fixed32(app_release_digest, 'selected ordinary app release')
+    require((expected_validation_category is None) == (expected_bundle_version is None),
+            'ordinary assertion release policy is incomplete')
+    if expected_validation_category is not None:
+        require(selected_release == app_attest_release_digest(
+            expected_validation_category, expected_bundle_version),
+            'ordinary selected release metadata differs from governed digest')
+    signed_release = None
     require(type(proof) is RawPlatformProof and type(raw_attestation) is bytes
             and 0 < len(raw_attestation) <= 128 * 1024
             and hashlib.sha256(raw_attestation).digest() == proof.evidence_sha256
@@ -176,6 +199,7 @@ def verify_enrollment_possession(challenge: OrdinaryEnrollmentChallenge, proof: 
                                            possession_issued_at_ms, possession_expires_at_ms)
     if challenge.platform_class == 1:
         require(proof.platform == 'android_keymint' and apple_app_id is None
+                and expected_validation_category is None and expected_bundle_version is None
                 and 8 <= len(raw_possession) <= 72, 'invalid Android enrollment possession')
         scalars = children(der_one(raw_possession))
         require(len(scalars) == 2 and all(0 < positive_integer(value) < (1 << 256) for value in scalars),
@@ -196,14 +220,33 @@ def verify_enrollment_possession(challenge: OrdinaryEnrollmentChallenge, proof: 
     else:
         require(proof.platform == 'apple_app_attest' and type(apple_app_id) is str,
                 'invalid Apple enrollment possession')
+        require(len(raw_possession) <= ORDINARY_APPLE_ASSERTION_MAX_BYTES,
+                'ordinary Apple assertion exceeds selected profile')
+        frame = cbor_exact(raw_possession)
+        require(type(frame) is dict and set(frame) == {'authenticatorData', 'signature'},
+                'ordinary Apple assertion frame differs')
+        authenticator = frame['authenticatorData']
+        require(type(authenticator) is bytes and 37 <= len(authenticator) <= 206
+                and authenticator[32] in (0x40, 0xc0)
+                and (len(authenticator) != 37 or authenticator[32] == 0x40),
+                'ordinary Apple authenticator profile differs')
         assertion = verify_apple_assertion(raw_possession, message, message, point, key_id,
                                            apple_app_id, 0, openssl_path,
-                                           expected_validation_category=None, expected_bundle_version=None)
+                                           expected_validation_category=expected_validation_category,
+                                           expected_bundle_version=expected_bundle_version)
+        if assertion.validation_category is not None:
+            require(assertion.bundle_version is not None, 'ordinary assertion release version absent')
+            signed_release = app_attest_release_digest(assertion.validation_category,
+                                                       assertion.bundle_version)
+            require(signed_release == selected_release,
+                    'ordinary signed assertion release differs from governed digest')
+        else:
+            require(assertion.bundle_version is None, 'ordinary assertion release measurement incomplete')
         floor = assertion.counter
     evidence = EVIDENCE_DOMAIN + len(raw_attestation).to_bytes(8, 'little') + raw_attestation
     evidence += len(raw_possession).to_bytes(8, 'little') + raw_possession
     return EnrollmentPossession(key_id, proof.evidence_sha256, hashlib.sha256(raw_possession).digest(),
-                                hashlib.sha256(evidence).digest(), floor)
+                                hashlib.sha256(evidence).digest(), floor, selected_release, signed_release)
 
 
 def credential_signing_request(challenge: OrdinaryEnrollmentChallenge, proof: RawPlatformProof,
@@ -213,7 +256,8 @@ def credential_signing_request(challenge: OrdinaryEnrollmentChallenge, proof: Ra
                                maximum_lifetime_ms: int, profile_expires_at_ms: int,
                                allowed_android_security_levels: frozenset[int],
                                integrity_policy: PlayIntegrityPolicy | None,
-                               integrity_proof: PlayIntegrityProof | None) -> bytes:
+                               integrity_proof: PlayIntegrityProof | None,
+                               circuit_issuer_public_key: bytes) -> bytes:
     """Frame the model-owned encoder input after actual Native/platform/PI checks.
 
     Calling this formatter does not verify evidence or grant signer custody.
@@ -227,6 +271,9 @@ def credential_signing_request(challenge: OrdinaryEnrollmentChallenge, proof: Ra
             and proof.device_key_reference == device_key_reference(point), 'ordinary attested key differs')
     key_id = hashlib.sha256(point).digest()
     require(type(possession) is EnrollmentPossession and possession.attested_key_id == key_id
+            and possession.selected_app_release_digest == fixed32(app_release_digest, 'governed ordinary app release')
+            and (possession.apple_signed_release_digest is None
+                 or possession.apple_signed_release_digest == app_release_digest)
             and possession.raw_attestation_sha256 == proof.evidence_sha256,
             'ordinary possession differs from actual raw proof')
     app_attest_counter_floor = possession.app_attest_counter_floor
@@ -239,7 +286,7 @@ def credential_signing_request(challenge: OrdinaryEnrollmentChallenge, proof: Ra
                 and proof.platform == 'android_keymint'
                 and type(proof.android_security_level) is int
                 and proof.android_security_level in allowed_android_security_levels
-                and app_attest_counter_floor == 0,
+                and app_attest_counter_floor == 0 and possession.apple_signed_release_digest is None,
                 'ordinary Android security level differs from selected policy')
         level = proof.android_security_level
     else:
@@ -281,6 +328,10 @@ def credential_signing_request(challenge: OrdinaryEnrollmentChallenge, proof: Ra
         body += b'\x01' + integrity_proof.request_hash + integrity_proof.google_response_sha256 + integrity_proof.policy_digest
         body += issued_at_ms.to_bytes(8, 'little') + min(expires_at_ms, issued_at_ms + integrity_policy.maximum_refresh_interval_ms).to_bytes(8, 'little')
     require(len(body) == CREDENTIAL_BODY_BYTES, 'ordinary credential body layout changed')
+    require(type(circuit_issuer_public_key) is bytes and len(circuit_issuer_public_key) == 65
+            and circuit_issuer_public_key[0] == 4 and any(circuit_issuer_public_key[1:]),
+            'actual governed circuit issuer key absent')
     request = SIGNING_REQUEST_MAGIC + body + fixed32(authority_public_key, 'actual governed app authority')
+    request += circuit_issuer_public_key
     require(len(request) == SIGNING_REQUEST_BYTES, 'ordinary signing request layout changed')
     return request

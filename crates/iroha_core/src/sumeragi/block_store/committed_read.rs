@@ -1,6 +1,6 @@
 //! Complete retained Kura authentication: original frame, full QC, and signed body restoration.
+use super::body_read::StoredBodyReadPoll;
 use super::*;
-use crate::sumeragi::body_read::BodyReadPoll;
 use certificate_read::{CertificateRead, CertificateReadError, DecodedCertificate};
 use iroha_sumeragi::availability::{BodyRestoration, RestorationError};
 #[derive(Debug, thiserror::Error)]
@@ -10,7 +10,7 @@ struct RestoreFailure(RestorationError);
 enum Phase {
     Certificate(CertificateRead),
     Decoded(DecodedCertificate),
-    Projecting(body_read::StoredBodyRead, Qc),
+    Projecting(body_read::StoredBodyRead),
     Restoring(BodyRestoration, Qc),
     Consumed,
 }
@@ -84,30 +84,26 @@ impl CommittedRead {
                             return Err(error);
                         }
                     };
-                    let qc = decoded.commit_qc.clone();
-                    self.phase = Phase::Projecting(
-                        body_read::StoredBodyRead::from_decoded(
-                            source,
-                            decoded,
-                            self.budget.clone(),
-                            self.crypto.clone(),
-                        ),
-                        qc,
-                    );
+                    self.phase = Phase::Projecting(body_read::StoredBodyRead::from_decoded(
+                        source,
+                        decoded,
+                        self.budget.clone(),
+                        self.crypto.clone(),
+                    ));
                 }
-                Phase::Projecting(mut job, qc) => match job.poll(&self.budget) {
-                    Ok(BodyReadPoll::Ready(restoration)) => {
+                Phase::Projecting(mut job) => match job.poll_with_qc(&self.budget) {
+                    Ok(StoredBodyReadPoll::Ready(restoration, qc)) => {
                         self.phase = Phase::Restoring(restoration, qc)
                     }
-                    Ok(BodyReadPoll::Pending(error)) => {
-                        self.phase = Phase::Projecting(job, qc);
+                    Ok(StoredBodyReadPoll::Pending(error)) => {
+                        self.phase = Phase::Projecting(job);
                         return Err(io::Error::new(io::ErrorKind::WouldBlock, error));
                     }
-                    Ok(BodyReadPoll::Absent) => {
+                    Ok(StoredBodyReadPoll::Absent) => {
                         return Err(invalid("retained committed block cannot become absent"));
                     }
                     Err(error) => {
-                        self.phase = Phase::Projecting(job, qc);
+                        self.phase = Phase::Projecting(job);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, error));
                     }
                 },
@@ -154,3 +150,7 @@ pub(super) fn certified_source(
     AvailabilitySource::new(instance, height, qc.block_hash, config)
         .map_err(|error| invalid(format!("invalid committed source: {error:?}")))
 }
+
+#[cfg(test)]
+#[path = "committed_read_tests.rs"]
+mod tests;

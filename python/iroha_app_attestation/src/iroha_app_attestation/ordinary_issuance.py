@@ -82,7 +82,10 @@ class CanonicalOrdinaryCredentialEncoder(_CanonicalIssuerEncoderCustody):
     """Dedicated pinned KOAC encoder/custody; accepts only final credential input."""
     def _encode(self, evidence: VerifiedOrdinaryEvidence, request: bytes) -> bytes:
         require(type(evidence) is VerifiedOrdinaryEvidence and evidence.policy.authority_public_key == self._public
-                and request[-32:] == self._public and self._metadata() == self._identity,
+                and type(request) is bytes and len(request) == 896 and request[:5] == b'KOAC\x01'
+                and request[799:831] == self._public
+                and request[831:] == evidence.policy.circuit_issuer_public_key
+                and self._metadata() == self._identity,
                 "ordinary signer differs from actual selected evidence/policy")
         original = (encode_ordinary_with_iroha(request, self._encoder, self._encoder_sha, self._fd)
                     if self._encoder_fd < 0 else encode_ordinary_with_iroha_fd(
@@ -93,7 +96,11 @@ class CanonicalOrdinaryCredentialEncoder(_CanonicalIssuerEncoderCustody):
     def _encode_refresh(self, evidence: VerifiedOrdinaryEvidence, request: bytes) -> bytes:
         require(type(evidence) is VerifiedOrdinaryEvidence
                 and evidence.policy.authority_public_key == self._public
-                and request[-32:] == self._public and self._metadata() == self._identity,
+                and type(request) is bytes and 514 <= len(request) <= 578 and request[:5] == b'KRPI\x01'
+                and len(request) == 409+int.from_bytes(request[407:409],'little')+97
+                and request[-97:-65] == self._public
+                and request[-65:] == evidence.policy.circuit_issuer_public_key
+                and self._metadata() == self._identity,
                 "refresh signer differs from retained enrollment/policy")
         original = (encode_refresh_with_iroha(request,self._encoder,self._encoder_sha,self._fd)
                     if self._encoder_fd < 0 else encode_refresh_with_iroha_fd(
@@ -321,7 +328,7 @@ class DurableOrdinaryCredentialIssuer:
     def _checked_saved_input(self, connection, evidence: VerifiedOrdinaryEvidence, row, *, fresh: bool) -> bytes:
         self._retain_or_check_possession(connection, evidence, reserve=False)
         request = row[5]
-        require(type(request) is bytes and len(request) == 831 and request[:5] == b"KOAC\x01",
+        require(type(request) is bytes and len(request) == 896 and request[:5] == b"KOAC\x01",
                 "corrupt ordinary signing input")
         # This is the model-owned fixed794 transport, not a second Norito codec.
         # Header4 + selectors576 + actual SEC1 point65 + two scope epochs16.

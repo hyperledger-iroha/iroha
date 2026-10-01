@@ -21,7 +21,10 @@ use p256::ecdsa::{
 use sha2::{Digest as _, Sha256};
 
 mod app_attest_extensions;
-pub(super) use app_attest_extensions::parse_app_attest_assertion;
+pub use app_attest_extensions::{AppAttestExtensionError, app_attest_release_extensions_digest};
+pub(super) use app_attest_extensions::{
+    parse_app_attest_assertion, parse_app_attest_assertion_extensions,
+};
 mod exchange;
 mod funding;
 mod hardware;

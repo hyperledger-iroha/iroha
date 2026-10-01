@@ -279,9 +279,12 @@ fn permission_cache_rebuilds_after_restart_impl() {
         InstructionBox::from(Grant::account_permission(CanManageRoles, owner.clone())),
     ];
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-    let mut config = TestChainConfig::new(World::new(), 1000);
-    config.genesis_instructions = genesis_instructions;
-    let mut fixture = CertifiedTestChain::start(config.clone()).unwrap();
+    let config = || {
+        let mut config = TestChainConfig::new(World::new(), 1000);
+        config.genesis_instructions = genesis_instructions.clone();
+        config
+    };
+    let mut fixture = CertifiedTestChain::start(config()).unwrap();
     let permission_register = CanRegisterTrigger {
         authority: owner.clone(),
     };
@@ -379,7 +382,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
             Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
         ));
         let mut replayed =
-            CertifiedTestChain::start(config.clone()).expect("restart original permission genesis");
+            CertifiedTestChain::start(config()).expect("restart original permission genesis");
         replayed
             .replay_from(&fixture)
             .expect("replay every original certified permission carrier");

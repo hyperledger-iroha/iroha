@@ -200,8 +200,8 @@ def encode_ordinary_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha25
 def encode_refresh_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha256: bytes,
                                 authority_key_fd: int) -> bytes:
     """Canonical Native KRPI encoder only; no Python Norito lease encoding."""
-    require(type(request) is bytes and 449 <= len(request) <= 513 and request[:5] == b"KRPI\x01"
-            and len(request) == 409+int.from_bytes(request[407:409],"little")+32,
+    require(type(request) is bytes and 514 <= len(request) <= 578 and request[:5] == b"KRPI\x01"
+            and len(request) == 409+int.from_bytes(request[407:409],"little")+32+65,
             "invalid Integrity lease signing request")
     return _encode_with_iroha_raw(request,None,encoder_sha256,authority_key_fd,
         maximum_certificate_bytes=4096,encoder_fd=encoder_fd)
@@ -210,8 +210,8 @@ def encode_refresh_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha256
 def encode_refresh_with_iroha(request: bytes, encoder: Path, encoder_sha256: bytes,
                             authority_key_fd: int) -> bytes:
     """Same canonical KRPI purpose through an original-content-pinned encoder."""
-    require(type(request) is bytes and 449 <= len(request) <= 513 and request[:5] == b"KRPI\x01"
-            and len(request) == 409+int.from_bytes(request[407:409],"little")+32,
+    require(type(request) is bytes and 514 <= len(request) <= 578 and request[:5] == b"KRPI\x01"
+            and len(request) == 409+int.from_bytes(request[407:409],"little")+32+65,
             "invalid Integrity lease signing request")
     return _encode_with_iroha_raw(request,encoder,encoder_sha256,authority_key_fd,
         maximum_certificate_bytes=4096)

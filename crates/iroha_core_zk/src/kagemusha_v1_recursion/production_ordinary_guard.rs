@@ -8,13 +8,14 @@ use super::super::super::{
     KagemushaPlatformCredentialStatementV1, KagemushaProviderRootCircuitParamsV1,
     ordinary_guard_circuit::{
         KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1,
-        OrdinaryGuardWitnessV1, build_ordinary_app_guard_pair_v1,
+        KagemushaOrdinaryGuardCircuitParamsV1, OrdinaryGuardWitnessV1,
+        build_ordinary_app_guard_pair_v1,
     },
     ordinary_guard_verifier::{OrdinaryGuardProofWireV1, public_column},
 };
 use super::*;
 use crate::kagemusha_v1_state::{
-    KagemushaAuthenticatedOrdinaryApprovalV1,
+    DigestV1, KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
     verify_ordinary_bootstrap_guard_v1,
@@ -25,7 +26,7 @@ use iroha_data_model::kagemusha::{
 };
 use zeroize::Zeroize as _;
 
-struct HeldRelation(KagemushaGuardBundleRelationWitnessV1);
+pub(super) struct HeldRelation(pub(super) KagemushaGuardBundleRelationWitnessV1);
 impl Drop for HeldRelation {
     fn drop(&mut self) {
         self.0.predecessor_device_authority_secret.zeroize();
@@ -43,12 +44,17 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         profile: KagemushaRecursiveVerifierProfileV1,
         resolver: R,
     ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
-        let owner = Self::from_selected_release(
+        let owner = Self::from_selected_ordinary_release(
             selection.authenticated_release().map_err(owner_error)?,
             profile,
             resolver,
         )?;
-        owner.require_release_binding(&selection.authenticated_release().map_err(owner_error)?)?;
+        owner.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
         Ok(owner)
     }
 
@@ -64,14 +70,21 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         approval: &KagemushaAuthenticatedOrdinaryApprovalV1<'_>,
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
-        let before = financial.trusted_time_ms().map_err(proving_error)?;
+        let before = financial
+            .trusted_time_ms()
+            .map_err(ordinary_proving_error)?;
         selection
             .recheck_at_trusted_time(before)
             .map_err(owner_error)?;
         approval
             .recheck_at_trusted_time(before)
             .map_err(owner_error)?;
-        self.require_release_binding(&selection.authenticated_release().map_err(owner_error)?)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
         if !core::ptr::eq(
             selection.enrollment(),
             approval.retained_enrollment().as_ref(),
@@ -89,10 +102,17 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 result = Some(self.prove_original(selection, approval, secret));
                 Ok(())
             })
-            .map_err(proving_error)?;
+            .map_err(ordinary_proving_error)?;
         let raw = result.ok_or_else(|| proving_error("ordinary native witness was not lent"))??;
-        let after = financial.trusted_time_ms().map_err(proving_error)?;
-        self.require_release_binding(&selection.authenticated_release().map_err(owner_error)?)?;
+        let after = financial
+            .trusted_time_ms()
+            .map_err(ordinary_proving_error)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
         verify_ordinary_bootstrap_guard_v1(selection, approval, &raw, after)
             .map_err(owner_error)?;
         Ok(raw)
@@ -106,12 +126,33 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
         let credential: KagemushaOrdinaryAppCredentialV1 =
             norito::decode_canonical(selection.enrollment().app_credential().original())
-                .map_err(proving_error)?;
+                .map_err(ordinary_proving_error)?;
         let original: KagemushaAppOperationApprovalV1 =
-            norito::decode_canonical(approval.original()).map_err(proving_error)?;
-        if credential.canonical_bytes().map_err(proving_error)?
+            norito::decode_canonical(approval.original()).map_err(ordinary_proving_error)?;
+        let integrity_lease = approval
+            .original_approval_integrity_lease()
+            .map(|lease| {
+                if lease.original().is_empty() || lease.original().len() > 4096 {
+                    return Err(proving_error(
+                        "ordinary retained lease exceeds original bound",
+                    ));
+                }
+                let raw: iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseV1 =
+                    norito::decode_canonical(lease.original()).map_err(ordinary_proving_error)?;
+                if raw.canonical_bytes().map_err(ordinary_proving_error)? != lease.original() {
+                    return Err(proving_error(
+                        "ordinary retained lease canonical original differs",
+                    ));
+                }
+                Ok(raw)
+            })
+            .transpose()?;
+        if credential
+            .canonical_bytes()
+            .map_err(ordinary_proving_error)?
             != selection.enrollment().app_credential().original()
-            || norito::encode_canonical(&original).map_err(proving_error)? != approval.original()
+            || norito::encode_canonical(&original).map_err(ordinary_proving_error)?
+                != approval.original()
         {
             return Err(proving_error("ordinary proof original encoding differs"));
         }
@@ -119,12 +160,17 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         let eq_parameters = self.artifacts.load_eq_params()?;
         let ep_parameters = self.artifacts.load_ep_params()?;
         let root = self.release.provider_policy_root();
-        let eq_params =
-            KagemushaProviderRootCircuitParamsV1::new(self.profile.guard_eq.clone(), root)
-                .map_err(proving_error)?;
-        let ep_params =
-            KagemushaProviderRootCircuitParamsV1::new(self.profile.guard_ep.clone(), root)
-                .map_err(proving_error)?;
+        let table = self.artifacts.ordinary_issuer_table();
+        let eq_params = KagemushaOrdinaryGuardCircuitParamsV1 {
+            base: self.profile.guard_eq.clone(),
+            provider_policy_root: root,
+            issuer_table: table.clone(),
+        };
+        let ep_params = KagemushaOrdinaryGuardCircuitParamsV1 {
+            base: self.profile.guard_ep.clone(),
+            provider_policy_root: root,
+            issuer_table: table.clone(),
+        };
         let eq_vk_bytes = self
             .artifacts
             .resolve(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq)?;
@@ -135,11 +181,13 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             &eq_vk_bytes,
             self.profile.guard_eq.clone(),
             root,
+            table,
         )?;
         let ep_vk = native_backend::read_ep_ordinary_guard_vk(
             &ep_vk_bytes,
             self.profile.guard_ep.clone(),
             root,
+            table,
         )?;
         let eq_pk =
             load_authenticated_proving_key_v1::<EqAffine, KagemushaOrdinaryAppGuardEqCircuitV1, _>(
@@ -188,23 +236,31 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 credential: &credential,
                 approval: &original,
                 previous_app_attest_counter: approval.previous_app_attest_counter_floor(),
+                integrity_lease: integrity_lease.as_ref(),
             },
             root,
+            table,
         )
-        .map_err(proving_error)?;
-        if eq_circuit.builder.config_params != self.profile.guard_eq
-            || ep_circuit.builder.config_params != self.profile.guard_ep
-        {
+        .map_err(ordinary_proving_error)?;
+        if !super::super::same_base_params(
+            &eq_circuit.builder.config_params,
+            &self.profile.guard_eq,
+        ) || !super::super::same_base_params(
+            &ep_circuit.builder.config_params,
+            &self.profile.guard_ep,
+        ) {
             return Err(proving_error("ordinary released circuit packing differs"));
         }
         let eq_history =
-            initial_kagemusha_eq_accumulator_v1(&eq_parameters).map_err(proving_error)?;
+            initial_kagemusha_eq_accumulator_v1(&eq_parameters).map_err(ordinary_proving_error)?;
         let ep_history =
-            initial_kagemusha_ep_accumulator_v1(&ep_parameters).map_err(proving_error)?;
+            initial_kagemusha_ep_accumulator_v1(&ep_parameters).map_err(ordinary_proving_error)?;
         let digests = [
             approval.challenge().normalized_guard_digest,
             selection.enrollment().app_credential().digest(),
-            approval.proof_binding_digest(),
+            approval
+                .authorization_binding_digest()
+                .map_err(owner_error)?,
             approval.challenge().subject_signing_digest,
             root,
         ];
@@ -215,9 +271,13 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         seed.update(secret);
         seed.update(approval.challenge().operation_id);
         seed.update(approval.challenge().nonce);
-        seed.update(approval.proof_binding_digest());
+        seed.update(
+            approval
+                .authorization_binding_digest()
+                .map_err(owner_error)?,
+        );
         let seed = KagemushaRecoverySeedV1::from_unsealed(seed.finalize().into())
-            .map_err(proving_error)?;
+            .map_err(ordinary_proving_error)?;
         let eq_proof = create_eq_proof_with_key_v1(
             &eq_parameters,
             &eq_pk,
@@ -243,7 +303,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             ep_protocol_digest: protocols[1],
             normalized_guard_digest: digests[0],
             credential_digest: digests[1],
-            approval_proof_binding_digest: digests[2],
+            authorization_transcript_digest: digests[2],
             subject_signing_digest: digests[3],
             provider_policy_root: root,
             eq_proof,
@@ -251,7 +311,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             eq_history: *eq_history.as_bytes(),
             ep_history: *ep_history.as_bytes(),
         };
-        let raw = norito::encode_canonical(&wire).map_err(proving_error)?;
+        let raw = norito::encode_canonical(&wire).map_err(ordinary_proving_error)?;
         if raw.len() > crate::kagemusha_v1_state::KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1 {
             return Err(proving_error("ordinary Guard original bound differs"));
         }
@@ -259,7 +319,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
     }
 }
 
-fn derive_relation(
+pub(super) fn derive_relation(
     selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
     secret: &[u8; 32],
 ) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
@@ -321,7 +381,7 @@ fn derive_relation(
         predecessor_device_authority_secret: *secret,
         successor_device_authority_secret: *secret,
     });
-    relation.0.validate().map_err(proving_error)?;
+    relation.0.validate().map_err(ordinary_proving_error)?;
     Ok(relation)
 }
 
@@ -330,4 +390,73 @@ fn canonical_empty_durable_effect(
 ) -> Result<DigestV1, KagemushaArtifactGenerationErrorV1> {
     crate::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(release.release_id())
         .map_err(owner_error)
+}
+
+fn ordinary_proving_error(error: impl core::fmt::Display) -> KagemushaArtifactGenerationErrorV1 {
+    proving_error(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halo2_base::gates::circuit::BaseCircuitParams;
+
+    #[test]
+    fn ordinary_released_packing_checks_every_original_parameter() {
+        let original = BaseCircuitParams {
+            k: 16,
+            num_advice_per_phase: vec![2, 1],
+            num_fixed: 1,
+            num_lookup_advice_per_phase: vec![1, 0],
+            lookup_bits: Some(15),
+            num_instance_columns: 1,
+        };
+        assert!(super::super::super::same_base_params(
+            &original,
+            &original.clone()
+        ));
+        let mutations: [fn(&mut BaseCircuitParams); 6] = [
+            |p| p.k += 1,
+            |p| p.num_advice_per_phase.swap(0, 1),
+            |p| p.num_fixed += 1,
+            |p| p.num_lookup_advice_per_phase.swap(0, 1),
+            |p| p.lookup_bits = None,
+            |p| p.num_instance_columns += 1,
+        ];
+        for mutate in mutations {
+            let mut substituted = original.clone();
+            mutate(&mut substituted);
+            assert!(!super::super::super::same_base_params(
+                &original,
+                &substituted
+            ));
+        }
+    }
+
+    #[test]
+    fn ordinary_proving_refusals_keep_the_canonical_typed_diagnostic() {
+        let mut diagnostics = std::collections::BTreeSet::new();
+        for error in [
+            KagemushaOrdinaryIdentityErrorV1::Rejected,
+            KagemushaOrdinaryIdentityErrorV1::Custody,
+            KagemushaOrdinaryIdentityErrorV1::UnknownOutcome,
+        ] {
+            let KagemushaArtifactGenerationErrorV1::CircuitBuild(reason) =
+                ordinary_proving_error(error)
+            else {
+                panic!("ordinary refusal changed its canonical error owner");
+            };
+            assert_eq!(reason, error.to_string());
+            diagnostics.insert(reason);
+        }
+        assert_eq!(diagnostics.len(), 3);
+        let error = crate::kagemusha_v1_recursion::KagemushaRecursionErrorV1::UnsupportedVersion;
+        let expected = error.to_string();
+        let KagemushaArtifactGenerationErrorV1::CircuitBuild(reason) =
+            ordinary_proving_error(error)
+        else {
+            panic!("recursive refusal changed its canonical error owner");
+        };
+        assert_eq!(reason, expected);
+    }
 }

@@ -232,33 +232,34 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
     ));
     let id: TriggerId = "generic_effect_callback".parse().unwrap();
-    let (mut setup, _setup_recording) = output_fixture_setup(&state);
-    let mut transaction = setup.transaction_for_callback_testing();
-    Grant::account_permission(
-        iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
-            authority: ALICE_ID.clone(),
-        },
-        ALICE_ID.clone(),
-    )
-    .execute(&ALICE_ID, &mut transaction)
-    .unwrap();
-    Register::trigger(Trigger::new(
-        id.clone(),
-        Action::new(
-            Executable::Ivm(IvmBytecode::from_compiled(program)),
-            Repeats::Exactly(1),
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            },
             ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(id.clone())
-                .under_authority(ALICE_ID.clone()),
         )
-        .unwrap(),
-    ))
-    .execute(&ALICE_ID, &mut transaction)
-    .unwrap();
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    drop(setup);
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+        Register::trigger(Trigger::new(
+            id.clone(),
+            Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(program)),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
+    }
     let instruction: InstructionBox = ExecuteTrigger::new(id).into();
     let direct_gas = crate::gas::meter_instructions(std::slice::from_ref(&instruction));
     state.pipeline.overlay_max_instructions = 1;

@@ -8,14 +8,13 @@ struct KagemushaOrdinaryAppIdentityPreparedProjectionV1: Sendable {
   let originalAlias: String
   let challenge: KagemushaOrdinaryAppEnrollmentProjectionV1
 
-  init(_ fields: [Data], enrollmentID: Data) throws {
+  init(_ fields: [Data]) throws {
     let f = fields.map { Data($0) }
-    guard f.count == 8, f[0].count == 8, Self.digest(enrollmentID),
+    guard f.count == 8, f[0].count == 8,
       KagemushaAppPlatformPreparedProjectionV1.nonzero(f[0]), f[1].count == 515,
       f[4].count == 1, f[6].count == 1, Self.digest(f[7]) else { throw Self.invalid() }
     let c = try KagemushaOrdinaryAppEnrollmentProjectionV1(f[2])
-    guard c.enrollmentID == enrollmentID,
-      Data(f[1].prefix(451)) == Data(f[2].suffix(451)),
+    guard Data(f[1].prefix(451)) == Data(f[2].suffix(451)),
       KagemushaAppPlatformPreparedProjectionV1.nonzero(Data(f[1].suffix(64))),
       f[3] == Data(SHA256.hash(data: f[2])), c.platform == f[4][0] else { throw Self.invalid() }
     let alias: String
@@ -38,6 +37,14 @@ struct KagemushaOrdinaryAppIdentityPreparedProjectionV1: Sendable {
         point == nil || keyID == Data(SHA256.hash(data: point!)) else { throw Self.invalid() }
     } else { guard name == originalAlias else { throw Self.invalid() } }
     return name
+  }
+  /// Structural transport projection only; native phase 13 authenticates the issuer signature.
+  static func challenge(transport: Data) throws -> KagemushaOrdinaryAppEnrollmentProjectionV1 {
+    guard transport.count == 515,
+      KagemushaAppPlatformPreparedProjectionV1.nonzero(Data(transport.suffix(64))) else { throw invalid() }
+    let domain = Data("iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0".utf8)
+    let size = withUnsafeBytes(of: UInt64(451).littleEndian) { Data($0) }
+    return try KagemushaOrdinaryAppEnrollmentProjectionV1(domain + size + Data(transport.prefix(451)))
   }
   static func digest(_ bytes: Data) -> Bool { KagemushaAppPlatformPreparedProjectionV1.digest(bytes) }
   static func point(_ bytes: Data) -> Bool {
@@ -116,5 +123,38 @@ enum KagemushaOrdinaryAppIdentityRecoveryActionV1: Equatable {
     case 1,3:throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
     default:throw KagemushaOrdinaryAppIdentityPreparedProjectionV1.invalid()
     }
+  }
+}
+
+/// Exact native reservation carrier. Decoding it creates neither a native owner nor authority.
+struct KagemushaOrdinaryAppIdentityReservationProjectionV1: Sendable {
+  let fields: [Data]
+  var ticket: Data { fields[0] }
+  init(_ offered: [Data]) throws {
+    let f = offered.map { Data($0) }
+    guard f.count == 8, f[0].count == 8, f[0].contains(where: { $0 != 0 }),
+      (1...2048).contains(f[1].count), !f[1].contains(0),
+      String(data: f[1], encoding: .utf8) != nil,
+      (2...6).allSatisfy({ KagemushaOrdinaryAppIdentityPreparedProjectionV1.digest(f[$0]) }),
+      f[7] == Self.requestID(nonce: f[2]) else {
+      throw KagemushaOrdinaryAppIdentityPreparedProjectionV1.invalid()
+    }
+    fields = f
+  }
+  /// Correlation only. Native admission independently verifies account custody and the signed original.
+  func matches(_ challenge: KagemushaOrdinaryAppEnrollmentProjectionV1) -> Bool {
+    let body = Data(challenge.canonicalSigningBytes.suffix(451))
+    return fields[2] == challenge.clientNonce && fields[3] == challenge.releaseID
+      && fields[4] == challenge.profileID && fields[5] == challenge.laneID
+      && fields[6] == Data(body[(3 + 11 * 32)..<(35 + 11 * 32)])
+  }
+  private static func requestID(nonce: Data) -> Data {
+    var bytes = Array(nonce.prefix(16)); bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    let digits = Array("0123456789abcdef".utf8)
+    let hex = bytes.flatMap { [digits[Int($0 >> 4)], digits[Int($0 & 15)]] }
+    let text = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32]
+      .map { String(decoding: hex[$0], as: UTF8.self) }.joined(separator: "-")
+    return Data(text.utf8)
   }
 }

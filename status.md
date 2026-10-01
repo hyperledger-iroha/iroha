@@ -58,25 +58,23 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-The latest pinned Taira observation on September 30 found four d431 validators
-at height 10 with matching CommitQCs and empty queues. Health, liveness, faucet
-policy and MCP responded, but every validator returned readiness HTTP 503. The
-beacon install resolved to Applied; its proof and signer-provider activation
-remained unfinished. The deployed recovery CLI loses the Canary operator key,
-and its source-bound forward lease has expired. See the
-[readiness incident](docs/incidents/2026-09-30-taira-readiness.md).
+Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
+All four validators return readiness HTTP 200, have three peers, and converged
+at height 3 after an ordinary signed transaction resolved to StateApplied.
+The public endpoint at `https://taira.sora.org` has verified TLS, and the
+same-revision basic doctor reports healthy public routes and curated MCP tools.
+The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes recovery arguments, checks readiness and initializes fresh
-safety records. Authenticated Linux qualification and the authorized fresh
-current-protocol cutover remain pending. Current codecs cannot authenticate the
-retired runtime. The [reset runbook](specs/runbooks/sumeragi_taira_reset.md) requires
-fresh four-validator readiness, write and restart evidence. On-chain governance
-owns deployment policy; a fixed-duration fault soak is not a cutover prerequisite.
+Current source fixes deployment recovery and initializes fresh safety records
+before first startup. Deployment preparation, transfer and the routine updater
+accept an authenticated build-only candidate without a full regression gate.
+On-chain governance owns deployment policy; no fixed 24-hour fault test is a
+deployment prerequisite for testnet or production.
 
-The retained height-3598 ledger remains a separate recovery obligation. Physical
-DPN, paid `dpn`/`admin@dpn`, clean-client completion and production beacon custody
-are not qualified by fresh bootstrap. Validators run in a Linux guest on
-MacStadium in Dublin; use the approved deployment tooling.
+Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
+completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
+use the approved deployment tooling. Retained incident records describe the
+[previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -85,17 +83,23 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Historical epoch10 Core/Kagami, CLI and network builds
-pass, along with 1,144 default Core controls and two four-validator component
-checks. The workspace all-targets check fails on six fixture/API errors. Apple
-ABI-25 packaging passes; Swift host fixtures and physical-device qualification
-remain open. A subsequent merge changes compiled inputs, invalidating remaining
-in-flight Core, IVM and FASTPQ qualification. Reconciled repairs need normal builds
-and tests on the completed source. Full workspace and same-candidate release
-validation remain incomplete. Dependency ownership and measured compiler memory
-remain gates; see the [architecture plan](specs/first_release_architecture_redesign.md)
-and [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
+Ordinary daemon/CLI and normal native/JS/Python frontends have recorded passes
+after compiler and runtime-owner extraction. Fresh targeted privacy controls and
+Core/bridge authority checks have scoped runtime coverage; the binary inventory
+admits 98 declared targets and 23 defaults. Recorded IVM-only, feature-hygiene,
+dependency-boundary and retired-codec pattern guards pass. An earlier all-targets
+check stopped on six fixture/API errors; the latest failed when a new Core ZK
+ordinary Guard composition source was unavailable during compilation. Subsequent
+Core ZK and metadata checks exposed
+issuer-type and API/fixture compilation errors. Source repairs are applied;
+fresh compiler and focused-test validation remain pending. The resolved SDK
+merge remains externally owned. A merge-free workspace retry, metadata
+freshness and observational warm timings remain pending. Apple ABI-25 packaging passes; Swift host fixtures and physical-device
+qualification remain open. Concurrent source and HEAD changes qualify each
+result. Full workspace and same-candidate release validation remain incomplete;
+dependency ownership and pinned compiler-memory measurements remain gates. See
+the [architecture plan](specs/first_release_architecture_redesign.md) and
+[compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
 introduced units and a 13-GiB per-unit release ceiling. Core/Torii test and daemon

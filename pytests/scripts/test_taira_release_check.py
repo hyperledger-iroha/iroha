@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1486 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1519 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1491 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1524 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -3168,6 +3168,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
             stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DEPLOY_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
             stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
@@ -3208,6 +3209,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
             stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DEPLOY_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
             stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
@@ -3250,6 +3252,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "TORII_UNIT_STAGES", ()))
             stack.enter_context(patch.object(gate, "TEST_NETWORK_STAGES", ()))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", ()))
+            stack.enter_context(patch.object(gate, "DEPLOY_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_STAGES", ()))
             stack.enter_context(patch.object(gate, "PROOF_FLOW_STAGES", ()))
             stack.enter_context(patch.object(gate, "TORII_SHARED_STAGES", ()))
@@ -3889,7 +3892,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                 for name in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
                              "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "DEPLOY_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
                              "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES",
-                             "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+                             "PROOF_STAGES", "PROOF_FLOW_STAGES", "DEPLOY_STAGES"):
                     stack.enter_context(patch.object(gate, name, ()))
                 copies = FixtureCopies({name: "/warm/" + name for name in ("config", "cli", "network")})
                 copies.observations = [{"selection": name, "sha256": str(index) * 64, "size": 20,
@@ -4278,7 +4281,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
 
     def test_mixed_batch_includes_configuration_in_one_graph_and_requires_every_artifact(self):
-        names = ("config", "config-unit", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
+        names = ("config", "config-unit", "data-model", "deploy", "proof", "proof-flows", "crypto", "p2p", "core", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "network")
         lines = "".join(self.artifact(name) for name in reversed(names))
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: {name: row["executable"] for name, row in rows.items()}), \
@@ -4288,10 +4291,10 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(spawn.call_args.args[0], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml",
             "test", "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-        "-p", "iroha_config", "-p", "iroha_data_model", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
+        "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_deploy", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_sumeragi", "-p", "iroha_schema_gen", "-p", "iroha_test_network",
             "-p", "iroha", "-p", "iroha_wallet", "-p", "iroha_torii", "-p", "iroha_torii_shared", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
             "--test", "torii_nexus_sorafs", "--test", "taira_consensus_contracts", "--features", "iroha_data_model/transparent_api", "--no-run", "--message-format=json-render-diagnostics"])
-        for missing in ("config", "torii", "torii-shared", "torii-lifecycle", "network"):
+        for missing in ("config", "deploy", "torii", "torii-shared", "torii-lifecycle", "network"):
             incomplete = "".join(self.artifact(name) for name in names if name != missing)
             with self.subTest(missing=missing), \
                  patch.object(gate.subprocess, "Popen", return_value=self.process(incomplete)), \

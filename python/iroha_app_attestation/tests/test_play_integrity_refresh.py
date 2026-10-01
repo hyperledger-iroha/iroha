@@ -88,6 +88,7 @@ class PlayIntegrityRefreshTests(unittest.TestCase):
                 self.select(replace(self.challenge,**change))
         with self.assertRaises(AttestationRejected):self.select(certificate=self.certificate+b'\0')
         with self.assertRaises(AttestationRejected):self.select(policy=replace(self.f.policy,play_integrity_policy=None))
+        with self.assertRaises(AttestationRejected):self.select(policy=replace(self.f.policy,circuit_issuer_public_key=b'\x04'+b'\x99'*64))
         altered=bytearray(self.frame); altered[5+746]^=1
         with self.assertRaises(AttestationRejected):self.select(frame=bytes(altered))
 
@@ -117,7 +118,8 @@ class PlayIntegrityRefreshTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(body[354:362],'little'),self.challenge.policy_epoch)
         self.assertEqual(int.from_bytes(body[362:370],'little'),self.challenge.hardware_epoch)
         self.assertEqual(int.from_bytes(frame[407:409],'little'),len(original))
-        self.assertEqual(frame[409:-32],original); self.assertEqual(frame[-32:],f.public)
+        self.assertEqual(frame[409:-97],original); self.assertEqual(frame[-97:-65],f.public)
+        self.assertEqual(frame[-65:],f.policy.circuit_issuer_public_key)
         for altered in (replace(proof,request_hash=b'\xa1'*32),replace(proof,policy_digest=b'\xa2'*32)):
             with self.assertRaises(AttestationRejected):refresh_lease_signing_request(self.challenge,original,
                 altered,f.policy,verified_at_ms=f.now,issued_at_ms=f.now,expires_at_ms=refresh_before,

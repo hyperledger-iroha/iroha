@@ -185,3 +185,82 @@ fn actual_metal_leaf_batches_match_canonical_sha3_for_every_oracle() {
         }
     }
 }
+
+#[test]
+fn overcapacity_leaf_and_prepared_batches_refuse_without_changing_outputs() {
+    let binding = Context::new(b"SHA3 overcapacity original batch refusal").unwrap();
+    let frames = (0..=CAPACITY)
+        .map(|index| {
+            binding
+                .prepare_leaf(Oracle::QuotientAndMask, index as u32, &[0; 96])
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut output = SecretPolynomial::<[u8; 32]>::zeroed(CAPACITY + 1).unwrap();
+    assert!(execute_prepared(&frames, &mut output, DigestExecutionV1::Cpu).is_err());
+    assert!(output.iter().all(|bytes| *bytes == [0; 32]));
+    assert!(
+        hash(
+            &binding,
+            Oracle::QuotientAndMask,
+            &[0; CAPACITY + 1],
+            &vec![0; (CAPACITY + 1) * 96],
+            96,
+            &mut output,
+            DigestExecutionV1::Cpu,
+        )
+        .is_err()
+    );
+    assert!(output.iter().all(|bytes| *bytes == [0; 32]));
+}
+
+#[test]
+fn bounded_leaf_jobs_return_the_first_input_error_after_workers_finish() {
+    let binding = Context::new(b"ordered SHA3 worker errors").unwrap();
+    let mut malformed = [0; 96];
+    malformed[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+    let malformed_error = format!(
+        "compact leaf batch: {}",
+        binding
+            .hash_leaf(Oracle::QuotientAndMask, 0, &malformed)
+            .unwrap_err()
+    );
+    for threads in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                for malformed_first in [false, true] {
+                    let indices = if malformed_first {
+                        [0, usize::MAX]
+                    } else {
+                        [usize::MAX, 0]
+                    };
+                    let mut payload = SecretPolynomial::<u8>::zeroed(2 * 96).unwrap();
+                    let offset = if malformed_first { 0 } else { 96 };
+                    payload[offset..offset + 96].copy_from_slice(&malformed);
+                    let mut output = SecretPolynomial::<[u8; 32]>::zeroed(2).unwrap();
+                    let error = hash(
+                        &binding,
+                        Oracle::QuotientAndMask,
+                        &indices,
+                        &payload,
+                        96,
+                        &mut output,
+                        DigestExecutionV1::Cpu,
+                    )
+                    .unwrap_err();
+                    let expected = if malformed_first {
+                        malformed_error.as_str()
+                    } else {
+                        "compact leaf index exceeds u32"
+                    };
+                    assert!(
+                        matches!(error, Error::InvalidTraceShape { details } if details == expected)
+                    );
+                    assert!(output.iter().all(|value| *value == [0; 32]));
+                }
+            });
+    }
+}

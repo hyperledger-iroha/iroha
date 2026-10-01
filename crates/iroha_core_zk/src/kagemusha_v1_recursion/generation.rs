@@ -545,6 +545,29 @@ pub struct KagemushaAppAttestRecursiveSelectionWitnessV1<'a> {
     pub app_policy: &'a KagemushaAppAttestationAuthorityPolicyV1,
 }
 
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    )
+))]
+/// Exact ordinary originals consumed privately by both aggregate-State parities.
+/// These borrowed model values grant no Native custody or monetary capability.
+#[derive(Clone, Copy)]
+pub struct KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a> {
+    /// Complete canonical enrollment credential, including both issuer signatures.
+    pub credential: &'a iroha_data_model::kagemusha::KagemushaOrdinaryAppCredentialV1,
+    /// Exact original approval wrapper and platform DER/CBOR evidence.
+    pub approval: &'a iroha_data_model::kagemusha::KagemushaAppOperationApprovalV1,
+    /// Genuine current Android refresh original, absent for initial verdict or Apple.
+    pub integrity_lease:
+        Option<&'a iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseV1>,
+    /// Independent prior Apple assertion counter, never a financial logical index.
+    pub previous_app_attest_counter: Option<u32>,
+}
+
 #[cfg(any(
     test,
     feature = "kagemusha-real-proof-harness",
@@ -576,6 +599,8 @@ pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
     pub guard_relation: KagemushaGuardBundleRelationWitnessV1,
     /// Original App Attest evidence for an app-backed transition; absent for a checkpoint lane.
     pub hardware_selection: Option<KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
+    /// Exact ordinary Guard family; mutually exclusive with OEM selection material.
+    pub ordinary_selection: Option<KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a>>,
     /// Eq predecessor state protocol compiled from the authenticated predecessor state key.
     pub eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     /// Ep predecessor state protocol compiled from the authenticated predecessor state key.
@@ -717,6 +742,7 @@ impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
             mint_credit: self.mint_credit,
             guard_relation: self.guard_relation,
             hardware_selection: self.hardware_selection,
+            ordinary_selection: self.ordinary_selection,
             eq_parent_protocol: self.eq_parent_protocol,
             ep_parent_protocol: self.ep_parent_protocol,
             eq_parent_instances: self.eq_parent_instances,

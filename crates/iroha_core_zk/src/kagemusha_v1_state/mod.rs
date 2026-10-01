@@ -53,9 +53,10 @@ pub(crate) use authenticated_core_owner::{
 mod ordinary_app_identity;
 #[cfg(unix)]
 pub use ordinary_app_identity::{
-    KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
-    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryPreparationCarrierV1,
-    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+    KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
+    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaOrdinaryPreparationCarrierV1, KagemushaOrdinaryPreparationReservationV1,
+    KagemushaOrdinaryPreparationSelectedOriginalsV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
     KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
 };
 mod candidate_lifecycle;
@@ -519,6 +520,22 @@ impl KagemushaStateProofReleaseV1 {
                 release,
                 canonical_empty_effect_digest,
             ),
+            Arc::from(release.enabled_profiles()),
+            release.purpose(),
+        )
+    }
+
+    /// Select the independently signed ordinary Guard family for an actual ordinary State.
+    /// This does not grant custody; the Native owner and actual paired proof remain required.
+    /// # Errors
+    /// Rejects absent or substituted ordinary helper roles or another common proof suite.
+    pub fn from_authenticated_ordinary_release(
+        release: &KagemushaAuthenticatedReleaseV1,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        let empty = canonical_empty_durable_effect_digest_v1(release.release_id())?;
+        Self::from_release_parts(
+            KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(release, empty)
+                .map_err(|_| KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool)?,
             Arc::from(release.enabled_profiles()),
             release.purpose(),
         )

@@ -5,7 +5,8 @@
 //! Native admission additionally authenticates the whole issuer original and current journal.
 
 use super::{
-    DigestV1, KagemushaProviderRootCircuitParamsV1,
+    DigestV1,
+    ordinary_issuer_config::{OrdinaryIssuerConfigV1, OrdinaryIssuerTableV1},
     provider_policy_root::ProviderPolicyRootConfigV1,
 };
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
 };
 use halo2_base::{
     AssignedValue,
-    gates::circuit::{BaseConfig, builder::BaseCircuitBuilder},
+    gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
 };
 use halo2_proofs::{
     circuit::{Layouter, V1, Value},
@@ -28,10 +29,27 @@ const UNUSABLE: usize = 9;
 const MODE: u64 = 0x4f_41_47_01;
 
 #[derive(Clone, Debug)]
+pub(crate) struct KagemushaOrdinaryGuardCircuitParamsV1 {
+    pub(crate) base: BaseCircuitParams,
+    pub(crate) provider_policy_root: DigestV1,
+    pub(super) issuer_table: OrdinaryIssuerTableV1,
+}
+impl Default for KagemushaOrdinaryGuardCircuitParamsV1 {
+    fn default() -> Self {
+        Self {
+            base: BaseCircuitParams::default(),
+            provider_policy_root: [0; 32],
+            issuer_table: OrdinaryIssuerTableV1::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct OrdinaryGuardConfig<F: KagemushaPoseidonFieldV1> {
     base: BaseConfig<F>,
     sha: PastaSha256ConfigV1,
     provider: ProviderPolicyRootConfigV1,
+    issuer: OrdinaryIssuerConfigV1,
     mode: Column<Advice>,
     selected: Selector,
 }
@@ -39,7 +57,7 @@ pub(crate) struct OrdinaryGuardConfig<F: KagemushaPoseidonFieldV1> {
 impl<F: KagemushaPoseidonFieldV1> OrdinaryGuardConfig<F> {
     fn configure(
         meta: &mut ConstraintSystem<F>,
-        params: KagemushaProviderRootCircuitParamsV1,
+        params: KagemushaOrdinaryGuardCircuitParamsV1,
     ) -> Self {
         let usable = (1_usize << params.base.k) - UNUSABLE;
         let mut base = BaseConfig::configure(meta, params.base);
@@ -57,6 +75,7 @@ impl<F: KagemushaPoseidonFieldV1> OrdinaryGuardConfig<F> {
             base,
             sha: PastaSha256ConfigV1::configure(meta),
             provider: ProviderPolicyRootConfigV1::configure(meta, params.provider_policy_root),
+            issuer: OrdinaryIssuerConfigV1::configure(meta, &params.issuer_table),
             mode,
             selected,
         }
@@ -69,6 +88,10 @@ pub(crate) struct KagemushaOrdinaryAppGuardEqCircuitV1 {
     pub(super) jobs: PastaSha256JobsV1<Fp>,
     pub(super) provider_policy_root: DigestV1,
     pub(super) provider_cells: [AssignedValue<Fp>; 2],
+    pub(super) issuer_table: OrdinaryIssuerTableV1,
+    pub(super) issuer_index: usize,
+    pub(super) issuer_cells: [AssignedValue<Fp>; 65],
+    pub(super) profile_cells: [AssignedValue<Fp>; 2],
 }
 #[derive(Clone)]
 pub(crate) struct KagemushaOrdinaryAppGuardEpCircuitV1 {
@@ -76,6 +99,10 @@ pub(crate) struct KagemushaOrdinaryAppGuardEpCircuitV1 {
     pub(super) jobs: PastaSha256JobsV1<Fq>,
     pub(super) provider_policy_root: DigestV1,
     pub(super) provider_cells: [AssignedValue<Fq>; 2],
+    pub(super) issuer_table: OrdinaryIssuerTableV1,
+    pub(super) issuer_index: usize,
+    pub(super) issuer_cells: [AssignedValue<Fq>; 65],
+    pub(super) profile_cells: [AssignedValue<Fq>; 2],
 }
 
 macro_rules! ordinary_circuit {
@@ -83,11 +110,12 @@ macro_rules! ordinary_circuit {
         impl Circuit<$field> for $name {
             type Config = OrdinaryGuardConfig<$field>;
             type FloorPlanner = V1;
-            type Params = KagemushaProviderRootCircuitParamsV1;
+            type Params = KagemushaOrdinaryGuardCircuitParamsV1;
             fn params(&self) -> Self::Params {
                 Self::Params {
                     base: self.builder.config_params.clone(),
                     provider_policy_root: self.provider_policy_root,
+                    issuer_table: self.issuer_table.clone(),
                 }
             }
             fn without_witnesses(&self) -> Self {
@@ -96,6 +124,10 @@ macro_rules! ordinary_circuit {
                     jobs: self.jobs.unknown(),
                     provider_policy_root: self.provider_policy_root,
                     provider_cells: self.provider_cells,
+                    issuer_table: self.issuer_table.clone(),
+                    issuer_index: self.issuer_index,
+                    issuer_cells: self.issuer_cells,
+                    profile_cells: self.profile_cells,
                 }
             }
             fn configure_with_params(
@@ -137,6 +169,14 @@ macro_rules! ordinary_circuit {
                     &self.builder.core().copy_manager,
                     self.builder.witness_gen_only(),
                 )?;
+                config.issuer.synthesize(
+                    &mut layouter,
+                    self.issuer_index,
+                    self.profile_cells,
+                    self.issuer_cells,
+                    &self.builder.core().copy_manager,
+                    self.builder.witness_gen_only(),
+                )?;
                 self.jobs.synthesize(
                     &config.sha,
                     &mut layouter,
@@ -150,8 +190,22 @@ macro_rules! ordinary_circuit {
 ordinary_circuit!(KagemushaOrdinaryAppGuardEqCircuitV1, Fp);
 ordinary_circuit!(KagemushaOrdinaryAppGuardEpCircuitV1, Fq);
 
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-production-prover",
+    feature = "kagemusha-real-proof-harness"
+))]
 #[path = "ordinary_guard_composition.rs"]
 mod composition;
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-production-prover",
+    feature = "kagemusha-real-proof-harness"
+))]
 pub(crate) use composition::{OrdinaryGuardWitnessV1, build_ordinary_app_guard_pair_v1};
+#[cfg(any(
+    test,
+    feature = "kagemusha-production-prover",
+    feature = "kagemusha-real-proof-harness"
+))]
+pub(crate) use composition::{bind_credential, bind_subject};

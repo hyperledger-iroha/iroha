@@ -74,7 +74,7 @@ class OrdinaryIssuanceTests(unittest.TestCase):
         self.policy = OrdinaryReleasePolicy(self.subject.release_id,self.subject.network_id,
             self.subject.hardware_profile_id,self.subject.suite_id,self.subject.trust_policy_digest,
             self.subject.app_authority_policy_digest,self.subject.issuer_policy_digest,self.subject.policy_epoch,
-            min(self.subject.issued_at_ms,self.now-1000),self.now+86400000,b'\x22'*32,b'\x23'*32,self.public,self.public,
+            min(self.subject.issued_at_ms,self.now-1000),self.now+86400000,b'\x22'*32,b'\x23'*32,self.public,self.public,self.point,
             3600000,self.platform,self.integrity)
         self.request = OrdinaryCredentialRequest('issue',self.subject.attestation_challenge(),
             self.sign_subject(self.subject),self.point,self.raw,self.pop,'android_keystore','opaque-token')
@@ -287,7 +287,8 @@ class OrdinaryIssuanceTests(unittest.TestCase):
                 e=connection.execute('SELECT raw_admission_sha256,possession_original,checked_apple_counter FROM ordinary_possession_originals').fetchone()
             self.assertEqual(e[0],hashlib.sha256(self.raw_original).digest())
             self.assertIn(self.pop,e[1]);self.assertEqual(e[2],0)
-            self.assertEqual(len(request),831)
+            self.assertEqual(len(request),896)
+            self.assertEqual(request[831:],self.policy.circuit_issuer_public_key)
             return b'public mocked output, deliberately not canonical Norito'
         with (patch('iroha_app_attestation.play_integrity.urllib.request.build_opener') as network,
              patch('iroha_app_attestation.ordinary_issuance.encode_ordinary_with_iroha',side_effect=encode) as encoder):

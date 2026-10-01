@@ -87,7 +87,7 @@ class DurableOrdinaryIntegrityRefreshIssuer:
 
     def _saved_input(self,request,selected,evidence,signing,row):
         original=row[5]
-        require(type(original) is bytes and 449 <= len(original) <= 513
+        require(type(original) is bytes and 514 <= len(original) <= 578
                 and original[:5]==b'KRPI\x01',"retained refresh signing input absent")
         body=original[5:407]
         issued=int.from_bytes(body[386:394],'little');expires=int.from_bytes(body[394:402],'little')

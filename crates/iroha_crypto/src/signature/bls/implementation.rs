@@ -286,6 +286,7 @@ impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
 }
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
 /// One pre-aggregation group: parsed public keys that all signed the paired message.
+#[cfg(test)]
 type PublicKeyGroup<'a, E> = (&'a [&'a PublicKey<E>], &'a [u8]);
 #[cfg(feature = "rand")]
 fn checked_entropy_from_rng<R>(
@@ -603,6 +604,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     /// group sign the same message, so aggregation is rogue-key safe only with `PoPs`), that
     /// the messages are distinct and that no key repeats inside a group. Rejects an empty
     /// group list, an empty group and a group whose key sum is the identity element.
+    #[cfg(test)]
     pub(crate) fn verify_preaggregated_multi_message(
         groups: &[PublicKeyGroup<'_, C::Engine>],
         aggregated_signature: &[u8],

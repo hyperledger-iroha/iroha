@@ -16,12 +16,15 @@ import unittest
 from pathlib import Path
 
 from iroha_app_attestation.attestation import AttestationRejected, RawPlatformProof, device_key_reference
-from iroha_app_attestation.issuance import encode_ordinary_with_iroha
+from iroha_app_attestation.issuance import encode_ordinary_with_iroha, encode_refresh_with_iroha
 from iroha_app_attestation.ordinary_enrollment import (
     CHALLENGE_BODY_BYTES, EnrollmentPossession, EVIDENCE_DOMAIN,
     authenticate_challenge_transport, credential_signing_request, decode_challenge_transport,
 )
 from iroha_app_attestation.play_integrity import PlayIntegrityPolicy, PlayIntegrityProof
+from iroha_app_attestation.play_integrity_refresh import (
+    authenticate_refresh_transport, verify_refresh_possession,
+)
 
 
 def decoded(value):
@@ -119,6 +122,9 @@ class NativeCodecCrossoverTests(unittest.TestCase):
         for row in self.document["vectors"]:
             with self.subTest(platform=row["platform"]):
                 challenge = decode_challenge_transport(decoded(row["signed_preparation_base64"]))
+                circuit_issuer_point = decoded(row["ordinary_issuer_public_key_sec1_base64"])
+                self.assertEqual(len(circuit_issuer_point), 65)
+                self.assertEqual(circuit_issuer_point[0], 4)
                 body = decoded(row["ordinary_credential_signing_body_base64"])
                 self.assertEqual(len(body), 794)
                 point, raw = decoded(row["app_public_key_sec1_base64"]), decoded(row["raw_attestation_base64"])
@@ -131,7 +137,7 @@ class NativeCodecCrossoverTests(unittest.TestCase):
                 proof = RawPlatformProof(hashlib.sha256(raw).digest(), point, device_key_reference(point),
                                          row["platform"], android_security_level=body[3] if challenge.platform_class == 1 else None)
                 possession = EnrollmentPossession(hashlib.sha256(point).digest(), hashlib.sha256(raw).digest(),
-                                                  hashlib.sha256(pop).digest(), evidence_digest, floor)
+                                                  hashlib.sha256(pop).digest(), evidence_digest, floor, body[4+12*32:4+13*32], None)
                 # Fixture projections are inert data, not a real decoded Google verdict.
                 policy = integrity = None
                 if challenge.platform_class == 1:
@@ -143,8 +149,9 @@ class NativeCodecCrossoverTests(unittest.TestCase):
                                                    slot[33:65], "PLAY_RECOGNIZED", "LICENSED", ("MEETS_DEVICE_INTEGRITY",))
                 request = credential_signing_request(challenge, proof, possession, bytes([2]) * 32,
                           bytes([3]) * 32, self.public, 200, 10200, 10000, 20000,
-                          frozenset({1, 2}) if challenge.platform_class == 1 else frozenset(), policy, integrity)
-                self.assertEqual(request, b"KOAC\x01" + body + self.public)
+                          frozenset({1, 2}) if challenge.platform_class == 1 else frozenset(), policy, integrity,
+                          circuit_issuer_point)
+                self.assertEqual(request, b"KOAC\x01" + body + self.public + circuit_issuer_point)
                 expected = decoded(row["ordinary_credential_base64"])
                 first = encode_ordinary_with_iroha(request, self.paths[1], self.originals[1][1], self.key_fd)
                 second = encode_ordinary_with_iroha(request, self.paths[1], self.originals[1][1], self.key_fd)
@@ -178,6 +185,34 @@ class NativeCodecCrossoverTests(unittest.TestCase):
                                          capture_output=True, env={"PATH": "/usr/bin:/bin"}, timeout=10)
                 self.assertNotEqual(invalid.returncode, 0)
                 self.assertEqual(invalid.stdout, b"")
+
+    def test_actual_native_periodic_lease_retains_both_issuer_signatures_and_exact_refresh(self):
+        row = self.document["vectors"][0]
+        refresh = row["integrity_refresh"]
+        self.assertIsNone(self.document["vectors"][1]["integrity_refresh"])
+        challenge = authenticate_refresh_transport(decoded(refresh["signed_refresh_challenge_base64"]),
+            public_key=self.public, openssl_path=self.openssl)
+        self.assertEqual(challenge.signing_bytes(), decoded(refresh["refresh_signing_message_base64"]))
+        self.assertEqual(challenge.attempt_id().hex(), refresh["operation_id"])
+        self.assertEqual(challenge.request_hash().hex(), refresh["play_integrity_request_hash_hex"])
+        self.assertEqual(challenge.possession_message(), decoded(refresh["possession_signing_message_base64"]))
+        point = decoded(row["app_public_key_sec1_base64"])
+        original_der = decoded(refresh["possession_der_base64"])
+        verify_refresh_possession(challenge, point, original_der, self.openssl)
+        body = decoded(refresh["lease_signing_body_base64"])
+        self.assertEqual(len(body), 402)
+        request = (b"KRPI\x01" + body + len(original_der).to_bytes(2, "little") + original_der
+                   + self.public + decoded(row["ordinary_issuer_public_key_sec1_base64"]))
+        expected = decoded(refresh["lease_base64"])
+        self.assertNotEqual(expected, decoded(refresh["lease_ed_original_base64"]))
+        self.assertEqual(len(decoded(refresh["lease_issuer_admission_base64"])), 163)
+        for _ in range(2):
+            actual = encode_refresh_with_iroha(request, self.paths[1], self.originals[1][1], self.key_fd)
+            self.assertEqual(actual, expected)
+            self.assertEqual(os.lseek(self.key_fd, 0, os.SEEK_CUR), 13)
+        wrong_point = request[:-1] + bytes([request[-1] ^ 1])
+        with self.assertRaises(AttestationRejected):
+            encode_refresh_with_iroha(wrong_point, self.paths[1], self.originals[1][1], self.key_fd)
 
 
 if __name__ == "__main__":

@@ -215,7 +215,7 @@ fn complete_query_frames_match_current_canonical_fixtures() {
     #[cfg(not(feature = "ids_projection"))]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_full_identity_frames.json"),
-        "66a36a6d0a10c05917ab9782817784926d8dc1d96dfa39ac31a4973b9edb47f9",
+        "fd10dd777565d2e3cfc05c8a1e6b8da7852139432255e290378709d66d7861d6",
         23,
     );
     #[cfg(feature = "ids_projection")]
