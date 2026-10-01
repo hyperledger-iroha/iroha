@@ -12,7 +12,9 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use halo2_base::gates::circuit::BaseCircuitParams;
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,

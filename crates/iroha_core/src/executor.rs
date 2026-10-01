@@ -24,7 +24,9 @@ use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
 use iroha_crypto::Hash;
 #[cfg(test)]
-use iroha_data_model::nexus::VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX;
+use iroha_data_model::nexus::{
+    VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
+};
 #[cfg(test)]
 use iroha_data_model::prelude::Domain;
 use iroha_data_model::{
@@ -49,7 +51,6 @@ use iroha_data_model::{
         FeeSponsorMultisigOperation, FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
-        VerifiedFeeSponsorVaultAllocation,
     },
     parameter::CustomParameterId,
     permission::Permission,

@@ -1,5 +1,8 @@
 //! Bind the exact executed block, including all outputs, to its certified result preimage.
-use iroha_data_model::{block::SignedBlock, sumeragi_finality::ExecutionResultCommitment};
+use iroha_data_model::{
+    block::SignedBlock,
+    sumeragi_finality::{CommitmentError, ExecutionResultCommitment},
+};
 use std::io;
 
 pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
@@ -18,8 +21,19 @@ pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     // The owning decoder enforces the finite result-preimage ceiling and input-derived
     // cumulative decode budgets. No schedule decoded here selects availability authority.
-    let result = ExecutionResultCommitment::decode(certificate.result_preimage())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let result =
+        ExecutionResultCommitment::decode(certificate.result_preimage()).map_err(|error| {
+            // A local decoder refusal says nothing about the original certified bytes. Preserve
+            // its typed cause and the caller's retained read instead of declaring disk corruption.
+            let kind = if matches!(&error, CommitmentError::Resource(_))
+                && !cfg!(all(test, sumeragi_core_mutation = "HC20"))
+            {
+                io::ErrorKind::WouldBlock
+            } else {
+                io::ErrorKind::InvalidData
+            };
+            io::Error::new(kind, error)
+        })?;
     let (len, hash) = block
         .executed_block_wire_identity()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;

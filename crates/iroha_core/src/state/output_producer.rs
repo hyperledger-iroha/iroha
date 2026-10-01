@@ -368,7 +368,6 @@ mod time;
 
 #[path = "output_network.rs"]
 mod network;
-pub(in crate::state) use network::execute_network_attempt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]

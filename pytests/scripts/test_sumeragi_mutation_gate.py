@@ -398,6 +398,18 @@ def test_hc15_selects_only_the_original_committed_quorum_owner():
     assert not gate.has_switch("HC15")
 
 
+def test_hc16_selects_only_original_lane_signer_ownership_handoffs():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC16"]
+    assert rule.tests == (
+        "sumeragi::lanes::custody::tests::original_signer_state_handoff_retains_backing_and_refuses_foreign_pool",
+        "sumeragi::lanes::custody::tests::original_signer_world_handoff_admits_both_generations_before_replacing_either",
+        "state::deserialize::native_lane_custody_tests::native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_funded",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC16", core=True)
+    assert not gate.has_switch("HC16")
+
+
 def test_hc17_selects_only_current_tip_control_publication_binding():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC17"]
     assert rule.tests == (
@@ -407,3 +419,37 @@ def test_hc17_selects_only_current_tip_control_publication_binding():
     assert not rule.scenarios
     assert gate.has_switch("HC17", core=True)
     assert not gate.has_switch("HC17")
+
+
+def test_hc19_preserves_amx_decoder_refusal_outside_instruction_results():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC19"]
+    assert rule.tests == (
+        "sumeragi::amx::tests::amx_anchor_decode_refusal_cannot_publish_even_when_instruction_error_is_caught",
+        "sumeragi::amx::tests::amx_relay_decode_refusal_keeps_original_undecided_record_and_retries_proof",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC19", core=True)
+    assert not gate.has_switch("HC19")
+
+
+def test_hc18_selects_only_original_lane_sample_ownership_handoffs():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC18"]
+    assert rule.tests == (
+        "sumeragi::lanes::custody::tests::sample_state_admission_refuses_unfunded_source",
+        "sumeragi::lanes::step::sample_owner_tests::sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix",
+        "state::deserialize::native_lane_custody_tests::native_lane_sample_snapshot_retains_raw_source_through_both_cut_refusal_and_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC18", core=True)
+    assert not gate.has_switch("HC18")
+
+
+def test_hc20_preserves_original_stored_result_read_on_decoder_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC20"]
+    assert rule.tests == (
+        "sumeragi::block_store::body_read::tests::stored_result_decode_refusal_retains_original_decoded_owners_and_retries",
+        "sumeragi::block_store::committed_read::tests::committed_result_decode_refusal_keeps_original_read_slot_and_retries",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC20", core=True)
+    assert not gate.has_switch("HC20")

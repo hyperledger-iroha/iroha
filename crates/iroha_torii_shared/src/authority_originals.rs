@@ -65,7 +65,7 @@ pub struct NativeAuthorityOriginalsRequestV1 {
     pub selector: NativeAuthorityOriginalsSelectorV1,
 }
 
-/// Finite typed selectors; no table names, StatePaths, key bytes or raw prefixes.
+/// Finite typed selectors; no table names, state paths, key bytes or raw prefixes.
 #[derive(
     Debug,
     Clone,
@@ -117,6 +117,10 @@ pub enum NativeAuthorityOriginalsSelectorV1 {
     no_fast_from_json
 )]
 #[norito_schema(name = "iroha_torii_shared::authority_originals::NativeAuthorityOriginalsFamilyV1")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "retain fixed-size owned family values inline without introducing a separate heap owner"
+)]
 pub enum NativeAuthorityOriginalsFamilyV1 {
     /// Complete canonical account binding keys and selected originals.
     AccountAlias(NativeAccountAliasStateV1),
@@ -234,7 +238,12 @@ impl NativeAuthorityOriginalsV1 {
                 NativeAuthorityOriginalsFamilyV1::AccountAlias(state),
             ) => {
                 if state.alias.label != name.label
-                    || state.alias.domain.as_ref().map(|d| d.name()) != name.domain.as_ref()
+                    || state
+                        .alias
+                        .domain
+                        .as_ref()
+                        .map(iroha_data_model::account::AccountAliasDomain::name)
+                        != name.domain.as_ref()
                     || state.binding_keys.len() > MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1
                 {
                     return Err(refused(
@@ -426,7 +435,7 @@ fn bounded_row<T: norito::NoritoSerialize>(row: &T) -> Result<(), norito::Error>
 pub struct NativeAccountAliasStateV1 {
     /// Native numeric alias resolved against the retained native catalog.
     pub alias: AccountAlias,
-    /// Every canonical world.account_aliases key, without reverse-index substitution.
+    /// Every canonical `world.account_aliases` key, without reverse-index substitution.
     pub binding_keys: Vec<AccountAlias>,
     /// Exact selected originals; None only when the binding is absent at this cut.
     #[norito(required)]
@@ -448,13 +457,13 @@ pub struct NativeAccountAliasStateV1 {
 #[norito(deny_unknown_fields, no_fast_from_json)]
 #[norito_schema(name = "iroha_torii_shared::authority_originals::NativeAccountAliasOriginalV1")]
 pub struct NativeAccountAliasOriginalV1 {
-    /// Actual world.account_aliases value.
+    /// Actual `world.account_aliases` value.
     pub bound_account: AccountId,
     /// Entire stored native rekey record, including history and provenance.
     pub rekey_record: AccountRekeyRecord,
     /// Actual Owned<AccountDetails>, preserving its stored label and identifiers.
     pub account_value: AccountValue,
-    /// Bare native NameRecord bytes at the server-derived account lease StatePath.
+    /// Bare native `NameRecord` bytes at the server-derived account lease `StatePath`.
     pub lease_value: Vec<u8>,
 }
 
@@ -479,7 +488,7 @@ pub struct NativeGlobalFeeProgramStateV1 {
     pub fee_asset: AssetDefinitionId,
     /// Every canonical world.assets key.
     pub asset_keys: Vec<AssetId>,
-    /// Every canonical world.fee_sponsor_programs key.
+    /// Every canonical `world.fee_sponsor_programs` key.
     pub program_keys: Vec<FeeSponsorProgramId>,
     /// Every canonical immutable program-revision key.
     pub revision_keys: Vec<FeeSponsorProgramRevisionKey>,
@@ -536,7 +545,7 @@ pub struct NativeAuthorityOriginalsV1 {
     pub originals: NativeAuthorityOriginalsFamilyV1,
 }
 
-/// Borrowed exact encoder of NativeAccountAliasOriginalV1; allocations stay with the original finite owner.
+/// Borrowed exact encoder of `NativeAccountAliasOriginalV1`; allocations stay with the original finite owner.
 #[derive(NoritoSerialize, JsonSerialize)]
 pub struct NativeAccountAliasOriginalRefV1<'a> {
     bound_account: FieldRef<'a, AccountId>,
@@ -563,7 +572,7 @@ impl<'a> NativeAccountAliasOriginalRefV1<'a> {
     }
 }
 
-/// Borrowed exact encoder of NativeAccountAliasStateV1; allocations stay with the original finite owner.
+/// Borrowed exact encoder of `NativeAccountAliasStateV1`; allocations stay with the original finite owner.
 #[derive(NoritoSerialize, JsonSerialize)]
 pub struct NativeAccountAliasStateRefV1<'a> {
     alias: FieldRef<'a, AccountAlias>,
@@ -587,7 +596,7 @@ impl<'a> NativeAccountAliasStateRefV1<'a> {
     }
 }
 
-/// Borrowed exact encoder of NativeGlobalFeeProgramStateV1; allocations stay with the original finite owner.
+/// Borrowed exact encoder of `NativeGlobalFeeProgramStateV1`; allocations stay with the original finite owner.
 #[derive(NoritoSerialize, JsonSerialize)]
 pub struct NativeGlobalFeeProgramStateRefV1<'a> {
     program_id: FieldRef<'a, FeeSponsorProgramId>,
@@ -647,7 +656,7 @@ impl<'a> NativeGlobalFeeProgramStateRefV1<'a> {
     }
 }
 
-/// Borrowed exact encoder of NativeAuthorityOriginalsV1; allocations stay with the original finite owner.
+/// Borrowed exact encoder of `NativeAuthorityOriginalsV1`; allocations stay with the original finite owner.
 #[derive(NoritoSerialize, JsonSerialize)]
 pub struct NativeAuthorityOriginalsRefV1<'a> {
     request_sha256: [u8; 32],

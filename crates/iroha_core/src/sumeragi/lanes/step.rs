@@ -102,9 +102,18 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
     let time_ms = u64::try_from(block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
     let policy = lane_policy(&block.world);
     let network = *block.network_id();
-    let mut state = block.world.sumeragi_lanes.get().clone();
+    let budget = block.pipeline_ivm_prepared_cache.execution_budget();
+    let mut state =
+        super::custody::admit_state(block.world.sumeragi_lanes.get(), budget).map_err(|error| {
+            match error {
+                iroha_data_model::sumeragi_lanes::LaneStateAdmissionError::Signers(
+                    iroha_data_model::sumeragi_lanes::CustodySignersAdmissionError::Invalid,
+                ) => LaneStepError::Custody(CustodyViolation::Signers),
+                _ => LaneStepError::CustodyAllocation,
+            }
+        })?;
     apply_merges(&mut state, input, height)?;
-    record_sample(&mut state, policy.as_ref(), input, height, time_ms);
+    record_sample(&mut state, policy.as_ref(), input, height, time_ms, budget)?;
     super::custody::prepare_retirement(&mut state, &block.world, height)
         .map_err(LaneStepError::Custody)?;
     retire(&mut state, height);
@@ -128,6 +137,7 @@ pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), 
         block.chain_id().as_str(),
         policy.as_ref(),
         height,
+        budget,
     )
     .map_err(|error| match error {
         super::custody::CustodyError::Invalid(reason) => LaneStepError::Custody(reason),
@@ -170,35 +180,43 @@ fn record_sample(
     input: &LaneStepInput,
     height: u64,
     time_ms: u64,
-) {
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), LaneStepError> {
     let Some(autoscale) = policy.and_then(|policy| policy.autoscale.as_ref()) else {
-        state.samples.clear();
-        return;
+        state.samples = Default::default();
+        return Ok(());
     };
     let policy = policy.expect("autoscale comes from the policy");
-    let elastic = state
-        .lanes
-        .iter()
-        .filter(|record| policy.is_elastic(record.lane) && record.admits_anchor(height))
-        .map(|record| record.lane)
-        .collect::<Vec<_>>();
+    let active_elastic = |record: &&SumeragiLaneRecord| {
+        policy.is_elastic(record.lane) && record.admits_anchor(height)
+    };
+    let elastic_count = state.lanes.iter().filter(active_elastic).count();
     let transactions = input
         .executed
         .iter()
-        .filter(|(lane, _)| lane.as_u32() == 0 || elastic.contains(lane))
+        .filter(|(lane, _)| {
+            lane.as_u32() == 0
+                || state
+                    .lanes
+                    .iter()
+                    .filter(active_elastic)
+                    .any(|record| record.lane == **lane)
+        })
         .map(|(_, count)| *count)
         .fold(0u64, u64::saturating_add);
-    state.samples.push(SumeragiLaneSample {
+    let sample = SumeragiLaneSample {
         height,
         time_ms,
         transactions,
-        lanes: u32::try_from(elastic.len().saturating_add(1)).unwrap_or(u32::MAX),
-    });
+        lanes: u32::try_from(elastic_count.saturating_add(1)).unwrap_or(u32::MAX),
+    };
     let keep = usize::try_from(autoscale.window)
         .unwrap_or(usize::MAX)
         .saturating_add(1);
-    let excess = state.samples.len().saturating_sub(keep);
-    state.samples.drain(..excess);
+    let samples = super::custody::retain_samples(&state.samples, Some((sample, keep)), budget)
+        .map_err(|_| LaneStepError::CustodyAllocation)?;
+    state.samples = samples;
+    Ok(())
 }
 
 /// Remove lanes whose retirement height is reached (§6.3).
@@ -591,7 +609,7 @@ mod tests {
         reconcile(&mut state, Some(&policy), &network(), 1, 0, pool);
         assert!(state.lanes.is_empty());
         assert_eq!(state.incarnations, 0);
-        state.samples = samples(9, 1, 5);
+        state.samples = samples(9, 1, 5).try_into().unwrap();
         reconcile(&mut state, Some(&policy), &network(), 20, 1, pool);
         assert_eq!(
             state.lanes.len(),
@@ -655,7 +673,7 @@ mod tests {
     fn autoscale_opens_under_load_and_closes_when_idle_with_cooldown() {
         let policy = policy();
         let mut state = SumeragiLaneState {
-            samples: samples(9, 1, 5),
+            samples: samples(9, 1, 5).try_into().unwrap(),
             ..SumeragiLaneState::default()
         };
         reconcile(&mut state, Some(&policy), &network(), 20, usize::MAX, pool);
@@ -674,7 +692,7 @@ mod tests {
         reconcile(&mut state, Some(&policy), &network(), 26, usize::MAX, pool);
         assert_eq!(state.lanes.len(), 3);
         // Idle: the highest active elastic lane closes.
-        state.samples = samples(0, 3, 5);
+        state.samples = samples(0, 3, 5).try_into().unwrap();
         reconcile(&mut state, Some(&policy), &network(), 29, usize::MAX, pool);
         assert_eq!(state.lane(LaneId::new(17)).unwrap().closing, Some(30));
         assert_eq!(state.lane(LaneId::new(16)).unwrap().closing, None);
@@ -730,3 +748,7 @@ mod tests {
         assert!(validate_policy(&forged).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "step/sample_owner_tests.rs"]
+mod sample_owner_tests;

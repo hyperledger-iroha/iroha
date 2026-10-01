@@ -122,6 +122,33 @@ NATIVE_CORE_TEST_OWNERS = (
         'merged_rejection_event_retains_the_original_native_proposal_header',
         'leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work',
     )),
+    ('native lane signer custody', 'sumeragi/lanes/custody.rs', 'sumeragi/lanes/custody/tests.rs', 'tests', 'sumeragi::lanes::custody::tests', (
+        'lane_obligation_never_moves_to_a_later_registration_sharing_key_and_account',
+        'every_original_incarnation_must_finish_its_delay_before_custody_releases',
+        'malformed_original_deadline_cannot_release_retained_custody',
+        'original_signer_binding_requires_positive_custody_and_survives_policy_member_order',
+        'retirement_marks_exact_boundary_and_policy_extension_precedes_withdrawal',
+        'creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay',
+        'pending_original_evidence_delays_reclamation_without_native_height_arithmetic',
+        'retirement_keeps_the_final_same_carrier_merge_after_the_live_record_is_removed',
+        'an_existing_frontier_cannot_regress_or_switch_hash_or_result_at_the_same_native_height',
+        'original_signer_pinning_refuses_then_retries_the_same_pool_and_stake_cut',
+        'original_signer_state_handoff_retains_backing_and_refuses_foreign_pool',
+        'original_signer_world_handoff_admits_both_generations_before_replacing_either',
+        'original_signer_state_constructor_refuses_before_cloning_unfunded_world',
+        'sample_state_admission_refuses_unfunded_source',
+        'original_sample_state_constructor_refuses_with_typed_sample_cause',
+        'original_sample_world_handoff_admits_both_generations_before_replacing_either',
+    )),
+    ('native lane signer restore custody', 'state/deserialize_world.rs', 'state/deserialize_world_lane_custody_tests.rs', 'native_lane_custody_tests', 'state::deserialize::native_lane_custody_tests', (
+        'native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_funded',
+        'native_lane_signer_snapshot_rejects_noncanonical_fields_without_consuming_source',
+        'native_lane_signer_snapshot_decode_refusal_retains_category_and_original_field',
+        'native_lane_sample_snapshot_retains_raw_source_through_both_cut_refusal_and_retry',
+    )),
+    ('native lane signer restore errors', 'snapshot/errors.rs', 'snapshot/errors/native_lane_custody_tests.rs', 'native_lane_custody_tests', 'snapshot::errors::native_lane_custody_tests', (
+        'restore_lane_custody_refusal_keeps_original_typed_local_error',
+    )),
     ('native beacon custody', 'sumeragi/epoch_beacon/producer.rs', 'sumeragi/epoch_beacon/producer/tests.rs', 'tests', 'sumeragi::epoch_beacon::producer::tests', (
         'all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse',
         'wrong_source_sender_and_proof_never_change_the_owned_round',
@@ -211,6 +238,29 @@ NATIVE_CORE_TEST_OWNERS = (
         'f37_flagged_blocks',
         'o2_kill_at_each_write_completion',
         'long_write_failure_keeps_queues_bounded',
+    )),
+    ('native lane sample finalizer', 'sumeragi/lanes/step.rs', 'sumeragi/lanes/step/sample_owner_tests.rs', 'sample_owner_tests', 'sumeragi::lanes::step::sample_owner_tests', (
+        'sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix',
+        'sample_finalizer_borrowed_lane_selection_preserves_boundaries_and_saturation',
+    )),
+    ('native lane sample publication', 'state.rs', 'state/lane_sample_owner_tests.rs', 'lane_sample_owner_tests', 'state::lane_sample_owner_tests', (
+        'sample_world_rollback_publication_and_readers_retain_original_pool',
+    )),
+    ('native lane sample restore errors', 'snapshot/errors.rs', 'snapshot/errors/native_lane_sample_tests.rs', 'native_lane_sample_tests', 'snapshot::errors::native_lane_sample_tests', (
+        'restore_lane_sample_refusal_keeps_original_typed_local_error',
+    )),
+    ('native stored body custody', 'sumeragi/block_store/body_read.rs', 'sumeragi/block_store/body_read_tests.rs', 'tests', 'sumeragi::block_store::body_read::tests', (
+        'stored_body_retains_original_certificate_and_projected_payload_across_refusals',
+        'absence_foreign_pool_and_corrupt_storage_are_separate_outcomes',
+        'requested_hash_cannot_be_replaced_by_the_stored_certificate',
+        'canonical_but_invalid_author_signature_never_becomes_available_custody',
+        'stored_result_decode_refusal_retains_original_decoded_owners_and_retries',
+        'malformed_result_preimage_remains_terminal_storage_corruption',
+    )),
+    ('native committed read custody', 'sumeragi/block_store/committed_read.rs', 'sumeragi/block_store/committed_read_tests.rs', 'tests', 'sumeragi::block_store::committed_read::tests', (
+        'committed_read_returns_original_qc_backing_after_projection_refusal_and_retry',
+        'body_only_read_releases_original_qc_witness_before_returning_ready',
+        'committed_result_decode_refusal_keeps_original_read_slot_and_retries',
     )),
  )
 

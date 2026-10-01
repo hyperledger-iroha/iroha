@@ -104,7 +104,12 @@ impl CommittedRead {
                     }
                     Err(error) => {
                         self.phase = Phase::Projecting(job);
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+                        // Keep the original operational category and typed cause so the
+                        // outer Kura read slot retains this exact owner across local refusal.
+                        return Err(match error {
+                            BodyReadError::Io(error) => error,
+                            error => io::Error::new(io::ErrorKind::InvalidData, error),
+                        });
                     }
                 },
                 Phase::Restoring(job, qc) => match job.complete(&self.budget, &*self.crypto) {

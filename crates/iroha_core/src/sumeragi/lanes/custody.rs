@@ -3,13 +3,15 @@
 //! Monetary identity is pinned once. Retirement removes routing/storage ownership, not the
 //! obligation. Native lane heights never enter the global evidence or withdrawal clocks.
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_config::parameters::actual::Nexus;
 use iroha_data_model::{
     nexus::PublicLaneValidatorRecord,
     sumeragi_lanes::{
-        MAX_LANE_CUSTODY_OBLIGATIONS, MAX_LANE_CUSTODY_SIGNERS, SumeragiLaneCustody,
-        SumeragiLaneCustodySigners, SumeragiLanePolicy, SumeragiLaneRecord,
-        SumeragiLaneSignerCustody, SumeragiLaneStakeBinding, SumeragiLaneState,
+        CustodySignersAdmissionError, LaneStateAdmissionError, MAX_LANE_CUSTODY_OBLIGATIONS,
+        MAX_LANE_CUSTODY_SIGNERS, SumeragiLaneCustody, SumeragiLaneCustodySigners,
+        SumeragiLanePolicy, SumeragiLaneRecord, SumeragiLaneSignerCustody,
+        SumeragiLaneStakeBinding, SumeragiLaneState,
     },
 };
 use iroha_model_base::topology::LaneId;
@@ -76,14 +78,15 @@ impl From<CustodyViolation> for CustodyError {
 
 /// Pin only genuine positive custody belonging to the original selected peer and tenure.
 /// Sparse fixed-size entries contain no nested heap owners; identity hashing streams bytes.
-/// TODO(S8): retain this new backing and every World clone in the original allocation pool.
+/// Immutable signer backing and its shared control retain the original State pool through
+/// every World clone. TODO(S8): fund outer lane/custody vectors and their Cell owners.
 fn pin_signers(
     world: &impl WorldReadOnly,
     nexus: &Nexus,
     record: &SumeragiLaneRecord,
     elastic: bool,
+    budget: &AllocationBudget,
 ) -> Result<SumeragiLaneCustodySigners, CustodyError> {
-    let mut signers = Vec::<SumeragiLaneSignerCustody>::new();
     if !(1..=MAX_LANE_CUSTODY_SIGNERS).contains(&record.committee.len()) {
         return Err(CustodyViolation::Committee.into());
     }
@@ -97,6 +100,37 @@ fn pin_signers(
     let Some(owner) = owner else {
         return Ok(SumeragiLaneCustodySigners::default());
     };
+    // Count from this same immutable cursor before creating the exact fixed backing.
+    // Actual binding/order validation below is unchanged; no stake or authority is inferred
+    // from this allocation count, and a refusal leaves the original World untouched.
+    let count = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(key, validator)| {
+            let (lane, account) = key;
+            *lane == owner
+                && validator.lane_id == *lane
+                && validator.validator == *account
+                && validator.stake_account == *account
+                && validator.activation_height <= record.created_at
+                && validator
+                    .deactivation_height
+                    .is_none_or(|end| record.created_at < end)
+                && record
+                    .committee
+                    .iter()
+                    .any(|member| member.peer == validator.peer_id)
+                && world
+                    .public_lane_stake_custody()
+                    .get(key)
+                    .is_some_and(|(_, amount)| !amount.is_zero())
+        })
+        .count();
+    if count > record.committee.len() {
+        return Err(CustodyViolation::AmbiguousStake.into());
+    }
+    let mut signers = ChargedBuffer::<SumeragiLaneSignerCustody>::new(count, budget)
+        .map_err(|_| CustodyError::Allocation)?;
     for (key, validator) in world.public_lane_validators().iter() {
         let (lane, account) = key;
         if *lane != owner
@@ -137,22 +171,31 @@ fn pin_signers(
             continue;
         }
         let signer = u32::try_from(index).map_err(|_| CustodyViolation::SignerIndex)?;
-        if signers.iter().any(|entry| entry.signer == signer) {
+        if signers
+            .as_slice()
+            .iter()
+            .any(|entry| entry.signer == signer)
+        {
             return Err(CustodyViolation::AmbiguousStake.into());
         }
-        signers
-            .try_reserve_exact(1)
-            .map_err(|_| CustodyError::Allocation)?;
-        signers.push(SumeragiLaneSignerCustody {
+        signers.push_reserved(SumeragiLaneSignerCustody {
             signer,
             binding: SumeragiLaneStakeBinding::from_record(validator, asset)
                 .map_err(|_| CustodyViolation::StakeBinding)?,
         });
     }
-    signers.sort_unstable_by_key(|entry| entry.signer);
+    if signers.as_slice().is_empty() {
+        return Ok(SumeragiLaneCustodySigners::default());
+    }
     signers
-        .try_into()
-        .map_err(|_| CustodyViolation::Signers.into())
+        .as_mut_slice()
+        .sort_unstable_by_key(|entry| entry.signer);
+    SumeragiLaneCustodySigners::from_charged(signers, budget).map_err(
+        |(_rows, error)| match error {
+            CustodySignersAdmissionError::Invalid => CustodyViolation::Signers.into(),
+            _ => CustodyError::Allocation,
+        },
+    )
 }
 
 /// Carry forward monotone signed policy and mark exact retirement before records are removed.
@@ -223,6 +266,7 @@ pub(super) fn pin_created(
     chain_id: &str,
     policy: Option<&SumeragiLanePolicy>,
     height: u64,
+    budget: &AllocationBudget,
 ) -> Result<(), CustodyError> {
     let Some(parameters) = world.sumeragi_npos_parameters() else {
         // Permissioned chains have no signed monetary evidence horizon; existing native
@@ -263,6 +307,7 @@ pub(super) fn pin_created(
                 nexus,
                 record,
                 policy.is_some_and(|policy| policy.is_elastic(record.lane)),
+                budget,
             )?,
             evidence_horizon: parameters.evidence_horizon_blocks(),
             slashing_delay: parameters.slashing_delay_blocks(),
@@ -340,6 +385,97 @@ fn has_pending_evidence(world: &impl WorldReadOnly, obligation: &SumeragiLaneCus
     world.consensus_evidence().iter().any(|(_, record)| {
         record.attribution.instance == obligation.instance && !record.penalty_status.is_terminal()
     })
+}
+
+/// Copy the lane DTO while retaining/admitting original immutable signer and sample owners.
+/// The borrowed source survives every failure; partial copies refund on abandonment.
+/// This accounts for signer and sample backing/control, not the remaining outer lane graph.
+pub(crate) fn admit_state(
+    source: &SumeragiLaneState,
+    budget: &AllocationBudget,
+) -> Result<SumeragiLaneState, LaneStateAdmissionError> {
+    let mut admitted = source.clone();
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC16")))]
+    for row in &mut admitted.custody {
+        row.signers = row.signers.admit(budget)?;
+    }
+    #[cfg(all(test, sumeragi_core_mutation = "HC16"))]
+    let _ = budget;
+    admitted.samples = retain_samples(&source.samples, None, budget)?;
+    Ok(admitted)
+}
+
+/// Retain or append the original sample owner through the same admission boundary.
+/// The test mutation bypasses this one owner boundary for both connected callers.
+pub(super) fn retain_samples(
+    source: &iroha_data_model::sumeragi_lanes::SumeragiLaneSamples,
+    append: Option<(iroha_data_model::sumeragi_lanes::SumeragiLaneSample, usize)>,
+    budget: &AllocationBudget,
+) -> Result<
+    iroha_data_model::sumeragi_lanes::SumeragiLaneSamples,
+    iroha_data_model::sumeragi_lanes::LaneSamplesAdmissionError,
+> {
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC18")))]
+    match append {
+        Some((sample, keep)) => source.retain_and_append(sample, keep, budget),
+        None => source.admit(budget),
+    }
+    #[cfg(all(test, sumeragi_core_mutation = "HC18"))]
+    {
+        let _ = budget;
+        let mut rows = source.to_vec();
+        if let Some((sample, keep)) = append {
+            rows.push(sample);
+            let excess = rows.len().saturating_sub(keep);
+            rows.drain(..excess);
+        }
+        Ok(rows
+            .try_into()
+            .expect("mutation retains canonical sample content"))
+    }
+}
+
+/// Admit both original World generations before replacing either field.
+/// Fresh-State construction owns this World exclusively; admission grants no history authority.
+pub(crate) fn admit_world_state(
+    world: &mut crate::state::World,
+    budget: &AllocationBudget,
+) -> Result<(), LaneStateAdmissionError> {
+    let prepared = {
+        let current = world.sumeragi_lanes.view();
+        let previous = world.sumeragi_lanes.predecessor_view();
+        if current.samples.admitted_to(budget)
+            && current
+                .custody
+                .iter()
+                .all(|row| row.signers.admitted_to(budget))
+            && previous.as_ref().is_none_or(|value| {
+                value.samples.admitted_to(budget)
+                    && value
+                        .custody
+                        .iter()
+                        .all(|row| row.signers.admitted_to(budget))
+            })
+        {
+            return Ok(());
+        }
+        let current = admit_state(&current, budget)?;
+        let previous = previous
+            .as_ref()
+            .map(|value| admit_state(value, budget))
+            .transpose()?;
+        (current, previous)
+    };
+    // Existing outer EBR controls are a separate open accounting obligation.
+    world.sumeragi_lanes = mv::cell::Cell::from_values_charged(
+        prepared.0,
+        prepared.1,
+        mv::cell::CellAllocationCharges::new(
+            concread::ebrcell::Untracked,
+            concread::ebrcell::Untracked,
+        ),
+    );
+    Ok(())
 }
 
 #[cfg(test)]

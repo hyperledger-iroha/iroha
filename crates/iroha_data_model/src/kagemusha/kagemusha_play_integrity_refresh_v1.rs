@@ -126,10 +126,10 @@ impl KagemushaPlayIntegrityRefreshChallengeV1 {
     /// # Errors
     /// Rejects absent selectors or invalid original interval.
     pub fn canonical_signing_bytes(&self) -> Result<Vec<u8>, String> {
-        message(
+        Ok(message(
             KAGEMUSHA_PLAY_INTEGRITY_REFRESH_CHALLENGE_DOMAIN_V1,
             &self.body()?,
-        )
+        ))
     }
     /// Attempt ID is the SHA of the exact full Core signing message.
     /// # Errors
@@ -151,7 +151,7 @@ impl KagemushaPlayIntegrityRefreshChallengeV1 {
     /// # Errors
     /// Rejects invalid challenge shape.
     pub fn possession_signing_bytes(&self) -> Result<Vec<u8>, String> {
-        message(POSSESSION_DOMAIN, &self.canonical_signing_bytes()?)
+        Ok(message(POSSESSION_DOMAIN, &self.canonical_signing_bytes()?))
     }
     fn select(
         &self,
@@ -450,7 +450,10 @@ impl KagemushaPlayIntegrityRefreshLeaseSubjectV1 {
         ] {
             body.extend_from_slice(&value.to_le_bytes());
         }
-        message(KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_DOMAIN_V1, &body)
+        Ok(message(
+            KAGEMUSHA_PLAY_INTEGRITY_REFRESH_LEASE_DOMAIN_V1,
+            &body,
+        ))
     }
 }
 
@@ -730,11 +733,11 @@ fn digest_original(original: &[u8]) -> [u8; 32] {
     hash.update(original);
     hash.finalize().into()
 }
-fn message(domain: &[u8], body: &[u8]) -> Result<Vec<u8>, String> {
+fn message(domain: &[u8], body: &[u8]) -> Vec<u8> {
     let mut message = domain.to_vec();
     message.extend_from_slice(&(body.len() as u64).to_le_bytes());
     message.extend_from_slice(body);
-    Ok(message)
+    message
 }
 struct Reader<'a> {
     bytes: &'a [u8],

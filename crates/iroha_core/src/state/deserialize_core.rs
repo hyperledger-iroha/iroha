@@ -25,6 +25,9 @@ pub(crate) enum StateRestoreError {
     /// Local resources refused restore; this does not invalidate the snapshot.
     #[error(transparent)]
     Admission(#[from] StateAdmissionError),
+    /// Original finite resources refused immutable native lane signer/sample ownership.
+    #[error("snapshot native lane custody admission deferred: {0}")]
+    NativeLaneCustody(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Original finite resources refused canonical native schedule ownership.
     #[error("snapshot native schedule admission deferred: {0}")]
     NativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
@@ -54,6 +57,9 @@ impl From<storage_transactions::MembershipRestoreError> for StateRestoreError {
 }
 fn durable_state_restore_error(error: MergeLedgerCommitError) -> StateRestoreError {
     match error {
+        MergeLedgerCommitError::NativeLaneCustodyAdmission(error) => {
+            StateRestoreError::NativeLaneCustody(error)
+        }
         MergeLedgerCommitError::ExecutionDeferred(reason) => {
             StateRestoreError::ExecutionDeferred(reason)
         }

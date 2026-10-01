@@ -171,8 +171,9 @@ impl AmxForeignInstanceV1 {
                 && block.result_preimage.len() <= MAX_RESULT_PREIMAGE_BYTES,
             "certified block parts are empty or exceed their bounds",
         )?;
+        let outer_scope = norito::core::decode_limits_active();
         let header: CoreHeader = norito::decode_canonical(&block.consensus_header)
-            .map_err(|error| proof_error(format!("core header: {error}")))?;
+            .map_err(|error| super::proof_codec_error(&error, "core header", outer_scope))?;
         let context = self.context(header.epoch.epoch)?;
         let epoch = core_epoch(context).map_err(|error| AmxError::Anchor(error.to_string()))?;
         need(
@@ -184,7 +185,7 @@ impl AmxForeignInstanceV1 {
             "the block is outside its tracked epoch context",
         )?;
         let qc: Qc = norito::decode_canonical(&block.commit_qc)
-            .map_err(|error| proof_error(format!("commit certificate: {error}")))?;
+            .map_err(|error| super::proof_codec_error(&error, "commit certificate", outer_scope))?;
         let validators: Vec<FinalityValidator> = context
             .committee
             .iter()
@@ -221,7 +222,7 @@ impl AmxForeignInstanceV1 {
             "the result preimage does not hash to the certified result",
         )?;
         let commitment = ExecutionResultCommitment::decode(&block.result_preimage)
-            .map_err(|error| proof_error(format!("result preimage: {error}")))?;
+            .map_err(|error| super::commitment_error(&error))?;
         need(
             commitment.height == header.height && commitment.schedule.current == *context,
             "the result preimage names another height or epoch context",

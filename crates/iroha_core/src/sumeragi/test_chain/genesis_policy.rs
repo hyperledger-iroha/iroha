@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     block::{BlockValidationError, ValidBlock},
-    state::{State, StateReadOnly},
+    state::State,
 };
 
 /// The signed genesis parameters of an optional `NPoS` policy.
@@ -168,7 +168,11 @@ mod tests {
     use iroha_data_model::{Registrable as _, account::Account, domain::Domain};
 
     use super::*;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{StateReadOnly, World},
+    };
 
     #[test]
     fn state_bound_fixture_genesis_signs_the_policies_its_native_execution_derives() {

@@ -7477,6 +7477,62 @@ struct NativeScheduleSnapshot {
     revert: Option<crate::sumeragi::schedule::ConsensusSchedule>,
     blocks: crate::sumeragi::schedule::ConsensusSchedule,
 }
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct NativeLaneCustodySnapshot {
+    revert: Option<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    blocks: iroha_data_model::sumeragi_lanes::SumeragiLaneState,
+}
+fn take_native_lane_custody(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>, StateRestoreError> {
+    // Borrow the original field until both generations have their original-pool owners.
+    // A refusal drops only this attempt's decoded graph and copies, not the raw source.
+    let field = map
+        .fields
+        .get("sumeragi_lanes")
+        .ok_or_else(|| json::Error::missing_field("sumeragi_lanes"))?;
+    let snapshot: NativeLaneCustodySnapshot = match field {
+        SnapshotJsonField::Borrowed { raw } => {
+            let value: NativeLaneCustodySnapshot = json::from_str(raw)?;
+            if json::to_json(&value)?.as_bytes() != raw.as_bytes() {
+                return Err(json::Error::InvalidField {
+                    field: "sumeragi_lanes".into(),
+                    message: "snapshot field is not canonically encoded".into(),
+                }
+                .into());
+            }
+            value
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(value) => json::value::from_value(value.clone())?,
+    };
+    let current = crate::sumeragi::lanes::custody::admit_state(&snapshot.blocks, budget)
+        .map_err(StateRestoreError::NativeLaneCustody)?;
+    let previous = snapshot
+        .revert
+        .as_ref()
+        .map(|value| crate::sumeragi::lanes::custody::admit_state(value, budget))
+        .transpose()
+        .map_err(StateRestoreError::NativeLaneCustody)?;
+    map.remove("sumeragi_lanes");
+    // Both nested original-pool signer/sample owners exist before either generation is installed.
+    // Outer lane vectors and EBR controls remain separate accounting obligations.
+    Ok(Cell::from_values_charged(
+        current,
+        previous,
+        mv::cell::CellAllocationCharges::new(
+            concread::ebrcell::Untracked,
+            concread::ebrcell::Untracked,
+        ),
+    ))
+}
+
+#[cfg(test)]
+#[path = "deserialize_world_lane_custody_tests.rs"]
+mod native_lane_custody_tests;
+
 fn take_native_consensus_schedule(
     map: &mut SnapshotJsonMap<'_>,
     budget: &iroha_allocation::AllocationBudget,
@@ -7881,7 +7937,7 @@ fn decode_world_fields(
     let verifying_keys_by_circuit = take_required(&mut map, "verifying_keys_by_circuit")?;
     let consensus_keys = take_required(&mut map, "consensus_keys")?;
     let consensus_keys_by_pk = take_required(&mut map, "consensus_keys_by_pk")?;
-    let sumeragi_lanes = take_required(&mut map, "sumeragi_lanes")?;
+    let sumeragi_lanes = take_native_lane_custody(&mut map, execution_budget)?;
     let sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> =
         take_required(&mut map, "sumeragi_amx")?;
     sumeragi_amx

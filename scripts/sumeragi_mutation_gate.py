@@ -451,8 +451,22 @@ CORE_MUTATIONS = [
       ["sumeragi::certified_chain::artifacts::tests::original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph"]),
     m("HC15", "committed body reader: duplicate the original decoded quorum certificate at handoff",
       ["sumeragi::block_store::committed_read::tests::committed_read_returns_original_qc_backing_after_projection_refusal_and_retry"]),
+    m("HC16", "lane custody: clone decoded signers without original-pool admission",
+      ["sumeragi::lanes::custody::tests::original_signer_state_handoff_retains_backing_and_refuses_foreign_pool",
+       "sumeragi::lanes::custody::tests::original_signer_world_handoff_admits_both_generations_before_replacing_either",
+       "state::deserialize::native_lane_custody_tests::native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_funded"]),
     m("HC17", "native control: accept an execution tip from another published hash journal",
       ["sumeragi::epoch_beacon::producer::tests::control_requires_original_tip_and_matching_published_hash_journal"]),
+    m("HC18", "lane samples: retain or append samples without original-pool admission",
+      ["sumeragi::lanes::custody::tests::sample_state_admission_refuses_unfunded_source",
+       "sumeragi::lanes::step::sample_owner_tests::sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix",
+       "state::deserialize::native_lane_custody_tests::native_lane_sample_snapshot_retains_raw_source_through_both_cut_refusal_and_retry"]),
+    m("HC19", "AMX: classify local decoder refusal as a deterministic instruction failure",
+      ["sumeragi::amx::tests::amx_anchor_decode_refusal_cannot_publish_even_when_instruction_error_is_caught",
+       "sumeragi::amx::tests::amx_relay_decode_refusal_keeps_original_undecided_record_and_retries_proof"]),
+    m("HC20", "stored result reader: classify local decoder refusal as corrupt storage",
+      ["sumeragi::block_store::body_read::tests::stored_result_decode_refusal_retains_original_decoded_owners_and_retries",
+       "sumeragi::block_store::committed_read::tests::committed_result_decode_refusal_keeps_original_read_slot_and_retries"]),
 ]
 
 

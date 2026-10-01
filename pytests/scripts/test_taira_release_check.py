@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1491 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1524 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1525 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1558 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -459,6 +459,9 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_merge_beacon_composition_controls_are_unique_and_focused_in_both_scopes(self):
         assert_native_coverage(self, ['native lane merge authority', 'native executed beacon controls'])
+
+    def test_original_lane_signer_custody_is_required_in_both_scopes(self):
+        assert_native_coverage(self, ['native lane signer custody', 'native lane signer restore custody', 'native lane signer restore errors'])
 
     def test_mandatory_beacon_requires_real_work_before_activation_in_both_scopes(self):
         assert_native_coverage(self, ['native beacon custody', 'native executed beacon controls'])

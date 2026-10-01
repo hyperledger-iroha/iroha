@@ -108,8 +108,6 @@ pub(super) enum ExecutionOutputPlanState {
 
 #[path = "output_producer.rs"]
 mod producer;
-pub(super) use producer::SealedExecutionOutputs;
-pub(super) use producer::execute_network_attempt;
 pub(crate) use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 impl StateBlock<'_> {

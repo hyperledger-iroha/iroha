@@ -492,7 +492,6 @@ pub(in crate::state) struct WorldRetirement<'target> {
 
 #[path = "world_preparation.rs"]
 mod preparation;
-pub(in crate::state) use preparation::WorldPublicationSlot;
 
 impl<Admission> DetachedWorld<Admission> {
     /// Prepare through the same caller-owned aggregate used by State publication.

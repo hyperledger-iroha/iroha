@@ -1,5 +1,7 @@
 //! Peer-to-peer proxy envelopes for Torii ingress routing.
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_crypto::HashOf;
 use iroha_data_model::transaction::TransactionEntrypoint;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};

@@ -63,4 +63,4 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 165)
+        self.assertEqual(len(names), 201)

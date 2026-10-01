@@ -52,7 +52,7 @@ npm install
 npm run build:native
 ```
 
-The native build writes strict V3 provenance with the execution policy
+The native build writes strict V4 provenance with the execution policy
 `trusted-local-cargo-v1`. Cargo compiles the authenticated live repository root.
 The builder seals the tracked and untracked source inventory, selected Cargo
 lockfile and exact compiled bytes, and checks that source state again after

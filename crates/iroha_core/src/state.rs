@@ -3,6 +3,8 @@
 /// Original finite allocation pool passed from startup into State and restore.
 pub use iroha_allocation::AllocationBudget;
 
+#[cfg(test)]
+use crate::block::ValidBlock;
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
@@ -23,7 +25,9 @@ use crate::private_settlement::{
     },
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
-use eyre::{Result, WrapErr, eyre};
+use eyre::Result;
+#[cfg(test)]
+use eyre::{WrapErr, eyre};
 use iroha_config::parameters::actual::{
     LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
 };
@@ -49,7 +53,6 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, ExecKv, ExecWitness},
@@ -73,7 +76,7 @@ use iroha_data_model::{
             governance as governance_events, prelude as data_pre,
             space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
         },
-        pipeline::{BlockEvent, PipelineEventBox},
+        pipeline::BlockEvent,
         time::{ExecutionTime, TimeEvent, TimeEventFilter},
         trigger_completed::TriggerCompletedOutcome,
     },
@@ -170,7 +173,12 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::signed::{SignedTransaction, TransactionEntrypoint},
+};
+#[cfg(test)]
+use iroha_data_model::{
+    block::consensus::ConsensusMode, events::pipeline::PipelineEventBox,
+    transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -188,9 +196,10 @@ use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
-    numeric::{Numeric, NumericSpec, Quantity},
-    time::TimeSource,
+    numeric::{NumericSpec, Quantity},
 };
+#[cfg(test)]
+use iroha_primitives::{numeric::Numeric, time::TimeSource};
 use iroha_schema::Ident;
 use mv::{
     Key as MvKey, Value as MvValue,
@@ -214,6 +223,8 @@ pub use range_bounds::{
     AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
+#[cfg(test)]
+use std::str::FromStr;
 use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
@@ -221,7 +232,6 @@ use std::{
     mem,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -442,7 +452,7 @@ use crate::{
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
-    block::{CommittedBlock, ValidBlock},
+    block::CommittedBlock,
     compliance::LaneComplianceEngine,
     executor::Executor,
     governance::{
@@ -1474,6 +1484,9 @@ pub(crate) fn inspect_trigger_world_capture_for_testing(
 pub(crate) mod block_field;
 use block_field::{CellField, StorageField};
 #[cfg(test)]
+#[path = "state/lane_sample_owner_tests.rs"]
+mod lane_sample_owner_tests;
+#[cfg(test)]
 #[path = "state/world_attached_publication_tests.rs"]
 mod world_attached_publication_tests;
 
@@ -2421,6 +2434,9 @@ pub(crate) fn committed_entrypoint_hashes(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Original lane signer/sample storage could not be admitted before fresh State construction.
+    #[error("local native lane custody admission failed: {0}")]
+    NativeLaneCustodyAdmission(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local World storage admission refused before executing State effects.
     #[error(transparent)]
     StateStorageAdmission(#[from] StateStorageAdmissionError),
@@ -27388,6 +27404,8 @@ impl State {
         network_id: iroha_data_model::NetworkId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
+        crate::sumeragi::lanes::custody::admit_world_state(&mut world, &execution_budget)
+            .map_err(MergeLedgerCommitError::NativeLaneCustodyAdmission)?;
         let transactions = TransactionsStorage::try_new(kura.transaction_history_budget())
             .map_err(MergeLedgerCommitError::MembershipAdmission)?;
         world
@@ -27396,7 +27414,7 @@ impl State {
         world
             .validate_quantity_ledger_invariants()
             .expect("initial world contains invalid quantity ledger state");
-        let committed_height = u64::try_from(exact_durable_height).map_err(|_| {
+        u64::try_from(exact_durable_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
                 "persisted block height exceeds u64 during startup".to_owned(),
             )

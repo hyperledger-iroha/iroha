@@ -26,12 +26,10 @@ use iroha_data_model::{NetworkId, block::BlockHeader, nexus::LaneCatalog};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_model_base::chain::ChainId;
-use iroha_model_base::state_path::StatePath;
 use iroha_model_base::topology::LaneId;
-use mv::{
-    cell::Cell,
-    storage::{Storage, StorageReadOnly},
-};
+use mv::cell::Cell;
+#[cfg(test)]
+use mv::storage::StorageReadOnly;
 use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use norito::json::{self, JsonSerialize};
 use sha2::{Digest, Sha256};

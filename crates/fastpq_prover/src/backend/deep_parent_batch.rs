@@ -39,7 +39,7 @@ pub(super) fn hash_in_place(
             .map(|((&index, &left), &right)| {
                 let index = u32::try_from(index)
                     .map_err(|_| invalid("DEEP parent batch index exceeds u32"))?;
-                binding.prepare_parent(oracle, level, index, digest(left)?, digest(right)?)
+                binding.prepare_parent(oracle, level, index, digest(left), digest(right))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -57,7 +57,7 @@ pub(super) fn hash_in_place(
                 let index = u32::try_from(index)
                     .map_err(|_| invalid("DEEP parent batch index exceeds u32"))?;
                 *right = binding
-                    .hash_parent(oracle, level, index, digest(left)?, digest(*right)?)
+                    .hash_parent(oracle, level, index, digest(left), digest(*right))
                     .map_err(|error| Error::InvalidTraceShape {
                         details: format!("DEEP parent batch: {error}"),
                     })?
@@ -72,8 +72,8 @@ pub(super) fn hash_in_place(
     }
 }
 
-fn digest(words: [u8; 32]) -> Result<Digest> {
-    Ok(Digest::from_bytes(words))
+fn digest(words: [u8; 32]) -> Digest {
+    Digest::from_bytes(words)
 }
 
 fn invalid(details: &'static str) -> Error {
@@ -114,8 +114,8 @@ mod tests {
                             oracle,
                             1,
                             u32::try_from(index).unwrap(),
-                            digest(left).unwrap(),
-                            digest(right).unwrap(),
+                            digest(left),
+                            digest(right),
                         )
                         .unwrap()
                         .into_bytes()
@@ -163,7 +163,7 @@ mod tests {
                 .is_err()
             );
         }
-        assert_eq!(digest([0xff; 32]).unwrap().into_bytes(), [0xff; 32]);
+        assert_eq!(digest([0xff; 32]).into_bytes(), [0xff; 32]);
     }
 
     #[cfg(feature = "fastpq-gpu")]

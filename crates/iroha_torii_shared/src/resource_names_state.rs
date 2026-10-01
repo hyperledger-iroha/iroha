@@ -39,7 +39,7 @@ pub struct NativeAssetAliasBindingOriginalV1 {
     pub binding_record_wire: Vec<u8>,
 }
 
-/// Actual dataspace SNS value under its native smart-contract StatePath.
+/// Actual dataspace SNS value under its native smart-contract `StatePath`.
 #[derive(
     Debug,
     Clone,
@@ -56,7 +56,7 @@ pub struct NativeAssetAliasBindingOriginalV1 {
 pub struct NativeDataspaceSnsOriginalV1 {
     /// Original canonical state key.
     pub storage_key: StatePath,
-    /// Original native stored bytes; consumers decode exact NameRecordV1 semantics.
+    /// Original native stored bytes; consumers decode exact `NameRecordV1` semantics.
     pub raw_value: Vec<u8>,
 }
 
@@ -132,7 +132,7 @@ pub struct NativeDataspaceSnsOriginalRefV1<'a> {
     raw_value: ByteRef<'a>,
 }
 impl<'a> NativeDataspaceSnsOriginalRefV1<'a> {
-    /// Borrow the native StatePath and exact raw value.
+    /// Borrow the native `StatePath` and exact raw value.
     #[must_use]
     pub fn new(storage_key: &'a StatePath, raw_value: &'a [u8]) -> Self {
         Self {

@@ -6223,7 +6223,6 @@ pub fn start(
 /// Project the next height's authenticated native scheduling mode from this State.
 /// Missing, pending or malformed authority clears a stale mode instead of using configuration.
 fn refresh_sumeragi_mode(metrics: &Metrics, state: &State) {
-    use crate::state::StateReadOnly as _;
     use iroha_data_model::parameter::system::ConsensusMode;
 
     let view = state.view();

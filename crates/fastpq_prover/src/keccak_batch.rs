@@ -9,9 +9,9 @@ use fastpq_isi::keccak256::Sha3Digest256V1;
 #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
 use rayon::prelude::*;
 /// Same fixed admission bounds for scalar, SIMD and device execution.
-pub(crate) const MAX_JOBS: usize = 1024;
-pub(crate) const MAX_BODY_BYTES: usize = 8192;
-pub(crate) const RATE: usize = 136;
+pub const MAX_JOBS: usize = 1024;
+pub const MAX_BODY_BYTES: usize = 8192;
+pub const RATE: usize = 136;
 /// A borrowed complete canonical SHA3 continuation; caller owns private bytes.
 #[cfg_attr(
     not(any(test, feature = "fastpq-gpu", feature = "simd")),
@@ -21,22 +21,22 @@ pub(crate) const RATE: usize = 136;
     )
 )]
 #[derive(Clone, Copy)]
-pub(crate) struct Job<'a> {
+pub struct Job<'a> {
     prefix: &'a Sha3_256V1,
     body: &'a [u8],
 }
 #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
 impl<'a> Job<'a> {
-    pub(crate) fn new(prefix: &'a Sha3_256V1, body: &'a [u8]) -> Self {
+    pub fn new(prefix: &'a Sha3_256V1, body: &'a [u8]) -> Self {
         Self { prefix, body }
     }
-    pub(crate) fn prefix(&self) -> &'a Sha3_256V1 {
+    pub fn prefix(&self) -> &'a Sha3_256V1 {
         self.prefix
     }
-    pub(crate) fn body(&self) -> &'a [u8] {
+    pub fn body(&self) -> &'a [u8] {
         self.body
     }
-    pub(crate) fn scalar(&self) -> Sha3Digest256V1 {
+    pub fn scalar(&self) -> Sha3Digest256V1 {
         let mut hash = self.prefix.clone();
         hash.update(self.body);
         hash.finalize()
@@ -44,7 +44,7 @@ impl<'a> Job<'a> {
     /// Each full absorbed rate plus one final padded permutation. Cached prefix
     /// work is charged once by its context owner, never once per continuation.
     #[cfg(test)]
-    pub(crate) fn permutations(&self) -> Result<usize> {
+    pub fn permutations(&self) -> Result<usize> {
         self.prefix.with_absorbed_state_v1(|_, position| {
             position
                 .checked_add(self.body.len())
@@ -54,7 +54,7 @@ impl<'a> Job<'a> {
     }
 }
 #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
-pub(crate) fn validate(jobs: &[Job<'_>], output_count: usize) -> Result<usize> {
+pub fn validate(jobs: &[Job<'_>], output_count: usize) -> Result<usize> {
     if jobs.is_empty() || jobs.len() > MAX_JOBS || output_count != jobs.len() {
         return Err(invalid(
             "Keccak batch requires its exact bounded cardinality",
@@ -72,7 +72,7 @@ pub(crate) fn validate(jobs: &[Job<'_>], output_count: usize) -> Result<usize> {
 /// Ordered output, no reduction and no fallback after a required-device error.
 /// At most two live states and their bounded scratch exist in each CPU worker.
 #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
-pub(crate) fn hash_cpu(jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
+pub fn hash_cpu(jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> {
     validate(jobs, output.len())?;
     output
         .par_chunks_mut(2)
@@ -98,7 +98,7 @@ pub(crate) fn hash_cpu(jobs: &[Job<'_>], output: &mut [[u8; 32]]) -> Result<()> 
 /// Fixed actual buffer extents, padded to the existing shared-page owner.
 /// The enclosing prover separately charges the complete retained global pool.
 /// Public KAT storage finishes before private staging; retain the greater peak.
-pub(crate) fn device_payload_bytes(count: usize, body_bytes: usize) -> Result<usize> {
+pub fn device_payload_bytes(count: usize, body_bytes: usize) -> Result<usize> {
     if count == 0 || count > MAX_JOBS || body_bytes > count * MAX_BODY_BYTES {
         return Err(invalid(
             "Keccak device payload geometry exceeds fixed bounds",

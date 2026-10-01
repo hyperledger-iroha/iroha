@@ -50,7 +50,7 @@ impl KagemushaOrdinaryAppCredentialSigningLayoutV1 {
     pub const VERSION: core::ops::Range<usize> = Self::BODY.start..Self::BODY.start + 2;
     /// One-byte platform tag (Android1, Apple2).
     pub const PLATFORM_CLASS: core::ops::Range<usize> = Self::BODY.start + 2..Self::BODY.start + 3;
-    /// One-byte security tag (TEE1, StrongBox2, AppAttest3).
+    /// One-byte security tag (TEE1, `StrongBox2`, `AppAttest3`).
     pub const SECURITY_LEVEL: core::ops::Range<usize> = Self::BODY.start + 3..Self::BODY.start + 4;
     /// Exact raw32 `enrollment_id` slot.
     pub const ENROLLMENT_ID: core::ops::Range<usize> = Self::BODY.start + 4..Self::BODY.start + 36;
@@ -163,7 +163,7 @@ pub struct KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
     pub version_bytes: [usize; 2],
     /// Actual encoded platform discriminant bytes, not the one-byte signing-body tag.
     pub platform_class_bytes: Vec<usize>,
-    /// Actual encoded security discriminant bytes; TEE/StrongBox can vary under one policy.
+    /// Actual encoded security discriminant bytes; TEE/`StrongBox` can vary under one policy.
     pub security_level_bytes: Vec<usize>,
     /// Raw byte positions for the 18 raw32 subject selectors in issuer signing-body order.
     /// This includes account/scope, actual app key references and the financial commitment.
@@ -204,7 +204,7 @@ pub struct KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
 pub enum KagemushaAppKeySecurityLevelV1 {
     /// Attested Android trusted execution environment, accepted only by exact policy.
     TrustedExecutionEnvironment,
-    /// Attested Android StrongBox key; no usage-count or rollback property is implied.
+    /// Attested Android `StrongBox` key; no usage-count or rollback property is implied.
     StrongBox,
     /// Apple App Attest key under its exact application/environment policy.
     AppleAppAttest,
@@ -298,8 +298,7 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
                     || self.allowed_android_security_levels.len() > 2
                     || self
                         .allowed_android_security_levels
-                        .iter()
-                        .any(|level| *level == KagemushaAppKeySecurityLevelV1::AppleAppAttest)
+                        .contains(&KagemushaAppKeySecurityLevelV1::AppleAppAttest)
                     || !self
                         .allowed_android_security_levels
                         .windows(2)
@@ -317,14 +316,13 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
             }
             _ => return Err("ordinary app policy is not an ordinary platform".into()),
         }
-        if let Some(policy) = self.play_integrity_policy {
-            if policy.policy_digest == [0; 32]
+        if let Some(policy) = self.play_integrity_policy
+            && (policy.policy_digest == [0; 32]
                 || policy.maximum_evidence_age_ms == 0
                 || policy.maximum_refresh_interval_ms == 0
-                || !matches!(policy.minimum_device_integrity, 1 | 2)
-            {
-                return Err("Play Integrity policy incomplete".into());
-            }
+                || !matches!(policy.minimum_device_integrity, 1 | 2))
+        {
+            return Err("Play Integrity policy incomplete".into());
         }
         Ok(())
     }
@@ -461,7 +459,7 @@ impl KagemushaOrdinaryAppEnrollmentChallengeV1 {
         Ok(bytes)
     }
 
-    /// Exact platform enrollment challenge hash, consumed by KeyMint or App Attest.
+    /// Exact platform enrollment challenge hash, consumed by `KeyMint` or App Attest.
     /// # Errors
     /// Rejects invalid challenge shape.
     pub fn attestation_challenge(&self) -> Result<[u8; 32], String> {
@@ -642,7 +640,7 @@ pub fn kagemusha_ordinary_app_enrollment_evidence_digest_v1(
     Ok(hash.finalize().into())
 }
 
-/// Original independent Google verdict binding, kept separate from KeyMint evidence.
+/// Original independent Google verdict binding, kept separate from `KeyMint` evidence.
 #[derive(
     Debug,
     Clone,
@@ -974,7 +972,7 @@ impl KagemushaOrdinaryAppCredentialSubjectV1 {
 pub struct KagemushaOrdinaryAppCredentialV1 {
     /// Complete unsigned ordinary issuer body.
     pub subject: KagemushaOrdinaryAppCredentialSubjectV1,
-    /// Ed25519 signature over canonical_signing_bytes, not an OEM compact P-256 signature.
+    /// Ed25519 signature over `canonical_signing_bytes`, not an OEM compact P-256 signature.
     pub signature: Signature,
     /// Mandatory governed P256 admission over the complete canonical Ed-only original.
     pub circuit_admission: super::KagemushaOrdinaryIssuerCircuitAdmissionV1,
@@ -1182,7 +1180,8 @@ impl KagemushaOrdinaryAppCredentialV1 {
     }
 
     /// Exact model-owned digest preimage layout derived from the sole canonical encoder.
-    /// This validates offsets against separately encoded subject fields and raw issuer signature.
+    /// This validates offsets against the declared record fields and raw issuer signature.
+    /// Derived `[u8; N]` fields contain raw bytes, unlike standalone array payloads.
     /// # Errors
     /// Rejects changed frame/schema/field layouts, another signature width or invalid body shape.
     pub fn original_preimage_layout(
@@ -1242,6 +1241,10 @@ impl KagemushaOrdinaryAppCredentialV1 {
         trust.validate_for_profile(profile, authority)?;
         let s = &self.subject;
         let message = s.canonical_signing_bytes()?;
+        let issued_during_challenge =
+            (expected.issued_at_ms..expected.expires_at_ms).contains(&s.issued_at_ms);
+        let lifetime_within_profile = (profile.valid_from_ms..).contains(&s.issued_at_ms)
+            && (..=profile.expires_at_ms).contains(&s.expires_at_ms);
         if s.platform_class != expected.platform_class
             || s.platform_class != profile.platform_class
             || s.enrollment_id != expected.enrollment_id
@@ -1265,10 +1268,8 @@ impl KagemushaOrdinaryAppCredentialV1 {
             || s.app_public_key != *expected_key
             || s.app_signing_identity_digest != authority.app_signing_identity_digest
             || s.app_release_digest != authority.app_release_digest
-            || s.issued_at_ms < expected.issued_at_ms
-            || s.issued_at_ms >= expected.expires_at_ms
-            || s.issued_at_ms < profile.valid_from_ms
-            || s.expires_at_ms > profile.expires_at_ms
+            || !issued_during_challenge
+            || !lifetime_within_profile
             || s.expires_at_ms - s.issued_at_ms > trust.maximum_credential_lifetime_ms
         {
             return Err("ordinary credential scope differs from original selection".into());
@@ -2011,13 +2012,22 @@ mod tests {
         // A valid issuer Ed signature alone cannot authorize a fabricated circuit issuer original.
         f.certificate.subject.financial_authority_commitment = [87; 32];
         f.preparation.challenge.financial_authority_commitment = [87; 32];
+        f.preparation.signature = Signature::new(
+            f.issuer.private_key(),
+            &f.preparation.challenge.canonical_signing_bytes().unwrap(),
+        );
+        f.certificate.subject.enrollment_challenge_digest =
+            f.preparation.challenge.attestation_challenge().unwrap();
         f.certificate.signature = Signature::new(
             f.issuer.private_key(),
             &f.certificate.subject.canonical_signing_bytes().unwrap(),
         );
-        assert!(admit(&f, 300).is_err());
+        assert_eq!(
+            admit(&f, 300).unwrap_err(),
+            "ordinary issuer original/profile differs"
+        );
         resign(&mut f);
-        assert!(admit(&f, 300).is_ok());
+        admit(&f, 300).unwrap();
         let expected = KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
             &f.certificate.subject,
             &f.certificate.signature,
@@ -2028,7 +2038,10 @@ mod tests {
         let sig = sig.normalize_s().unwrap_or(sig);
         f.certificate.circuit_admission.signature =
             super::super::KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap();
-        assert!(admit(&f, 300).is_err());
+        assert_eq!(
+            admit(&f, 300).unwrap_err(),
+            "ordinary circuit issuer signature rejected"
+        );
     }
     fn approval(
         f: &Fixture,

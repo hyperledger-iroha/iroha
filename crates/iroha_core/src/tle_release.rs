@@ -49,9 +49,9 @@ pub use casting::{
     AuthorizedTimedOvnCastingContextV1, authorize_parliament_timed_ovn_casting_context_v1,
 };
 pub use custody::{RuntimeTleReleaseShareCustodyV1, TleReleaseShareCustodyErrorV1};
+#[cfg(test)]
 pub(crate) use iroha_core_timed_ovn::casting::{
-    ParliamentTimedOvnCastingContextArchiveV1, ParliamentTimedOvnCastingPhaseV1,
-    TimedOvnCastingAuthorizationErrorV1,
+    ParliamentTimedOvnCastingPhaseV1, TimedOvnCastingAuthorizationErrorV1,
 };
 pub use runtime::{TleReleaseCoordinatorErrorV1, TleReleaseCoordinatorV1};
 
