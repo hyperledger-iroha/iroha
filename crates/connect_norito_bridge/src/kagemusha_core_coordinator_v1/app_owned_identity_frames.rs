@@ -157,6 +157,9 @@ pub(super) fn validate_request(
         }
     } else {
         match phase {
+            9 | 10 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
+                count(f, 2)
+            }
             9 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
                 count(f, 4)?;
                 check(!f[2].is_empty() && f[2].len() <= 32 * 1024)?;
@@ -234,6 +237,15 @@ pub(super) fn validate_response(
         };
     }
     match phase {
+        9 | 10 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
+            count(r, 9)?;
+            ticket(&r[0])?;
+            check(r[0] == q[1])?;
+            for original_digest in &r[1..] {
+                digest(original_digest)?;
+            }
+            Ok(())
+        }
         1 => approval_projection(method, &q[1], r),
         8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
             bootstrap_approval_projection(&q[1], r)
@@ -549,6 +561,54 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bootstrap_publication_phases_require_exact_ticket_and_complete_nonzero_originals() {
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval;
+        for phase in [9u32, 10] {
+            let q = vec![phase.to_le_bytes().to_vec(), 17u64.to_le_bytes().to_vec()];
+            validate_request(method, &q).unwrap();
+            let mut r = vec![q[1].clone()];
+            r.extend((1u8..=8).map(|index| vec![index; 32]));
+            // Data-only codec samples do not construct a publication or Native capability.
+            validate_response(method, &q, &r).unwrap();
+            let request = kagemusha_core_coordinator_encode_request_v1(&q).unwrap();
+            let response = kagemusha_core_coordinator_encode_response_v1(&r).unwrap();
+            kagemusha_core_coordinator_validate_method_request_v1(method, &request).unwrap();
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                .unwrap();
+            let mut wrong_ticket = r.clone();
+            wrong_ticket[0] = 18u64.to_le_bytes().to_vec();
+            assert!(validate_response(method, &q, &wrong_ticket).is_err());
+            for index in 1..r.len() {
+                for replacement in [vec![0; 32], vec![7; 31], vec![7; 33], vec![]] {
+                    let mut changed = r.clone();
+                    changed[index] = replacement;
+                    assert!(validate_response(method, &q, &changed).is_err());
+                }
+            }
+            let mut extra = r.clone();
+            extra.push(vec![9; 32]);
+            assert!(validate_response(method, &q, &extra).is_err());
+            assert!(validate_response(method, &q, &r[..8]).is_err());
+            let mut extra_request = q.clone();
+            extra_request.push(vec![7; 32]);
+            assert!(validate_request(method, &extra_request).is_err());
+            let mut zero_ticket = q.clone();
+            zero_ticket[1] = vec![0; 8];
+            assert!(validate_request(method, &zero_ticket).is_err());
+            let mut digest_ticket = q.clone();
+            digest_ticket[1] = vec![7; 32];
+            assert!(validate_request(method, &digest_ticket).is_err());
+            assert!(
+                validate_response(
+                    KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession,
+                    &q,
+                    &r,
+                )
+                .is_err()
+            );
+        }
+    }
     fn signed_approval_projection(
         fixture: &iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1,
         challenge: iroha_data_model::kagemusha::KagemushaAppOperationApprovalChallengeV1,

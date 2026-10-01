@@ -731,6 +731,14 @@ int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
 // existing storage path. No keys, roots, policies or authority claims are accepted.
 // Exact successful same-path retries recheck original custody; no native
 // provisioner returns UNAVAILABLE and rejected/uncertain installation fails closed.
+/* Distinct ordinary Native account startup lifecycle. The Native-installed root/account
+ * producer is mandatory. phase/id/raw carry no authority, root or timestamp construction.
+ * Phase 6 (nonzero retained read ID, empty raw) fetches/authenticates all four current
+ * wallet originals inside Native. Successful output is canonical Norito; use connect_norito_free. */
+int32_t connect_norito_kagemusha_ordinary_runtime_startup_v1(
+    uint8_t phase, uint64_t id, const uint8_t *original_ptr, size_t original_len,
+    uint8_t **output_ptr, size_t *output_len);
+
 int32_t connect_norito_kagemusha_core_coordinator_install_v1(
     const uint8_t* storage_path_utf8, size_t storage_path_length);
 int32_t connect_norito_kagemusha_core_coordinator_open_v1(

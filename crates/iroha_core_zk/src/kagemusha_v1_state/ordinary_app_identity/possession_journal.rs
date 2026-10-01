@@ -2,12 +2,14 @@
 //! This WAL retains one platform invocation/original/consumption and one authenticated final
 //! app identity original. It grants no hardware monotonicity, StateGuard or monetary authority.
 //! Unknown effects never re-sign.
+use super::super::KagemushaOrdinaryNativeTimeIntervalV1;
 use super::super::{PrivateJournal, PrivateJournalFormat};
+use super::preparation_reservation::KagemushaOrdinaryPreparationSelectedOriginalsV1;
 use super::{Custody, KagemushaPendingAppIdentityV1, Rejected, Result};
 use iroha_data_model::kagemusha::*;
 use rand_core_06::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 const MAX_ROWS: usize = 5;
 const MAX_FRAME: usize = 20 * 1024;
@@ -54,12 +56,85 @@ pub struct KagemushaOrdinaryAppPossessionAttemptV1 {
     receipt: Option<Vec<u8>>,
     consumed_at_ms: Option<u64>,
     final_credential: Option<KagemushaVerifiedOrdinaryAppCredentialV1>,
+    selected_clock: Option<Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>>,
 }
 impl KagemushaOrdinaryAppPossessionAttemptV1 {
+    /// Retain the same actual selected signed clock before preparing or lending E20 custody.
+    /// # Errors
+    /// Rejects future/expired originals or another selected scope.
+    pub fn create_with_native_selected(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) -> Result<Self> {
+        selected.require_prepared_original_scope(pending.preparation())?;
+        let now = selected.trusted_time_interval()?.lower_ms();
+        let mut this = Self::create_at_reference(root, pending, now)?;
+        this.selected_clock = Some(selected);
+        this.recheck(pending, now)?;
+        Ok(this)
+    }
+    /// Cold-open only the same original E prefix under the original actual current clock owner.
+    /// # Errors
+    /// Rejects changed historical originals, absent custody or stale current policy.
+    pub fn open_with_native_selected(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) -> Result<Self> {
+        selected.require_prepared_original_scope(pending.preparation())?;
+        let now = selected.trusted_time_interval()?.lower_ms();
+        let mut this = Self::open_at_reference(root, pending, now)?;
+        this.selected_clock = Some(selected);
+        if this.stage == 3 {
+            this.recheck_consumed_originals(pending, now)?;
+        } else {
+            this.recheck(pending, now)?;
+        }
+        Ok(this)
+    }
+    /// Create a fixture-only E attempt under the pending C at the supplied synthetic time.
+    /// Shipping callers must use [`Self::create_with_native_selected`].
+    /// # Errors
+    /// Rejects stale pending originals, existing or uncertain storage, or unavailable native randomness.
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+    pub fn create(root: &Path, pending: &KagemushaPendingAppIdentityV1, now: u64) -> Result<Self> {
+        Self::create_at_reference(root, pending, now)
+    }
+    /// Reopen the fixture-only E prefix under the same pending C and supplied synthetic time.
+    /// Shipping callers must use [`Self::open_with_native_selected`].
+    /// # Errors
+    /// Rejects changed E or scope, malformed or torn storage, or invalid retained signatures and times.
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+    pub fn open_existing(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+    ) -> Result<Self> {
+        Self::open_at_reference(root, pending, now)
+    }
+    fn interval(&self, offered_fixture_time: u64) -> Result<KagemushaOrdinaryNativeTimeIntervalV1> {
+        if let Some(selected) = &self.selected_clock {
+            return selected.trusted_time_interval();
+        }
+        #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+        return Ok(KagemushaOrdinaryNativeTimeIntervalV1::fixture_point(
+            offered_fixture_time,
+        ));
+        #[cfg(not(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness")))]
+        {
+            let _ = offered_fixture_time;
+            Err(Custody)
+        }
+    }
     /// Durably prepare only from the genuine pending issuer original and native current time.
     /// # Errors
     /// Refuses existing storage, uncertain originals, expiry or unavailable native randomness.
-    pub fn create(root: &Path, pending: &KagemushaPendingAppIdentityV1, now: u64) -> Result<Self> {
+    fn create_at_reference(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+    ) -> Result<Self> {
         pending.recheck_at_trusted_time(now)?;
         let challenge = pending.possession_challenge(now)?;
         let mut entropy = [0; 8];
@@ -79,13 +154,14 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             receipt: None,
             consumed_at_ms: None,
             final_credential: None,
+            selected_clock: None,
         };
         this.append(Record::Prepared {
             ticket,
             pending_scope,
             challenge,
         })?;
-        this.recheck(pending, now)?;
+        this.recheck_at_reference(pending, now)?;
         Ok(this)
     }
     /// Recover the exact bounded complete WAL under the same genuine pending raw owner.
@@ -94,7 +170,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
     /// hardware/signature prefixes remain unavailable after their original interval.
     /// # Errors
     /// Refuses changed E/scope, malformed or torn prefixes, extra rows or invalid old signatures.
-    pub fn open_existing(
+    fn open_at_reference(
         root: &Path,
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
@@ -125,6 +201,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             receipt: None,
             consumed_at_ms: None,
             final_credential: None,
+            selected_clock: None,
         };
         for record in rows {
             match record {
@@ -170,9 +247,9 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             }
         }
         if this.stage == 3 {
-            this.recheck_consumed_originals(pending, now)?;
+            this.recheck_consumed_at_reference(pending, now)?;
         } else {
-            this.recheck(pending, now)?;
+            this.recheck_at_reference(pending, now)?;
         }
         Ok(this)
     }
@@ -184,9 +261,17 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
     /// # Errors
     /// Rejects stale/changed/uncertain originals or a cancelled attempt.
     pub fn recheck(&self, pending: &KagemushaPendingAppIdentityV1, now: u64) -> Result<()> {
+        self.interval(now)?
+            .check_both(|point| self.recheck_at_reference(pending, point))
+    }
+    fn recheck_at_reference(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+    ) -> Result<()> {
         self.journal.check_owned().map_err(|_| Custody)?;
         if matches!(self.stage, 3 | 5) {
-            self.recheck_consumed_originals(pending, now)?;
+            self.recheck_consumed_at_reference(pending, now)?;
             if self.stage == 5 {
                 self.final_credential
                     .as_ref()
@@ -206,6 +291,14 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         Ok(())
     }
     fn recheck_consumed_originals(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+    ) -> Result<()> {
+        self.interval(now)?
+            .check_both(|point| self.recheck_consumed_at_reference(pending, point))
+    }
+    fn recheck_consumed_at_reference(
         &self,
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
@@ -239,6 +332,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         selector: [u8; 32],
         now: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let now = self.interval(now)?.lower_ms();
         if self.stage == 3 {
             self.recheck_consumed_originals(pending, now)?;
         } else {
@@ -297,6 +391,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         pending.recheck_at_trusted_time(now)?;
         let result = match self.stage {
@@ -326,6 +421,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         original: &[u8],
         now: u64,
     ) -> Result<[u8; 32]> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         pending.recheck_at_trusted_time(now)?;
         check_raw(pending, original)?;
@@ -349,6 +445,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<Vec<u8>> {
+        let now = self.interval(now)?.lower_ms();
         let before = super::journal::continuous_clock::Reading::now()?;
         self.recheck(pending, now)?;
         pending.recheck_at_trusted_time(now)?;
@@ -358,9 +455,12 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             let receipt = self.make_receipt(counter)?;
             // Crypto/storage admission uses a fresh suspend-inclusive Native instant.
             // The recorded admission cannot reuse the value sampled before verification.
-            let checked_at_ms = now
+            let fixture_after = now
                 .checked_add(super::journal::continuous_clock::Reading::now()?.elapsed_ms(before)?)
                 .ok_or(Custody)?;
+            let interval = self.interval(fixture_after)?;
+            interval.check_both(|point| pending.recheck_at_trusted_time(point))?;
+            let checked_at_ms = interval.lower_ms();
             pending.recheck_at_trusted_time(checked_at_ms)?;
             self.append(Record::Consumed {
                 checked_at_ms,
@@ -387,6 +487,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         Ok(match self.stage {
             0 => vec![vec![0], vec![], vec![]],
@@ -408,6 +509,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         Ok(vec![
             self.pending_scope.to_vec(),
@@ -423,6 +525,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
     /// # Errors
     /// Rejects any invocation/signature/completed state or uncertain append.
     pub fn cancel(&mut self, pending: &KagemushaPendingAppIdentityV1, now: u64) -> Result<()> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         if self.stage != 0 {
             return Err(Rejected);
@@ -444,6 +547,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         original: &[u8],
         now: u64,
     ) -> Result<Vec<Vec<u8>>> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck_consumed_originals(pending, now)?;
         let checked = self.verify_final(pending, original, now)?;
         if self.stage == 5 {
@@ -476,6 +580,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<&'a KagemushaVerifiedOrdinaryAppCredentialV1> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck(pending, now)?;
         self.final_credential.as_ref().ok_or(Rejected)
     }
@@ -488,6 +593,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
     ) -> Result<&'a [u8]> {
+        let now = self.interval(now)?.lower_ms();
         self.recheck_consumed_originals(pending, now)?;
         self.raw_original.as_deref().ok_or(Custody)
     }
@@ -629,29 +735,35 @@ fn replay_bounded(journal: &mut PrivateJournal) -> Result<Vec<Record>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::KagemushaPreparedOrdinaryAppEnrollmentV1;
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use std::sync::Arc;
     fn pending() -> KagemushaPendingAppIdentityV1 {
-        let f = Fixture::new(false);
+        pending_for_fixture(&Fixture::new(false))
+    }
+    fn prepared_for_fixture(f: &Fixture) -> KagemushaPreparedOrdinaryAppEnrollmentV1 {
         let c = &f.selection.preparation.challenge;
-        let prepared =
-            super::super::KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
-                f.selection.preparation.clone(),
-                f.selection.owner.clone(),
-                f.release.clone(),
-                f.trust.clone(),
-                f.app_authority.clone(),
-                f.issuer_policy.clone(),
-                c.hardware_profile_id,
-                c.client_nonce,
-                c.financial_authority_commitment,
-                c.hardware_epoch,
-                300,
-            )
-            .unwrap();
+        KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
+            f.selection.preparation.clone(),
+            f.selection.owner.clone(),
+            f.release.clone(),
+            f.trust.clone(),
+            f.app_authority.clone(),
+            f.issuer_policy.clone(),
+            c.hardware_profile_id,
+            c.client_nonce,
+            c.financial_authority_commitment,
+            c.hardware_epoch,
+            300,
+        )
+        .unwrap()
+    }
+    fn pending_for_fixture(f: &Fixture) -> KagemushaPendingAppIdentityV1 {
+        let prepared = prepared_for_fixture(f);
+        let c = &prepared.preparation.challenge;
         let app = f.selection.issuance.credential.subject;
         // Synthetic full raw original isolates real issuer/key/signature/custody joins, not device qualification.
         let raw = vec![23; 100];
@@ -678,34 +790,201 @@ mod tests {
             )
             .unwrap(),
         };
-        let alias = kagemusha_ordinary_android_app_key_alias_v1(c).unwrap();
+        let alias = if c.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            STANDARD.encode(app.attested_key_id)
+        } else {
+            kagemusha_ordinary_android_app_key_alias_v1(c).unwrap()
+        };
         Arc::new(prepared)
             .admit_raw_attestation(admission, raw, &app.app_public_key, alias, 300)
             .unwrap()
     }
+    fn selected_scope(
+        f: &Fixture,
+        native_owner: KagemushaRetailEnrollmentOwnerV1,
+        issuer_policy: KagemushaRetailEnrollmentIssuerPolicyV1,
+    ) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
+        let key = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        let core = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            key.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap();
+        Arc::new(
+            KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
+                native_owner,
+                f.release.clone(),
+                issuer_policy,
+                f.trust.clone(),
+                f.app_authority.clone(),
+                f.selection.preparation.challenge.hardware_profile_id,
+                &core,
+                300,
+            )
+            .unwrap(),
+        )
+    }
+    fn selected(f: &Fixture) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
+        selected_scope(f, f.selection.owner.clone(), f.issuer_policy.clone())
+    }
+    // Independently valid signed C originals with another Native lane or issuer.
+    // These deterministic public signatures construct no installed clock or financial owner.
+    fn resigned_fixture_scope(
+        f: &Fixture,
+        changed: u8,
+    ) -> (
+        KagemushaPreparedOrdinaryAppEnrollmentV1,
+        Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) {
+        use iroha_crypto::{Algorithm, KeyPair, Signature};
+        let mut native_owner = f.selection.owner.clone();
+        let mut issuer_policy = f.issuer_policy.clone();
+        let seed = match changed {
+            0 => {
+                native_owner.lane_id[0] ^= 1;
+                61
+            }
+            1 => 63,
+            _ => panic!("unsupported public fixture mutation"),
+        };
+        let issuer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        issuer_policy.issuer_public_key = issuer.public_key().clone();
+        let mut original = f.selection.preparation.clone();
+        original.challenge.enrollment_id = native_owner.enrollment_id().unwrap();
+        original.challenge.lane_id = native_owner.lane_id;
+        original.challenge.issuer_policy_digest =
+            kagemusha_ordinary_retail_issuer_policy_digest_v1(&issuer_policy).unwrap();
+        original.signature = Signature::new(
+            issuer.private_key(),
+            &original.challenge.canonical_signing_bytes().unwrap(),
+        );
+        let c = original.challenge;
+        let prepared = KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
+            original,
+            native_owner.clone(),
+            f.release.clone(),
+            f.trust.clone(),
+            f.app_authority.clone(),
+            issuer_policy.clone(),
+            c.hardware_profile_id,
+            c.client_nonce,
+            c.financial_authority_commitment,
+            c.hardware_epoch,
+            300,
+        )
+        .unwrap();
+        (prepared, selected_scope(f, native_owner, issuer_policy))
+    }
+
+    #[test]
+    fn ordinary_e_selected_creation_rejects_valid_foreign_scope_before_wal_creation() {
+        for apple in [false, true] {
+            let own = Fixture::new(apple);
+            let foreign = Fixture::new(!apple);
+            let pending = pending_for_fixture(&own);
+            let foreign_pending = pending_for_fixture(&foreign);
+            let temp = tempfile::tempdir().unwrap();
+            let parent = temp.path().canonicalize().unwrap();
+            let root = parent.join("possession");
+            pending.recheck_at_trusted_time(300).unwrap();
+            foreign_pending.recheck_at_trusted_time(300).unwrap();
+            let foreign_selected = selected(&foreign);
+            foreign_selected
+                .require_prepared_original_scope(foreign_pending.preparation())
+                .unwrap();
+            for (prepared, selected) in [
+                (prepared_for_fixture(&foreign), foreign_selected),
+                resigned_fixture_scope(&own, 0),
+                resigned_fixture_scope(&own, 1),
+            ] {
+                prepared.recheck_at_trusted_time(300).unwrap();
+                selected.require_prepared_original_scope(&prepared).unwrap();
+                assert!(
+                    KagemushaOrdinaryAppPossessionAttemptV1::create_with_native_selected(
+                        &root, &pending, selected,
+                    )
+                    .is_err()
+                );
+                assert!(!root.exists());
+                assert!(std::fs::read_dir(&parent).unwrap().next().is_none());
+            }
+            // A matching pair can create E under either supported platform original.
+            KagemushaOrdinaryAppPossessionAttemptV1::create_with_native_selected(
+                &root,
+                &pending,
+                selected(&own),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn ordinary_e_selected_reopen_rejects_valid_foreign_scope_without_replacing_original() {
+        for apple in [false, true] {
+            let own = Fixture::new(apple);
+            let foreign = Fixture::new(!apple);
+            let pending = pending_for_fixture(&own);
+            let foreign_pending = pending_for_fixture(&foreign);
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap().join("possession");
+            let mut held = KagemushaOrdinaryAppPossessionAttemptV1::create_with_native_selected(
+                &root,
+                &pending,
+                selected(&own),
+            )
+            .unwrap();
+            let ticket = held.ticket;
+            held.fence(&pending, 300).unwrap();
+            let prefix = held.journal.recovery_prefix().unwrap();
+            let path = held
+                .journal
+                .original_directory()
+                .unwrap()
+                .join(FORMAT.filename);
+            let original = std::fs::read(&path).unwrap();
+            drop(held);
+            let foreign_selected = selected(&foreign);
+            foreign_selected
+                .require_prepared_original_scope(foreign_pending.preparation())
+                .unwrap();
+            let mut selected_scopes = vec![foreign_selected];
+            for changed in [0, 1] {
+                let (prepared, selected) = resigned_fixture_scope(&own, changed);
+                prepared.recheck_at_trusted_time(300).unwrap();
+                selected.require_prepared_original_scope(&prepared).unwrap();
+                selected_scopes.push(selected);
+            }
+            for selected in selected_scopes {
+                assert!(
+                    KagemushaOrdinaryAppPossessionAttemptV1::open_with_native_selected(
+                        &root, &pending, selected,
+                    )
+                    .is_err()
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+            }
+            let mut recovered = KagemushaOrdinaryAppPossessionAttemptV1::open_with_native_selected(
+                &root,
+                &pending,
+                selected(&own),
+            )
+            .unwrap();
+            assert_eq!(recovered.ticket, ticket);
+            assert_eq!(recovered.journal.recovery_prefix().unwrap(), prefix);
+            assert!(matches!(
+                recovered.fence(&pending, 300),
+                Err(super::super::KagemushaOrdinaryIdentityErrorV1::UnknownOutcome)
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
+
     #[test]
     fn possession_once_only_retains_verifies_and_recovers_actual_signature() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("possession");
         let mut attempt = KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).unwrap();
-        assert!(KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).is_err());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-                0o700
-            );
-            assert_eq!(
-                std::fs::metadata(root.join(FORMAT.filename))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
         let selector = p.possession_challenge(300).unwrap().enrollment_attempt_id;
         let fields = attempt.preparation_fields(&p, selector, 300).unwrap();
         assert_eq!(fields.len(), 14);

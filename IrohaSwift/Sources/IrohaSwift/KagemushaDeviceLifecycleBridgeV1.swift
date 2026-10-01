@@ -7,7 +7,7 @@ import Foundation
 
 /// Failures from the exact KAGEMUSHA V1 secure-device bridge contract.
 public enum KagemushaDeviceLifecycleBridgeErrorV1: Error, Equatable {
-  case onlineOnly
+  case unavailable
   case invalidContract(String)
   case executionFailed
 }
@@ -137,13 +137,12 @@ extension KagemushaDeviceLifecycleEndpointV1 {
 /// App Attest assertions authenticate online challenges, but do not expose a local atomic journal,
 /// authenticated multi-credit inbox, trusted clock, exact-next monetary counter, hardware-epoch
 /// rotation, or authenticated payment outbox. This bridge is therefore available only when the
-/// loaded native image provides the complete optional secure backend contract. Missing symbols,
-/// partial capability frames, malformed replies, and execution failures keep the wallet
-/// online-only; no Keychain, App Attest-only, or software fallback exists.
+/// loaded native image provides the complete required secure backend contract. Missing symbols,
+/// partial capability frames, malformed replies, and execution failures are errors; no product mode may disable KAGEMUSHA and no software monetary fallback exists.
 ///
 public final class KagemushaDeviceLifecycleBridgeV1 {
   public enum Availability: Sendable {
-    case onlineOnly
+    case unavailable
     case available
   }
 
@@ -164,11 +163,11 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   ) {
     self.endpoint = endpoint
     acceptedCapabilities = capabilities
-    availability = endpoint != nil && capabilities != nil ? .available : .onlineOnly
+    availability = endpoint != nil && capabilities != nil ? .available : .unavailable
   }
 
-  /// Discover the optional native secure backend without permitting a software downgrade.
-  public static func production() -> KagemushaDeviceLifecycleBridgeV1 {
+  /// Require the authenticated native secure backend.
+  public static func production() throws -> KagemushaDeviceLifecycleBridgeV1 {
     guard let endpoint = NativeEndpoint.create(),
       let encoded = try? endpoint.capabilities(),
       let capabilities = try? Codec.decodeCapabilities(
@@ -176,7 +175,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
         expectedPlatform: Codec.iosPlatformCode
       )
     else {
-      return onlineOnly()
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
     return KagemushaDeviceLifecycleBridgeV1(
       endpoint: endpoint,
@@ -184,8 +183,8 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     )
   }
 
-  /// Construct an explicit online-only bridge for a device without the complete hardware API.
-  public static func onlineOnly() -> KagemushaDeviceLifecycleBridgeV1 {
+  /// Missing-endpoint fixture used only by SDK tests.
+  static func unavailableForTests() -> KagemushaDeviceLifecycleBridgeV1 {
     KagemushaDeviceLifecycleBridgeV1(endpoint: nil, capabilities: nil)
   }
 
@@ -220,7 +219,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     acceptedDevicePublicKey: Data?
   ) throws -> KagemushaDeviceLifecycleResultV1 {
     guard let endpoint else {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
     let responseKey = try Self.requireAcceptedDevicePublicKey(
       operation: operation, acceptedDevicePublicKey: acceptedDevicePublicKey)
@@ -240,7 +239,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     let responseRange = response.startIndex..<response.endIndex
     defer { response.resetBytes(in: responseRange) }
     guard let acceptedCapabilities else {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
     return try Self.authenticateResponse(
       response, operation: operation, requestID: requestID,
@@ -464,11 +463,11 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       static func create() -> NativeEndpoint? { nil }
 
       func capabilities() throws -> Data {
-        throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+        throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
       }
 
       func execute(_: Data) throws -> Data {
-        throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+        throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
       }
     #endif
   }

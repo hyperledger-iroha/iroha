@@ -126,7 +126,11 @@ mod halo2_backend;
 /// and synthetic circuit fixtures remain confined to the module's test-only helpers.
 #[cfg(all(
     feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
 ))]
 pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.

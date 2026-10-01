@@ -6,7 +6,6 @@ use crate::{
 use axum::{extract::Path, response::IntoResponse};
 #[cfg(feature = "app_api")]
 use iroha_core::query::index_status::QueryIndexStatus;
-#[cfg(feature = "app_api")]
 use iroha_core::state::StateReadOnly;
 use iroha_core::state::WorldReadOnly;
 use iroha_core::{

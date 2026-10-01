@@ -59,6 +59,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("fastpq_prover", "fastpq_metal_bench"),
         ("integration_tests", "refresh_nexus_streaming_fixtures"),
         ("integration_tests", "sorafs-gateway-fixtures"),
+        ("iroha", "iroha_ordinary_native_inventory_assemble"),
         ("iroha_cli", "account_literal_reencode"),
         ("iroha_cli", "gov_instruction"),
         ("iroha_cli", "taira_fee_sponsor_program"),
@@ -71,6 +72,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("iroha_data_model", "axt_fixtures"),
         ("iroha_data_model", "cancel_asset_lock_fixtures"),
         ("iroha_data_model", "kagemusha_app_certificate_encoder_v1"),
+        ("iroha_data_model", "kagemusha_ordinary_preparation_encoder_v1"),
         ("iroha_data_model", "kagemusha_raw_app_attestation_encoder_v1"),
         ("iroha_data_model", "kagemusha_verified_receipt_v1"),
         ("iroha_data_model", "musubi_fixtures"),
@@ -132,7 +134,7 @@ FORBIDDEN_COMPATIBILITY_BINS = frozenset(
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 99
+EXPECTED_DECLARED_BIN_COUNT = 101
 
 
 def load_metadata(root: Path) -> dict[str, Any]:

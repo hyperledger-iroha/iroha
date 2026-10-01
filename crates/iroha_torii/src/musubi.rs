@@ -191,6 +191,7 @@ pub async fn handler_find_ordered_prefix(
     )?))
 }
 /// Execute an exact-token query against the rebuildable finalized-event search projection.
+#[cfg(feature = "app_api")]
 pub async fn handler_search_packages(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<MusubiSearchQueryV1>,

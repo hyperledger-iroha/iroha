@@ -17,6 +17,8 @@ pub mod account_faucet_policy;
 pub mod aliases;
 /// Scoped canonical account/fee authority originals for an existing native ledger-wide reader.
 pub mod authority_originals;
+/// Actual signed account-scoped ordinary current-wallet original wire.
+pub mod ordinary_wallet_current;
 /// Typed non-success observations for challenge-bound bridge finality.
 pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.

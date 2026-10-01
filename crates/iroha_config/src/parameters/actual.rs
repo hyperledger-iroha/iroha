@@ -7249,7 +7249,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional KAGEMUSHA V1 command-submission authority.
+    /// Optional KAGEMUSHA V1 command capacity and redemption authority customization.
+    /// Command admission remains active with bounded defaults when absent.
     pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,

@@ -50,7 +50,7 @@ zk-halo2 = ["dep:kaigi_zk"]
 zk-halo2-ipa = ["zk-ipa-native"]
 # Native IPA polynomial-opening verifier (no external halo2 libs).
 zk-ipa-native = []
-zk-stark = []
+zk-stark = ["dep:fastpq_prover"]
 # Temporary helper to match halo2's default circuit-params toggle.
 circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
@@ -71,6 +71,7 @@ kagemusha-real-proof-harness = ["zk-halo2-ipa"]
 kagemusha-production-prover = ["zk-halo2-ipa"]
 
 [dependencies]
+iroha_primitives = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
@@ -78,7 +79,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["consen
 iroha_panic_hook = { workspace = true }
 iroha_torii_shared = { workspace = true }
 ivm_abi = { workspace = true }
-fastpq_prover = { workspace = true }
+fastpq_prover = { workspace = true, optional = true }
 fastpq_isi = { path = "../fastpq_isi" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }

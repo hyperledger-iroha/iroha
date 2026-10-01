@@ -90,17 +90,21 @@ internal object KagemushaSelectionFrameV1 {
         ) { "Core S differs from the selected lane or exact-next indices" }
     }
 
-    fun requireAppAttest(frame: ByteArray, previous: UInt) {
-        require(previous != UInt.MAX_VALUE && frame.size == FRAME_BYTES) {
-            "App Attest Core S counter or width is invalid"
+    /** Validate only Core S grammar; Apple counters are independent of financial indexes. */
+    fun requireAppAttestSubject(frame: ByteArray) {
+        require(frame.size == FRAME_BYTES) { "App Attest Core S width is invalid" }
+        val lane = frame.copyOfRange(LANE, LANE + 32)
+        if (frame[OPERATION] == 0.toByte()) {
+            requireOrdinaryBootstrapExact(frame, lane)
+            return
         }
-        fun index(value: UInt): ByteArray = ByteArray(16).also { bytes ->
-            for (offset in 0 until 4) {
-                bytes[offset] = (value.toLong() ushr (offset * 8)).toByte()
-            }
+        val before = frame.copyOfRange(BEFORE, BEFORE + 16)
+        val after = frame.copyOfRange(AFTER, AFTER + 16)
+        requireExact(frame, lane, before, after)
+        require(BigInteger(1, after.reversedArray()) ==
+            BigInteger(1, before.reversedArray()).add(BigInteger.ONE)) {
+            "Core S financial indexes are not exact-next"
         }
-        requireExact(frame, frame.copyOfRange(LANE, LANE + 32),
-            index(previous), index(previous + 1u))
     }
 
     /** Separate ordinary Bootstrap data layout; it never admits a monetary exact-next S. */

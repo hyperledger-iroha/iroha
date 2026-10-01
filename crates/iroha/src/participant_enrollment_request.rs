@@ -15,8 +15,9 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::peer::PeerId;
+use iroha_primitives::time::NativeContinuousReading;
 use sha2::{Digest as _, Sha256};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use url::Url;
 
 const DOMAIN: &[u8] = b"iroha.participant.ordinary-enrollment-request.v1\0";
@@ -198,7 +199,7 @@ pub struct SelectedEnrollmentReadNodeV1 {
 pub struct EnrollmentWalletReadChallengeV1 {
     challenge: [u8; 32],
     request_sha256: [u8; 32],
-    deadline: Instant,
+    started: NativeContinuousReading,
 }
 impl EnrollmentWalletReadChallengeV1 {
     /// Reserve fresh public challenge entropy for the exact bounded signing subject.
@@ -215,17 +216,55 @@ impl EnrollmentWalletReadChallengeV1 {
         Ok(Self {
             challenge: digest.finalize().into(),
             request_sha256,
-            deadline: Instant::now() + READ_BUDGET,
+            started: NativeContinuousReading::now()?,
         })
     }
+    /// Reserve a distinct Native startup read for the actual immutable S/W/network selection.
+    /// This establishes no FI or monetary authority and cannot verify an enrollment HTTP request.
+    /// # Errors
+    /// Refuses another controller shape or unavailable actual Native elapsed-clock custody.
+    pub fn for_native_wallet_selection(
+        network: NetworkId,
+        signatory: &AccountId,
+        wallet: &AccountId,
+    ) -> Result<Self> {
+        require_single_member_wallet(signatory, wallet)?;
+        let entropy = rand::random::<[u8; 32]>();
+        ensure!(entropy != [0; 32], "Native startup entropy unavailable");
+        let mut subject = Sha256::new();
+        subject.update(b"iroha:kagemusha:v1:ordinary-native-startup-wallet-read\0");
+        subject.update(network.as_bytes());
+        subject.update(norito::encode_canonical(signatory)?);
+        subject.update(norito::encode_canonical(wallet)?);
+        let request_sha256: [u8; 32] = subject.finalize().into();
+        let mut nonce = Sha256::new();
+        nonce.update(b"iroha:kagemusha:v1:ordinary-native-startup-wallet-nonce\0");
+        nonce.update(request_sha256);
+        nonce.update(entropy);
+        Ok(Self {
+            challenge: nonce.finalize().into(),
+            request_sha256,
+            started: NativeContinuousReading::now()?,
+        })
+    }
+
     /// Public request challenge; possessing it cannot create verified native evidence.
     #[must_use]
     pub fn bytes(&self) -> [u8; 32] {
         self.challenge
     }
+    /// Remaining suspend-inclusive budget of the same original Native read.
+    /// # Errors
+    /// Refuses an expired read; callers cannot renew it with another local deadline.
+    pub(crate) fn remaining_native_budget(&self) -> Result<std::time::Duration> {
+        READ_BUDGET
+            .checked_sub(self.started.elapsed()?)
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| eyre::eyre!("Native wallet read expired"))
+    }
     fn recheck(&self) -> Result<()> {
         ensure!(
-            Instant::now() < self.deadline,
+            self.started.elapsed()? < READ_BUDGET,
             "current enrollment wallet observation expired"
         );
         Ok(())
@@ -326,6 +365,35 @@ impl VerifiedEnrollmentWalletSignatoryV1 {
     pub fn recheck(&self) -> Result<()> {
         self.challenge.recheck()
     }
+    /// Original independently verified network; this grants no FI or installation authority.
+    #[must_use]
+    pub fn network_id(&self) -> &NetworkId {
+        &self.network
+    }
+    /// Recheck this same challenged current read under the independently installed current
+    /// finality prefix and exact node/schema/network selections before Native startup.
+    /// # Errors
+    /// Refuses another root, committee, node inventory, schema, network or expired read.
+    pub fn recheck_under_installed_finality(
+        &self,
+        verifier: &SumeragiFinalityVerifier,
+        nodes: &[SelectedEnrollmentReadNodeV1; 4],
+        expected_schema: Hash,
+        network: NetworkId,
+    ) -> Result<()> {
+        self.recheck()?;
+        let block = verifier.verify_retained_decision(&self.proof)?;
+        ensure!(
+            self.nodes == *nodes
+                && self.network == network
+                && self.snapshot.schema_hash() == expected_schema
+                && block.context_id() == self.block.context_id()
+                && block.execution().world_state_root == self.snapshot.world_root(),
+            "current Native wallet read changed installed root/schema/node selection"
+        );
+        self.recheck()
+    }
+
     /// Exact current S; no label-based or broker-selected account substitution.
     #[must_use]
     pub fn signatory(&self) -> &AccountId {
@@ -536,3 +604,6 @@ impl VerifiedParticipantEnrollmentRequestV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix, feature = "kagemusha-ordinary-native"))]
+pub(crate) use tests::NativeCustodyFixture;

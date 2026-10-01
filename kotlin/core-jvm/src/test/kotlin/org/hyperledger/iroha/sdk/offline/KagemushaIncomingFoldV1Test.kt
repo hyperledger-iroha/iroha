@@ -32,7 +32,7 @@ class KagemushaIncomingFoldV1Test {
     @Test fun `method18 is a closed empty request and exact three nonzero digest response`() {
         val method = KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY
         assertEquals(18, method.code)
-        assertEquals(18, KagemushaCoreCoordinatorMethodV1.entries.size)
+        assertEquals(21, KagemushaCoreCoordinatorMethodV1.entries.size)
         val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, emptyList())
         val response = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request,
             listOf(digest(41), digest(42), digest(43)))

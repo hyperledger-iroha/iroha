@@ -494,23 +494,57 @@ impl KagemushaCoreCoordinatorBackendV1 for NativeInitialSelectionBackend {
 /// An exact successful same-path retry is idempotent; a different path, prior unknown install
 /// or uncertain platform result is rejected. Inventory readiness is not an installed backend.
 /// # Errors
-/// Returns `Unavailable` without a registered OEM owner, and rejects substituted/uncertain use.
+/// Android requires its registered ordinary app source and never falls back to an OEM source.
+/// Other targets retain their existing native selection. Missing sources return `Unavailable`;
+/// substituted or uncertain use is rejected.
 pub fn provision_and_install_kagemusha_native_enrollment_v1(path: &str) -> Result<(), Error> {
     kagemusha_core_coordinator_validate_storage_path_v1(path.as_bytes())
         .map_err(|_| Error::Rejected)?;
     // Ordinary app identity is an independent signed/native account ceremony. It neither
     // needs nor grants a non-forking financial provider. Selection is installed once in Rust.
     #[cfg(unix)]
-    if super::ordinary_app_identity::has_registered_source() {
-        return super::ordinary_app_identity::provision_and_install(path);
+    let ordinary_registered = super::ordinary_app_identity::has_registered_source();
+    #[cfg(not(unix))]
+    let ordinary_registered = false;
+    install_with_native_target_source_policy(
+        cfg!(target_os = "android"),
+        ordinary_registered,
+        || {
+            #[cfg(unix)]
+            {
+                super::ordinary_app_identity::provision_and_install(path)
+            }
+            #[cfg(not(unix))]
+            {
+                Err(Error::Unavailable)
+            }
+        },
+        || {
+            let source = PROVISIONER.get().ok_or(Error::Unavailable)?.clone();
+            INSTALLATION
+                .lock()
+                .map_err(|_| Error::Rejected)?
+                .install(source, path, |backend| {
+                    install_kagemusha_core_coordinator_backend_v1(backend)
+                        .map_err(|_| Error::Rejected)
+                })
+        },
+    )
+}
+
+// The target policy is compiled into the Rust installer. Neither C/JNI frames nor source
+// registration can select a fallback. Closures retain existing install-once owner operations.
+fn install_with_native_target_source_policy(
+    ordinary_only: bool,
+    ordinary_registered: bool,
+    ordinary_install: impl FnOnce() -> Result<(), Error>,
+    retained_generic_install: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), Error> {
+    if ordinary_only || ordinary_registered {
+        ordinary_install()
+    } else {
+        retained_generic_install()
     }
-    let source = PROVISIONER.get().ok_or(Error::Unavailable)?.clone();
-    INSTALLATION
-        .lock()
-        .map_err(|_| Error::Rejected)?
-        .install(source, path, |backend| {
-            install_kagemusha_core_coordinator_backend_v1(backend).map_err(|_| Error::Rejected)
-        })
 }
 
 struct InstalledRecoveredBackend {

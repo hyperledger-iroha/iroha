@@ -46,8 +46,20 @@ mod native_backend;
     )
 ))]
 mod ordinary_app_guard_binding;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_cash_candidate_verifier;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_cash_terminal_verifier;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use ordinary_cash_terminal_verifier::{
+    KagemushaAuthenticatedOrdinaryCashTerminalV1, verify_ordinary_cash_terminal_v1,
+};
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_circuit;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use ordinary_cash_candidate_verifier::{
+    KagemushaAuthenticatedOrdinaryCashCandidateV1, verify_ordinary_cash_candidate_v1,
+};
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_verifier;
 mod ordinary_issuer_config;
@@ -57,7 +69,10 @@ mod ordinary_state_reserved;
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+    KagemushaAuthenticatedOrdinaryPreparationGuardV1,
+    KagemushaAuthenticatedOrdinaryTerminalGuardV1, verify_ordinary_bootstrap_guard_historical_v1,
+    verify_ordinary_bootstrap_guard_v1, verify_ordinary_preparation_guard_v1,
+    verify_ordinary_terminal_guard_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1;
@@ -78,6 +93,15 @@ mod ordinary_approval_proof_binding;
         feature = "kagemusha-real-proof-harness"
     )
 ))]
+mod ordinary_cash_opening;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
 mod ordinary_credential_union;
 #[cfg(all(
     feature = "zk-halo2-ipa",
@@ -88,6 +112,25 @@ mod ordinary_credential_union;
     )
 ))]
 mod ordinary_guard_data_binding;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_guard_recursive_consumer;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_prepared_intent;
+
 #[cfg(all(
     feature = "zk-halo2-ipa",
     any(
@@ -124,6 +167,15 @@ mod ordinary_integrity_union;
     )
 ))]
 mod ordinary_issuer_equation;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_terminal_subject_binding;
 #[cfg(all(
     feature = "zk-halo2-ipa",
     any(
@@ -245,8 +297,6 @@ pub use generation::KagemushaArtifactGenerationErrorV1;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub use generation::KagemushaGeneratedOperationArtifactsV1;
 #[cfg(feature = "kagemusha-production-prover")]
-pub use generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1;
-#[cfg(feature = "kagemusha-production-prover")]
 pub use generation::production_prover::{
     KagemushaNativeOutgoingWitnessSourceV1, KagemushaNativeStateWitnessConsumerV1,
     KagemushaNativeTerminalHashWitnessConsumerV1, KagemushaNativeTerminalWitnessConsumerV1,
@@ -318,6 +368,10 @@ pub use generation::{
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
     generate_kagemusha_recursive_state_artifacts_v1, prove_kagemusha_recursive_state_hash_claim_v1,
     prove_kagemusha_recursive_state_v1,
+};
+#[cfg(feature = "kagemusha-production-prover")]
+pub use generation::{
+    KagemushaOrdinaryAppRecursiveSelectionWitnessV1, KagemushaOrdinaryRecursivePreparedOpeningV1,
 };
 #[cfg(all(
     feature = "kagemusha-production-prover",

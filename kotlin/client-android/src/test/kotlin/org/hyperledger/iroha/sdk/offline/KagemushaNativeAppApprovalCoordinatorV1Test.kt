@@ -368,10 +368,104 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         assertEquals(1, uncertain.state); assertEquals(1, calls)
     }
 
+    @Test fun `initial publication uses captured W and repeated publication and recovery never resign`() {
+        val endpoint = Endpoint(bootstrap = true); var signs = 0
+        val held = bootstrap(endpoint)
+        held.performPlatformSigning { _, _, _, _, _, _, _ -> signs++; der.copyOf() }
+        val publication = held.publishOriginalInitialState()
+        assertContentEquals(endpoint.publication[1], publication.enrollmentId())
+        assertContentEquals(endpoint.publication[3], publication.retailCertificateOriginalDigest())
+        assertContentEquals(endpoint.fields[8], publication.appCredentialOriginalDigest())
+        assertContentEquals(endpoint.publication[5], publication.bootstrapApprovalOriginalDigest())
+        assertContentEquals(endpoint.publication[6], publication.stateOriginalDigest())
+        assertContentEquals(endpoint.publication[7], publication.pairedStateProofOriginalDigest())
+        assertContentEquals(endpoint.publication[8], publication.pairedOrdinaryGuardOriginalDigest())
+        publication.publicationOriginalDigest().fill(0)
+        assertContentEquals(endpoint.publication[2], publication.publicationOriginalDigest())
+        assertContentEquals(endpoint.publication[2], held.publishOriginalInitialState().publicationOriginalDigest())
+        assertContentEquals(endpoint.publication[2], held.recoverOriginalInitialStatePublication().publicationOriginalDigest())
+        assertEquals(1, endpoint.proofs); assertEquals(2, endpoint.publicationCalls); assertEquals(1, endpoint.publicationRecoveries)
+        assertEquals(1, signs); assertEquals(1, endpoint.retains)
+    }
+
+    @Test fun `initial publication rejects missing captured W or missing native FI binding before proof dispatch`() {
+        val endpoint = Endpoint(bootstrap = true)
+        assertFailsWith<IllegalStateException> { bootstrap(endpoint).publishOriginalInitialState() }
+        assertEquals(0, endpoint.publicationCalls); assertEquals(0, endpoint.state)
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/native-bootstrap-unbound", endpoint)
+        val fields = bridge.invokeOrdinaryBootstrapApproval(listOf(KagemushaCoreCoordinatorFrameV1.u32(8), endpoint.id))
+        val unbound = KagemushaNativePreparedOrdinaryBootstrapApprovalV1.fromNative(bridge, endpoint.id, fields, {})
+        assertFailsWith<IllegalStateException> { unbound.publishOriginalInitialState() }
+        assertEquals(0, endpoint.publicationCalls)
+    }
+
+    @Test fun `initial publication cannot substitute ticket FI enrollment certificate or credential`() {
+        for (index in listOf(0, 1, 3, 4)) {
+            val endpoint = Endpoint(bootstrap = true)
+            val held = bootstrap(endpoint)
+            held.performPlatformSigning { _, _, _, _, _, _, _ -> der.copyOf() }
+            endpoint.publication[index] = if (index == 0) le64(8) else bytes(0x74)
+            assertFailsWith<RuntimeException> { held.publishOriginalInitialState() }
+            assertFailsWith<IllegalStateException> { held.recoverOriginalInitialStatePublication() }
+            assertEquals(1, endpoint.closes); assertEquals(1, endpoint.retains)
+        }
+    }
+
+    @Test fun `initial publication rechecks every retained original commitment on recovery`() {
+        for (index in listOf(2, 5, 6, 7, 8)) {
+            val endpoint = Endpoint(bootstrap = true)
+            val held = bootstrap(endpoint)
+            held.performPlatformSigning { _, _, _, _, _, _, _ -> der.copyOf() }
+            held.publishOriginalInitialState()
+            endpoint.publication[index] = bytes(0x74)
+            assertFailsWith<IllegalStateException> { held.recoverOriginalInitialStatePublication() }
+            assertEquals(1, endpoint.closes); assertEquals(1, endpoint.proofs); assertEquals(1, endpoint.retains)
+        }
+    }
+
+    @Test fun `lost initial publication return allows only native original recovery from a fresh holder`() {
+        val endpoint = Endpoint(bootstrap = true).apply { losePublicationReturn = true }; var signs = 0
+        val old = bootstrap(endpoint)
+        old.performPlatformSigning { _, _, _, _, _, _, _ -> signs++; der.copyOf() }
+        assertFailsWith<IllegalStateException> { old.publishOriginalInitialState() }
+        assertEquals(1, endpoint.proofs); assertEquals(1, endpoint.closes)
+        assertFailsWith<IllegalStateException> { old.publishOriginalInitialState() }
+        endpoint.losePublicationReturn = false
+        val recovered = bootstrap(endpoint).recoverOriginalInitialStatePublication()
+        assertContentEquals(endpoint.publication[2], recovered.publicationOriginalDigest())
+        assertEquals(1, endpoint.proofs); assertEquals(1, endpoint.publicationCalls)
+        assertEquals(1, signs); assertEquals(1, endpoint.retains)
+    }
+
+    @Test fun `missing native initial publication provider stays unavailable without a money claim`() {
+        val endpoint = Endpoint(bootstrap = true).apply { publicationUnavailable = true }
+        val held = bootstrap(endpoint)
+        held.performPlatformSigning { _, _, _, _, _, _, _ -> der.copyOf() }
+        assertFailsWith<IllegalStateException> { held.publishOriginalInitialState() }
+        assertEquals(0, endpoint.proofs); assertEquals(1, endpoint.closes)
+        assertFailsWith<IllegalStateException> { held.recoverOriginalInitialStatePublication() }
+    }
+
+    @Test fun `publication recovery cannot create a new proof and original owner revocation stops dispatch`() {
+        val missing = Endpoint(bootstrap = true)
+        val held = bootstrap(missing)
+        held.performPlatformSigning { _, _, _, _, _, _, _ -> der.copyOf() }
+        assertFailsWith<IllegalStateException> { held.recoverOriginalInitialStatePublication() }
+        assertEquals(0, missing.proofs); assertEquals(0, missing.publicationCalls)
+        var current = true
+        val revoked = Endpoint(bootstrap = true)
+        val guarded = bootstrap(revoked) { check(current) }
+        guarded.performPlatformSigning { _, _, _, _, _, _, _ -> der.copyOf() }
+        current = false
+        assertFailsWith<IllegalStateException> { guarded.publishOriginalInitialState() }
+        assertEquals(0, revoked.publicationCalls); assertEquals(1, revoked.closes)
+    }
+
     private fun bootstrap(endpoint: Endpoint, guard: () -> Unit = {}): KagemushaNativePreparedOrdinaryBootstrapApprovalV1 {
         val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/native-bootstrap-owner", endpoint)
         val fields = bridge.invokeOrdinaryBootstrapApproval(listOf(KagemushaCoreCoordinatorFrameV1.u32(8), endpoint.id))
-        return KagemushaNativePreparedOrdinaryBootstrapApprovalV1.fromNative(bridge, endpoint.id, fields, guard)
+        return KagemushaNativePreparedOrdinaryBootstrapApprovalV1.fromNative(bridge, endpoint.id, fields, guard,
+            endpoint.enrollmentId, endpoint.retailCertificate)
     }
 
     private fun facade(endpoint: Endpoint) = KagemushaNativeAppApprovalCoordinatorV1(
@@ -386,6 +480,13 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         var credential = byteArrayOf(); var loseCredentialReturn = false; var substituteCredentialScope = false
         var credentialResponseOverride: Array<ByteArray>? = null; var substituteScopeAfterCredential = false
         var loseRetainReturn = false; var substituteScope = false; var substituteReceipt = false
+        val enrollmentId = bytes(0xb1)
+        val retailCertificate = byteArrayOf(0xb2.toByte(), 1)
+        // Scripted transport commitments exercise correlation; they are not genuine proof evidence.
+        val publication = mutableListOf(fields[0].copyOf(), enrollmentId.copyOf(), bytes(0xb3), sha(retailCertificate),
+            fields[8].copyOf(), bytes(0xb4), bytes(0xb5), bytes(0xb6), bytes(0xb7))
+        var proofs = 0; var publicationCalls = 0; var publicationRecoveries = 0
+        var published = false; var losePublicationReturn = false; var publicationUnavailable = false
         override fun contract() = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
@@ -426,6 +527,17 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
                             response
                         }
                     }
+                }
+                9 -> {
+                    check(bootstrap && state == 3); publicationCalls++
+                    if (publicationUnavailable) null else {
+                        if (!published) { published = true; proofs++ }
+                        if (losePublicationReturn) null else publication.map(ByteArray::copyOf).toTypedArray()
+                    }
+                }
+                10 -> {
+                    check(bootstrap && state == 3); publicationRecoveries++
+                    if (!published) null else publication.map(ByteArray::copyOf).toTypedArray()
                 }
                 else -> error("Unexpected fixture phase")
             }

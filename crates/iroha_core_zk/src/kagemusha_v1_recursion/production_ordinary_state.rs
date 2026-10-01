@@ -67,6 +67,7 @@ impl Originals {
             approval: &self.approval,
             integrity_lease: self.lease.as_ref(),
             previous_app_attest_counter: floor,
+            prepared: None,
         });
         witness
     }

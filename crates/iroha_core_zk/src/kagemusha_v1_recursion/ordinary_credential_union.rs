@@ -248,7 +248,7 @@ mod tests {
     fn shape<F: KagemushaPoseidonFieldV1>(
         apple: bool,
         pi: bool,
-    ) -> (Vec<usize>, Vec<usize>, usize, usize) {
+    ) -> (Vec<usize>, Vec<usize>, usize, usize, usize) {
         let f = if pi {
             assert!(!apple, "Integrity belongs to the Android fixture");
             KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity()
@@ -286,12 +286,13 @@ mod tests {
             .unwrap();
         builder.calculate_params(Some(9));
         let params = builder.config_params;
-        let (blocks, rows, _) = jobs.capacity_profile().unwrap();
+        let (job_count, compression_blocks, required_rows) = jobs.capacity_profile().unwrap();
         (
             params.num_advice_per_phase,
             params.num_lookup_advice_per_phase,
-            blocks,
-            rows,
+            job_count,
+            compression_blocks,
+            required_rows,
         )
     }
     #[test]

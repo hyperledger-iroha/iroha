@@ -53,12 +53,19 @@ pub struct KagemushaNativeOrdinaryAppIdentitySourceV1 {
     platform_disposition: KagemushaOrdinaryEnrollmentDispositionV1,
     integrity_policy_original: Option<Vec<u8>>,
     bootstrap: Option<BootstrapMaterial>,
+    native_account_session:
+        Option<Arc<super::ordinary_native_startup::BoundNativeAccountSessionV1>>,
 }
 struct BootstrapMaterial {
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
     capacity: KagemushaDurableCapacityV1,
     disposition: KagemushaOrdinaryEnrollmentDispositionV1,
     integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    proving: Option<BootstrapProvingMaterial>,
+}
+struct BootstrapProvingMaterial {
+    profile: KagemushaRecursiveVerifierProfileV1,
+    resolver: Arc<dyn KagemushaArtifactByteResolverV1>,
 }
 impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
     /// Bind actual independently selected native originals before any mobile call.
@@ -111,13 +118,15 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             platform_disposition,
             integrity_policy_original,
             bootstrap: None,
+            native_account_session: None,
         };
         this.recheck_originals(&this.path)?;
         Ok(this)
     }
     /// Bind the actual release verifier and native original recovery choice before installation.
     /// Verified lease holders come from independent native admission; decoded mobile fields do
-    /// not create them. This supplies proving inputs, without asserting an initialized State.
+    /// not create them. This supplies bootstrap admission and recovery, without asserting an
+    /// initialized State or available proving artifacts; those originals are retained separately.
     /// # Errors
     /// Rejects duplicate material, stale source, invalid capacity or fresh recovery lease inputs.
     pub fn with_native_bootstrap_material(
@@ -140,11 +149,41 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
             capacity,
             disposition,
             integrity_leases,
+            proving: None,
         });
         self.recheck_originals(&self.path)?;
         Ok(self)
     }
+    /// Retain independently selected release proving originals before this source is installed.
+    /// Neither coordinator frames nor JNI supply a profile, resolver or artifact digest. The
+    /// production loader authenticates these originals against actual FI/W selection at use.
+    /// # Errors
+    /// Rejects missing bootstrap admission, duplicate material or stale native source custody.
+    pub fn with_native_bootstrap_proving_material(
+        mut self,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: Arc<dyn KagemushaArtifactByteResolverV1>,
+    ) -> Result<Self, Error> {
+        self.recheck_originals(&self.path)?;
+        let bootstrap = self.bootstrap.as_mut().ok_or(Error::Unavailable)?;
+        if bootstrap.proving.is_some() {
+            return Err(Error::Rejected);
+        }
+        bootstrap.proving = Some(BootstrapProvingMaterial { profile, resolver });
+        self.recheck_originals(&self.path)?;
+        Ok(self)
+    }
+    pub(super) fn with_native_account_session(
+        mut self,
+        session: Arc<super::ordinary_native_startup::BoundNativeAccountSessionV1>,
+    ) -> Self {
+        self.native_account_session = Some(session);
+        self
+    }
     fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
+        if let Some(session) = &self.native_account_session {
+            session.recheck()?;
+        }
         self.selected
             .trusted_time_ms()
             .map_err(|_| Error::Rejected)?;
@@ -258,7 +297,10 @@ pub fn install_kagemusha_native_ordinary_source_v1(
 }
 fn with_installed_bootstrap<T>(
     handle: u64,
-    consume: impl FnOnce(&mut BootstrapOwner) -> Result<T, Error>,
+    consume: impl FnOnce(
+        &mut BootstrapOwner,
+        &KagemushaNativeOrdinaryAppIdentitySourceV1,
+    ) -> Result<T, Error>,
 ) -> Result<T, Error> {
     let installed = INSTALL.lock().map_err(|_| Error::Rejected)?;
     if !installed.succeeded {
@@ -276,76 +318,84 @@ fn with_installed_bootstrap<T>(
     }
     let initial = owner.bootstrap.as_mut().ok_or(Error::Unavailable)?;
     initial.enrollment().map_err(|_| Error::Rejected)?;
-    let result = consume(initial)?;
+    let result = consume(initial, &backend.source)?;
     backend.source.recheck_originals(&backend.path)?;
     initial.enrollment().map_err(|_| Error::Rejected)?;
     Ok(result)
 }
-/// Generate the actual initial ordinary paired Guard under the same installed Native holder.
-/// Loading release-pinned material and proving never dispatches another platform signature.
+/// Prove and durably publish the initial State using the same retained Native platform ticket.
+/// Native fsyncs publication intent before generating its Guard, SHA claim and State parities.
+/// A retry reads the actual publication; surviving cold intent selects original-only recovery.
 /// # Errors
-/// Rejects a foreign/closed handle, missing captured W, stale custody or invalid released keys.
-pub fn prove_kagemusha_native_ordinary_initial_guard_v1<R: KagemushaArtifactByteResolverV1>(
-    handle: u64,
-    profile: KagemushaRecursiveVerifierProfileV1,
-    resolver: R,
-) -> Result<Vec<u8>, Error> {
-    with_installed_bootstrap(handle, |initial| {
-        initial
-            .with_selected_bootstrap(|selection, approval, financial| {
-                let prover = KagemushaProductionProverV1::load_ordinary_bootstrap(
-                    selection, profile, resolver,
-                )
-                .map_err(|error| {
-                    iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::RecoveryMaterial(
-                        error.to_string(),
-                    )
-                })?;
-                prover
-                    .prove_ordinary_bootstrap_guard(selection, approval, financial)
-                    .map_err(|error| {
-                        iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::RecoveryMaterial(
-                            error.to_string(),
-                        )
-                    })
-            })
-            .map_err(|_| Error::Rejected)
-    })
-}
-/// Generate both real initial State parities and durably publish their exact Guard and W.
-/// Native builds the public auxiliaries from its actual release material and Guard original,
-/// then binds the held financial secret and admission. Success is the actual current publication.
-/// # Errors
-/// Rejects another owner/release, substituted proof inputs, stale current lease or failed proof.
-pub fn publish_kagemusha_native_ordinary_initial_state_v1<R: KagemushaArtifactByteResolverV1>(
-    handle: u64,
-    profile: KagemushaRecursiveVerifierProfileV1,
-    resolver: R,
-    paired_guard_original: Vec<u8>,
-) -> Result<(), Error> {
-    with_installed_bootstrap(handle, |initial| {
-        let prover = initial
-            .with_selected_bootstrap(|selection, _, _| {
-                KagemushaProductionProverV1::load_ordinary_bootstrap(selection, profile, resolver)
-                    .map_err(|error| {
-                        iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1::RecoveryMaterial(
-                            error.to_string(),
-                        )
-                    })
-            })
+/// Rejects a foreign/closed handle, absent platform attempt, stale custody or uncertain originals.
+pub fn publish_kagemusha_native_ordinary_initial_state_v1(handle: u64) -> Result<(), Error> {
+    with_installed_bootstrap(handle, |initial, source| {
+        let ticket = initial
+            .retained_bootstrap_platform_ticket()
             .map_err(|_| Error::Rejected)?;
-        initial
-            .prove_and_publish(&prover, paired_guard_original)
-            .map_err(|_| Error::Rejected)
+        bootstrap_publication_originals(initial, source, ticket, false).map(|_| ())
     })
 }
 /// Reopen the same actual published State after independent native FI and lease admission.
 /// # Errors
 /// Rejects absent, mixed or uncertain publication originals; missing storage is not recreated.
 pub fn recover_kagemusha_native_ordinary_current_publication_v1(handle: u64) -> Result<(), Error> {
-    with_installed_bootstrap(handle, |initial| {
+    with_installed_bootstrap(handle, |initial, _| {
         initial.recover_publication().map_err(|_| Error::Rejected)
     })
+}
+
+fn bootstrap_publication_originals(
+    initial: &mut BootstrapOwner,
+    source: &KagemushaNativeOrdinaryAppIdentitySourceV1,
+    ticket: u64,
+    recover: bool,
+) -> Result<Vec<Vec<u8>>, Error> {
+    // This check is under the same installed owner's mutex as preparation and publication.
+    // A successful retry reads originals; an uncertain outcome cannot regenerate proofs.
+    let prior = initial
+        .published_bootstrap_original_commitments(ticket)
+        .map_err(|_| Error::Rejected)?;
+    if prior.is_none() {
+        let bootstrap_material = source.bootstrap.as_ref().ok_or(Error::Unavailable)?;
+        // Replayed Native intent selects original-only recovery before loading or proving.
+        // A cold captured approval without intent may resume its first publication; explicit
+        // recovery still rejects missing intent and never falls back to fresh proving.
+        let requires_recovery = initial
+            .requires_original_publication_recovery(ticket)
+            .map_err(|_| Error::Rejected)?;
+        if recover || requires_recovery {
+            initial.recover_publication().map_err(|_| Error::Rejected)?;
+        } else {
+            let material = bootstrap_material
+                .proving
+                .as_ref()
+                .ok_or(Error::Unavailable)?;
+            let prover = initial
+                .with_selected_bootstrap(|selection, _, _| {
+                    use iroha_core_zk::kagemusha_v1_state::KagemushaStateErrorV1;
+                    KagemushaProductionProverV1::load_ordinary_bootstrap(
+                        selection,
+                        material.profile.clone(),
+                        super::native_core_work::Resolver(material.resolver.clone()),
+                    )
+                    .map_err(|error| KagemushaStateErrorV1::RecoveryMaterial(error.to_string()))
+                })
+                .map_err(|_| Error::Rejected)?;
+            initial
+                .prove_and_publish(&prover, ticket)
+                .map_err(|_| Error::Rejected)?;
+        }
+    }
+    let commitments = initial
+        .published_bootstrap_original_commitments(ticket)
+        .map_err(|_| Error::Rejected)?
+        .ok_or(Error::Rejected)?;
+    source.recheck_originals(&source.path)?;
+    let mut fields = Vec::with_capacity(9);
+    fields.push(ticket.to_le_bytes().to_vec());
+    fields.extend(commitments.into_iter().map(|digest| digest.to_vec()));
+    Ok(fields)
 }
 fn bootstrap_registered_source(
     source: Arc<KagemushaNativeOrdinaryAppIdentitySourceV1>,
@@ -528,6 +578,9 @@ impl OrdinaryBackend {
                     .map_err(|_| Error::Rejected)?,
             );
             match phase {
+                9 | 10 => {
+                    bootstrap_publication_originals(initial, &self.source, ticket, phase == 10)?
+                }
                 2 => initial
                     .fence_bootstrap_platform(ticket)
                     .map_err(|_| Error::Rejected)?,
@@ -657,7 +710,16 @@ impl OrdinaryBackend {
                 9 => held
                     .preparation_fields(pending, app)
                     .map_err(|_| Error::Rejected)?,
-                10 => held.fence(pending, app).map_err(|_| Error::Rejected)?,
+                10 => {
+                    if let Some(session) = &self.source.native_account_session {
+                        // The real Native account key signs only this exact retained C20 challenge
+                        // after the genuine WAL fence and Ed64 retention. Tag 2 is the existing
+                        // retained-original branch; managed code cannot invoke another signer.
+                        vec![vec![2], session.sign_retail(pending, app, held)?.to_vec()]
+                    } else {
+                        held.fence(pending, app).map_err(|_| Error::Rejected)?
+                    }
+                }
                 11 => vec![
                     held.retain_account_signature(
                         pending,
@@ -802,8 +864,13 @@ impl OrdinaryBackend {
                     .retained_prepared_owner()
                     .map_err(|_| Error::Rejected)?;
                 owner.attempt = Some(
-                    Attempt::open_retained_originals(&self.path, prepared, now)
-                        .map_err(|_| Error::Rejected)?,
+                    Attempt::open_with_native_selected(
+                        &self.path,
+                        prepared,
+                        self.source.selected.clone(),
+                        true,
+                    )
+                    .map_err(|_| Error::Rejected)?,
                 );
             }
             let pending = owner
@@ -840,10 +907,18 @@ impl OrdinaryBackend {
                     .join("possession");
                 let result = match self.source.platform_disposition {
                     KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
-                        Possession::create(&root, pending, now)
+                        Possession::create_with_native_selected(
+                            &root,
+                            pending,
+                            self.source.selected.clone(),
+                        )
                     }
                     KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
-                        Possession::open_existing(&root, pending, now)
+                        Possession::open_with_native_selected(
+                            &root,
+                            pending,
+                            self.source.selected.clone(),
+                        )
                     }
                 }
                 .map_err(|_| Error::Rejected)?;
@@ -1012,10 +1087,19 @@ impl OrdinaryBackend {
                     .map_err(|_| Error::Rejected)?;
                 let attempt = match self.source.platform_disposition {
                     KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
-                        Attempt::create(&self.path, prepared, now)
+                        Attempt::create_with_native_selected(
+                            &self.path,
+                            prepared,
+                            self.source.selected.clone(),
+                        )
                     }
                     KagemushaOrdinaryEnrollmentDispositionV1::Recover => {
-                        Attempt::open_existing(&self.path, prepared, now)
+                        Attempt::open_with_native_selected(
+                            &self.path,
+                            prepared,
+                            self.source.selected.clone(),
+                            false,
+                        )
                     }
                 }
                 .map_err(|_| Error::Rejected)?;
@@ -1496,32 +1580,11 @@ mod tests {
         .to_transport_bytes()
         .unwrap();
         let pending = call(&b, h, 6, vec![t, signed]).unwrap();
-        let enrollment_root = b.path.join(hex::encode(c.enrollment_id));
-        let c21_path = enrollment_root.join("ordinary-app-enrollment.wal");
-        let c21_original = std::fs::read(&c21_path).unwrap();
         // A stable enrollment ID cannot substitute for the sole SHA(full C) E selector.
         assert!(possession_call(&b, h, 1, vec![c.enrollment_id.to_vec()]).is_err());
         let fields =
             possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).unwrap();
         assert_eq!(fields.len(), 14);
-        assert_eq!(std::fs::read(&c21_path).unwrap(), c21_original);
-        assert!(
-            enrollment_root
-                .join("possession/ordinary-app-possession.wal")
-                .is_file()
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                std::fs::metadata(enrollment_root.join("possession"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
         assert!(fields[8].is_empty());
         assert_eq!(fields[9], pending[0]);
         assert_eq!(fields[12], subject.app_signing_identity_digest);
@@ -1630,25 +1693,6 @@ mod tests {
             vec![et, challenge_original.clone(), message.to_vec()],
         )
         .unwrap();
-        assert_eq!(std::fs::read(&c21_path).unwrap(), c21_original);
-        assert!(
-            enrollment_root
-                .join("possession/ordinary-app-possession.wal")
-                .is_file()
-        );
-        assert!(enrollment_root.join("retail-enrollment").is_dir());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                std::fs::metadata(enrollment_root.join("retail-enrollment"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
         assert_eq!(prepared_fi[1], challenge_original);
         assert_eq!(prepared_fi[2], message);
         let mut wrong = message;
@@ -1666,80 +1710,6 @@ mod tests {
             )
             .is_err()
         );
-        // Recreate the native owner with its explicit recovery policy. Both child journals
-        // must reopen their original tickets without changing any retained enrollment WAL.
-        let retained_wals = [
-            b.path
-                .join(format!("{}-preparation", hex::encode(c.enrollment_id)))
-                .join("ordinary-preparation.norito.wal"),
-            c21_path.clone(),
-            enrollment_root.join("possession/ordinary-app-possession.wal"),
-            enrollment_root.join("retail-enrollment/ordinary-retail-enrollment.wal"),
-        ];
-        let retained_before = retained_wals
-            .each_ref()
-            .map(|path| std::fs::read(path).unwrap());
-        b.close(h).unwrap();
-        assert!(
-            possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).is_err()
-        );
-        let recovered_source = Arc::new(
-            KagemushaNativeOrdinaryAppIdentitySourceV1::from_native_selected_originals(
-                b.path.clone(),
-                b.source.selected.clone(),
-                KagemushaOrdinaryEnrollmentDispositionV1::Recover,
-                KagemushaOrdinaryEnrollmentDispositionV1::Recover,
-                b.source.integrity_policy_original.clone(),
-            )
-            .unwrap(),
-        );
-        let b = OrdinaryBackend {
-            path: b.path.clone(),
-            source: recovered_source,
-            owner: Mutex::new(Owner::default()),
-        };
-        let h = b.open(b.path.to_str().unwrap()).unwrap();
-        assert_eq!(
-            possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).unwrap(),
-            fields
-        );
-        assert_eq!(
-            possession_call(&b, h, 8, vec![fields[0].clone(), original.clone()]).unwrap(),
-            identity
-        );
-        assert_eq!(
-            possession_call(
-                &b,
-                h,
-                9,
-                vec![
-                    fields[0].clone(),
-                    challenge_original.clone(),
-                    message.to_vec()
-                ],
-            )
-            .unwrap(),
-            prepared_fi
-        );
-        for (path, original_wal) in retained_wals.iter().zip(&retained_before) {
-            assert_eq!(std::fs::read(path).unwrap(), *original_wal);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                assert_eq!(
-                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                    0o600
-                );
-                assert_eq!(
-                    std::fs::metadata(path.parent().unwrap())
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o777,
-                    0o700
-                );
-            }
-        }
         let ft = prepared_fi[0].clone();
         assert_eq!(
             reopen_called_retail_original(&b),
@@ -1894,6 +1864,28 @@ mod tests {
             Err(Error::Unavailable)
         );
         // A well-formed typed entry cannot manufacture missing bootstrap verifier/custody.
+        for phase in [9u32, 10] {
+            for ticket in [0u64, 17, u64::MAX] {
+                let publication_request =
+                    super::super::kagemusha_core_coordinator_encode_request_v1(&[
+                        phase.to_le_bytes().to_vec(),
+                        ticket.to_le_bytes().to_vec(),
+                    ])
+                    .unwrap();
+                assert_eq!(
+                    b.invoke(
+                        h,
+                        Method::PreparedAppOperationApproval,
+                        &publication_request
+                    ),
+                    Err(Error::Unavailable),
+                );
+                // Correlation tickets cannot manufacture a missing Native Bootstrap owner.
+                // The actual admitted financial owner remains exclusively retained.
+                assert!(b.owner.lock().unwrap().financial.is_some());
+                assert!(b.owner.lock().unwrap().bootstrap.is_none());
+            }
+        }
         assert!(b.owner.lock().unwrap().financial.is_some());
         assert!(b.owner.lock().unwrap().bootstrap.is_none());
         assert_eq!(

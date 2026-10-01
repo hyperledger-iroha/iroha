@@ -505,6 +505,30 @@ original receipt without signing again. Generic monetary approval still rejects
 Bootstrap. Returned enrollment and approval originals grant no money permission;
 genuine State/Guard publication and the ordinary Native monetary owner remain
 separate requirements.
+`beginOrResumeInitialStatePublication()` then uses that same captured Bootstrap
+ticket with method-19 phase 9. Native selects the authenticated initial-proof
+profile and artifact resolver from its already installed source. Before any
+Guard or State proof work, the original logical journal fsyncs an initial
+publication intent bound to the same ticket, FI, credential and complete signed
+Bootstrap approval. Its single-use Native permit checks the exact owned journal
+prefix. Cold replay retains the intent without creating another permit. A cold
+captured approval without an intent may resume its first publication; a surviving
+intent selects only exact original publication recovery. A missing or damaged
+publication after that intent freezes, with no fresh-proof fallback. Recovery
+across every interruption cut remains unfinished.
+The request carries only the phase and original ticket; no host proof, verifier,
+profile or resolver can be admitted through the frame. Phase 10 only recovers and
+rechecks an existing publication and never generates another proof or signature.
+Both phases return the ticket, enrollment ID and SHA-256 digests of the complete
+canonical publication, FI certificate, app credential, signed Bootstrap approval,
+initial State, paired State proof and paired ordinary Guard. The managed holder
+binds these to its original FI completion, app credential and ticket, and requires
+every retained commitment to remain unchanged on recovery. A lost Native return
+freezes the old holder; only actual Native original recovery in a fresh holder can
+continue. `KagemushaOrdinaryInitialStatePublicationOriginalsV1` is detached
+acknowledgement data with defensive copies and no monetary capability. Missing
+authentic proof material remains unavailable, and ordinary monetary operations
+still require their separate verified Native provider.
 `KagemushaOrdinaryCashApprovalProjectionV1` checks copied public W325/S460 originals
 through separate preparation and terminal entry points. Preparation requires signed
 purpose 2 and zero candidate/body commitments; terminal requires signed purpose 1

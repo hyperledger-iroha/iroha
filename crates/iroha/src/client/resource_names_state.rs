@@ -382,6 +382,7 @@ mod tests {
         let node_id = PeerId::new(node.public_key().clone());
         let config = Hash::new(b"explicitly synthetic node HTTP fixture configuration");
         let body = SumeragiFinalityAttestationBody {
+            observed_at_unix_ms: 1_000_000,
             challenge: [0x58; 32],
             network_id: native.network_id(),
             node_fingerprint: Hash::new(node_id.encode()),

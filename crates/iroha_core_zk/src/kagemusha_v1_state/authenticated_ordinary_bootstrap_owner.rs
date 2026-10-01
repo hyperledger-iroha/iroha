@@ -377,6 +377,23 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
             captured.app_attest_counter(),
         ))
     }
+    /// Read the ticket from the actual retained platform attempt without reserving or creating it.
+    /// Native owner, current custody and captured/live originals are rechecked before exposure.
+    /// This correlation value grants no approval or publication authority.
+    /// # Errors
+    /// Rejects absent, cancelled or substituted attempts and uncertain publication outcomes.
+    pub fn retained_bootstrap_platform_ticket(&self) -> Result<u64, KagemushaStateErrorV1> {
+        if self.publication_attempted && self.publication.is_none() {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let ticket = self
+            .platform_attempt
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .ticket();
+        self.require_live_or_captured_platform(ticket)?;
+        Ok(ticket)
+    }
     fn require_platform_ticket(&self, ticket: u64) -> Result<(), KagemushaStateErrorV1> {
         if let Some(publication) = &self.publication {
             publication.recheck()?;
@@ -630,11 +647,35 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
     pub fn prove_and_publish<R: KagemushaArtifactByteResolverV1>(
         &mut self,
         prover: &KagemushaProductionProverV1<R>,
-        paired_guard_original: Vec<u8>,
+        ticket: u64,
     ) -> Result<(), KagemushaStateErrorV1> {
         if self.publication_attempted || self.publication.is_some() {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
+        self.require_live_or_captured_platform(ticket)?;
+        let financial = self
+            .financial
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let approvals = self
+            .approvals
+            .as_mut()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if !Arc::ptr_eq(financial.enrollment(), approvals.retained_enrollment()) {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        // Fsync intent and consume its one process-local permit before any proof work.
+        // A failed or lost result never regenerates proofs from a surviving cold intent.
+        self.publication_attempted = true;
+        let permit = approvals
+            .begin_initial_publication(ticket, financial.trusted_time_ms().map_err(material)?)?;
+        permit.consume_before_proving(approvals, financial.trusted_time_ms().map_err(material)?)?;
+        let paired_guard_original =
+            self.with_selected_bootstrap(|selection, approval, financial| {
+                prover
+                    .prove_ordinary_bootstrap_guard(selection, approval, financial)
+                    .map_err(material)
+            })?;
         let proof = self.with_selected_bootstrap(|selection, approval, financial| {
             let auxiliaries = prover
                 .prepare_ordinary_bootstrap_auxiliaries(
@@ -665,7 +706,6 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
                 .map_err(material)?;
             Ok(generated.proof)
         })?;
-        self.publication_attempted = true;
         let enrollment = self
             .financial
             .as_ref()
@@ -714,6 +754,14 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
         if self.publication.is_some() || self.publication_attempted {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
+        let financial = self
+            .financial
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        self.approvals
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .initial_publication_intent_digest(financial.trusted_time_ms().map_err(material)?)?;
         self.publication_attempted = true;
         let enrollment = self
             .financial
@@ -766,6 +814,73 @@ impl KagemushaNativeOrdinaryBootstrapOwnerV1 {
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         published.recheck()?;
         Ok(published)
+    }
+
+    /// Move the actual published wallet and its original verifier into exclusive cash custody.
+    /// Fresh and recovery paths are explicit; missing recovery data never creates a new wallet.
+    /// No original Bootstrap approval is reused to authorize a cash operation.
+    pub fn into_cash_owner(
+        mut self,
+        recover: bool,
+        historical_leases: &[Arc<
+            iroha_data_model::kagemusha::KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        >],
+        historical_receivers: &[Arc<
+            iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        >],
+    ) -> Result<KagemushaNativeOrdinaryCashOwnerV1, KagemushaStateErrorV1> {
+        self.publication()?.recheck()?;
+        let publication = self
+            .publication
+            .take()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        KagemushaNativeOrdinaryCashOwnerV1::from_publication(
+            &self.path.join("cash-approvals"),
+            publication,
+            self.verifier,
+            recover,
+            historical_leases,
+            historical_receivers,
+        )
+    }
+
+    /// Read an existing initial publication for exactly the consumed bootstrap platform ticket.
+    /// None means this holder has no in-memory publication. Cold dispatch separately rechecks
+    /// the actual replayed intent; an uncertain publication write remains frozen.
+    /// The detached commitments acknowledge originals and confer no mutable monetary authority.
+    pub fn published_bootstrap_original_commitments(
+        &self,
+        ticket: u64,
+    ) -> Result<Option<[DigestV1; 8]>, KagemushaStateErrorV1> {
+        self.require_live_or_captured_platform(ticket)?;
+        let result = match self.publication.as_ref() {
+            Some(published) => Some(published.original_commitments()?),
+            None if !self.publication_attempted => None,
+            None => return Err(KagemushaStateErrorV1::InvalidCandidateStage),
+        };
+        self.require_live_or_captured_platform(ticket)?;
+        Ok(result)
+    }
+
+    /// Select cold recovery only from the actual replayed logical publication intent.
+    /// A captured original without intent may resume its first publication, even after restart.
+    /// Missing, replaced or stale originals never select fresh proving by file absence.
+    pub fn requires_original_publication_recovery(
+        &self,
+        ticket: u64,
+    ) -> Result<bool, KagemushaStateErrorV1> {
+        self.require_live_or_captured_platform(ticket)?;
+        if self.publication_attempted || self.publication.is_some() {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let financial = self
+            .financial
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        self.approvals
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .has_initial_publication_intent(ticket, financial.trusted_time_ms().map_err(material)?)
     }
 }
 

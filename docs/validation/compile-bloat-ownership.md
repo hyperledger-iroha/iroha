@@ -23,42 +23,55 @@ non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
 source TODO records the remaining direct-owner migration.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
-moved compiler/model and all six Norito grouped harnesses. A fresh privacy-owner
-harness passes 39 targeted repair and production controls; its registry preserves
-all 2,075 original test names and their 40 ignored cases. Core authority and
-bridge controls retain their recorded passes and source bindings.
+moved compiler/model and all six Norito grouped harnesses. The current privacy
+harness registers 2,264 tests, including 52 ignored qualification cases. Twelve
+rewritten private-terminal controls map to the original field-mutation and forgery
+coverage. Core authority and bridge controls retain their recorded passes and
+source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. The target inventory admits 99 declared binaries and 23 defaults;
-certificate and raw-attestation encoders require explicit `dev-tools`. Recorded
+graphs. The current target inventory admits 101 declared binaries and 23 defaults;
+certificate, attestation, preparation and SDK inventory assembly tools require
+explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
 IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
-retired-codec pattern check. The normal production-feature Core ZK frontend and both test-feature harnesses
+retired-codec pattern check. The SDK native-custody feature has an exact shipping pin; FASTPQ is selected by
+the existing STARK feature, avoiding its unrelated Halo2-only dependency path.
+Current dependency costs and the native proving context still require review. The normal production-feature
+Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
 tests pass for the one first-release boxed-challenge layout, including canonical
 bounds and retained challenge/scope checks. Its payload changes without a
 compatibility decoder. Focused issuer-key, corrected enrollment-floor and expired-
 preparation custody controls pass in the retained default-feature harness. The
 Guard-generation import, layout-comparison and recovery-phase fixes compile, and
-both extended regressions pass. The remaining selected proof cases are running.
-The current privacy acceptance run completes with 121 passes and 13 failures in
-malformed-input controls, profile-pin tests and resource fixtures; repairs remain
-under validation.
+both extended regressions pass. All 33 selected proof controls, including MintFold,
+protocol labels and reciprocal claim-carrier binding, pass in the retained harness;
+concurrent source changes limit current-candidate qualification. The
+non-test real-proof harness now enables the P-256 gadget and bounded SHA relation
+used by its equations; focused frontend validation remains open. Unused terminal
+reference helpers now compile only for tests, preserving their assertion bodies
+and the production private-product/local-AIR path. Strict privacy lint remains open.
+The repaired privacy acceptance run passes all 136 selected controls, including
+strict malformed-input rejection, the independently derived current profile pin
+and exact retired-profile rejection hashes. Concurrent workspace manifest and
+lock changes limit source qualification; the full ordinary suite remains open.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
 Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
 fails with concurrent source changes and library rebuilds. The latest workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-Workspace validation, metadata freshness qualification and observational warm
-timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
+The separate chat completed the merge; current test and private-proof
+integration still requires compiler repair. Workspace validation,
+metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.
 
 Two additional numeric controls reconstruct canonical frame, CRC and SHA inputs
 in both Pasta fields. They exercise a test-only reference after the current
-integrity-stream integration; their runtime results are pending and do not
-qualify the live lease or proving relation.
+integrity-stream integration and pass in the retained default-feature harness.
+They do not qualify the live lease or proving relation.
 
 Final moved-model controls must enable `transparent_api`, because several
 preserved block assertions are feature-gated. Reuse the warm `finish` lane

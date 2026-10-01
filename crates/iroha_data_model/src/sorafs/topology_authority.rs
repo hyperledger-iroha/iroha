@@ -18,6 +18,7 @@ use sorafs_manifest::signer::{
     topology::{SignerTopologyRequestV1, subject::TopologyApprovalSubjectV1},
 };
 
+mod action_codec;
 pub mod reducer;
 /// Normal control revision limit, retaining two final emergency revocations.
 pub const TOPOLOGY_CONTROL_NORMAL_LIMIT_V1: u64 = 8192;
@@ -332,42 +333,30 @@ pub struct TopologyRevocationV1 {
 }
 
 /// Topology-only operations; native permissions and actual execution are deliberately external.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-    norito::NoritoSchema,
-)]
+///
+/// Expiry is boxed in memory while the sole canonical codec retains its original
+/// unboxed field bytes, schema reference and eight-byte frame alignment.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyActionV1")]
+#[repr(align(8))]
 pub enum TopologyActionV1 {
     /// Canonical role16 custody policy; configuration invalidates any active operation.
-    #[codec(index = 0)]
     Configure(Vec<u8>),
     /// Canonical independent enrollment for the exact committed control predecessor.
-    #[codec(index = 1)]
     Enroll(Vec<u8>),
     /// Monotonic emergency signer/attester revocation, invalidating any active operation.
-    #[codec(index = 2)]
     Revoke(TopologyRevocationV1),
     /// Reserve exactly one candidate/request/intent before key I/O.
-    #[codec(index = 3)]
     Reserve(Box<TopologyReserveV1>),
     /// Commit the exact original reservation before exclusive expiry.
-    #[codec(index = 4)]
     Complete(Box<TopologyCompleteV1>),
     /// Terminalize without advancing audit or deleting the operation id.
-    #[codec(index = 5)]
-    Expire(TopologyExpireV1),
+    Expire(Box<TopologyExpireV1>),
     /// Check claimed current state without consuming an id or changing any head.
-    #[codec(index = 6)]
     Check(Box<TopologyCheckV1>),
 }
+/// Archived canonical Norito representation of a topology action.
+pub type ArchivedTopologyActionV1 = norito::core::Archived<TopologyActionV1>;
 /// CAS input wrapped by the registered, explicitly closed V1 topology instruction.
 #[derive(
     Clone,

@@ -203,7 +203,6 @@ use crate::{json_entry, json_object, json_value};
 /// `can_read_all` is kept separately because unscoped protocol records must
 /// fail closed for ordinary dataspace readers, even when every currently
 /// configured dataspace happens to be visible.
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
@@ -211,7 +210,6 @@ pub(crate) struct DataspaceReadVisibility {
     exact_account: Option<AccountId>,
 }
 
-#[cfg(feature = "app_api")]
 impl DataspaceReadVisibility {
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
@@ -35345,6 +35343,7 @@ pub(crate) fn committed_transactions_snapshot(
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
+app_api_items! {
 struct HistoryVisibilityReads {
     state: Arc<CoreState>,
     height: u64,
@@ -35487,6 +35486,7 @@ fn committed_transaction_is_visible_in_block(
 ) -> bool {
     visibility.can_read_all()
         || visibility.allows_external_entrypoint_hash(block, *transaction.entrypoint_hash())
+}
 }
 include!("routing/committed_transaction_pagination.rs");
 app_api_items! {
@@ -55653,6 +55653,7 @@ fn verify_faucet_pow(
 #[path = "routing/faucet_pow_tests.rs"]
 mod faucet_pow_tests;
 }
+#[cfg(feature = "app_api")]
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
     account_id: AccountId,
@@ -60426,6 +60427,7 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
     NonZeroUsize::new(height_usize)
 }
 
+app_api_items! {
 /// Maximum historical blocks decoded by one Explorer cursor request.
 const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
@@ -60579,6 +60581,7 @@ fn instruction_history_filter_digest(
             filters.asset_id.as_ref().map(ToString::to_string),
         ],
     )
+}
 }
 app_api_items! {
 #[cfg(test)]

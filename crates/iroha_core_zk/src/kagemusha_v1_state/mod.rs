@@ -47,14 +47,26 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
-    KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
+    KagemushaNativeOrdinaryCashOwnerV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaOriginalOutgoingHardwareCommitV1,
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub(crate) use authenticated_core_owner::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
     verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+};
+#[cfg(unix)]
+mod ordinary_native_clock;
+#[cfg(unix)]
+pub use ordinary_native_clock::{
+    KagemushaOrdinaryNativeClockErrorV1, KagemushaOrdinaryNativeClockNodeV1,
+    KagemushaOrdinaryNativeClockOriginalsV1, KagemushaOrdinaryNativeClockOwnerV1,
+    KagemushaOrdinaryNativeClockPolicyV1, KagemushaOrdinaryNativeClockReadV1,
+    KagemushaOrdinaryNativeTimeIntervalV1,
 };
 #[cfg(unix)]
 mod ordinary_app_identity;
@@ -62,10 +74,10 @@ mod ordinary_app_identity;
 pub use ordinary_app_identity::{
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
     KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryGovernedPolicyOriginalsV1,
-    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryPreparationCarrierV1,
-    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
-    KagemushaOrdinaryRetailEnrollmentAttemptV1, KagemushaPendingAppIdentityV1,
-    KagemushaPreparedOrdinaryAppEnrollmentV1,
+    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryIssuerPreparationAttemptV1,
+    KagemushaOrdinaryPreparationCarrierV1, KagemushaOrdinaryPreparationReservationV1,
+    KagemushaOrdinaryPreparationSelectedOriginalsV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
+    KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -188,6 +200,8 @@ pub use redemption_release::{
     KAGEMUSHA_REDEMPTION_TERMINAL_RECEIPT_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
 };
 
+#[cfg(test)]
+mod diagnostic_sender_lifecycle;
 #[cfg(test)]
 mod state_frame_identity_tests;
 #[cfg(test)]

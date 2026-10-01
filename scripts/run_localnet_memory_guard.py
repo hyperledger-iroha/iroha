@@ -242,7 +242,6 @@ def build_deploy_cmd(args: argparse.Namespace) -> list[str]:
         "--base-p2p-port",
         str(args.base_p2p_port),
         "--force",
-        "--skip-asset-register",
     ]
     if not args.debug:
         cmd.append("--release")

@@ -13,6 +13,10 @@ use iroha_data_model::{
 };
 use norito::codec::Encode as _;
 
+// Reuse this actual four-statement Ed/BLS fixture without inventing a verified request.
+#[path = "../participant_enrollment_dispatch_tests.rs"]
+mod issuer_dispatch_retention_tests;
+
 struct Fixture {
     signer: KeyPair,
     signatory: AccountId,
@@ -81,6 +85,7 @@ impl Fixture {
             let signer = KeyPair::from_seed(vec![i as u8 + 1; 32], Algorithm::BlsNormal);
             let node = &nodes[i];
             let body = SumeragiFinalityAttestationBody {
+                observed_at_unix_ms: 1_000_000,
                 challenge,
                 network_id: self.native.network_id(),
                 node_fingerprint: Hash::new(node.peer_id.encode()),
@@ -376,4 +381,98 @@ fn actual_owner_rejects_another_network_schema_peer_config_and_retained_certifie
             )
             .is_err()
     );
+}
+
+pub(crate) struct NativeCustodyFixture(Fixture);
+#[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
+impl NativeCustodyFixture {
+    pub(crate) fn new() -> Self {
+        Self(Fixture::new())
+    }
+    pub(crate) fn key(&self) -> &KeyPair {
+        &self.0.signer
+    }
+    pub(crate) fn wallet(&self) -> &AccountId {
+        &self.0.wallet
+    }
+    pub(crate) fn signatory(&self) -> &AccountId {
+        &self.0.signatory
+    }
+    pub(crate) fn network(&self) -> NetworkId {
+        self.0.native.network_id()
+    }
+    pub(crate) fn current(
+        &self,
+        request: &ParticipantEnrollmentRequestV1<'_>,
+    ) -> VerifiedEnrollmentWalletSignatoryV1 {
+        let challenge = EnrollmentWalletReadChallengeV1::for_request(request).unwrap();
+        let nodes = Fixture::nodes();
+        let statements = self.0.statements(challenge.bytes(), &nodes);
+        self.0.admit(challenge, &nodes, &statements).unwrap()
+    }
+    pub(crate) fn wallet_original(
+        &self,
+        nonce: [u8; 32],
+    ) -> iroha_torii_shared::ordinary_wallet_current::OrdinaryWalletCurrentOriginalV1 {
+        let request = iroha_torii_shared::ordinary_wallet_current::OrdinaryWalletCurrentRequestV1 {
+            version: 1,
+            network_id: self.network(),
+            height: self.0.native.latest().height(),
+            request_nonce: nonce,
+            signatory: self.signatory().clone(),
+            wallet: self.wallet().clone(),
+        };
+        iroha_torii_shared::ordinary_wallet_current::OrdinaryWalletCurrentOriginalV1 {
+            request,
+            attestation: self.0.statements(nonce, &Fixture::nodes())[0].clone(),
+            world_snapshot: self.0.world.clone(),
+            signatory_value: self.0.value.clone(),
+            wallet_value: self.0.value.clone(),
+        }
+    }
+    pub(crate) fn clock(
+        &self,
+        root: &std::path::Path,
+    ) -> iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryNativeClockOwnerV1 {
+        use iroha_core_zk::kagemusha_v1_state::{
+            KagemushaOrdinaryNativeClockNodeV1 as Node,
+            KagemushaOrdinaryNativeClockOriginalsV1 as Originals,
+            KagemushaOrdinaryNativeClockOwnerV1 as Owner,
+            KagemushaOrdinaryNativeClockPolicyV1 as Policy,
+        };
+        let nodes = Fixture::nodes();
+        let selected = Originals::from_selected_originals(
+            self.0
+                .native
+                .verifier()
+                .export_checkpoint(self.0.native.latest())
+                .unwrap(),
+            self.network(),
+            "participant-request-tests".into(),
+            std::array::from_fn(|i| Node {
+                peer_id: nodes[i].peer_id.clone(),
+                build_fingerprint: nodes[i].build_fingerprint,
+                config_fingerprint: nodes[i].config_fingerprint,
+            }),
+            Policy {
+                maximum_reply_age_ms: 10_000,
+                maximum_node_skew_ms: 100,
+                maximum_projection_age_ms: 120_000,
+                maximum_persistence_age_ms: 1_000,
+            },
+        )
+        .unwrap();
+        let mut owner =
+            Owner::create(&root.canonicalize().unwrap(), std::sync::Arc::new(selected)).unwrap();
+        let read = owner.reserve_current_read().unwrap();
+        let nonce = read.nonce();
+        let statements = self.0.statements(nonce, &nodes);
+        owner
+            .admit_current_read(
+                read,
+                std::array::from_fn(|i| norito::encode_canonical(&statements[i]).unwrap()),
+            )
+            .unwrap();
+        owner
+    }
 }

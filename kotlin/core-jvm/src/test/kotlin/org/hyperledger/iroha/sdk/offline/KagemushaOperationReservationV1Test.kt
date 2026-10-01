@@ -18,7 +18,7 @@ class KagemushaOperationReservationV1Test {
         val fixture = fixture()
         val core = RecordingCore()
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         val id = ByteArray(32) { 7 }
         val request = bytes(fixture, "send_request_hex")
         assertContentEquals(id, provider.reservePaymentOperationId(id, request))
@@ -41,7 +41,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val id = ByteArray(32) { 8 }
         val core = RecordingCore()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(UnavailableTransport(), core, TestOperationIntentStoreV1(), {})
+        val provider = KagemushaAuthenticatedHardwareProviderV1(UnavailableTransport(), core, TestOperationIntentStoreV1(), {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         repeat(2) {
             assertContentEquals(id, provider.reservePaymentRequestOperationId(id, request.recipient.canonicalPayload(), request.amount, 1000L))
         }
@@ -64,7 +64,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val core = RecordingCore().also { it.substituteId = true }
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         val id = ByteArray(32) { 9 }
         assertFailsWith<IllegalArgumentException> { provider.qualification() }
         assertFailsWith<IllegalArgumentException> { provider.reservePaymentOperationId(id, bytes(fixture(), "send_request_hex")) }
@@ -98,7 +98,7 @@ class KagemushaOperationReservationV1Test {
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(bytes(fixture(), "send_request_hex"))
         val core = RecordingCore().also { it.substituteId = true }
         val transport = UnavailableTransport()
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         val id = ByteArray(32) { 12 }
         assertFailsWith<IllegalArgumentException> {
             provider.createPaymentRequest(id, request.recipient.canonicalPayload(), request.amount, 1000L)

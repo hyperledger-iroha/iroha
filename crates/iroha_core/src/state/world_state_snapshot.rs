@@ -7,6 +7,7 @@
 //! complete reconstructed root/count must match certified R; current typed targets
 //! that changed in the tail are refused. Decoded restoration requires native replay.
 
+mod ordinary_wallet;
 use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{

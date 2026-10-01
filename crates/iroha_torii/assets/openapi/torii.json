@@ -48904,12 +48904,20 @@
             "description": "Canonical PeerId of the installed BLS node key.",
             "type": "string"
           },
+          "observed_at_unix_ms": {
+            "description": "Unix milliseconds observed by the reporting node immediately before signing. This is a signed software-clock observation, distinct from the certified block timestamp.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
           "status": {
             "$ref": "#/components/schemas/SumeragiStatusResponse"
           }
         },
         "required": [
           "challenge",
+          "observed_at_unix_ms",
           "network_id",
           "node_id",
           "node_fingerprint",

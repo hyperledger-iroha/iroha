@@ -20,6 +20,7 @@ from iroha_app_attestation.attestation import (
     der_one,
     primitive,
     verify_android_raw,
+    verify_android_persistent_app_key_raw,
     verify_apple_raw,
 )
 
@@ -119,9 +120,11 @@ class SignedEnvelope:
 
 def keymint_description(selected: Selection, package_name: str,
                         package_version: int, signer: bytes, *,
-                        verified_boot_hash: bytes = b"\x52" * 32,
+                        verified_boot_hash: bytes | None = b"\x52" * 32,
+                        attestation_version: int = 300, keymaster_version: int = 300,
                         security_level: int = 2, keymint_security_level: int = 2,
                         rollback_resistant: bool = False,
+                        legacy_rollback_resistant: bool = False,
                         usage_count: int | None = None,
                         software_usage_count: int | None = None,
                         purpose: int = 2, algorithm: int = 3,
@@ -138,7 +141,8 @@ def keymint_description(selected: Selection, package_name: str,
     software = sequence(*software_fields, explicit(709, octets(app_id)))
     boot = sequence(octets(b"\x51" * 32),
                     der(b"\x01", b"\xff" if device_locked else b"\x00"),
-                    integer(verified_boot_state, b"\x0a"), octets(verified_boot_hash))
+                    integer(verified_boot_state, b"\x0a"),
+                    *([] if verified_boot_hash is None else [octets(verified_boot_hash)]))
     hardware_fields = [explicit(1, set_of(integer(purpose))), explicit(2, integer(algorithm))]
     if not software_key_size:
         hardware_fields.append(explicit(3, integer(key_size)))
@@ -147,12 +151,16 @@ def keymint_description(selected: Selection, package_name: str,
         hardware_fields.append(explicit(303, der(b"\x05", b"")))
     if usage_count is not None:
         hardware_fields.append(explicit(405, integer(usage_count)))
-    hardware = sequence(*hardware_fields, explicit(702, integer(origin)),
-        explicit(704, boot), explicit(718, integer(20260805)),
-    )
+    hardware_fields.append(explicit(702, integer(origin)))
+    if legacy_rollback_resistant:
+        hardware_fields.append(explicit(703, der(b"\x05", b"")))
+    hardware_fields.append(explicit(704, boot))
+    if attestation_version >= 3:
+        hardware_fields.append(explicit(718, integer(20260805)))
+    hardware = sequence(*hardware_fields)
     return sequence(
-        integer(300), integer(security_level, b"\x0a"),
-        integer(300), integer(keymint_security_level, b"\x0a"),
+        integer(attestation_version), integer(security_level, b"\x0a"),
+        integer(keymaster_version), integer(keymint_security_level, b"\x0a"),
         octets(hashlib.sha256(selected.transcript()).digest()), octets(b""),
         software, hardware,
     )
@@ -377,6 +385,130 @@ class SyntheticPlatformTests(unittest.TestCase):
                         AttestationRejected, "security-level selection"
                     ):
                         verify_android_raw(*arguments, allowed_security_levels=invalid)
+
+    def test_ordinary_persistent_android_accepts_original_keymaster_and_keymint_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SignedEnvelope(Path(temporary), self.openssl)
+            original = selection(fixture.point)
+            selected = Selection(original.client_nonce, original.server_nonce,
+                                 original.release_id, original.hardware_profile_id,
+                                 b"\0" * 32, original.lane_id)
+            package_name, package_version, signer = "org.example.wallet", 7, b"\x71" * 32
+            now = int(time.time() * 1000) + 60_000
+            pairs = [(2, 3), (3, 4), (4, 41)] + [(version, version) for version in (100, 200, 300, 400, 500)]
+            for version, keymaster in pairs:
+                levels = (1,) if version == 2 else (1, 2)
+                for level in levels:
+                    with self.subTest(version=version, keymaster=keymaster, level=level):
+                        description = keymint_description(
+                            selected, package_name, package_version, signer,
+                            attestation_version=version, keymaster_version=keymaster,
+                            security_level=level, keymint_security_level=level,
+                            verified_boot_hash=None if version == 2 else b"\x52" * 32,
+                            legacy_rollback_resistant=version == 2,
+                        )
+                        leaf, root = fixture.sign(ANDROID_KEY_DESCRIPTION_OID, description)
+                        proof = verify_android_persistent_app_key_raw(
+                            [leaf, root], selected, package_name, package_version, signer,
+                            root, hashlib.sha256(root).digest(), now, self.openssl,
+                            allowed_security_levels=frozenset({1, 2}),
+                        )
+                        self.assertEqual(proof.android_security_level, level)
+                        self.assertEqual(proof.attested_public_key_sec1, fixture.point)
+                        self.assertEqual(proof.evidence_sha256,
+                                         hashlib.sha256(encode_android_chain([leaf, root])).digest())
+                        if version < 100:
+                            with self.assertRaisesRegex(AttestationRejected, "authenticated hardware policy"):
+                                verify_android_raw(
+                                    [leaf, root], selected, package_name, package_version, signer,
+                                    root, hashlib.sha256(root).digest(), now, self.openssl,
+                                    allowed_security_levels=frozenset({1, 2}),
+                                )
+
+    def test_ordinary_persistent_legacy_preserves_signed_identity_and_hardware_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SignedEnvelope(Path(temporary), self.openssl)
+            original = selection(fixture.point)
+            selected = Selection(original.client_nonce, original.server_nonce,
+                                 original.release_id, original.hardware_profile_id,
+                                 b"\0" * 32, original.lane_id)
+            package_name, package_version, signer = "org.example.wallet", 7, b"\x71" * 32
+            now = int(time.time() * 1000) + 60_000
+            base = dict(attestation_version=2, keymaster_version=3,
+                        security_level=1, keymint_security_level=1, verified_boot_hash=None)
+            leaf, root = fixture.sign(ANDROID_KEY_DESCRIPTION_OID,
+                keymint_description(selected, package_name, package_version, signer, **base))
+            arguments = ([leaf, root], selected, package_name, package_version, signer,
+                         root, hashlib.sha256(root).digest(), now, self.openssl)
+            with self.assertRaisesRegex(AttestationRejected, "authenticated hardware policy"):
+                verify_android_persistent_app_key_raw(*arguments, allowed_security_levels=frozenset({2}))
+            for changes in (
+                {"device_locked": False}, {"verified_boot_state": 1},
+                {"verified_boot_hash": b"\x52" * 32}, {"purpose": 3},
+                {"algorithm": 1}, {"key_size": 384}, {"digest": 0},
+                {"curve": 2}, {"origin": 2}, {"software_key_size": True},
+                {"usage_count": 1}, {"software_usage_count": 1},
+            ):
+                with self.subTest(changes=changes):
+                    changed_leaf, _ = fixture.sign(ANDROID_KEY_DESCRIPTION_OID,
+                        keymint_description(selected, package_name, package_version, signer,
+                                            **(base | changes)))
+                    with self.assertRaises(AttestationRejected):
+                        verify_android_persistent_app_key_raw(
+                            [changed_leaf, root], *arguments[1:], allowed_security_levels=frozenset({1, 2}))
+            for index, changed in (
+                (1, Selection(selected.client_nonce, b"\x08" * 32, selected.release_id,
+                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
+                (2, "org.example.other"), (3, package_version + 1),
+                (4, b"\x72" * 32), (6, b"\x09" * 32),
+                (0, [leaf[:-1] + bytes([leaf[-1] ^ 1]), root]),
+            ):
+                with self.subTest(index=index), self.assertRaises(AttestationRejected):
+                    mutated = list(arguments)
+                    mutated[index] = changed
+                    verify_android_persistent_app_key_raw(*mutated, allowed_security_levels=frozenset({1, 2}))
+            fields = children(der_one(keymint_description(
+                selected, package_name, package_version, signer, **base)))
+            no_app_binding = sequence(
+                integer(2), integer(1, b"\x0a"), integer(3), integer(1, b"\x0a"),
+                octets(hashlib.sha256(selected.transcript()).digest()), octets(b""),
+                sequence(), der(b"\x30", fields[7].value),
+            )
+            missing_app_leaf, _ = fixture.sign(ANDROID_KEY_DESCRIPTION_OID, no_app_binding)
+            with self.assertRaises(AttestationRejected):
+                verify_android_persistent_app_key_raw(
+                    [missing_app_leaf, root], *arguments[1:], allowed_security_levels=frozenset({1, 2}))
+
+    def test_ordinary_persistent_android_rejects_unknown_versions_and_wrong_boot_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SignedEnvelope(Path(temporary), self.openssl)
+            original = selection(fixture.point)
+            selected = Selection(original.client_nonce, original.server_nonce,
+                                 original.release_id, original.hardware_profile_id,
+                                 b"\0" * 32, original.lane_id)
+            package_name, package_version, signer = "org.example.wallet", 7, b"\x71" * 32
+            now = int(time.time() * 1000) + 60_000
+            rejected = [dict(attestation_version=v, keymaster_version=k)
+                        for v, k in ((1, 2), (2, 4), (3, 3), (4, 4), (100, 4), (600, 600))]
+            rejected.extend((
+                dict(attestation_version=2, keymaster_version=3, security_level=2,
+                     keymint_security_level=2, verified_boot_hash=None),
+                dict(attestation_version=2, keymaster_version=3, security_level=1,
+                     keymint_security_level=0, verified_boot_hash=None),
+                dict(attestation_version=3, keymaster_version=4, verified_boot_hash=None),
+                dict(attestation_version=4, keymaster_version=41, verified_boot_hash=b"\x52" * 31),
+                dict(verified_boot_hash=b"\0" * 32),
+            ))
+            for changes in rejected:
+                with self.subTest(changes=changes):
+                    leaf, root = fixture.sign(ANDROID_KEY_DESCRIPTION_OID,
+                        keymint_description(selected, package_name, package_version, signer, **changes))
+                    with self.assertRaises(AttestationRejected):
+                        verify_android_persistent_app_key_raw(
+                            [leaf, root], selected, package_name, package_version, signer,
+                            root, hashlib.sha256(root).digest(), now, self.openssl,
+                            allowed_security_levels=frozenset({1, 2}),
+                        )
 
     def test_android_uses_root_nearest_extension_and_exact_chain_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

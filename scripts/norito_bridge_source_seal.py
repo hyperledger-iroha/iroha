@@ -7,7 +7,9 @@ platform.  Platform inputs also bind the SDK sources compiled into the shipping
 application: Swift on Apple, and Kotlin/Java on Android.  This keeps the native
 artifact and its directly paired SDK source on one authenticated snapshot
 without pulling in unrelated workspace tools such as Kagami or test-network
-helpers.
+helpers. The explicit ``android-armv7-diagnostic`` profile follows the same
+authentication rules for one experimental target; it is not an Android release
+profile and does not widen the packaged target inventory.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ ANDROID_TARGETS = (
     "aarch64-linux-android",
     "x86_64-linux-android",
 )
+# Development-only closure; it never widens the admitted Android inventory.
+ANDROID_ARMV7_DIAGNOSTIC_TARGETS = ("armv7-linux-androideabi",)
 COMMON_ROOT_INPUTS = (
     "Cargo.toml",
     "Cargo.lock",
@@ -114,14 +118,18 @@ ANDROID_ROOT_INPUTS = (
 PLATFORM_TARGETS = {
     "apple": APPLE_TARGETS,
     "android": ANDROID_TARGETS,
+    "android-armv7-diagnostic": ANDROID_ARMV7_DIAGNOSTIC_TARGETS,
 }
 PLATFORM_ROOT_INPUTS = {
     "apple": APPLE_ROOT_INPUTS,
     "android": ANDROID_ROOT_INPUTS,
+    "android-armv7-diagnostic": ANDROID_ROOT_INPUTS
+    + ("scripts/inspect_android_armv7_diagnostic.py",),
 }
 # Kept as a public union for callers/tests which construct their own input set.
 ROOT_INPUTS = tuple(
-    dict.fromkeys(COMMON_ROOT_INPUTS + APPLE_ROOT_INPUTS + ANDROID_ROOT_INPUTS)
+    dict.fromkeys(COMMON_ROOT_INPUTS + APPLE_ROOT_INPUTS + ANDROID_ROOT_INPUTS
+                  + ("scripts/inspect_android_armv7_diagnostic.py",))
 )
 SNAPSHOT_SCHEMA = "iroha.norito-bridge-source-seal.v1"
 CANONICAL_CARGO_LOCK_OWNER = "ci/privacy_sdk_cargo_lockfile.sh"
@@ -147,6 +155,139 @@ SWIFT_NATIVE_BRIDGE_HASH_BLOCK = re.compile(
     rb'^    \]$',
     re.MULTILINE,
 )
+
+
+# Only public source/build input filenames may be opened by the derived seal. A
+# prohibited required input stops the seal; it is never silently dropped.
+_PUBLIC_SOURCE_SUFFIXES = frozenset({
+    ".rs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".inc",
+    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java",
+    ".py", ".sh", ".bat", ".kts", ".gradle", ".properties", ".xml",
+    ".toml", ".lock", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".md",
+    ".rst", ".adoc", ".csv", ".tsv", ".nrt", ".bin", ".ptx", ".podspec",
+    ".template", ".cmake", ".in", ".js", ".ts", ".css", ".html", ".map",
+    ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".snap", ".expect",
+    ".hex", ".pub", ".hash", ".sha256", ".checksum",
+})
+_MATERIAL_SUFFIXES = frozenset({
+    ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdb", ".asc",
+    ".der", ".crt", ".cer", ".mobileprovision", ".env",
+})
+_PROHIBITED_SOURCE_PARTS = frozenset({
+    "credentials", "secrets", "materials", "private", "private-fixtures",
+    "private_fixtures", "key-material", "key_material", ".ssh", ".kube",
+    ".aws", ".gcloud", "deploy", "deployment", "deployments", "infra",
+    "infrastructure", "ops", "operations", "terraform", "ansible", "target",
+    "build", "artifacts", "output", "run", "runs", ".git", ".codex",
+    "node_modules",
+})
+_MATERIAL_FILENAME = re.compile(
+    r"(^|[-_.])(credentials?|creds|secrets?|passwords?|service[-_]account|"
+    r"google[-_]services|firebase[-_]admin|id_rsa|id_ed25519|private[-_]key|"
+    r"api[-_]key|auth[-_]token)([-_.]|$)", re.IGNORECASE,
+)
+_CODE_SUFFIXES = frozenset({
+    ".rs", ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".inc",
+    ".s", ".metal", ".cu", ".proto", ".fbs", ".swift", ".kt", ".java",
+    ".py", ".sh", ".bat", ".kts", ".js", ".ts",
+})
+_PUBLIC_BASENAMES = frozenset({
+    "Cargo.toml", "Cargo.lock", "Package.swift", "Package.resolved", "VERSION",
+    "rust-toolchain", "Makefile", "CMakeLists.txt", "LICENSE", "NOTICE",
+    "README", ".gitignore", ".gitattributes", ".cargo-checksum.json",
+})
+
+
+def _public_source_relative(relative: str, *, file_name: bool = True) -> pathlib.PurePosixPath:
+    """Admit a canonical public filename before filesystem or content intake."""
+    path = pathlib.PurePosixPath(relative)
+    if (not relative or path.is_absolute() or path.as_posix() != relative
+            or ".." in path.parts or "\\" in relative
+            or any(ord(character) < 32 or ord(character) == 127 for character in relative)):
+        raise RuntimeError(f"source-seal input path is not canonical: {relative!r}")
+    lower = relative.lower()
+    if (any(part.lower() in _PROHIBITED_SOURCE_PARTS for part in path.parts)
+            or "vultr" in lower or "sydneycreds" in lower
+            or path.suffix.lower() in _MATERIAL_SUFFIXES
+            or path.name.lower().startswith(".env")
+            or (path.suffix.lower() not in _CODE_SUFFIXES
+                and _MATERIAL_FILENAME.search(path.name))):
+        raise RuntimeError(f"source-seal input is prohibited material or operational input: {relative}")
+    if file_name and not (relative in ROOT_INPUTS
+            or path.suffix.lower() in _PUBLIC_SOURCE_SUFFIXES
+            or path.name in _PUBLIC_BASENAMES
+            or path.name.startswith(("LICENSE-", "LICENSE.", "COPYING", "COPYRIGHT",
+                                     "NOTICE", "AUTHORS", "CHANGELOG", "README"))):
+        raise RuntimeError(f"source-seal input is not an admitted public filename: {relative}")
+    return path
+
+
+def _source_path_metadata(
+    root: pathlib.Path, relative: str, *, allow_directory: bool = False,
+) -> tuple[pathlib.Path, dict[pathlib.Path, tuple[object, ...]]]:
+    """Reject every ancestor alias before admitting a source content descriptor."""
+    relative_path = _public_source_relative(relative, file_name=not allow_directory)
+    if not root.is_absolute() or root != pathlib.Path(os.path.abspath(root)):
+        raise RuntimeError("source-seal root must be absolute and canonical")
+    source = root.joinpath(*relative_path.parts)
+    identities: dict[pathlib.Path, tuple[object, ...]] = {}
+    for component in (*reversed(source.parents), source):
+        value = component.lstat()
+        if stat.S_ISLNK(value.st_mode):
+            raise RuntimeError(f"source-seal input is symlinked: {relative}")
+        if component != source and not stat.S_ISDIR(value.st_mode):
+            raise RuntimeError(f"source-seal ancestor is not a directory: {relative}")
+        if component == source and not (stat.S_ISREG(value.st_mode)
+                or (allow_directory and stat.S_ISDIR(value.st_mode))):
+            raise RuntimeError(f"source-seal input is not a regular file: {relative}")
+        identities[component] = (_source_directory_identity(value)
+            if stat.S_ISDIR(value.st_mode) else _source_identity(value))
+    return source, identities
+
+
+def _source_directory_identity(value: os.stat_result) -> tuple[object, ...]:
+    # Directory timestamps/link counts can change for unrelated admitted children;
+    # device/inode/type binding and O_NOFOLLOW authenticate this exact traversal.
+    return (value.st_dev, value.st_ino, value.st_mode)
+
+
+def _source_identity(value: os.stat_result) -> tuple[object, ...]:
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _read_public_source_bytes(root: pathlib.Path, relative: str) -> bytes:
+    """Read only the admitted file through a complete no-follow descriptor walk."""
+    source, initial = _source_path_metadata(root, relative)
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise RuntimeError("source-seal no-follow directory descriptors are unavailable")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    directory = pathlib.Path(source.anchor)
+    descriptor = os.open(directory, directory_flags)
+    try:
+        if _source_directory_identity(os.fstat(descriptor)) != initial[directory]:
+            raise RuntimeError(f"source-seal ancestor changed before content intake: {relative}")
+        for part in source.parts[1:-1]:
+            child = os.open(part, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            directory /= part
+            if _source_directory_identity(os.fstat(descriptor)) != initial[directory]:
+                raise RuntimeError(f"source-seal ancestor changed before content intake: {relative}")
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(source.name, flags, dir_fd=descriptor), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or _source_identity(before) != initial[source]:
+                raise RuntimeError(f"source-seal input changed before content intake: {relative}")
+            contents = stream.read()
+            after = os.fstat(stream.fileno())
+            _, current = _source_path_metadata(root, relative)
+            if (_source_identity(after) != initial[source] or current != initial
+                    or len(contents) != after.st_size):
+                raise RuntimeError(f"source-seal input changed while authenticating: {relative}")
+            return contents
+    finally:
+        os.close(descriptor)
 
 
 class AuthenticatedTool:
@@ -625,17 +766,18 @@ def listed_files(
     for relative in ROOT_INPUTS:
         if relative not in input_set:
             continue
-        source = root / relative
-        if source.is_symlink():
-            raise RuntimeError(f"explicit source-seal input is symlinked: {relative}")
-        if source.is_file():
+        try:
+            source, identities = _source_path_metadata(root, relative, allow_directory=True)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(int(identities[source][2])):
+            _public_source_relative(relative)
             listed.add(relative)
 
     present = []
     for relative in listed:
-        source = root / relative
         try:
-            source.lstat()
+            _source_path_metadata(root, relative)
         except FileNotFoundError:
             # `git ls-files --cached` includes intentionally deleted tracked
             # files. Their absence is authenticated by the source status and
@@ -738,12 +880,7 @@ def fingerprint(
     lockfile = selected_lockfile_path(root, lockfile_path)
     digest = hashlib.sha256()
     for relative in listed_files(root, inputs, lockfile):
-        source = root / relative
-        if source.is_symlink():
-            raise RuntimeError(f"source-seal input is symlinked: {relative}")
-        if not source.is_file():
-            raise RuntimeError(f"source-seal input is not a regular file: {relative}")
-        contents = source.read_bytes()
+        contents = _read_public_source_bytes(root, relative)
         if relative == SWIFT_NATIVE_BRIDGE_PATH:
             contents = normalize_swift_native_bridge_hash_pins(contents)
         digest.update(relative.encode("utf-8"))
@@ -892,7 +1029,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    root = args.root.resolve()
+    root = args.root
+    _source_path_metadata(root, "Cargo.toml")
     lockfile = selected_lockfile_path(root, args.lockfile_path)
     inputs = seal_inputs(root, args.platform, lockfile)
     if args.mode == "fingerprint":

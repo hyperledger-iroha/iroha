@@ -309,6 +309,61 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         assertEquals(0, osCalls)
     }
 
+    @Test fun sharedPublicationWorkflowReusesTheExactFiAndCapturedWWithoutHttpWalletOrOsRepeat() = runBlocking {
+        val e = Endpoint().apply { publicationFixtureEnabled = true }
+        var httpCalls = 0; var walletCalls = 0; var osCalls = 0
+        val workflow = e.workflow({ request -> httpCalls++; e.reply(request) }, {
+            walletCalls++; ByteArray(64) { 0x61 }
+        }, bootstrapSigner = { prepared -> prepared.performPlatformSigning { _, _, _, _, _, _, guard ->
+            osCalls++; guard(); der.copyOf()
+        } })
+        val first = workflow.beginOrResumeInitialStatePublication()
+        assertContentEquals(e.enrollmentId, first.enrollmentId())
+        assertContentEquals(sha(e.retailCertificate), first.retailCertificateOriginalDigest())
+        assertContentEquals(sha(e.credential), first.appCredentialOriginalDigest())
+        val captured = workflow.beginOrResumeBootstrapApproval()
+        assertContentEquals(e.bootstrapReceipt(), captured.originalApprovalReceipt())
+        first.publicationOriginalDigest().fill(0)
+        val resumed = workflow.beginOrResumeInitialStatePublication()
+        assertContentEquals(e.publicationFields()[2], resumed.publicationOriginalDigest())
+        assertEquals(1, e.publicationCalls); assertEquals(1, e.publicationRecoveries)
+        assertEquals(1, e.bootstrapPreparations); assertEquals(1, e.bootstrapRetains)
+        assertEquals(1, e.retailCompletions); assertEquals(4, httpCalls)
+        assertEquals(1, walletCalls); assertEquals(1, osCalls)
+    }
+
+    @Test fun lostNativePublicationReplyFreezesSharedWorkflowWithoutRepeatingAnyOriginalInvocation() = runBlocking {
+        val e = Endpoint().apply { publicationFixtureEnabled = true; losePublicationReturn = true }
+        var httpCalls = 0; var walletCalls = 0; var osCalls = 0
+        val workflow = e.workflow({ request -> httpCalls++; e.reply(request) }, {
+            walletCalls++; ByteArray(64) { 0x61 }
+        }, bootstrapSigner = { prepared -> prepared.performPlatformSigning { _, _, _, _, _, _, guard ->
+            osCalls++; guard(); der.copyOf()
+        } })
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeInitialStatePublication() }
+        assertTrue(e.publicationReplyRetained); assertEquals(1, e.closes)
+        e.losePublicationReturn = false
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeInitialStatePublication() }
+        assertEquals(1, e.publicationCalls); assertEquals(0, e.publicationRecoveries)
+        assertEquals(4, httpCalls); assertEquals(1, walletCalls); assertEquals(1, osCalls)
+        assertEquals(1, e.bootstrapPreparations); assertEquals(1, e.bootstrapRetains)
+    }
+
+    @Test fun missingAuthenticPublicationProviderRefusesSharedWorkflowAfterTheSameFiAndW() = runBlocking {
+        val e = Endpoint(); var httpCalls = 0; var walletCalls = 0; var osCalls = 0
+        val workflow = e.workflow({ request -> httpCalls++; e.reply(request) }, {
+            walletCalls++; ByteArray(64) { 0x61 }
+        }, bootstrapSigner = { prepared -> prepared.performPlatformSigning { _, _, _, _, _, _, guard ->
+            osCalls++; guard(); der.copyOf()
+        } })
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeInitialStatePublication() }
+        assertEquals(3, e.retailState); assertEquals(3, e.bootstrapState)
+        assertFalse(e.publicationReplyRetained); assertEquals(1, e.closes)
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeInitialStatePublication() }
+        assertEquals(1, e.publicationCalls); assertEquals(0, e.publicationRecoveries)
+        assertEquals(4, httpCalls); assertEquals(1, walletCalls); assertEquals(1, osCalls)
+    }
+
     @Test fun pureSelectedGoogleProjectionRejectsExtraMembersUnsupportedNumbersAndBrokenIdentitySyntax() {
         assertEquals(7L, KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy()))
         for (mutation in listOf("extra", "project-extra", "project-zero", "project-overflow", "principal", "certificate", "version")) {
@@ -368,6 +423,12 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         var retailState = 0; var retailSignature = byteArrayOf(); var retailCompletions = 0
         var bootstrapState = 0; var bootstrapRaw = byteArrayOf(); var bootstrapPreparations = 0; var bootstrapRetains = 0
         var alternateBootstrapCredential = false
+        var publicationFixtureEnabled = false; var publicationReplyRetained = false; var losePublicationReturn = false
+        var publicationCalls = 0; var publicationRecoveries = 0
+        // Inert transport commitments exercise workflow correlation only. No genuine Native
+        // proof, financial current owner, release admission or device qualification is simulated.
+        fun publicationFields() = listOf(le64(20), enrollmentId.copyOf(), bytes(0x81), sha(retailCertificate),
+            sha(credential), bytes(0x82), bytes(0x83), bytes(0x84), bytes(0x85))
         private fun bootstrapOperationId() = sha("iroha:kagemusha:v1:ordinary-bootstrap-operation-id\u0000".toByteArray(Charsets.US_ASCII) + retailCertificate)
         fun bootstrapFields(): List<ByteArray> {
             val credentialDigest = if (alternateBootstrapCredential) bytes(0x75) else sha(credential)
@@ -436,6 +497,18 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
                     }
                     6 -> arrayOf(original[9].copyOf(), sha(original[1]))
                     7 -> emptyArray()
+                    9 -> {
+                        check(bootstrapState == 3); publicationCalls++
+                        check(publicationFixtureEnabled) { "Authentic initial publication provider is unavailable" }
+                        publicationReplyRetained = true
+                        check(!losePublicationReturn) { "Original publication reply lost after dispatch" }
+                        publicationFields().map(ByteArray::copyOf).toTypedArray()
+                    }
+                    10 -> {
+                        check(bootstrapState == 3); publicationRecoveries++
+                        check(publicationFixtureEnabled && publicationReplyRetained)
+                        publicationFields().map(ByteArray::copyOf).toTypedArray()
+                    }
                     else -> error("No monetary fixture authority")
                 }
             }

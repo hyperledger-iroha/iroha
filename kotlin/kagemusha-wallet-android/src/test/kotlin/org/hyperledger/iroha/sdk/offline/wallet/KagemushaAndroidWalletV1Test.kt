@@ -11,30 +11,13 @@ import org.junit.jupiter.api.Test
 
 class KagemushaAndroidWalletV1Test {
     @Test
-    fun `online only bridge never invokes an OEM provider or falls back`() {
-        var factoryCalls = 0
-        val error = assertFailsWith<IllegalStateException> {
-            KagemushaAndroidWalletV1.openBridge(
-                KagemushaDeviceLifecycleBridgeV1.onlineOnly(),
-                KagemushaAndroidHardwareProviderFactoryV1 { _, _, _ ->
-                    factoryCalls += 1
-                    error("factory must not be invoked")
-                },
-                org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {},
-            )
-        }
-        assertEquals(0, factoryCalls)
-        assertEquals(true, error.message!!.contains("online-only"))
-    }
-
-    @Test
     fun `production uses the factory admitted lifecycle bridge`() {
         var bridgeCalls = 0
         var providerCalls = 0
         val factory = object : KagemushaAndroidHardwareProviderFactoryV1 {
             override fun deviceLifecycleBridge(): KagemushaDeviceLifecycleBridgeV1 {
                 bridgeCalls += 1
-                return KagemushaDeviceLifecycleBridgeV1.onlineOnly()
+                throw IllegalStateException("native capability qualification failed")
             }
 
             override fun open(bridge: KagemushaDeviceLifecycleBridgeV1, intentStore: org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1, authorizeBootstrap: () -> Unit): KagemushaHardwareProviderV1 {

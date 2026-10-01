@@ -549,6 +549,55 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unsupported source-seal platform"):
             self.inputs("windows")
 
+    def test_armv7_diagnostic_seals_only_its_dependency_target(self) -> None:
+        profile = "android-armv7-diagnostic"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()) as closure:
+            seal.seal_inputs(self.root, profile, self.root / "Cargo.lock")
+        self.assertEqual(closure.call_args.args[1], ("armv7-linux-androideabi",))
+        self.assertEqual(seal.PLATFORM_TARGETS["android"],
+                         ("aarch64-linux-android", "x86_64-linux-android"))
+        self.assertIn("scripts/inspect_android_armv7_diagnostic.py",
+                      seal.PLATFORM_ROOT_INPUTS[profile])
+
+    def test_armv7_diagnostic_closure_retains_target_specific_local_dependency(self) -> None:
+        bridge = self.root / "crates/connect_norito_bridge/Cargo.toml"
+        dependency = self.root / "crates/armv7-only/Cargo.toml"
+        document = {
+            "packages": [
+                {"id": "bridge", "name": "connect_norito_bridge", "manifest_path": str(bridge)},
+                {"id": "arm-dependency", "name": "armv7-only", "manifest_path": str(dependency)},
+                {"id": "unrelated", "name": "unrelated", "manifest_path": str(self.root / "crates/unrelated/Cargo.toml")},
+            ],
+            "resolve": {"nodes": [
+                {"id": "bridge", "deps": [{"pkg": "arm-dependency"}]},
+                {"id": "arm-dependency", "deps": []},
+                {"id": "unrelated", "deps": []},
+            ]},
+        }
+        with mock.patch.object(seal, "metadata", return_value=document) as metadata:
+            observed = seal.local_dependency_roots(self.root,
+                seal.ANDROID_ARMV7_DIAGNOSTIC_TARGETS, self.root / "Cargo.lock")
+        self.assertEqual(observed, {"crates/connect_norito_bridge", "crates/armv7-only"})
+        metadata.assert_called_once_with(self.root, "armv7-linux-androideabi", self.root / "Cargo.lock")
+
+    def test_armv7_diagnostic_snapshot_cannot_verify_as_android_release(self) -> None:
+        original = self.root / "armv7-diagnostic-seal.json"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
+            seal.verify_snapshot(self.root, "android-armv7-diagnostic", original, self.root / "Cargo.lock")
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                seal.verify_snapshot(self.root, "android", original, self.root / "Cargo.lock")
+
+    def test_armv7_inspector_mutation_invalidates_diagnostic_seal(self) -> None:
+        helper = self.root / "scripts/inspect_android_armv7_diagnostic.py"
+        helper.write_text("# original inspection recipe\n", encoding="utf-8")
+        original = self.root / "armv7-diagnostic-seal.json"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
+            helper.write_text("# substituted inspection recipe\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                seal.verify_snapshot(self.root, "android-armv7-diagnostic", original, self.root / "Cargo.lock")
+
     def test_apple_builder_never_relies_on_the_default_seal_platform(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")
         invocations = re.findall(

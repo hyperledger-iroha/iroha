@@ -162,10 +162,10 @@ fn borrowed_plans_and_cold_replay_share_every_mutating_action_and_idempotent_res
     let reservation = f.model.operation(&[11; 32]).unwrap().reservation;
     same_plan(
         &mut f,
-        TopologyActionV1::Expire(TopologyExpireV1 {
+        TopologyActionV1::Expire(Box::new(TopologyExpireV1 {
             operation_id: [11; 32],
             reservation,
-        }),
+        })),
         8,
         reservation.expires_at_unix_ms,
         33,

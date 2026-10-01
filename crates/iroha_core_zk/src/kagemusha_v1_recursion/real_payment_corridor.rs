@@ -317,6 +317,7 @@ impl MintRecipientMaterial {
 }
 
 fn mint_recipient_material(
+    device_index: u64,
     release_id: DigestV1,
     vk_digest: DigestV1,
     artifact_manifest_digest: DigestV1,
@@ -328,7 +329,12 @@ fn mint_recipient_material(
     let provider_policy = DiagnosticProviderPolicy::new(hardware_profile);
     let empty_effect = digest(b"empty-durable-effect", 0);
     let (mut platform_credential, device_authority_secret) =
-        credential_witness_with_policy(0, release_id, empty_effect, &provider_policy);
+        credential_witness_with_policy(device_index, release_id, empty_effect, &provider_policy);
+    // The common governed asset lane does not identify a device. Each independently enrolled
+    // fixture owns a distinct device lane while sharing the same provider policy and circuits.
+    if device_index != 0 {
+        platform_credential.statement.lane_id = digest(b"corridor-device-lane", device_index);
+    }
 
     let mut hardware_credential = KagemushaHardwareCredentialV1 {
         app_policy_binding_digest: platform_credential.statement.app_policy_binding_digest,
@@ -1989,13 +1995,19 @@ struct RealFundedPrerequisite {
 
 /// Preserve the original recipient while binding its credential to Core's exact release context.
 fn core_bound_mint_recipient_material(
+    device_index: u64,
     release_id: DigestV1,
     vk_digest: DigestV1,
     artifact_manifest_digest: DigestV1,
     amount: u128,
 ) -> MintRecipientMaterial {
-    let mut material =
-        mint_recipient_material(release_id, vk_digest, artifact_manifest_digest, amount);
+    let mut material = mint_recipient_material(
+        device_index,
+        release_id,
+        vk_digest,
+        artifact_manifest_digest,
+        amount,
+    );
     // Core reconstructs this release-specific digest before it accepts any Guard statement.
     // Retain the same credential and private opening throughout reservation and MintFold.
     let empty_effect =
@@ -2025,8 +2037,13 @@ fn prove_funded_prerequisite(
 ) -> RealFundedPrerequisite {
     let eq = canonical_kagemusha_eq_parameters_v1();
     let ep = canonical_kagemusha_ep_parameters_v1();
-    let material =
-        core_bound_mint_recipient_material(release_id, vk_digest, artifact_manifest_digest, amount);
+    let material = core_bound_mint_recipient_material(
+        0,
+        release_id,
+        vk_digest,
+        artifact_manifest_digest,
+        amount,
+    );
     let (hash_eq, hash_ep) = generate_mint_hash_suite(&material, &eq, &ep);
     let credential_keys = CredentialKeys::generate(
         &eq,
@@ -2993,6 +3010,7 @@ fn bootstrap_certificate_is_zero_authority_and_pins_complete_genesis_authorizati
 #[test]
 fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
     let material = mint_recipient_material(
+        0,
         digest(b"payment-corridor-release", 0),
         digest(b"vk-set", 0),
         digest(b"payment-corridor-artifact-manifest", 0),
@@ -3069,12 +3087,14 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
 #[test]
 fn mint_authorization_key_reuse_fixture_changes_amount_with_one_provider_policy() {
     let first = mint_recipient_material(
+        0,
         digest(b"payment-corridor-release", 0),
         digest(b"vk-set", 0),
         digest(b"payment-corridor-artifact-manifest", 0),
         1_000,
     );
     let second = mint_recipient_material(
+        0,
         digest(b"payment-corridor-release", 0),
         digest(b"vk-set", 0),
         digest(b"payment-corridor-artifact-manifest", 0),
@@ -3126,6 +3146,7 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
         .spawn(|| {
             let release_id = digest(b"payment-corridor-release", 0);
             let material = mint_recipient_material(
+                0,
                 release_id,
                 digest(b"vk-set", 0),
                 digest(b"payment-corridor-artifact-manifest", 0),
@@ -3213,6 +3234,7 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
             // its own exact typed-SHA claim and history. Reusing the first relation's claim would
             // only exercise witness rejection and would not prove reusable production geometry.
             let next_material = mint_recipient_material(
+                0,
                 release_id,
                 digest(b"vk-set", 0),
                 digest(b"payment-corridor-artifact-manifest", 0),
@@ -3301,6 +3323,7 @@ fn real_guard_bundle_carries_current_credential_sha_histories_with_reusable_keys
             let release_id = digest(b"real-guard-prerequisite-release", 0);
             let empty_effect = digest(b"empty-durable-effect", 0);
             let material = mint_recipient_material(
+                0,
                 release_id,
                 digest(b"vk-set", 0),
                 digest(b"real-guard-prerequisite-manifest", 0),
@@ -3498,7 +3521,7 @@ pub(in crate::kagemusha_v1_recursion) fn ordinary_zero_bootstrap_hash_keys_for_t
     KagemushaLoadedEqMintHashArtifactsV1,
     KagemushaLoadedEpMintHashArtifactsV1,
 ) {
-    let material = mint_recipient_material(release_id, vk_digest, manifest, 1);
+    let material = mint_recipient_material(0, release_id, vk_digest, manifest, 1);
     generate_mint_hash_suite(
         &material,
         &canonical_kagemusha_eq_parameters_v1(),

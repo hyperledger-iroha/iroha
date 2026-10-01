@@ -21,6 +21,14 @@ use iroha_data_model::kagemusha::{
 mod current_publication;
 pub use current_publication::KagemushaAuthenticatedOrdinaryCurrentPublicationV1;
 
+#[path = "authenticated_ordinary_cash_owner.rs"]
+mod cash_owner;
+pub use cash_owner::KagemushaNativeOrdinaryCashOwnerV1;
+pub(crate) use cash_owner::{
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+};
+
 #[path = "authenticated_ordinary_logical_journal.rs"]
 mod logical_journal;
 pub(crate) use logical_journal::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;

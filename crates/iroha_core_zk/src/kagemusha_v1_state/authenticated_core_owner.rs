@@ -28,10 +28,13 @@ pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
-    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaNativeOrdinaryCashOwnerV1,
+    KagemushaOrdinaryLogicalApprovalJournalV1,
 };
 pub(crate) use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
     verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,

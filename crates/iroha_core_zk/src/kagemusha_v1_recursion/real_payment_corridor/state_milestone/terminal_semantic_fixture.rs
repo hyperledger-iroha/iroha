@@ -96,6 +96,7 @@ fn assert_complete_semantic_queue_matches_original(
     ));
     let release = digest(b"terminal-shared-semantic-fixture", 0);
     let material = core_bound_mint_recipient_material(
+        0,
         release,
         digest(b"vk-set", 0),
         digest(b"terminal-semantic-fixture-manifest", 0),

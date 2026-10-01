@@ -5,8 +5,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaSecureElementAPDUV1Tests: XCTestCase {
-  #if !OFFLINE_SECURE_ELEMENT_CREDENTIAL
-    func testAppleCredentialBoundaryIsUnavailableWithoutExplicitCompileGate() async throws {
+  #if !canImport(SecureElementCredential)
+    func testAppleCredentialBoundaryReportsMissingPlatformFramework() async throws {
       let configuration = try KagemushaSecureElementCredentialConfigurationV1.foundation(
         productConfigurationIdentifier: UUID(
           uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF"

@@ -121,9 +121,9 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     }
   }
 
-  func testUnsupportedDeviceRemainsOnlineOnly() throws {
-    let bridge = KagemushaDeviceLifecycleBridgeV1.onlineOnly()
-    XCTAssertEqual(bridge.availability, .onlineOnly)
+  func testMissingDeviceEndpointReportsError() throws {
+    let bridge = KagemushaDeviceLifecycleBridgeV1.unavailableForTests()
+    XCTAssertEqual(bridge.availability, .unavailable)
     XCTAssertNil(bridge.acceptedCapabilities)
     XCTAssertThrowsError(
       try bridge.executeAuthenticated(
@@ -135,7 +135,7 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     ) { error in
       XCTAssertEqual(
         error as? KagemushaDeviceLifecycleBridgeErrorV1,
-        .onlineOnly
+        .unavailable
       )
     }
   }

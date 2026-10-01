@@ -653,6 +653,8 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     ep_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    eq_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    ep_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_mint_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
@@ -1115,6 +1117,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ordinary_guard_protocol_digests,
             eq_state_protocol,
             ep_state_protocol,
+            eq_terminal_authorization_protocol,
+            ep_terminal_authorization_protocol,
             eq_commit_wrapper_protocol,
             ep_commit_wrapper_protocol,
             eq_mint_authorization_protocol,
@@ -1376,6 +1380,72 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             eq_protocol_digest: self.ordinary_guard_protocol_digests[0],
             ep_protocol_digest: self.ordinary_guard_protocol_digests[1],
         }
+    }
+
+    /// Borrow the actual common-role keys for the separate first-release ordinary cash family.
+    #[cfg(unix)]
+    pub(super) fn ordinary_cash_terminal_verifier_material(
+        &self,
+    ) -> Result<super::ordinary_cash_terminal_verifier::OrdinaryCashTerminalMaterialV1<'_>, String>
+    {
+        self.monetary_release()?;
+        for (binding, role) in [
+            (
+                &self.terminal_authorization_eq_binding,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+            ),
+            (
+                &self.terminal_authorization_ep_binding,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+            ),
+            (
+                &self.commit_wrapper_eq_binding,
+                KagemushaArtifactRoleV1::CommitWrapperVkEq,
+            ),
+            (
+                &self.commit_wrapper_ep_binding,
+                KagemushaArtifactRoleV1::CommitWrapperVkEp,
+            ),
+        ] {
+            if binding.role != role {
+                return Err("ordinary Terminal/Wrapper key-role mismatch".into());
+            }
+        }
+        let key_digests = [
+            self.terminal_authorization_eq_binding.sha256,
+            self.terminal_authorization_ep_binding.sha256,
+            self.commit_wrapper_eq_binding.sha256,
+            self.commit_wrapper_ep_binding.sha256,
+        ];
+        if key_digests
+            .iter()
+            .enumerate()
+            .any(|(i, d)| key_digests[i + 1..].contains(d))
+        {
+            return Err("ordinary Terminal/Wrapper key roles alias".into());
+        }
+        Ok(
+            super::ordinary_cash_terminal_verifier::OrdinaryCashTerminalMaterialV1 {
+                eq_parameters: &self.eq_parameters,
+                ep_parameters: &self.ep_parameters,
+                terminal_eq_protocol: &self.eq_terminal_authorization_protocol,
+                terminal_ep_protocol: &self.ep_terminal_authorization_protocol,
+                wrapper_eq_protocol: &self.eq_commit_wrapper_protocol,
+                wrapper_ep_protocol: &self.ep_commit_wrapper_protocol,
+                release_id: self.release_id,
+                suite_id: self.suite_id,
+                vk_set_digest: self.vk_set_digest,
+                artifact_manifest_digest: self.artifact_manifest_digest,
+                terminal_protocol_digests: [
+                    self.terminal_authorization_eq_protocol_digest,
+                    self.terminal_authorization_ep_protocol_digest,
+                ],
+                wrapper_protocol_digests: [
+                    self.commit_wrapper_eq_protocol_digest,
+                    self.commit_wrapper_ep_protocol_digest,
+                ],
+            },
+        )
     }
 
     /// Return the actual Eq state protocol identity derived from its authenticated key.

@@ -2801,11 +2801,17 @@ def test_main_emits_schema_closed_summary(capsys: pytest.CaptureFixture[str]) ->
 
 
 def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() -> None:
-    """The strict release gate cannot omit SF-11 or topology adversarial tests."""
+    """Explicit diagnostics retain SF-11 and topology adversarial tests."""
 
     source = (REPO_ROOT / "ci/check_sorafs_cli_release.sh").read_text(
         encoding="utf-8"
     )
+    assert 'diagnostics=false\ncase "$#" in\n' in source
+    assert 'if [[ "$1" != "--diagnostics" ]]; then' in source
+    integrity_return = source.index('if [[ "${diagnostics}" != true ]]; then')
+    assert source.index(automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND) < integrity_return
+    assert source.index("python3 -I -S scripts/check_release_feature_graph.py") < integrity_return
+    assert integrity_return < source.index("cargo fmt --all -- --check")
     for relative in (
         "scripts/tests/check_sorafs_mobile_parity_reports_test.py",
         "scripts/tests/release_output_parent_cleanup_test.py",

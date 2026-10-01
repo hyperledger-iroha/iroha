@@ -28,25 +28,35 @@ tests; 48 dependency-budget tests; Cargo feature hygiene, workspace target
 inventory and every configured feature-resolved dependency boundary. Separate
 source/fixture suites retain their own logs and counts. The normal graphs
 exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
-Fresh privacy follow-up passes 39 targeted controls and preserves all 2,075
-original registered names, including their 40 ignored cases. Recorded normal
+The current privacy registry has 2,264 names and 52 ignored qualification cases;
+twelve rewritten private-terminal controls map to original field-mutation and
+forgery coverage. Recorded normal
 native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
-inventory now admits 99 declared targets and 23 defaults. Recorded IVM-only,
+inventory now admits 101 declared targets and 23 defaults. Recorded IVM-only,
 feature-hygiene, dependency-boundary and retired-codec pattern guards pass.
 The normal production-feature Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
 tests pass. Focused issuer-key, corrected enrollment-floor and expired-preparation
 custody controls pass in the retained default-feature harness. The Guard-generation
-fixes compile and both extended regressions pass; the remaining selected proof
-cases are running. Current privacy acceptance records 121 passes and 13 failures
-in malformed-input controls, profile-pin tests and resource fixtures. Repairs
-remain under validation. Eight focused parameter tests pass with the scoped inline-policy
+fixes compile and both extended regressions pass. MintFold and protocol-label
+controls and every remaining selected proof case pass in the retained harness: 33
+selected controls in total, with source changes limiting current qualification. The non-test real-proof harness now enables its equations' P-256
+gadget and bounded SHA relation; focused frontend validation remains open. Unused
+terminal reference helpers now compile only for tests, preserving their assertions
+and production private-product/local-AIR path; strict privacy lint remains open. Repaired privacy acceptance passes all 136 selected controls,
+including malformed-input rejection and current/retired profile pins. Concurrent
+workspace manifest and lock changes limit source qualification; the full ordinary
+suite remains open. Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
 compile with matching package/features; the freshness check fails with concurrent
 source changes and library rebuilds. The latest workspace check reaches Core test
-compile errors owned by the separate repair chat. Workspace validation, metadata
-freshness qualification and observational warm timings remain pending. The
+compile errors owned by the separate repair chat. That chat completed the merge;
+current test and private-proof integration still needs compiler repair.
+New SDK native-custody and assembly tools have explicit feature/target owners;
+FASTPQ belongs to existing STARK activation. Current dependency costs and native
+proving-context coverage remain under review. Workspace validation, metadata freshness qualification
+and observational warm timings remain pending. The
 [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
 describes the remaining controls. All evidence retains its scoped source and
 load qualifications; full completion is not yet established.

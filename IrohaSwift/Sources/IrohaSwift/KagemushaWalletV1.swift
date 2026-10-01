@@ -2,7 +2,6 @@ import Foundation
 
 /// Failures from the hardware-authoritative KAGEMUSHA V1 orchestration layer.
 public enum KagemushaWalletErrorV1: Error, Equatable, Sendable {
-  case onlineOnly
   case invalidHardwareContract(String)
   case invalidHardwareResult(String)
   case nativeVerificationRequired

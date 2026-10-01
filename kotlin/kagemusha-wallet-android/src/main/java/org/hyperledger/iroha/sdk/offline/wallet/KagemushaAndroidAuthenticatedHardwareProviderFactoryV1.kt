@@ -50,7 +50,9 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
             )
         }
         return KagemushaAuthenticatedHardwareProviderV1(transport, coordinator, intentStore, authorizeBootstrap,
-            coordinatorFactory.incomingFoldEvidenceProvider(coordinator))
+            checkNotNull(coordinatorFactory.incomingFoldEvidenceProvider(coordinator)) {
+                "KAGEMUSHA native-Core factory returned no qualified physical incoming evidence owner"
+            })
     }
 
     private fun loadExactlyOneCoordinatorFactory(): KagemushaNativeCoreCoordinatorFactoryV1 {

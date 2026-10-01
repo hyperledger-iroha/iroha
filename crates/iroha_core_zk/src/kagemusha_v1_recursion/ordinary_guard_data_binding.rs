@@ -46,6 +46,14 @@ pub(crate) struct KagemushaOrdinaryGuardDataBindingV1<F: KagemushaPoseidonFieldV
     pub(crate) canonical_subject: [AssignedValue<F>; S::TOTAL_BYTES],
     /// Same signed purpose cell inside the whole platform-approved wrapper transcript.
     pub(crate) approval_purpose: AssignedValue<F>,
+    /// Same operation-ID bytes copy-bound inside the complete signed W wrapper.
+    pub(crate) approval_operation_id: [PastaSha256ByteV1<F>; 32],
+    /// Same original nonce bytes copy-bound inside the whole platform-approved wrapper.
+    pub(crate) approval_nonce: [PastaSha256ByteV1<F>; 32],
+    /// Same original W issuance cell, never a detached terminal time witness.
+    pub(crate) approval_issued_at_ms: AssignedValue<F>,
+    /// Same immutable original W expiry cell.
+    pub(crate) approval_expires_at_ms: AssignedValue<F>,
 }
 
 /// Reconstruct exact model originals and join every scope/key/financial field to assigned State.
@@ -192,5 +200,9 @@ pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
         ],
         canonical_subject: signed_s,
         approval_purpose,
+        approval_operation_id: original.operation_id,
+        approval_nonce: original.nonce,
+        approval_issued_at_ms: original.issued_at_ms,
+        approval_expires_at_ms: original.expires_at_ms,
     })
 }

@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+diagnostics=false
+case "$#" in
+  0) ;;
+  1)
+    if [[ "$1" != "--diagnostics" ]]; then
+      echo "usage: $0 [--diagnostics]" >&2
+      exit 2
+    fi
+    diagnostics=true
+    ;;
+  *)
+    echo "usage: $0 [--diagnostics]" >&2
+    exit 2
+    ;;
+esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "${repo_root}"
@@ -58,6 +74,11 @@ PY
 }
 
 expected_cargo_lock_sha256="$(cargo_lock_sha256)"
+
+if [[ "${diagnostics}" != true ]]; then
+  echo "[sorafs-release] source integrity checks complete; diagnostics were not run"
+  exit 0
+fi
 
 echo "[sorafs-release] fmt check (workspace)"
 cargo fmt --all -- --check

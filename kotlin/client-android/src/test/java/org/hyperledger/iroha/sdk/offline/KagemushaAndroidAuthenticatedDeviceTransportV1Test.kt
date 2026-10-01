@@ -11,13 +11,16 @@ import org.junit.jupiter.api.Test
 
 class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
     @Test
-    fun `online-only bridge cannot become an authenticated transport`() {
+    fun `missing capability frame refuses transport before device execution`() {
+        val endpoint = FakeEndpoint().apply { rejectCapabilities = true }
         assertFailsWith<IllegalStateException> {
             KagemushaAndroidAuthenticatedDeviceTransportV1(
-                KagemushaDeviceLifecycleBridgeV1.onlineOnly(),
-            )
+                KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(endpoint))
         }
+        assertTrue(endpoint.observedOperations.isEmpty())
+        assertEquals(0, endpoint.verifierCalls)
     }
+
 
     @Test
     fun `all 22 lifecycle operations retain authenticated bindings`() {
@@ -163,6 +166,7 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
         var operation = KagemushaDeviceLifecycleBridgeV1.Operation.READ_ACTIVE_HARDWARE_CREDENTIAL
         var status = KagemushaDeviceLifecycleBridgeV1.Status.SUCCESS
         var verificationResult = true
+        var rejectCapabilities = false
         var lastResponse: ByteArray? = null
         var verifierCalls = 0
         var lastVerifiedCommand: ByteArray? = null
@@ -176,12 +180,14 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1Test {
         var lastVerifiedDevicePublicKey: ByteArray? = null
         val observedOperations = mutableListOf<Int>()
 
-        override fun capabilities(): ByteArray =
-            KagemushaDeviceLifecycleBridgeV1.Codec.encodeCapabilitiesForTests(
+        override fun capabilities(): ByteArray {
+            check(!rejectCapabilities) { "required native capability frame unavailable" }
+            return KagemushaDeviceLifecycleBridgeV1.Codec.encodeCapabilitiesForTests(
                 platform = 1,
                 policy = fixed(0x22, 32),
                 attestation = fixed(0x33, 32),
             )
+        }
 
         override fun execute(command: ByteArray): ByteArray {
             val observedOperation = command[10].toInt() and 0xff

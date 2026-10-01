@@ -7,8 +7,8 @@
 //! the actual wrapper identity. The funded sender fixture also opens its request-bound encrypted
 //! peer credit with a receiver-owned key. The sender-closure entry point now finalizes the exact
 //! generated payment envelope in a private test verifier, but does not install a hardware-backed
-//! state-machine commit, stage the receiver, or prove ReceiveFold; the 1024-handoff gate remains
-//! closed.
+//! state-machine commit, stage the receiver, or prove ReceiveFold. The separate alternating
+//! handoff fixture retains independent original device owners and verifies the full sequence.
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -60,6 +60,20 @@ use zeroize::Zeroizing;
 
 use crate::kagemusha_v1_crypto::{open_kagemusha_credit_v1, seal_kagemusha_credit_v1_with_rng};
 
+#[path = "state_milestone/device_owner.rs"]
+mod device_owner;
+#[path = "state_milestone/handoff_inputs.rs"]
+mod handoff_inputs;
+#[path = "state_milestone/handoff_receive.rs"]
+mod handoff_receive;
+#[path = "state_milestone/handoff_release.rs"]
+mod handoff_release;
+#[path = "state_milestone/handoff_run.rs"]
+mod handoff_run;
+#[path = "state_milestone/handoff_send.rs"]
+mod handoff_send;
+#[path = "state_milestone/peer_stage.rs"]
+mod peer_stage;
 #[path = "state_milestone/recovery_checkpoint.rs"]
 mod recovery_checkpoint;
 #[path = "state_milestone/terminal.rs"]
@@ -74,10 +88,12 @@ enum DiagnosticMilestoneV1 {
     RedemptionTerminal,
     Wrapper,
     SenderClosure,
+    Handoffs(usize),
 }
 
 const RESERVATION_DOMAIN: &[u8] = b"iroha:kagemusha:diagnostic:mint-reservation\0";
 const STAGE_DOMAIN: &[u8] = b"iroha:kagemusha:diagnostic:mint-stage\0";
+const CREDIT_STAGE_DOMAIN: &[u8] = b"iroha:kagemusha:diagnostic:peer-credit-stage\0";
 const BOOTSTRAP_TIME: u64 = 50;
 const STAGE_TIME: u64 = 150;
 const MINT_TIME: u64 = 200;
@@ -94,11 +110,18 @@ struct DiagnosticReceiverCreditV1 {
 
 impl DiagnosticReceiverCreditV1 {
     fn new() -> Self {
+        Self::for_device(1)
+    }
+
+    fn for_device(device_index: u64) -> Self {
         Self {
-            private_key: Zeroizing::new(digest(b"diagnostic-receiver-x25519-private", 1)),
-            credit_commitment_opening: digest(b"diagnostic-peer-credit-opening", 1),
-            recipient_binding_opening: digest(b"diagnostic-peer-recipient-opening", 1),
-            recovery_nonce: digest(b"diagnostic-peer-recovery-nonce", 1),
+            private_key: Zeroizing::new(digest(
+                b"diagnostic-receiver-x25519-private",
+                device_index,
+            )),
+            credit_commitment_opening: digest(b"diagnostic-peer-credit-opening", device_index),
+            recipient_binding_opening: digest(b"diagnostic-peer-recipient-opening", device_index),
+            recovery_nonce: digest(b"diagnostic-peer-recovery-nonce", device_index),
         }
     }
 
@@ -138,7 +161,14 @@ impl DiagnosticReceiverCreditV1 {
         let aad = KagemushaEncryptedCreditAadV1::for_peer(output, request)
             .expect("Core-derived peer-credit associated data");
         let opening = self.opening(output.credit_id, request.amount);
-        let mut rng = StdRng::from_seed(digest(b"diagnostic-peer-credit-entropy", 1));
+        let mut entropy_input = Zeroizing::new([0_u8; 96]);
+        entropy_input[..32].copy_from_slice(&self.private_key[..]);
+        entropy_input[32..64].copy_from_slice(&request.canonical_digest().expect("signed request"));
+        entropy_input[64..].copy_from_slice(&output.credit_id);
+        let mut rng = StdRng::from_seed(digest_bytes(
+            b"diagnostic-peer-credit-entropy",
+            entropy_input.as_ref(),
+        ));
         let envelope = seal_kagemusha_credit_v1_with_rng(
             &opening,
             &aad,
@@ -750,6 +780,7 @@ fn context_from_normalized(
 #[derive(Clone)]
 struct DiagnosticGuardVerifier<'a> {
     funded: &'a RealFundedPrerequisite,
+    material: &'a MintRecipientMaterial,
     eq_protocol: PlonkProtocol<EqAffine>,
     ep_protocol: PlonkProtocol<EpAffine>,
     journal_key: KagemushaDevicePublicKeyV1,
@@ -790,7 +821,7 @@ impl DiagnosticGuardVerifier<'_> {
             proof.relation.statement == *normalized && guard_frame(&proof) == bytes,
             "diagnostic Guard statement/frame substitution",
         )?;
-        let expected = guard_relation(&self.funded.material, *normalized);
+        let expected = guard_relation(self.material, *normalized);
         ensure(
             proof.relation.credential_digests() == expected.credential_digests(),
             "diagnostic Guard credential substitution",
@@ -855,8 +886,7 @@ impl KagemushaGuardBundleVerifierV1 for DiagnosticGuardVerifier<'_> {
             statement,
             context_from_normalized(
                 normalized,
-                self.funded
-                    .material
+                self.material
                     .platform_credential
                     .statement
                     .canonical_empty_effect_digest,
@@ -883,8 +913,12 @@ impl KagemushaGuardBundleVerifierV1 for DiagnosticGuardVerifier<'_> {
         self.verify_normalized(normalized, bytes)
     }
 
-    fn verify_credit_stage(&self, _: &CreditStageStatementV1, _: &[u8]) -> Result<(), String> {
-        Err("diagnostic milestone does not stage peer payments".to_owned())
+    fn verify_credit_stage(
+        &self,
+        statement: &CreditStageStatementV1,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        peer_stage::verify_stage_signature(&self.journal_key, statement, bytes)
     }
 
     fn verify_durability_anchor(
@@ -972,6 +1006,85 @@ fn bootstrap_preview(
         BOOTSTRAP_TIME,
     )
     .expect("Core zero-balance bootstrap preview")
+}
+
+#[test]
+fn independent_devices_bind_their_own_credentials_lanes_and_bootstrap_guards() {
+    let first = core_bound_mint_recipient_material(
+        0,
+        digest(b"device-fixture-release", 0),
+        digest(b"vk-set", 0),
+        digest(b"device-fixture-manifest", 0),
+        1_000,
+    );
+    let second = core_bound_mint_recipient_material(
+        1,
+        first.authorization_relation.statement.context.release_id,
+        first.authorization_relation.statement.context.vk_digest,
+        first
+            .authorization_relation
+            .statement
+            .context
+            .artifact_manifest_digest,
+        1_000,
+    );
+    assert_eq!(first.provider_policy.root, second.provider_policy.root);
+    assert_eq!(first.hardware_profile, second.hardware_profile);
+    assert_ne!(
+        first.hardware_credential.credential_id,
+        second.hardware_credential.credential_id
+    );
+    assert_ne!(
+        first.hardware_credential.device_public_key,
+        second.hardware_credential.device_public_key
+    );
+    assert_ne!(
+        first.hardware_credential.lane_commitment,
+        second.hardware_credential.lane_commitment
+    );
+    assert_ne!(
+        first.hardware_credential.hardware_epoch_id,
+        second.hardware_credential.hardware_epoch_id
+    );
+    let issuer = device_public_key(&deterministic_signing_key(0x7000));
+    let artifacts = provisional_artifacts(&first);
+    let previews = [&first, &second].map(|material| {
+        material
+            .hardware_credential
+            .governance_signature
+            .verify(
+                &issuer,
+                &material
+                    .hardware_credential
+                    .canonical_signing_bytes()
+                    .unwrap(),
+            )
+            .unwrap();
+        material.platform_credential.validate().unwrap();
+        material.authorization_relation.validate_shape().unwrap();
+        let preview = bootstrap_preview(material, artifacts);
+        assert_eq!(preview.state.balance, 0);
+        assert_eq!(
+            preview.state.lane.device_lane_id,
+            material.hardware_credential.lane_commitment
+        );
+        assert_eq!(
+            preview.state.hardware_epoch.epoch_id,
+            material.hardware_credential.hardware_epoch_id
+        );
+        assert_eq!(
+            preview.state.device_policy_binding.device_key_reference,
+            material.hardware_credential.device_key_reference
+        );
+        let guard = guard_relation(material, preview.normalized_guard_statement);
+        guard.validate().unwrap();
+        (preview, guard.credential_digests())
+    });
+    assert_ne!(
+        previews[0].0.state.state_commitment,
+        previews[1].0.state.state_commitment
+    );
+    assert_ne!(previews[0].1, previews[1].1);
 }
 
 // Explicit test ownership for this Unix diagnostic only. This selector is not an enrollment
@@ -1610,7 +1723,9 @@ fn assert_guard_mutations_rejected(
 }
 
 #[cfg(unix)]
-fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
+fn run_state_milestone(
+    milestone: DiagnosticMilestoneV1,
+) -> Option<KagemushaHandoffSequenceVerificationV1> {
     let started = std::time::Instant::now();
     let funded = prove_funded_prerequisite(
         digest(b"state-milestone-release", 0),
@@ -1625,6 +1740,8 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         "Core must derive the zero-balance base"
     );
     let mut guard_keys = None;
+    let mut terminal_key_cache = None;
+    let mut wrapper_key_cache = None;
     let bootstrap_guard = Rc::new(prove_guard(
         &funded.eq,
         &funded.ep,
@@ -1713,6 +1830,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             .expect("fixed diagnostic credential and simulated journal identity");
     let guard_verifier = DiagnosticGuardVerifier {
         funded: &funded,
+        material: &funded.material,
         eq_protocol: guard_keys.as_ref().expect("Guard keys").eq_protocol.clone(),
         ep_protocol: guard_keys.as_ref().expect("Guard keys").ep_protocol.clone(),
         journal_key: device_public_key(&journal_key),
@@ -2072,6 +2190,9 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             .expect("genuine RedeemSplit Guard proof matches Core's candidate");
         let terminal = terminal::prove_outgoing_terminal(
             &funded,
+            &funded.material,
+            &funded.credential,
+            &mut terminal_key_cache,
             &state_keys,
             &mut guard_keys,
             &recursive_verifier,
@@ -2100,7 +2221,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         );
         // TODO: add qualified physical assertion folding and release-key evidence before
         // admitting this diagnostic as a production offline redemption.
-        return;
+        return None;
     }
 
     let (mut send_inputs, sender_openings) = send_preparation(
@@ -2278,6 +2399,9 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         let retained_candidate = candidate.clone();
         let terminal = terminal::prove_outgoing_terminal(
             &funded,
+            &funded.material,
+            &funded.credential,
+            &mut terminal_key_cache,
             &state_keys,
             &mut guard_keys,
             &recursive_verifier,
@@ -2290,9 +2414,21 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         );
         if matches!(
             milestone,
-            DiagnosticMilestoneV1::Wrapper | DiagnosticMilestoneV1::SenderClosure
+            DiagnosticMilestoneV1::Wrapper
+                | DiagnosticMilestoneV1::SenderClosure
+                | DiagnosticMilestoneV1::Handoffs(_)
         ) {
-            let wrapper = wrapper::prove_sender_wrapper(&funded, artifacts, &incoming, terminal);
+            let wrapper = wrapper::prove_sender_wrapper(
+                &funded,
+                &mut wrapper_key_cache,
+                artifacts,
+                &incoming,
+                terminal,
+            );
+            assert!(Rc::ptr_eq(
+                &wrapper.keys,
+                wrapper_key_cache.as_ref().unwrap()
+            ));
             assert_eq!(
                 wrapper.eq_protocol.num_instance,
                 [TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
@@ -2359,7 +2495,10 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 .unwrap(),
                 *wrapper.incoming.ep_current.as_ref().unwrap(),
             );
-            if milestone == DiagnosticMilestoneV1::SenderClosure {
+            if matches!(
+                milestone,
+                DiagnosticMilestoneV1::SenderClosure | DiagnosticMilestoneV1::Handoffs(_)
+            ) {
                 // The State circuit takes the incoming full protocol as a constrained witness;
                 // its fixed verifier geometry should permit a new release identity without
                 // changing either State verifying key. Fail before keygen if the initial
@@ -2579,6 +2718,9 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
 
                 let rebound_terminal = terminal::prove_outgoing_terminal(
                     &funded,
+                    &funded.material,
+                    &funded.credential,
+                    &mut terminal_key_cache,
                     &rebound,
                     &mut guard_keys,
                     &rebound_verifier,
@@ -2591,10 +2733,12 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 );
                 let closed = wrapper::prove_sender_wrapper(
                     &funded,
+                    &mut wrapper_key_cache,
                     rebound_artifacts,
                     &wrapper.incoming,
                     rebound_terminal,
                 );
+                assert!(Rc::ptr_eq(&closed.keys, &wrapper.keys));
                 wrapper::require_release_pinned_incoming_identity(
                     [
                         rebound_artifacts.commit_wrapper_eq_protocol_digest,
@@ -2709,10 +2853,49 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 eprintln!(
                     "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; exact generated Payment verified and finalized only against a structural test certificate; physical commit and receiver handoff remain unqualified",
                 );
+                if let DiagnosticMilestoneV1::Handoffs(count) = milestone {
+                    return Some(
+                        handoff_run::run(
+                            &funded,
+                            &rebound,
+                            &mut guard_keys,
+                            &mut terminal_key_cache,
+                            &mut wrapper_key_cache,
+                            rebound_artifacts,
+                            &closed.incoming,
+                            count,
+                        )
+                        .expect("every original genuine payment handoff must be installed"),
+                    );
+                }
             }
         }
         assert_eq!(machine.state().balance, 1_000);
     }
+    None
+}
+
+/// Generate and verify the complete requested fixture sequence under the genuine proof lock.
+pub(in crate::kagemusha_v1_recursion::real_handoff_qualification_tests) fn run_real_handoff_sequence_v1(
+    count: usize,
+) -> KagemushaHandoffSequenceVerificationV1 {
+    let _exclusive_proof = exclusive_real_proof_test_lock();
+    std::thread::Builder::new()
+        .name("kagemusha-real-payment-handoffs".to_owned())
+        .stack_size(REAL_PROOF_TEST_STACK_BYTES)
+        .spawn(move || run_state_milestone(DiagnosticMilestoneV1::Handoffs(count)))
+        .expect("start genuine payment handoffs")
+        .join()
+        .expect("genuine payment handoffs")
+        .expect("handoff milestone returns the production sequence verification")
+}
+
+/// Verify one genuine handoff and the exact failed-phase/proof/request no-effect regressions.
+#[test]
+#[cfg(unix)]
+#[ignore = "expensive genuine original SendSplit/ReceiveFold lifecycle; run in the real-proof lane"]
+fn real_payment_handoff_installs_original_sender_and_receiver_owners() {
+    assert_eq!(run_real_handoff_sequence_v1(1).verified_handoffs, 1);
 }
 
 /// Run only in the exclusive expensive real-proof lane; no generated model evidence is accepted.
@@ -2793,6 +2976,7 @@ fn real_bootstrap_mint_fold_send_split_sender_closure_milestone() {
 #[test]
 fn diagnostic_peer_credit_requires_receiver_key_and_exact_request_bound_output() {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"peer-credit-preflight-release", 0),
         digest(b"vk-set", 0),
         digest(b"peer-credit-preflight-manifest", 0),
@@ -2885,6 +3069,7 @@ fn diagnostic_peer_credit_requires_receiver_key_and_exact_request_bound_output()
 #[test]
 fn diagnostic_core_bootstrap_preflight_is_zero_and_recipient_bound() {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"cheap-state-preflight-release", 0),
         digest(b"vk-set", 0),
         digest(b"cheap-state-preflight-manifest", 0),
@@ -2969,6 +3154,7 @@ fn diagnostic_core_bootstrap_preflight_is_zero_and_recipient_bound() {
 #[test]
 fn diagnostic_sender_openings_bind_original_predecessor_counters_and_commit_time() {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"sender-opening-preflight-release", 0),
         digest(b"vk-set", 0),
         digest(b"sender-opening-preflight-manifest", 0),

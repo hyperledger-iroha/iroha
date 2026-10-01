@@ -21,7 +21,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Bounded bootstrap/startup, request-bound native finality and signed top-up boundaries have component implementations. | Durable hardware authority, recursive monetary proofs, reserve settlement, provisioning and physical-device evidence. |
+| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Current-owner financial control, complete recursive monetary proofs, funded State transitions, settlement, recovery and physical-device evidence. |
 
 ## Immediate blockers
 
@@ -106,45 +106,35 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Recorded `051df111` checks cover workspace all-targets, Core/Kagami,
+Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
 checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. On merged base `222e30c4`, the
-recorded privacy candidate passes normal builds, all three authentic pins and all
-1,017 selected ordinary controls. Required-Metal coefficient parity and full RFC
-key replay pass. Its maximum proof passes fresh verification and byte/RSS limits;
-proving takes 2,368.35 seconds against 300 seconds, and observed virtual size
-exceeds the literal 32 GiB limit.
-
-The recorded corrected normal Core/Kagami/SDK build and genuine 54-role producer
-pass. Paired finalized-execution captures and consumers agree byte for byte.
-Authentic canonical fixtures, managed verifier corrections, bounded retail-journal
-recovery, IVM descriptor/copyback/partial-dispatch/publication controls and the new
-X509 private SHA/RFC bridge are integrated. Normal privacy builds and regenerated
-pins pass on their recorded source; its expanded selection has 1,039 passes and
-19 failures requiring native rerunning. A separate repair selection records 13
-failures in malformed-input controls, profile-pin tests and resource fixtures,
-with repairs under validation. Successive SDK producer builds expose IVM fixture
-imports and JSON-array serialization errors; their corrections await a fresh
-build. The actual release-evidence Python suite records 130 passing tests. The
-last native identity selection failed cold Recover/Recover before the repair.
-
-The normal production-feature Core ZK frontend and default-feature test harness
-have recorded build passes. Component journal, focused issuer-key, corrected
+These results qualify their recorded source. The normal production-feature Core ZK
+frontend has recorded passes, limited by concurrent source changes. The default-
+feature test harness also builds. Component journal, focused issuer-key, corrected
 enrollment-floor and expired-preparation custody controls pass. Guard-generation
-fixes compile and both extended regressions pass; remaining selected proof cases
-are running. Eight focused parameter tests pass with the scoped inline-policy
-annotation. Concurrent source changes limit current-candidate qualification. The
-recorded workspace check reaches Core test compile errors; subsequent repairs
-need fresh workspace validation.
-
-The combined candidate still needs fresh compiler and focused-test validation,
-a merge-free workspace check, genuine private-terminal/quotient-mask profile
-regeneration, current native/SDK consumers and executable-metadata freshness.
-Full bridge, Kotlin, Swift, workspace and four-validator checks on the combined
-candidate, physical-device evidence and signed release artifacts remain
-incomplete.
-
+fixes compile and both extended regressions pass. All 33 selected retained-harness
+proof controls pass, including MintFold, protocol labels and reciprocal claim-carrier
+binding; source changes limit current-candidate qualification. The
+non-test real-proof harness's P-256 and bounded SHA guards match its consumers;
+its frontend remains under validation. Unused terminal reference helpers now
+compile only for tests; strict privacy lint remains open. Repaired privacy
+acceptance passes all 136 selected controls, including
+malformed-input rejection and independently derived current/retired profile pins.
+Concurrent workspace manifest and lock changes limit source qualification; the
+full ordinary privacy suite remains open.
+Eight focused parameter tests pass with the scoped inline-policy annotation.
+Concurrent source changes limit current-candidate qualification. The latest
+workspace check reaches Core test compile errors owned by the separate repair
+chat. That chat completed the merge; current test and private-proof
+integration still needs compiler repair. SDK native-custody and assembly tools have explicit feature/target owners;
+FASTPQ is selected by the existing STARK feature. Current dependency costs and the
+native proving context remain under review. Workspace validation is pending.
+The combined candidate still needs
+fresh compiler and focused-test validation, a merge-free workspace check, genuine
+private-terminal/quotient-mask profile regeneration, current native/SDK consumers
+and executable-metadata freshness. Full workspace tests, physical-device
+qualification and same-candidate release validation remain incomplete.
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
@@ -168,18 +158,22 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** the recorded maximum X509 proof and fresh verifier pass
-  byte/RSS and cryptographic acceptance, but proving takes 2,368.35 seconds
-  against 300 seconds and observed virtual address space exceeds 32 GiB.
-  All 1,017 selected ordinary privacy controls, genuine pins and required-Metal
-  parity pass on that recorded source. The new private SHA/RFC bridge removes
-  112 further public values and needs native validation; 320 public intermediate
-  values and additional byte-source joins remain. Historical q77 maximum
-  ordinary/AXT proofs and fresh replay pass byte/RSS limits on their recorded
-  source. RAM-LFE secure encryption/full execution, IVM execution/finalized-State
-  binding, complete protocol/side-channel review, hardware/network evidence and
-  final signing remain open under the [ZK goals](specs/zk_first_release_goals.md).
-
+- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
+  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
+  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
+  bind P256/projection byte declarations to the shared trace. The selected-input
+  repair binds bytes to actual P256 values, but native comparison exposed a
+  missing selected-input multiplicity in the closed fixed-schedule compiler.
+  The post-pin privacy selection completes with 942 passes and 14 failures;
+  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
+  corrections require a new native run. The partial private-terminal repair
+  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
+  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
+  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
+  retained artifacts also pass fresh-process verification. RAM-LFE secure
+  encryption/full execution, IVM execution/finalized-State binding, protocol and
+  side-channel review, hardware/network evidence and final signing remain open
+  under the [ZK goals](specs/zk_first_release_goals.md).
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

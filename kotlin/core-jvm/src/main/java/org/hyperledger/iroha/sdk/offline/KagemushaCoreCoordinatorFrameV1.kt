@@ -8,6 +8,7 @@ import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAppAttestOriginalV1
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -264,7 +265,10 @@ object KagemushaCoreCoordinatorFrameV1 {
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
                 bounded(fields, 3, 8 * 1024)
-                KagemushaSelectionFrameV1.requireAppAttest(selection, number(fields, 4).toUInt())
+                KagemushaSelectionFrameV1.requireAppAttestSubject(selection)
+                require(KagemushaAppAttestOriginalV1.counter(field(fields, 3)) > number(fields, 4).toUInt()) {
+                    "App Attest counter did not advance beyond the retained floor"
+                }
                 digest(fields, 5); digest(fields, 6)
             }
         }
@@ -362,8 +366,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                         "App Attest acknowledgment substituted original bytes"
                     }
                 }
-                require(number(response, 4).toUInt() == number(request, 4).toUInt() + 1u) {
-                    "App Attest acknowledgment skipped the committed counter"
+                require(number(response, 4).toUInt() == KagemushaAppAttestOriginalV1.counter(field(request, 3))) {
+                    "App Attest acknowledgment substituted the original counter"
                 }
                 equal(response, 5, request, 5); equal(response, 6, request, 6)
             }

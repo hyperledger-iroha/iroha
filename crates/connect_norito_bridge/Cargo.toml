@@ -37,6 +37,7 @@ privacy-production-enabled = []
 cuda = ["ivm/cuda"]
 
 [dependencies]
+iroha = { workspace = true, features = ["kagemusha-ordinary-native"] }
 iroha_core_privacy = { workspace = true, features = ["zk-stark"] }
 iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }

@@ -252,7 +252,7 @@ impl GeneratedHandoffEvidenceV1 {
 
 /// Apply the production fail-closed verifier to every generated proof in the qualification run.
 ///
-/// This is the only acceptance path for the pending real 1,024-handoff generator. It prevents a
+/// This is the acceptance path for the real 1,024-handoff generator. It prevents a
 /// rotation-only loop, a relation-model loop, or unchecked proof-size samples from being reported
 /// as payment handoffs.
 fn verify_real_handoff_qualification_v1<V: KagemushaRecursiveVerifierV1>(
@@ -619,7 +619,8 @@ pub(super) fn aggregate_state_with_balance(
     balance: u128,
     logical_sequence: u128,
 ) -> KagemushaStateV1 {
-    let lane = lane();
+    let mut lane = lane();
+    lane.device_lane_id = credential.lane_id;
     let asset_incarnation = credential.asset_incarnation;
     let liability_pool_id =
         kagemusha_liability_pool_id_v1(&lane.network_id, &lane.asset, asset_incarnation)
@@ -2393,17 +2394,8 @@ fn bootstrap_guard_shape_preflight_needs_no_halo2_proof() {
 }
 
 #[test]
-#[ignore = "blocked until the real funded SendSplit and ReceiveFold generator is complete"]
+#[ignore = "expensive genuine 1024 alternating-device payment handoffs; run in the real-proof lane"]
 fn real_1024_payment_handoffs_must_pass_the_fail_closed_evidence_corridor() {
-    // TODO: Replace this explicit failure with the real positive-balance alternating-device
-    // generator once MintFold exposes its funded recursive state output to SendSplit. Keeping the
-    // gate fail-closed prevents a model loop or Rotate proof from satisfying this qualification.
-    let generated: Result<Vec<GeneratedHandoffEvidenceV1>, &str> = Err(
-        "real positive-value MintFold -> SendSplit -> PaymentV1 -> ReceiveFold generation is not yet wired",
-    );
-    let generated = generated.expect("real 1,024-handoff generator must be installed");
-    let verifier = super::RejectAllKagemushaRecursiveVerifierV1;
-    let artifacts = super::tests::artifacts();
-    let verified = verify_real_handoff_qualification_v1(&verifier, artifacts, &generated);
+    let verified = real_payment_corridor::state_milestone::run_real_handoff_sequence_v1(1_024);
     assert_eq!(verified.verified_handoffs, 1_024);
 }

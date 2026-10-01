@@ -3,6 +3,8 @@
 Set: 2026-09-25. Overall goal: **Active**. Complete and qualify the single
 first-release Sumeragi core, node integration and application consumers.
 Implementation completion and network/release qualification are separate gates.
+Regression and fault diagnostics do not authorize or block deployment; on-chain governance
+owns deployment policy for testnet and production (§13.5).
 Required working directory: `/Users/takemiyamakoto/dev/iroha`. Required branch:
 `optimizations`.
 

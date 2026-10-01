@@ -200,6 +200,7 @@ fn terminal_candidate_preflight_requires_exact_role_and_semantic_cells_in_both_f
 // but does not create an authenticated catalog, register a release, or call a native admission API.
 fn diagnostic_terminal_keys(
     funded: &RealFundedPrerequisite,
+    material: &MintRecipientMaterial,
     artifacts: KagemushaRecursionArtifactsV1,
     generated: KagemushaGeneratedTerminalAuthorizationArtifactsV1,
 ) -> (
@@ -218,7 +219,7 @@ fn diagnostic_terminal_keys(
         .write(&mut ep_parameters)
         .expect("original Ep parameters");
     assert_eq!(ep_parameters.as_slice(), generated.ep_parameters.as_ref());
-    let lifecycle = &funded.material.authorization_relation.statement.context;
+    let lifecycle = &material.authorization_relation.statement.context;
     macro_rules! load {
         ($curve:ty, $circuit:ty, $loaded:ident, $params:expr, $pk:expr, $vk:expr,
          $layout:expr, $digest:expr, $parity:expr) => {{
@@ -301,11 +302,16 @@ fn diagnostic_terminal_keys(
     (eq, ep)
 }
 
+/// Original generated terminal keys shared by proofs in one unchanged diagnostic release.
+pub(super) struct DiagnosticTerminalKeysV1 {
+    pub(super) eq: KagemushaLoadedEqTerminalAuthorizationArtifactsV1,
+    pub(super) ep: KagemushaLoadedEpTerminalAuthorizationArtifactsV1,
+}
+
 /// Retained genuine proof material for the next private diagnostic stage, never a Core capability.
 pub(super) struct ProvenSenderTerminalV1 {
     pub(super) public: KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
-    pub(super) eq_keys: KagemushaLoadedEqTerminalAuthorizationArtifactsV1,
-    pub(super) ep_keys: KagemushaLoadedEpTerminalAuthorizationArtifactsV1,
+    pub(super) keys: Rc<DiagnosticTerminalKeysV1>,
     pub(super) proof: KagemushaGeneratedTerminalAuthorizationProofV1,
     pub(super) committed: CommittedOutgoingCandidateV1,
 }
@@ -335,6 +341,9 @@ impl DiagnosticTerminalPreparationV1<'_> {
 
 pub(super) fn prove_outgoing_terminal(
     funded: &RealFundedPrerequisite,
+    material: &MintRecipientMaterial,
+    credential: &CredentialProof,
+    key_cache: &mut Option<Rc<DiagnosticTerminalKeysV1>>,
     state_keys: &StateKeys,
     guard_keys: &mut Option<GuardKeys>,
     verifier: &DiagnosticVerifier<'_>,
@@ -623,8 +632,8 @@ pub(super) fn prove_outgoing_terminal(
         journal_revision_after: openings.journal_revision_after,
         authorization_counter_before: openings.authorization_counter_before,
         authorization_counter_after: openings.authorization_counter_after,
-        hardware_profile: funded.material.hardware_profile.clone(),
-        hardware_credential: funded.material.hardware_credential.clone(),
+        hardware_profile: material.hardware_profile.clone(),
+        hardware_credential: material.hardware_credential.clone(),
         apple_selection: None,
     };
     // Setup placeholders are used solely for host validation and the no-cycle terminal binding;
@@ -715,8 +724,8 @@ pub(super) fn prove_outgoing_terminal(
         &funded.credential_keys,
         guard_keys,
         relation,
-        &funded.credential,
-        &funded.credential,
+        credential,
+        credential,
     );
     let guard_keys = guard_keys.as_ref().expect("same postcommit Guard keys");
     assert_eq!(
@@ -725,11 +734,7 @@ pub(super) fn prove_outgoing_terminal(
     );
     assert_eq!(
         guard_keys.provider_policy_root,
-        funded
-            .material
-            .platform_credential
-            .statement
-            .hardware_policy_id
+        material.platform_credential.statement.hardware_policy_id
     );
     let eq_guard_column = guard_public_instances::<Fp>(
         &terminal_guard.relation,
@@ -849,7 +854,7 @@ pub(super) fn prove_outgoing_terminal(
     let eq_guards = [eq_guard_column];
     let ep_guards = [ep_guard_column];
     let mut enabled = [[0; 32]; TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1];
-    enabled[0] = funded.material.hardware_profile.hardware_profile_id;
+    enabled[0] = material.hardware_profile.hardware_profile_id;
     let semantic_plan = plan_terminal_outgoing_sha_v1(TerminalSemanticPlanInputsV1 {
         public: &setup_public,
         private_transition: &private,
@@ -991,12 +996,52 @@ pub(super) fn prove_outgoing_terminal(
         },
     };
     eprintln!(
-        "KAGEMUSHA terminal diagnostic: actual transport candidate, terminal Guard44, complete SHA claim and all history folds verified; generating dedicated terminal keys"
+        "KAGEMUSHA terminal diagnostic: actual transport candidate, terminal Guard44, complete SHA claim and all history folds verified; proving with one retained dedicated terminal key pair"
     );
-    let generated = generate_kagemusha_terminal_authorization_artifacts_v1(witness.clone())
-        .expect("actual terminal key generation/profile capacity and key stability");
-    let (eq_keys, ep_keys) = diagnostic_terminal_keys(funded, artifacts, generated);
-    let proof = prove_kagemusha_terminal_authorization_v1(&eq_keys, &ep_keys, witness, &seed)
+    let keys = Rc::clone(key_cache.get_or_insert_with(|| {
+        let generated = generate_kagemusha_terminal_authorization_artifacts_v1(witness.clone())
+            .expect("actual terminal key generation/profile capacity and key stability");
+        let (eq, ep) = diagnostic_terminal_keys(funded, material, artifacts, generated);
+        Rc::new(DiagnosticTerminalKeysV1 { eq, ep })
+    }));
+    assert!(Rc::ptr_eq(&keys, key_cache.as_ref().unwrap()));
+    let eq_keys = &keys.eq;
+    let ep_keys = &keys.ep;
+    let lifecycle = &material.authorization_relation.statement.context;
+    macro_rules! require_original_key_owner {
+        ($keys:expr) => {{
+            assert_eq!($keys.release_id, artifacts.release_id);
+            assert_eq!($keys.profile_digest, artifacts.profile_digest);
+            assert_eq!(
+                $keys.artifact_manifest_digest,
+                artifacts.artifact_manifest_digest
+            );
+            assert_eq!($keys.suite_id, lifecycle.suite_id);
+            assert_eq!($keys.vk_digest, lifecycle.vk_digest);
+            assert_eq!($keys.enabled_hardware_profiles, enabled);
+            assert_eq!(
+                $keys.eq_claim_protocol_digest,
+                artifacts.mint_hash_claim_eq_protocol_digest
+            );
+            assert_eq!(
+                $keys.ep_claim_protocol_digest,
+                artifacts.mint_hash_claim_ep_protocol_digest
+            );
+            assert_eq!(
+                $keys.eq_shard_protocol_digest,
+                artifacts.mint_hash_shard_eq_protocol_digest
+            );
+            assert_eq!(
+                $keys.ep_shard_protocol_digest,
+                artifacts.mint_hash_shard_ep_protocol_digest
+            );
+        }};
+    }
+    require_original_key_owner!(eq_keys);
+    require_original_key_owner!(ep_keys);
+    // The native prover rebuilds this exact witness and checks its complete circuit profile
+    // against the retained loaded keys on every proof; a cache cannot change its geometry.
+    let proof = prove_kagemusha_terminal_authorization_v1(eq_keys, ep_keys, witness, &seed)
         .expect("actual paired TerminalAuthorization proof over retained Core candidate");
     assert_eq!(&proof.eq_history, eq_claim_merge.successor());
     assert_eq!(&proof.ep_history, ep_claim_merge.successor());
@@ -1088,8 +1133,7 @@ pub(super) fn prove_outgoing_terminal(
     );
     ProvenSenderTerminalV1 {
         public,
-        eq_keys,
-        ep_keys,
+        keys,
         proof,
         committed,
     }

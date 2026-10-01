@@ -543,6 +543,7 @@ pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
 /// These values are absorbed after auxiliary roots and before composition challenges. The final-row
 /// identities bind them to the committed DER accumulators; byte-memory and RFC 5280 adapters
 /// consume them in the same verifier-fixed role order.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -1646,7 +1647,7 @@ pub(crate) fn zk_x509_der_stark_terminals_v1(
         input_byte: read_aux_lanes_v1(last, AUX_INPUT_BYTE_AFTER),
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
     trace: &ZkX509DerStarkTraceV1,
 ) -> Result<ZkX509DerStarkTerminalClaimsV1, ZkX509DerStarkErrorV1> {
@@ -1671,6 +1672,7 @@ pub(crate) const fn zk_x509_der_terminal_columns_v1() -> [usize; 8] {
 }
 /// Bind ordered input-byte then node claims to the committed final auxiliary
 /// row. This helper is shared by native and aggregate opened-row evaluation.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1<A: PolynomialAirFieldV1>(
     last_aggregate: A,
     aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -4206,6 +4208,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAir
 }
 /// Complete standalone DER relation, retaining its own explicit public statement.
 /// MAIN uses the local relation and private joined endpoint quotients instead.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4247,7 +4250,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV
 }
 /// Allocate and evaluate the complete strict-DER constraint vector.
 ///
-/// Streaming composition builders should use [`evaluate_zk_x509_der_stark_residues_into_v1`] to
+/// Streaming composition builders should use [`evaluate_zk_x509_der_stark_local_residues_into_v1`] to
 /// reuse one bounded scratch vector across every common-domain row.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirFieldV1>(
@@ -4275,6 +4278,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirField
     Ok(residues)
 }
 /// Complete standalone DER constraints including its explicit public endpoints.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],

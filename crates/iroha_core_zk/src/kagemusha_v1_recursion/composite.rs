@@ -32,6 +32,13 @@ mod keymint_one_use_head_stage;
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
+#[path = "ordinary_state_prepared_binding.rs"]
+mod ordinary_state_prepared_binding;
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[path = "ordinary_state_subject_binding.rs"]
 mod ordinary_state_subject_binding;
 
@@ -854,13 +861,15 @@ pub(super) fn recursive_state_sha_messages_v1(
 ))]
 
 /// Closed construction dispatch. The shipping variant preserves the explicit refusal.
-/// The test variant only exercises the identical complete zero-Bootstrap relation; it
-/// cannot install a Native owner or enter a monetary operation.
+/// Test variants exercise the identical complete ordinary State body with exact originals.
+/// Their outputs cannot install a Native owner or enter a production monetary operation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecursiveStateConstructionV1 {
     Production,
     #[cfg(test)]
     OrdinaryZeroBootstrapQualification,
+    #[cfg(test)]
+    OrdinaryOutgoingQualification,
 }
 
 #[cfg(any(
@@ -891,6 +900,24 @@ impl RecursiveStateConstructionV1 {
                     "ordinary qualification requires the exact zero Bootstrap and original Guard"
                         .into(),
                 );
+            }
+        }
+        #[cfg(test)]
+        if self == Self::OrdinaryOutgoingQualification {
+            let s = &witness.state;
+            if !matches!(
+                s.operation,
+                KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+            ) || s.predecessor.is_none()
+                || s.amount == 0
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.prepared)
+                    .is_none()
+                || witness.hardware_selection.is_some()
+                || witness.mint_fold_opening.is_some()
+            {
+                return Err("ordinary outgoing qualification requires complete actual State/W2/Guard/prepared originals".into());
             }
         }
         let _ = witness;
@@ -1787,7 +1814,19 @@ where
         assigned_state.operation,
         state.prepared_intent,
     );
-    builder.assigned_instances[0].extend(prepared_intent_limbs);
+    builder.assigned_instances[0].extend_from_slice(&prepared_intent_limbs);
+    if let Some(original) = &ordinary_data {
+        ordinary_state_prepared_binding::constrain_ordinary_state_prepared_v1(
+            &mut builder,
+            &mut sha_jobs,
+            &assigned_state,
+            &state,
+            original,
+            &transition_digest,
+            &prepared_intent_limbs,
+            witness.ordinary_selection.and_then(|o| o.prepared),
+        )?;
+    }
     debug_assert_eq!(
         builder.assigned_instances[0].len(),
         state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT

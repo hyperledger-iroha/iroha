@@ -299,6 +299,7 @@ mod tests {
             }),
             counter_floor: None,
             integrity_lease: None,
+            publication_intent: None,
         }
     }
     fn current_lease(
@@ -322,6 +323,141 @@ mod tests {
                 .unwrap(),
         );
         lease
+    }
+    fn reopen_publication_intent_journal(
+        held: KagemushaOrdinaryLogicalApprovalJournalV1,
+        path: &Path,
+        now: u64,
+    ) -> Result<KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaStateErrorV1> {
+        let KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal,
+            enrollment,
+            release,
+            bootstrap,
+            ..
+        } = held;
+        drop(wal);
+        let expected = initial_record(&enrollment, &release, &bootstrap)?;
+        let mut reopened = KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal: PrivateJournal::open_existing(path, FORMAT).map_err(storage)?,
+            counter_floor: enrollment.possession().app_attest_counter(),
+            enrollment,
+            release,
+            bootstrap,
+            pending: None,
+            integrity_lease: None,
+            publication_intent: None,
+        };
+        // Reuse the production replay function with retained genuinely authenticated model
+        // originals. This constructs no financial/proof/publication/device authority.
+        reopened.replay_initial_originals(expected, &[], now)?;
+        reopened.recheck_at_trusted_time(now)?;
+        Ok(reopened)
+    }
+
+    #[test]
+    fn publication_intent_cold_capture_resumes_once_and_cold_intent_cannot_reissue_permit() {
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().canonicalize().unwrap().join("intent-resume");
+        let mut held = journal(&fixture, &path);
+        let prefix = held.wal.recovery_prefix().unwrap();
+        assert!(held.begin_initial_publication(17, 301).is_err());
+        assert_eq!(held.wal.recovery_prefix().unwrap(), prefix);
+        held.persist_bootstrap_capture_at_checked_native_time(302)
+            .unwrap();
+        let w = held
+            .captured_bootstrap_at_native_time(302)
+            .unwrap()
+            .original()
+            .to_vec();
+        assert!(!held.has_initial_publication_intent(17, 302).unwrap());
+        let mut held = reopen_publication_intent_journal(held, &path, 303).unwrap();
+        assert!(!held.has_initial_publication_intent(17, 303).unwrap());
+        let permit = held.begin_initial_publication(17, 303).unwrap();
+        let prefix = held.wal.recovery_prefix().unwrap();
+        let digest = held.initial_publication_intent_digest(304).unwrap();
+        assert!(held.has_initial_publication_intent(17, 304).unwrap());
+        assert!(held.has_initial_publication_intent(18, 304).is_err());
+        assert!(held.begin_initial_publication(17, 304).is_err());
+        assert_eq!(held.wal.recovery_prefix().unwrap(), prefix);
+        permit.consume_before_proving(&held, 304).unwrap();
+        let mut held = reopen_publication_intent_journal(held, &path, 305).unwrap();
+        assert!(held.has_initial_publication_intent(17, 305).unwrap());
+        assert!(held.begin_initial_publication(17, 305).is_err());
+        assert_eq!(held.initial_publication_intent_digest(305).unwrap(), digest);
+        assert_eq!(held.wal.recovery_prefix().unwrap(), prefix);
+        assert_eq!(
+            held.captured_bootstrap_at_native_time(305)
+                .unwrap()
+                .original(),
+            w
+        );
+    }
+
+    #[test]
+    fn publication_intent_replay_rejects_mixed_originals_and_future_or_duplicate_intent() {
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let temp = tempfile::tempdir().unwrap();
+        for changed_field in 0..9 {
+            let path = temp
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(format!("intent-{changed_field}"));
+            let mut held = journal(&fixture, &path);
+            held.persist_bootstrap_capture_at_checked_native_time(302)
+                .unwrap();
+            let mut original = held
+                .expected_initial_publication_intent(17, 303, 303)
+                .unwrap();
+            match changed_field {
+                0 => original.enrollment_id[0] ^= 1,
+                1 => original.release_id[0] ^= 1,
+                2 => original.certificate_digest[0] ^= 1,
+                3 => original.credential_digest[0] ^= 1,
+                4 => original.approval_digest[0] ^= 1,
+                5 => original.authorization_binding_digest[0] ^= 1,
+                6 => original.created_at_ms = 301,
+                7 => original.created_at_ms = 9999,
+                8 => original.bootstrap_ticket = 0,
+                _ => unreachable!(),
+            }
+            held.persist(&Record::InitialPublicationIntent { original })
+                .unwrap();
+            assert!(reopen_publication_intent_journal(held, &path, 304).is_err());
+        }
+        let path = temp.path().canonicalize().unwrap().join("intent-duplicate");
+        let mut held = journal(&fixture, &path);
+        held.persist_bootstrap_capture_at_checked_native_time(302)
+            .unwrap();
+        let permit = held.begin_initial_publication(17, 303).unwrap();
+        let original = held.publication_intent.clone().unwrap();
+        held.persist(&Record::InitialPublicationIntent { original })
+            .unwrap();
+        assert!(permit.consume_before_proving(&held, 304).is_err());
+        assert!(reopen_publication_intent_journal(held, &path, 304).is_err());
+    }
+
+    #[test]
+    fn publication_intent_partial_or_replaced_wal_never_selects_fresh_proving() {
+        use std::io::Write as _;
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().canonicalize().unwrap().join("intent-corrupt");
+        let mut held = journal(&fixture, &path);
+        held.persist_bootstrap_capture_at_checked_native_time(302)
+            .unwrap();
+        let permit = held.begin_initial_publication(17, 303).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path.join(FORMAT.filename))
+            .unwrap()
+            .write_all(&[1])
+            .unwrap();
+        assert!(permit.consume_before_proving(&held, 304).is_err());
+        assert!(held.has_initial_publication_intent(17, 304).is_err());
+        assert!(reopen_publication_intent_journal(held, &path, 304).is_err());
     }
     fn refresh(
         fixture: &KagemushaOrdinaryRetailEnrollmentFixtureV1,

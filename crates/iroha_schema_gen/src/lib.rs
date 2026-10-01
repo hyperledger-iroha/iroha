@@ -654,6 +654,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "challenge",
+                "observed_at_unix_ms",
                 "network_id",
                 "node_id",
                 "node_fingerprint",

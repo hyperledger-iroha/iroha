@@ -33,26 +33,13 @@ public enum IrohaKagemushaTransportKind: String, CaseIterable, Identifiable, Sen
     }
 }
 
-/// App-provided availability snapshot; this type does not infer entitlements.
+/// KAGEMUSHA first release always offers every peer transport.
+/// Entitlement, radio, permission and hardware errors are reported by the transport itself.
 public struct IrohaKagemushaCapabilities: Equatable, Sendable {
-    public let qr: Bool
-    public let nfc: Bool
-    public let nearby: Bool
-
-    public init(qr: Bool = true, nfc: Bool, nearby: Bool) {
-        self.qr = qr
-        self.nfc = nfc
-        self.nearby = nearby
-    }
+    public init() {}
 
     public var availableTransports: [IrohaKagemushaTransportKind] {
-        IrohaKagemushaTransportKind.allCases.filter {
-            switch $0 {
-            case .qr: return qr
-            case .nfc: return nfc
-            case .nearby: return nearby
-            }
-        }
+        IrohaKagemushaTransportKind.allCases
     }
 }
 

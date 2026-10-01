@@ -59,7 +59,6 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
-#[cfg(feature = "app_api")]
 mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
@@ -67,16 +66,14 @@ mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
-#[cfg(feature = "app_api")]
 mod kagemusha_commands;
-#[cfg(feature = "app_api")]
 mod kagemusha_state;
 mod ledger_state_finality;
-#[cfg(feature = "app_api")]
 mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod ordinary_wallet_current;
 #[cfg(feature = "app_api")]
 mod parliament_tle_release;
 pub mod privacy_issuance_api;
@@ -277,7 +274,6 @@ use iroha_data_model::events::{
 };
 #[cfg(feature = "app_api")]
 use iroha_data_model::proof::ProofRecord;
-#[cfg(feature = "app_api")]
 use iroha_data_model::{
     account::{
         AccountId,
@@ -323,7 +319,6 @@ use iroha_futures::supervisor::ShutdownSignal;
 use iroha_model_base::chain::ChainId;
 #[cfg(feature = "app_api")]
 use iroha_model_base::domain::DomainId;
-#[cfg(feature = "app_api")]
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -2315,7 +2310,6 @@ struct AppState {
     kura: Arc<Kura>,
     chain_id: Arc<ChainId>,
     signed_query_admission: Arc<routing::SignedQueryAdmission>,
-    #[cfg(feature = "app_api")]
     transaction_max_content_len: usize,
     /// Maximum body retained by any Torii proxy response snapshot.
     ///
@@ -2377,7 +2371,6 @@ struct AppState {
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
-    #[cfg(feature = "app_api")]
     /// Byte-weighted working-set capacity for proof-bearing KAGEMUSHA commands.
     kagemusha_command_memory_inflight: ByteWeightedMemoryPool,
     soracloud_public_rate_limiter: limits::RateLimiter,
@@ -2427,6 +2420,7 @@ struct AppState {
     tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
     telemetry: routing::MaybeTelemetry,
     soracloud_public_inflight: Arc<tokio::sync::Semaphore>,
+    #[cfg(feature = "app_api")]
     sns_name_cache: Arc<sns::SnsNameRecordCache>,
     ivm_tooling_inflight: Arc<tokio::sync::Semaphore>,
     ivm_tooling_timeout: Duration,
@@ -2450,7 +2444,6 @@ struct AppState {
     sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     #[cfg(feature = "connect")]
     connect_bus: connect::Bus,
@@ -2538,8 +2531,7 @@ struct AppState {
     sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    #[cfg(feature = "app_api")]
-    kagemusha_commands: Option<Arc<kagemusha_commands::KagemushaCommandRuntime>>,
+    kagemusha_commands: Arc<kagemusha_commands::KagemushaCommandRuntime>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -4460,13 +4452,11 @@ async fn enforce_required_api_token_private_no_store(
 const fn canonical_base64_max_len(decoded_len: usize) -> usize {
     4 * decoded_len.div_ceil(3)
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundedContentLengthError {
     TooLarge,
     Invalid,
 }
-#[cfg(feature = "app_api")]
 fn validate_bounded_content_length(
     headers: &axum::http::HeaderMap,
     max_body_bytes: usize,
@@ -7100,7 +7090,6 @@ async fn collect_proof_body_with_deadline(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 async fn collect_kagemusha_command_body_with_deadline(
     request: axum::http::Request<Body>,
     max_bytes: usize,
@@ -10178,20 +10167,13 @@ async fn handler_repo_agreements_query(
     )
     .await
 }
-#[cfg(feature = "app_api")]
 const fn kagemusha_top_up_body_limit(transaction_max_content_len: usize) -> usize {
     transaction_max_content_len
 }
-#[cfg(feature = "app_api")]
-const fn kagemusha_command_ingress_capacity_is_valid(
-    commands_enabled: bool,
-    transaction_max_content_len: usize,
-) -> bool {
-    !commands_enabled
-        || transaction_max_content_len
-            >= iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
+const fn kagemusha_command_ingress_capacity_is_valid(transaction_max_content_len: usize) -> bool {
+    transaction_max_content_len
+        >= iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
 }
-#[cfg(feature = "app_api")]
 const fn kagemusha_redeem_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
         < iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
@@ -10201,13 +10183,11 @@ const fn kagemusha_redeem_body_limit(transaction_max_content_len: usize) -> usiz
         iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
     }
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KagemushaCommandBodyPolicy {
     route_hint: &'static str,
     max_body_bytes: usize,
 }
-#[cfg(feature = "app_api")]
 impl KagemushaCommandBodyPolicy {
     fn top_up(transaction_max_content_len: usize) -> Self {
         Self {
@@ -10242,7 +10222,6 @@ impl KagemushaCommandBodyPolicy {
             .and_then(|bytes| usize::try_from(bytes).ok())
     }
 }
-#[cfg(feature = "app_api")]
 fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Option<usize> {
     Some(
         KagemushaCommandBodyPolicy::top_up(transaction_max_content_len)
@@ -10253,7 +10232,6 @@ fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Op
             ),
     )
 }
-#[cfg(feature = "app_api")]
 fn encode_kagemusha_readiness_representation(
     payload: &iroha_torii_shared::kagemusha_api::KagemushaReadinessV1,
     format: crate::utils::ResponseFormat,
@@ -10273,12 +10251,10 @@ fn encode_kagemusha_readiness_representation(
             }),
     }
 }
-#[cfg(feature = "app_api")]
 fn strong_etag_for_representation(bytes: &[u8]) -> String {
     use sha2::Digest as _;
     format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
 }
-#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_kagemusha_readiness(
     State(app): State<SharedAppState>,
@@ -10340,7 +10316,6 @@ async fn handler_kagemusha_readiness(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_kagemusha_redeem(
     State(app): State<SharedAppState>,
@@ -10352,7 +10327,6 @@ async fn handler_kagemusha_redeem(
 ) -> Result<AxResponse, Error> {
     kagemusha_commands::handle_redeem(app, headers, accept, request).await
 }
-#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_kagemusha_top_up(
     State(app): State<SharedAppState>,
@@ -10362,7 +10336,6 @@ async fn handler_kagemusha_top_up(
 ) -> Result<AxResponse, Error> {
     kagemusha_commands::handle_top_up(app, headers, accept, body).await
 }
-#[cfg(feature = "app_api")]
 async fn enforce_kagemusha_command_prebody_admission(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -10443,14 +10416,6 @@ async fn enforce_kagemusha_command_prebody_admission(
         )
             .into_response());
     }
-    if app.kagemusha_commands.is_none() {
-        return Ok(Error::AppServiceUnavailable {
-            code: "kagemusha_service_unavailable",
-            message: "KAGEMUSHA operation admission is not configured on this Torii node."
-                .to_owned(),
-        }
-        .into_response());
-    }
     let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -10515,17 +10480,14 @@ async fn enforce_kagemusha_command_prebody_admission(
     drop(lease);
     Ok(response)
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct KagemushaCommandBodyAdmissionLease {
     _permits: Arc<KagemushaCommandBodyAdmissionPermits>,
 }
-#[cfg(feature = "app_api")]
 struct KagemushaCommandBodyAdmissionPermits {
     _body: tokio::sync::OwnedSemaphorePermit,
     _memory: tokio::sync::OwnedSemaphorePermit,
 }
-#[cfg(feature = "app_api")]
 impl KagemushaCommandBodyAdmissionLease {
     fn new(
         body: tokio::sync::OwnedSemaphorePermit,
@@ -10539,7 +10501,6 @@ impl KagemushaCommandBodyAdmissionLease {
         }
     }
 }
-#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_kagemusha_operation_status(
     State(app): State<SharedAppState>,
@@ -13607,7 +13568,6 @@ async fn handler_peers(
     };
     Ok(routing::handle_peers(&app.online_peers, format))
 }
-#[cfg(feature = "app_api")]
 fn universal_kagemusha_readiness_v1() -> iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
     iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
         kagemusha_handoff_capability: iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
@@ -15378,7 +15338,6 @@ fn authoritative_lane_peer_statuses_with_manifest_urls(
         })
         .collect()
 }
-#[cfg(any(feature = "app_api", feature = "connect"))]
 fn lane_authority_route(
     routing_decision: RoutingDecision,
 ) -> iroha_core::state::LaneAuthorityRoute {
@@ -15778,7 +15737,6 @@ fn torii_proxy_candidate_peer_ids(
         unavailable_reason,
     }
 }
-#[cfg(any(feature = "app_api", feature = "connect"))]
 fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerId]) -> bool {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return false;
@@ -15787,7 +15745,6 @@ fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerI
         .iter()
         .any(|peer_id| peer_id == local_peer_id)
 }
-#[cfg(any(feature = "app_api", feature = "connect"))]
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let Ok(committee) = app
         .state
@@ -15797,7 +15754,6 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
     };
     is_local_authoritative_for_peers(app, committee.validators())
 }
-#[cfg(any(feature = "app_api", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
     is_local_authoritative_for_route(app, routing_decision)
 }
@@ -15945,13 +15901,11 @@ fn torii_route_for_public_lane_id(
     }
     torii_route_for_lane_id(app, lane_id)
 }
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
 enum ToriiAccountReadVisibility {
     Signed(AccountId),
     None,
 }
-#[cfg(feature = "app_api")]
 impl ToriiAccountReadVisibility {
     fn caller(&self) -> Option<&AccountId> {
         match self {
@@ -15984,7 +15938,6 @@ impl ToriiAccountReadVisibility {
 /// The visible set is deliberately recomputed from current state instead of
 /// being frozen at connection time, so permission revocation takes effect for
 /// the next emitted item.
-#[cfg(feature = "app_api")]
 #[derive(Clone)]
 pub(crate) struct ToriiDataspaceReadContext {
     app: SharedAppState,
@@ -15996,13 +15949,11 @@ pub(crate) struct ToriiDataspaceReadContext {
 
 /// Event plus the complete authorization scope resolved before any
 /// subscriber-controlled filtering or projection.
-#[cfg(feature = "app_api")]
 struct ScopedEvent {
     event: EventBox,
     scope: ScopedEventScope,
 }
 
-#[cfg(feature = "app_api")]
 enum ScopedEventScope {
     /// Block lifecycle notices are public and carry no transaction body.
     Public,
@@ -16013,7 +15964,6 @@ enum ScopedEventScope {
     GlobalReaderOnly,
 }
 
-#[cfg(feature = "app_api")]
 impl ScopedEvent {
     fn into_visible(self, visibility: &routing::DataspaceReadVisibility) -> Option<EventBox> {
         let visible = match &self.scope {
@@ -16027,7 +15977,6 @@ impl ScopedEvent {
     }
 }
 
-#[cfg(feature = "app_api")]
 impl ToriiDataspaceReadContext {
     fn caller(&self) -> Option<&AccountId> {
         self.caller.as_ref()
@@ -16307,7 +16256,6 @@ fn torii_visible_account_read_routes(
         .collect()
 }
 
-#[cfg(feature = "app_api")]
 fn torii_dataspace_read_visibility(
     app: &AppState,
     caller: Option<&AccountId>,
@@ -24774,7 +24722,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         proxy_memory,
     )))
 }
-#[cfg(not(feature = "connect"))]
+#[cfg(all(feature = "app_api", not(feature = "connect")))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     _app: &SharedAppState,
     _target: &ResolvedHostedHttpTarget,
@@ -33340,7 +33288,6 @@ async fn handler_fee_sponsor_program_by_id(
     };
     alias_json_response(StatusCode::OK, program)
 }
-#[cfg(feature = "app_api")]
 fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
     matches!(
         code,
@@ -33354,7 +33301,6 @@ fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
             | FeeRejectionCode::RelayCapacityUnavailable
     )
 }
-#[cfg(feature = "app_api")]
 fn fee_quote_remediation(code: FeeRejectionCode) -> &'static str {
     match code {
         FeeRejectionCode::InvalidFeeIntent => {
@@ -33476,7 +33422,6 @@ fn fee_quote_routing_decision(
 ) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
     fee_quote_routing_decision_from_parts(app.queue.as_ref(), app.state.as_ref(), payload)
 }
-#[cfg(feature = "app_api")]
 fn fee_quote_routing_decision_from_parts(
     queue: &Queue,
     state: &CoreState,
@@ -33487,7 +33432,6 @@ fn fee_quote_routing_decision_from_parts(
         _ => Err(FeeRejectionCode::InvalidProgramConfiguration),
     }
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment(
     app: &AppState,
     payload: &TransactionPayload,
@@ -33499,7 +33443,6 @@ pub(crate) fn quote_internal_fee_payment(
         payload,
     )
 }
-#[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment_from_parts(
     network_id: &NetworkId,
     queue: &Queue,
@@ -34808,6 +34751,7 @@ enum AuthenticatedOnboardingScope {
     Domain(DomainId),
     Dataspace(Name),
 }
+#[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
 struct AuthenticatedOnboardingDomain(AuthenticatedOnboardingScope);
 #[cfg(feature = "app_api")]
@@ -35945,7 +35889,6 @@ pub struct Torii {
     sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     // Query and transaction admission (operator-local)
     query_max_inflight: usize,
@@ -36091,8 +36034,7 @@ pub struct Torii {
     sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    #[cfg(feature = "app_api")]
-    kagemusha_commands: Option<Arc<kagemusha_commands::KagemushaCommandRuntime>>,
+    kagemusha_commands: Arc<kagemusha_commands::KagemushaCommandRuntime>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -38799,10 +38741,8 @@ impl Torii {
     fn add_connect_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-    /// App-facing typed and protocol-native endpoints.
-    #[cfg(feature = "app_api")]
-    fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
-        let app_state = builder.state().clone();
+    /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
+    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
         let transaction_max_content_len = self.transaction_max_content_len;
         let kagemusha_top_up_body_limit_bytes =
             kagemusha_top_up_body_limit(transaction_max_content_len);
@@ -38817,7 +38757,14 @@ impl Torii {
             AUTHORITY_STATE => public_get(kagemusha_state::handler);
             RESOURCE_NAMES_STATE => canonical_signature_get(kagemusha_state::handle_resource_names);
             AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
+            ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
         );
+    }
+    /// App-facing typed and protocol-native endpoints.
+    #[cfg(feature = "app_api")]
+    fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
+        let app_state = builder.state().clone();
+        let transaction_max_content_len = self.transaction_max_content_len;
         mount_catalog_route_rows!(
             builder, application_api;
             APP_API_BINDINGS_GET => public_get(app_api::handle_get_app_api_bindings);
@@ -39714,22 +39661,17 @@ impl Torii {
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
             config.account_onboarding = None;
             config.faucet = None;
-            config.kagemusha_v1_commands = None;
             config.ram_lfe = None;
             config.tx_history = None;
             config.peer_telemetry_urls.clear();
             config.connect.enabled = false;
             config.mcp.enabled = false;
         }
-        #[cfg(feature = "app_api")]
-        if !kagemusha_command_ingress_capacity_is_valid(
-            config.kagemusha_v1_commands.is_some(),
-            transaction_max_content_len,
-        ) {
+        if !kagemusha_command_ingress_capacity_is_valid(transaction_max_content_len) {
             return Err(ToriiBuildError::invalid_configuration(
                 "max_content_len",
                 format!(
-                    "enabled KAGEMUSHA V1 commands require at least {} bytes of signed-transaction ingress capacity",
+                    "KAGEMUSHA V1 commands require at least {} bytes of signed-transaction ingress capacity",
                     iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
                 ),
             ));
@@ -41043,12 +40985,12 @@ impl Torii {
             )
         })
         .transpose()?;
-        #[cfg(feature = "app_api")]
         let kagemusha_commands = config
             .kagemusha_v1_commands
             .clone()
             .map(kagemusha_commands::KagemushaCommandRuntime::from_config)
-            .map(Arc::new);
+            .unwrap_or_default();
+        let kagemusha_commands = Arc::new(kagemusha_commands);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config
             .ram_lfe
@@ -41189,7 +41131,6 @@ impl Torii {
             ws_message_timeout: config.ws_message_timeout,
             #[cfg(any(feature = "app_api", feature = "connect"))]
             p2p: None,
-            #[cfg(any(feature = "app_api", feature = "connect"))]
             local_peer_id: None,
             query_max_inflight: config.query_max_inflight.get(),
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
@@ -41335,7 +41276,6 @@ impl Torii {
             sorafs_appeal_finance_policy,
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
-            #[cfg(feature = "app_api")]
             kagemusha_commands,
             #[cfg(feature = "app_api")]
             account_onboarding,
@@ -41458,14 +41398,8 @@ impl Torii {
         self
     }
     /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
-    #[cfg(any(feature = "app_api", feature = "connect"))]
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
-        self
-    }
-    /// No-op when P2P support is disabled.
-    #[cfg(not(any(feature = "app_api", feature = "connect")))]
-    pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
     fn validate_startup_configuration(&self) -> core::result::Result<(), ToriiBuildError> {
@@ -41555,7 +41489,6 @@ impl Torii {
                     "query memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-        #[cfg(feature = "app_api")]
         {
             let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
                 kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
@@ -42006,7 +41939,6 @@ impl Torii {
                     "query memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-        #[cfg(feature = "app_api")]
         let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
             kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
                 || {
@@ -42023,7 +41955,6 @@ impl Torii {
                 "KAGEMUSHA command memory pool does not fit weighted semaphore geometry",
             )
         })?;
-        #[cfg(feature = "app_api")]
         if !kagemusha_command_memory_inflight.can_reserve_parts(
             KagemushaCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
                 .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
@@ -42127,7 +42058,6 @@ impl Torii {
             kura: self.kura.clone(),
             chain_id: self.chain_id.clone(),
             signed_query_admission: self.signed_query_admission.clone(),
-            #[cfg(feature = "app_api")]
             transaction_max_content_len: self.transaction_max_content_len,
             torii_proxy_max_response_bytes,
             query_fanout_working_set_bytes,
@@ -42170,7 +42100,6 @@ impl Torii {
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             proof_body_inflight,
-            #[cfg(feature = "app_api")]
             kagemusha_command_memory_inflight,
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
             soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
@@ -42223,6 +42152,7 @@ impl Torii {
             tx_history_access_policy: self.tx_history_access_policy.clone(),
             telemetry: self.telemetry.clone(),
             soracloud_public_inflight,
+            #[cfg(feature = "app_api")]
             sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
             ivm_tooling_inflight,
             ivm_tooling_timeout: self.ivm_tooling_timeout,
@@ -42246,7 +42176,6 @@ impl Torii {
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "connect"))]
             p2p: self.p2p.clone(),
-            #[cfg(any(feature = "app_api", feature = "connect"))]
             local_peer_id: self.local_peer_id.clone(),
             #[cfg(feature = "connect")]
             connect_bus: self.connect_bus.clone(),
@@ -42343,7 +42272,6 @@ impl Torii {
             sorafs_appeal_finance_policy: self.sorafs_appeal_finance_policy.clone(),
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
-            #[cfg(feature = "app_api")]
             kagemusha_commands: self.kagemusha_commands.clone(),
             #[cfg(feature = "app_api")]
             account_onboarding: self.account_onboarding.clone(),
@@ -42487,6 +42415,7 @@ impl Torii {
         // Iroha Connect (feature-gated)
         #[cfg(feature = "connect")]
         self.add_connect_routes(&mut builder);
+        self.add_kagemusha_routes(&mut builder);
         // App-facing JSON API
         #[cfg(feature = "app_api")]
         self.add_app_api_routes(&mut builder);
@@ -42502,15 +42431,13 @@ impl Torii {
         let mut router = router
             .fallback(handler_route_not_found_or_sorafs_site)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
+        // Mandatory KAGEMUSHA body admission remains inside listener authentication.
+        router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            enforce_kagemusha_command_prebody_admission,
+        ));
         #[cfg(feature = "app_api")]
         {
-            // KAGEMUSHA command admission inspects request bodies inside the
-            // listener-wide credential gates. SoraCloud commands use sealed
-            // route-local authentication installed during catalog mounting.
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_kagemusha_command_prebody_admission,
-            ));
             // App admission stays inside authentication but outside body extractors.
             router = router.layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),

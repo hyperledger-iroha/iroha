@@ -1,4 +1,4 @@
-//! Actual paired ordinary Guard verification under a genuine Native bootstrap selection.
+//! Actual paired ordinary Guard verification under genuine Native selections.
 //!
 //! Signature admission remains in the descriptor-held logical journal. This boundary derives
 //! every public column from that journal and the actual financial preview, verifies both real IPA
@@ -29,6 +29,20 @@ use iroha_data_model::kagemusha::KagemushaReleasePurposeV1;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use snark_verifier::verifier::plonk::PlonkProtocol;
+
+#[path = "ordinary_cash_guard_verifier.rs"]
+mod cash_guard;
+pub(super) use cash_guard::preparation_digests;
+pub(crate) use cash_guard::{
+    KagemushaAuthenticatedOrdinaryPreparationGuardV1, verify_ordinary_preparation_guard_v1,
+};
+
+#[path = "ordinary_cash_terminal_guard_verifier.rs"]
+mod terminal_guard;
+pub(super) use terminal_guard::terminal_digests;
+pub(crate) use terminal_guard::{
+    KagemushaAuthenticatedOrdinaryTerminalGuardV1, verify_ordinary_terminal_guard_v1,
+};
 
 type History = [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
 type Result<T> = core::result::Result<T, KagemushaStateErrorV1>;

@@ -28430,6 +28430,10 @@
         "type": "Array<u8, 32>"
       },
       {
+        "name": "observed_at_unix_ms",
+        "type": "u64"
+      },
+      {
         "name": "network_id",
         "type": "HashOf<BlockHeader>"
       },

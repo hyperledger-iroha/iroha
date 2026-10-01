@@ -2,6 +2,9 @@
 //!
 //! Callers can use real time, capture one immutable instant for deterministic
 //! work, or substitute a manually controlled clock via [`MockTimeHandle`].
+mod continuous;
+pub use continuous::NativeContinuousReading;
+
 use parking_lot::Mutex;
 use std::{
     sync::Arc,

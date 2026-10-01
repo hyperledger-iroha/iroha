@@ -91,18 +91,18 @@ public protocol KagemushaNativeAuthenticatedDeviceTransportV1: AnyObject {
 }
 
 /// The dynamically discovered native lifecycle bridge already satisfies the authenticated
-/// transport contract. An unavailable or partial bridge remains online-only.
+/// transport contract. An unavailable or partial bridge reports an authenticated hardware error.
 extension KagemushaDeviceLifecycleBridgeV1: KagemushaNativeAuthenticatedDeviceTransportV1 {
   public func hardwarePolicyID() throws -> Data {
     guard let acceptedCapabilities else {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
     return acceptedCapabilities.hardwarePolicyID
   }
 
   public func qualificationReportDigest() throws -> Data {
     guard let acceptedCapabilities else {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
     return acceptedCapabilities.qualificationReportDigest
   }
@@ -861,7 +861,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
 {
   private let client: KagemushaAuthenticatedDeviceClientV1
   private let lock = NSRecursiveLock()
-  private let incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)?
+  private let incomingFoldEvidenceProvider: any KagemushaIncomingFoldEvidenceProviderV1
   private var pendingIncomingFold: PendingIncomingFold?
 
   private struct PendingIncomingFold {
@@ -871,7 +871,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
   }
 
   public init(client: KagemushaAuthenticatedDeviceClientV1,
-    incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)? = nil) {
+    incomingFoldEvidenceProvider: any KagemushaIncomingFoldEvidenceProviderV1) {
     self.client = client
     self.incomingFoldEvidenceProvider = incomingFoldEvidenceProvider
   }
@@ -880,7 +880,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     transport: any KagemushaNativeAuthenticatedDeviceTransportV1,
     core: any KagemushaNativeCoreCoordinatorV1,
     intentOwner: KagemushaOperationIntentOwnerV1,
-    incomingFoldEvidenceProvider: (any KagemushaIncomingFoldEvidenceProviderV1)? = nil
+    incomingFoldEvidenceProvider: any KagemushaIncomingFoldEvidenceProviderV1
   ) {
     self.init(client: KagemushaAuthenticatedDeviceClientV1(transport: transport, core: core,
       intentOwner: intentOwner), incomingFoldEvidenceProvider: incomingFoldEvidenceProvider)
@@ -1202,8 +1202,8 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     selector: KagemushaPendingCreditSelectorV1
   ) throws -> KagemushaHardwareReceiveFoldV1 {
     try locked {
-      guard let evidenceProvider = incomingFoldEvidenceProvider,
-        let core = client.core as? any KagemushaNativeIncomingCoreCoordinatorV1
+      let evidenceProvider = incomingFoldEvidenceProvider
+      guard let core = client.core as? any KagemushaNativeIncomingCoreCoordinatorV1
       else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
       _ = try authenticatedProviderDigest(selector.creditID, "creditID")
       if let pending = pendingIncomingFold {

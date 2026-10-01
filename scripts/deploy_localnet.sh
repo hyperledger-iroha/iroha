@@ -48,7 +48,6 @@ Options:
   --asset-id <ID>            Built-in KAGEMUSHA V1 asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
   --asset-name <NAME>        Built-in KAGEMUSHA V1 asset name to verify (default: usd)
   --asset-alias <ALIAS>      Built-in KAGEMUSHA V1 alias to verify (default: usd#wonderland.universal)
-  --skip-asset-check         Skip built-in KAGEMUSHA V1 asset verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -95,7 +94,6 @@ SAMPLE_ASSET=true
 ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 ASSET_NAME="usd"
 ASSET_ALIAS="usd#wonderland.universal"
-SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
@@ -228,10 +226,6 @@ while [[ $# -gt 0 ]]; do
     --asset-alias)
       ASSET_ALIAS="$2"
       shift 2
-      ;;
-    --skip-asset-check|--skip-asset-register)
-      SKIP_ASSET_CHECK=true
-      shift
       ;;
     --telemetry-profile)
       TELEMETRY_PROFILE="$2"
@@ -919,21 +913,20 @@ curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
 echo "Consensus readiness was established through bounded public /status; inspect the frozen mode with an operator-signed Sumeragi status request when needed."
 
 CFG="$OUT_DIR/client.toml"
-if [[ "$SKIP_ASSET_CHECK" != true ]]; then
-  echo ""
-  echo "Verifying built-in KAGEMUSHA V1 alias $ASSET_ALIAS..."
-  asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
-  asset_alias_response="$(
-    curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-      -H "Content-Type: application/json" \
-      -d "$asset_alias_request" \
-      "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
-  )" || {
-    echo "Failed to resolve built-in KAGEMUSHA V1 alias $ASSET_ALIAS." >&2
-    exit 1
-  }
-  ASSET_ALIAS_RESPONSE="$asset_alias_response" \
-  "$PYTHON_BIN" - "$ASSET_ID" "$ASSET_NAME" "$ASSET_ALIAS" <<'PY'
+echo ""
+echo "Verifying built-in KAGEMUSHA V1 alias $ASSET_ALIAS..."
+asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
+asset_alias_response="$(
+  curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+    -H "Content-Type: application/json" \
+    -d "$asset_alias_request" \
+    "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
+)" || {
+  echo "Failed to resolve built-in KAGEMUSHA V1 alias $ASSET_ALIAS." >&2
+  exit 1
+}
+ASSET_ALIAS_RESPONSE="$asset_alias_response" \
+"$PYTHON_BIN" - "$ASSET_ID" "$ASSET_NAME" "$ASSET_ALIAS" <<'PY'
 import json
 import os
 import sys
@@ -950,7 +943,6 @@ if actual_name != expected_name:
 if actual_alias != expected_alias:
     raise SystemExit(f"expected alias {expected_alias}, got {actual_alias}")
 PY
-fi
 
 echo ""
 echo "Iroha localnet is running in $OUT_DIR."

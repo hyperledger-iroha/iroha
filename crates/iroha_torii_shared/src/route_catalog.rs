@@ -1180,8 +1180,8 @@ fn validate_feature_name(
 /// Universal KAGEMUSHA protocol route descriptors.
 pub mod kagemusha {
     use super::{
-        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        RouteDescriptor, RouteEffect, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
     };
     /// Fetch the node's universal KAGEMUSHA readiness contract.
     pub const READINESS_PATH: &str = "/v1/kagemusha/readiness";
@@ -1203,7 +1203,6 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for KAGEMUSHA top-up submission.
@@ -1217,7 +1216,6 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for KAGEMUSHA redemption submission.
@@ -1231,7 +1229,6 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for reading one KAGEMUSHA operation.
@@ -1244,7 +1241,6 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Data-only complete World publication; clients independently select finality authority.
@@ -1257,8 +1253,7 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Complete name originals; the handler additionally requires the native genesis-issued read root.
     pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
@@ -1271,8 +1266,7 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Scoped account/fee originals for an existing native full-ledger read holder.
     pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
@@ -1285,10 +1279,23 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Canonical first-release KAGEMUSHA API catalog.
+    /// Exact current S/W originals under account authentication; no broad ledger-read grant.
+    pub const ORDINARY_WALLET_CURRENT: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.ordinary_wallet_current",
+        HttpMethod::Post,
+        "/v1/kagemusha/ordinary/current-wallet",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Complete first-release KAGEMUSHA route descriptor inventory.
     pub const ROUTES: &[RouteDescriptor] = &[
         READINESS,
         TOP_UP,
@@ -1297,6 +1304,7 @@ pub mod kagemusha {
         AUTHORITY_STATE,
         RESOURCE_NAMES_STATE,
         AUTHORITY_ORIGINALS,
+        ORDINARY_WALLET_CURRENT,
     ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.

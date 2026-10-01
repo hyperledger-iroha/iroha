@@ -573,6 +573,29 @@ pub struct KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a> {
         Option<&'a iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseV1>,
     /// Independent prior Apple assertion counter, never a financial logical index.
     pub previous_app_attest_counter: Option<u32>,
+    /// Exact ordinary outgoing original and both complete sealed streams, absent otherwise.
+    /// These data alone authorize no Native preparation, cash operation or proof publication.
+    pub prepared: Option<KagemushaOrdinaryRecursivePreparedOpeningV1<'a>>,
+}
+
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    )
+))]
+/// Exact mathematical preparation original borrowed from the separately held Native cash owner.
+/// All State/W2/Guard/stream joins and complete SHA proof realization remain mandatory.
+#[derive(Clone, Copy)]
+pub struct KagemushaOrdinaryRecursivePreparedOpeningV1<'a> {
+    /// Sole shared-model prepared record selected after purpose2 admission.
+    pub record: &'a iroha_data_model::kagemusha::KagemushaOrdinaryPreparedOutgoingV1,
+    /// Every byte of the original bounded sealed transition stream.
+    pub sealed_transition_inputs: &'a [u8],
+    /// Every byte of the original bounded sealed recovery stream.
+    pub sealed_recovery_seeds: &'a [u8],
 }
 
 #[cfg(any(

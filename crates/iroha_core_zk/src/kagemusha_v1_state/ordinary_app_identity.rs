@@ -28,6 +28,10 @@ pub use preparation_reservation::{
     KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
 };
 
+#[path = "ordinary_app_identity/issuer_preparation.rs"]
+mod issuer_preparation;
+pub use issuer_preparation::KagemushaOrdinaryIssuerPreparationAttemptV1;
+
 /// Confidential closed ordinary identity failures; private inputs are never formatted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaOrdinaryIdentityErrorV1 {

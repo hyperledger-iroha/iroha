@@ -47,11 +47,14 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
 
 /** Private same-coordinator FI completion; detached originals alone cannot recreate it. */
 internal class KagemushaNativeCompletedRetailBindingV1 internal constructor(credential: ByteArray, certificate: ByteArray,
+    enrollment: ByteArray,
     private val requireOriginal: () -> Unit) {
     private val digest = credential.copyOf()
     private val originalCertificate = certificate.copyOf()
+    private val originalEnrollmentId = enrollment.copyOf()
     fun credentialDigest(): ByteArray { requireOriginal(); return digest.copyOf() }
     fun originalCertificate(): ByteArray { requireOriginal(); return originalCertificate.copyOf() }
+    fun enrollmentId(): ByteArray { requireOriginal(); return originalEnrollmentId.copyOf() }
     fun recheck() = requireOriginal()
 }
 
@@ -66,6 +69,7 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
     private val credential = credentialDigest.copyOf()
     private var signature: ByteArray? = null
     private var certificateOriginal: ByteArray? = null
+    private var enrollmentId: ByteArray? = null
     private var unusable = false
 
     init { same(original[3], scope); same(original[4], credential); current() }
@@ -73,8 +77,10 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
     @Synchronized fun completedBinding(other: KagemushaCoreCoordinatorBridgeV1): KagemushaNativeCompletedRetailBindingV1 {
         check(bridge === other) { "Bootstrap requires the same Native FI coordinator" }
         val retained = certificate()
-        return KagemushaNativeCompletedRetailBindingV1(credential, retained) {
+        val enrolled = checkNotNull(enrollmentId) { "Native has not acknowledged the original FI enrollment ID" }.copyOf()
+        return KagemushaNativeCompletedRetailBindingV1(credential, retained, enrolled) {
             same(certificate(), retained)
+            same(checkNotNull(enrollmentId), enrolled)
         }
     }
 
@@ -129,6 +135,8 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
         same(admitted[1], scope); same(admitted[0], reply[1])
         same(current()[2], reply[0])
         request.requireCurrent()
+        enrollmentId?.let { same(it, admitted[0]) }
+        enrollmentId = admitted[0].copyOf()
         return admitted[0].copyOf()
     }
     @Synchronized fun certificate(): ByteArray {

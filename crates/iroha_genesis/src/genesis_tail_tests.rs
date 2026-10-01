@@ -119,6 +119,17 @@ fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()>
         return Ok(());
     }
     let genesis = with_test_signing_topology(load_default_genesis_source_template_for_test()?);
+    let expected_execution_policy = genesis
+        .effective_parameters()?
+        .parameters()
+        .filter(|parameter| {
+            matches!(
+                parameter,
+                Parameter::Executor(_) | Parameter::Transaction(_) | Parameter::SmartContract(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut retained_execution_policy = Vec::new();
     let kp = checked_genesis_fixture_keypair();
     let proposal = genesis.build_and_sign(&kp)?;
     assert!(
@@ -132,11 +143,10 @@ fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()>
             for instr in instrs {
                 if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>() {
                     match set_param.inner() {
-                        Parameter::Transaction(_) | Parameter::SmartContract(_) => {
-                            panic!("unexpected high-level parameter instruction generated")
-                        }
-                        Parameter::Executor(_) => {
-                            panic!("unexpected executor parameter instruction generated")
+                        Parameter::Executor(_)
+                        | Parameter::Transaction(_)
+                        | Parameter::SmartContract(_) => {
+                            retained_execution_policy.push(set_param.inner().clone());
                         }
                         Parameter::Custom(custom)
                             if custom.id() == &consensus_metadata::handshake_meta_id() =>
@@ -166,6 +176,10 @@ fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()>
             }
         }
     }
+    assert_eq!(
+        retained_execution_policy, expected_execution_policy,
+        "Default signed genesis must retain each configured admission and execution policy slot exactly once in canonical order"
+    );
     assert!(
         saw_handshake_mode,
         "Default genesis must emit SetParameter for consensus handshake metadata"

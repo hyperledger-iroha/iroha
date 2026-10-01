@@ -234,11 +234,11 @@ fn diagnostic_wrapper_keys(
     assert_eq!(ep_parameters.as_slice(), generated.ep_parameters.as_ref());
     assert_eq!(
         generated.enabled_hardware_profiles,
-        terminal.eq_keys.enabled_hardware_profiles
+        terminal.keys.eq.enabled_hardware_profiles
     );
     assert_eq!(
         generated.enabled_hardware_profiles,
-        terminal.ep_keys.enabled_hardware_profiles
+        terminal.keys.ep.enabled_hardware_profiles
     );
     macro_rules! load {
         ($curve:ty, $circuit:ty, $loaded:ident, $params:expr, $nested:expr, $pk:expr, $vk:expr,
@@ -310,7 +310,7 @@ fn diagnostic_wrapper_keys(
         KagemushaCommitWrapperEqCircuitV1,
         KagemushaLoadedEqCommitWrapperArtifactsV1,
         &funded.eq,
-        &terminal.eq_keys,
+        &terminal.keys.eq,
         generated.eq_proving_key,
         generated.eq_verifying_key,
         generated.eq_circuit_params,
@@ -323,7 +323,7 @@ fn diagnostic_wrapper_keys(
         KagemushaCommitWrapperEpCircuitV1,
         KagemushaLoadedEpCommitWrapperArtifactsV1,
         &funded.ep,
-        &terminal.ep_keys,
+        &terminal.keys.ep,
         generated.ep_proving_key,
         generated.ep_verifying_key,
         generated.ep_circuit_params,
@@ -334,8 +334,15 @@ fn diagnostic_wrapper_keys(
     (eq, ep)
 }
 
+/// Original dedicated wrapper keys shared by proofs in one unchanged diagnostic release.
+pub(super) struct DiagnosticWrapperKeysV1 {
+    pub(super) eq: KagemushaLoadedEqCommitWrapperArtifactsV1,
+    pub(super) ep: KagemushaLoadedEpCommitWrapperArtifactsV1,
+}
+
 /// Retained genuine wrapper proof and exact sender projection for graph closure only.
 pub(super) struct ProvenSenderWrapperV1 {
+    pub(super) keys: Rc<DiagnosticWrapperKeysV1>,
     pub(super) eq_protocol: PlonkProtocol<EqAffine>,
     pub(super) ep_protocol: PlonkProtocol<EpAffine>,
     pub(super) payment: KagemushaGeneratedPaymentProofV1,
@@ -347,6 +354,7 @@ pub(super) struct ProvenSenderWrapperV1 {
 /// Return a genuine proved wrapper as the next nonauthorizing graph-construction seed.
 pub(super) fn prove_sender_wrapper(
     funded: &RealFundedPrerequisite,
+    key_cache: &mut Option<Rc<DiagnosticWrapperKeysV1>>,
     artifacts: KagemushaRecursionArtifactsV1,
     incoming_seed: &IncomingStateProofMaterial,
     terminal: ProvenSenderTerminalV1,
@@ -370,31 +378,31 @@ pub(super) fn prove_sender_wrapper(
         artifact_manifest_digest: [0; 32],
     };
     assert_eq!(terminal.public, original_public);
-    assert_eq!(terminal.eq_keys.release_id, artifacts.release_id);
-    assert_eq!(terminal.ep_keys.release_id, artifacts.release_id);
-    assert_eq!(terminal.eq_keys.profile_digest, artifacts.profile_digest);
-    assert_eq!(terminal.ep_keys.profile_digest, artifacts.profile_digest);
+    assert_eq!(terminal.keys.eq.release_id, artifacts.release_id);
+    assert_eq!(terminal.keys.ep.release_id, artifacts.release_id);
+    assert_eq!(terminal.keys.eq.profile_digest, artifacts.profile_digest);
+    assert_eq!(terminal.keys.ep.profile_digest, artifacts.profile_digest);
     assert_eq!(
-        terminal.eq_keys.artifact_manifest_digest,
+        terminal.keys.eq.artifact_manifest_digest,
         artifacts.artifact_manifest_digest
     );
     assert_eq!(
-        terminal.ep_keys.artifact_manifest_digest,
+        terminal.keys.ep.artifact_manifest_digest,
         artifacts.artifact_manifest_digest
     );
     let terminal_protocols = [
-        terminal.eq_keys.protocol_digest,
-        terminal.ep_keys.protocol_digest,
+        terminal.keys.eq.protocol_digest,
+        terminal.keys.ep.protocol_digest,
     ];
     let eq_terminal_protocol = compile(
         &funded.eq,
-        &terminal.eq_keys.verifying_key,
+        &terminal.keys.eq.verifying_key,
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
     let ep_terminal_protocol = compile(
         &funded.ep,
-        &terminal.ep_keys.verifying_key,
+        &terminal.keys.ep.verifying_key,
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
@@ -480,7 +488,7 @@ pub(super) fn prove_sender_wrapper(
     let ep_terminal_columns = [ep_expected];
     let witness = KagemushaCommitWrapperGenerationWitnessV1 {
         public: terminal.public.clone(),
-        enabled_hardware_profiles: terminal.eq_keys.enabled_hardware_profiles,
+        enabled_hardware_profiles: terminal.keys.eq.enabled_hardware_profiles,
         eq: KagemushaCommitWrapperEqGenerationWitnessV1 {
             terminal_authorization_protocol: &eq_terminal_protocol,
             terminal_authorization_instances: &eq_terminal_columns,
@@ -499,11 +507,42 @@ pub(super) fn prove_sender_wrapper(
         },
     };
     eprintln!(
-        "KAGEMUSHA wrapper diagnostic: retained terminal pair and both new folds decided; generating dedicated wrapper keys with unchanged transport size gates"
+        "KAGEMUSHA wrapper diagnostic: retained terminal pair and both new folds decided; proving with one retained dedicated wrapper key pair and unchanged transport size gates"
     );
-    let generated = generate_kagemusha_commit_wrapper_artifacts_v1(witness.clone())
-        .expect("actual wrapper key generation, transport capacity, and final-ID VK stability");
-    let (eq_keys, ep_keys) = diagnostic_wrapper_keys(funded, &terminal, generated);
+    let keys = Rc::clone(key_cache.get_or_insert_with(|| {
+        let generated = generate_kagemusha_commit_wrapper_artifacts_v1(witness.clone())
+            .expect("actual wrapper key generation, transport capacity, and final-ID VK stability");
+        let (eq, ep) = diagnostic_wrapper_keys(funded, &terminal, generated);
+        Rc::new(DiagnosticWrapperKeysV1 { eq, ep })
+    }));
+    assert!(Rc::ptr_eq(&keys, key_cache.as_ref().unwrap()));
+    let eq_keys = &keys.eq;
+    let ep_keys = &keys.ep;
+    macro_rules! require_original_key_owner {
+        ($keys:expr, $terminal:expr) => {{
+            assert_eq!($keys.release_id, artifacts.release_id);
+            assert_eq!($keys.profile_digest, artifacts.profile_digest);
+            assert_eq!(
+                $keys.artifact_manifest_digest,
+                artifacts.artifact_manifest_digest
+            );
+            assert_eq!($keys.suite_id, $terminal.suite_id);
+            assert_eq!($keys.vk_digest, $terminal.vk_digest);
+            assert_eq!(
+                $keys.enabled_hardware_profiles,
+                $terminal.enabled_hardware_profiles
+            );
+            assert_eq!(
+                $keys.terminal_authorization_protocol_digest,
+                $terminal.protocol_digest
+            );
+            assert_ne!($keys.protocol_digest, $terminal.protocol_digest);
+        }};
+    }
+    require_original_key_owner!(eq_keys, terminal.keys.eq);
+    require_original_key_owner!(ep_keys, terminal.keys.ep);
+    // Every native proof rebuilds the witness and compares its complete circuit profile with
+    // these same loaded keys, then checks the exact nested terminal protocol identities.
     let eq_wrapper_protocol = compile(
         &funded.eq,
         &eq_keys.verifying_key,
@@ -516,7 +555,7 @@ pub(super) fn prove_sender_wrapper(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
-    let generated = prove_kagemusha_commit_wrapper_v1(&eq_keys, &ep_keys, witness, &seed)
+    let generated = prove_kagemusha_commit_wrapper_v1(eq_keys, ep_keys, witness, &seed)
         .expect("actual paired CommitWrapper proof over exact terminal pair");
     assert!(
         generated.clone().into_redemption().is_err(),
@@ -716,6 +755,7 @@ pub(super) fn prove_sender_wrapper(
     // The caller must independently require exact release identity before treating the retained
     // proof as incoming sender evidence. This function only proves and decides the bytes.
     ProvenSenderWrapperV1 {
+        keys,
         incoming: IncomingStateProofMaterial {
             eq_protocol: eq_wrapper_protocol.clone(),
             ep_protocol: ep_wrapper_protocol.clone(),

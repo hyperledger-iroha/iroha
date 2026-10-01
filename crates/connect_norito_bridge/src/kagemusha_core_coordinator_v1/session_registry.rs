@@ -444,6 +444,21 @@ impl<K: Eq, O, P> SessionRegistry<K, O, P> {
         Ok(())
     }
 
+    /// Check a held typed Native session without waiting on its serialized owner. The actual
+    /// dispatch still rechecks after taking that owner; this projection grants no dispatch permit.
+    pub(super) fn require_current_handle(&self, handle: u64) -> Result<()> {
+        let state = self.lock()?;
+        let entry = state.handles.get(&handle).ok_or(RegistryError::Rejected)?;
+        if state.selected_owner == Some(entry.owner)
+            && state.selection == entry.selection
+            && state.owners[entry.owner].usable
+        {
+            Ok(())
+        } else {
+            Err(RegistryError::Rejected)
+        }
+    }
+
     pub(super) fn invocation(&self, handle: u64) -> Result<Invocation<O>> {
         let state = self.lock()?;
         let entry = state.handles.get(&handle).ok_or(RegistryError::Rejected)?;

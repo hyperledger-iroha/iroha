@@ -68,6 +68,7 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private var completed: KagemushaOrdinaryEnrollmentOriginalsV1? = null
     private var bootstrap: KagemushaNativePreparedOrdinaryBootstrapApprovalV1? = null
     private var capturedBootstrap: KagemushaOrdinaryBootstrapApprovalOriginalsV1? = null
+    private var publishedInitialState: KagemushaOrdinaryInitialStatePublicationOriginalsV1? = null
 
     /** Complete the same Native ceremony, reusing complete originals and refusing uncertain platform/wallet work. */
     suspend fun beginOrResume(): KagemushaOrdinaryEnrollmentOriginalsV1 = mutex.withLock {
@@ -145,6 +146,24 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
             requireOriginalOwner()
             KagemushaOrdinaryBootstrapApprovalOriginalsV1(enrollment, operation, held.signingBytes(),
                 held.bootstrapSelectionOriginal(), receipt).also { requireOriginalOwner(); capturedBootstrap = it }
+        }
+    }
+
+    /** Publish or recover the actual Native initial State and paired ordinary Guard after FI/W.
+     * This uses the same retained Bootstrap approval and installed Native proof profile. The
+     * detached acknowledgement grants no monetary wallet capability; unavailable authentic
+     * proof material remains an error and cannot be repaired with an app-generated proof.
+     */
+    suspend fun beginOrResumeInitialStatePublication(): KagemushaOrdinaryInitialStatePublicationOriginalsV1 {
+        beginOrResumeBootstrapApproval()
+        return mutex.withLock {
+            requireOriginalOwner()
+            val held = checkNotNull(bootstrap)
+            val published = if (publishedInitialState == null) held.publishOriginalInitialState()
+                else held.recoverOriginalInitialStatePublication()
+            requireOriginalOwner()
+            publishedInitialState = published
+            published
         }
     }
 
