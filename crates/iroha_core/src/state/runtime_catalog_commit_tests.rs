@@ -13,7 +13,18 @@ fn staged_catalog_fixture(
     let mut block = state.block(catalog_test_header());
     let mut transaction = block.transaction();
     transaction
-        .stage_consensus_catalog_transition(&payload)
+        .stage_consensus_catalog_transition(
+            &AccountId::new(
+                iroha_crypto::KeyPair::try_from_seed(
+                    vec![1; 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .unwrap()
+                .public_key()
+                .clone(),
+            ),
+            &payload,
+        )
         .unwrap();
     (
         transaction.nexus.clone(),
@@ -42,7 +53,18 @@ fn runtime_catalog_readback_tracks_committed_state_and_rejects_malformed_paramet
             let mut block = state.block(catalog_test_header());
             let mut transaction = block.transaction();
             transaction
-                .stage_consensus_catalog_transition(&payload)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &payload,
+                )
                 .unwrap();
             let runtime = runtime_catalog_from_world(&transaction.world)
                 .unwrap()
@@ -152,14 +174,36 @@ fn runtime_catalog_readback_binds_next_transition_and_rejects_stale_root() {
             let mut block = state.block(catalog_test_header());
             let mut transaction = block.transaction();
             let error = transaction
-                .stage_consensus_catalog_transition(&invalid)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &invalid,
+                )
                 .expect_err("stale overlay guard must reject a second transition");
             assert!(error.to_string().contains("expected runtime catalog root"));
         }
         let mut block = state.block(catalog_test_header());
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .expect("native readback must bind the next additive transition");
         let next = runtime_catalog_from_world(&transaction.world)
             .unwrap()
@@ -185,7 +229,18 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
         let mut block = state.block(catalog_test_header());
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         let pending = transaction.pending_lane_lifecycle.clone().unwrap();
         validate_runtime_catalog_block_overlay(
@@ -195,6 +250,7 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
             &state.nexus_snapshot(),
             Some(&pending),
             2,
+            0,
         )
         .expect("exact accepted catalog and live committee");
         assert!(
@@ -204,7 +260,8 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
                 &state.network_id,
                 &state.nexus_snapshot(),
                 None,
-                2
+                2,
+                0,
             )
             .is_err()
         );
@@ -222,7 +279,8 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
                 &state.network_id,
                 &state.nexus_snapshot(),
                 Some(&pending),
-                2
+                2,
+                0,
             )
             .is_err()
         );
@@ -239,7 +297,8 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
                 &state.network_id,
                 &state.nexus_snapshot(),
                 Some(&pending),
-                2
+                2,
+                0,
             )
             .is_err()
         );
@@ -254,7 +313,18 @@ fn runtime_catalog_applied_transaction_publishes_manifest_to_next_transaction() 
         let mut block = state.block(catalog_test_header());
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         let expected_manifest_digest = transaction.lane_manifests.consensus_policy_digest();
         assert!(
@@ -321,7 +391,18 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
             let mut block = state.block(catalog_test_header());
             let mut transaction = block.transaction();
             transaction
-                .stage_consensus_catalog_transition(&payload)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &payload,
+                )
                 .unwrap();
             let pending = transaction.pending_lane_lifecycle.clone().unwrap();
             validate_runtime_catalog_block_overlay(
@@ -331,6 +412,7 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
                 &state.nexus_snapshot(),
                 Some(&pending),
                 2,
+                0,
             )
             .unwrap();
             let id = derive_committee_key_id(keys[0].public_key());
@@ -361,7 +443,8 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
                     &state.network_id,
                     &state.nexus_snapshot(),
                     Some(&pending),
-                    2
+                    2,
+                    0,
                 )
                 .is_err(),
                 "late authority invalidation case {case}"
@@ -390,6 +473,7 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
             &original_nexus,
             None,
             3,
+            0,
         )
         .unwrap();
         block
@@ -406,6 +490,7 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
             &original_nexus,
             None,
             3,
+            0,
         )
         .expect_err("removing a protected catalog requires a staged transition");
         assert!(
@@ -441,6 +526,7 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
             &original_nexus,
             None,
             3,
+            0,
         )
         .expect_err("an unchanged malformed catalog cannot pass equality validation");
         assert!(
@@ -608,6 +694,7 @@ fn runtime_catalog_replacement_uses_its_retained_parameter_predecessor() {
             &nexus,
             None,
             2,
+            0,
         )
         .expect("an untouched replacement retains its actual pre-catalog predecessor");
         replacement.parameters.get_mut().set_parameter(
@@ -623,6 +710,7 @@ fn runtime_catalog_replacement_uses_its_retained_parameter_predecessor() {
                 &nexus,
                 None,
                 2,
+                0,
             )
             .is_err(),
             "matching the discarded live tip does not authorize an unstaged catalog"
@@ -644,7 +732,18 @@ fn runtime_catalog_owned_overlay_ignores_later_policy_cache_mutation() {
         let mut block = state.block(catalog_test_header());
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         transaction.apply();
         block.validate_owned_runtime_catalog_overlay().unwrap();
@@ -679,7 +778,18 @@ fn runtime_catalog_merge_validation_owns_its_captured_policy() {
         let mut block = state.block(catalog_test_header());
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         transaction.apply();
         block.validate_owned_runtime_catalog_overlay().unwrap();
@@ -722,7 +832,18 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
             let mut block = state.block(catalog_test_header());
             let mut transaction = block.transaction();
             transaction
-                .stage_consensus_catalog_transition(&payload)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &payload,
+                )
                 .unwrap();
             transaction.apply();
             block.validate_owned_runtime_catalog_overlay().unwrap();
@@ -750,7 +871,18 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
             .expect("the discarded live catalog is not the replacement's predecessor");
         let mut transaction = replacement.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         transaction.apply();
         replacement

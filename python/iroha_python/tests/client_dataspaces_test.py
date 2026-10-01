@@ -661,7 +661,8 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(
 
     class FakeInstruction:
         @staticmethod
-        def nexus_lane_lifecycle(status_json: str, plan_json: str) -> object:
+        def nexus_lane_lifecycle(status_json: str, plan_json: str, *, chain_discriminant: int) -> object:
+            assert chain_discriminant == 753
             captured["status"] = json.loads(status_json)
             captured["plan"] = json.loads(plan_json)
             return "set-parameter-instruction"
@@ -1008,7 +1009,8 @@ def test_nexus_lane_lifecycle_canonicalizes_typed_confidential_audiences(
 
     class FakeInstruction:
         @staticmethod
-        def nexus_lane_lifecycle(_status_json: str, plan_json: str) -> object:
+        def nexus_lane_lifecycle(_status_json: str, plan_json: str, *, chain_discriminant: int) -> object:
+            assert chain_discriminant == 753
             captured["plan"] = json.loads(plan_json)
             return "set-parameter-instruction"
 
@@ -1218,7 +1220,8 @@ def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(
 
     class FakeInstruction:
         @staticmethod
-        def nexus_lane_lifecycle(_status: str, _plan: str) -> object:
+        def nexus_lane_lifecycle(_status: str, _plan: str, *, chain_discriminant: int) -> object:
+            assert chain_discriminant == 753
             return object()
 
     class FakeCrypto:

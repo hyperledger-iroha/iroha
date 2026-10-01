@@ -858,6 +858,7 @@ def _validate_payment_output_values(values: Mapping[str, object]) -> None:
     ):
         _fail("KAGEMUSHA V1 payment output is invalid")
 
+
 def _validate_peer_context_values(values: Mapping[str, object]) -> None:
     _require_version(values["version"])
     if (
@@ -1362,9 +1363,11 @@ def payment_request_transcript(value: KagemushaPaymentRequestV1) -> bytes:
 def payment_request_signing_bytes(value: KagemushaPaymentRequestV1) -> bytes:
     return _DOMAIN["request_signing"] + b"\0" + _payment_request_unsigned_transcript(value)
 
+
 def payment_request_digest(value: KagemushaPaymentRequestV1) -> bytes:
     _validate_request(value)
     return _digest_encoded(_DOMAIN["request_digest"], payment_request_transcript(value))
+
 
 def ciphertext_digest(value: object) -> bytes:
     return _digest_encoded(_DOMAIN["ciphertext"], _bytes(value, "encrypted credit"))
@@ -1388,10 +1391,12 @@ def prepared_transfer_digest(
         + _fixed32(ciphertext_commitment, "ciphertext_commitment"))
     return _digest_encoded(_DOMAIN["prepared_transfer"], transcript)
 
+
 def credit_id(transition_nullifier: object, request_digest_value: object) -> bytes:
     return hashlib.sha256(_DOMAIN["credit_id"] + b"\0"
         + _fixed32(transition_nullifier, "transition_nullifier")
         + _fixed32(request_digest_value, "request_digest")).digest()
+
 
 def peer_credit_opening_commitment(
     request_digest: object,
@@ -1509,6 +1514,7 @@ def peer_credit_context(
         recipient_encryption_key=request.recipient_encryption_key,
     )
 
+
 def _commit_evidence_transcript(value: object) -> bytes:
     evidence = _normalize_type(_COMMIT_EVIDENCE, value, "commit_evidence")
     if isinstance(evidence, KagemushaTrustedCommitTimeV1):
@@ -1608,6 +1614,7 @@ def commit_certificate_digest(value: KagemushaCommitCertificateV1, lifecycle: Ka
         _same_bytes(value.certificate_id, commit_certificate_id(value), "certificate ID")
     return _digest_encoded(_DOMAIN["commit_certificate"], _commit_certificate_transcript(value, include_id=True))
 
+
 def _validate_redemption_proof(
     value: KagemushaRedemptionProofV1,
     semantic_digest: object,
@@ -1647,6 +1654,7 @@ def _validate_payment_output(
     if output.committed_at_ms < request.issued_at_ms or output.committed_at_ms >= request.expires_at_ms:
         _fail("payment commit time is outside the request window")
 
+
 def payment_output_transcript(output: KagemushaPaymentOutputV1) -> bytes:
     if not isinstance(output, KagemushaPaymentOutputV1):
         raise TypeError("output must be KagemushaPaymentOutputV1")
@@ -1670,6 +1678,7 @@ def payment_body_digest(output: KagemushaPaymentOutputV1, encrypted_credit: obje
     decode_encrypted_credit_envelope(encrypted_credit)
     return _digest_encoded(_DOMAIN["payment_body"], payment_output_digest(output) + ciphertext_digest(encrypted_credit))
 
+
 def _validate_payment(
     payment: KagemushaPaymentV1,
     request: KagemushaPaymentRequestV1,
@@ -1684,6 +1693,8 @@ def _validate_payment(
     _same_bytes(payment.proof.candidate_envelope_digest, certificate.candidate_envelope_digest, "payment candidate digest")
     _same_bytes(payment.proof.commit_certificate_digest, commit_certificate_digest(certificate), "payment certificate digest")
     _same_bytes(payment.proof.semantic_digest, payment_body_digest(payment.output, payment.encrypted_credit), "payment semantic digest")
+
+
 def payment_digest(
     payment: KagemushaPaymentV1,
     request: KagemushaPaymentRequestV1,
@@ -2283,12 +2294,12 @@ class KagemushaTopUpInstructionV1:
         encoded = base64.b64encode(self.to_norito_bytes()).decode("ascii")
         return json.dumps(encoded, separators=(",", ":"))
 
-    def to_instruction(self) -> Any:
+    def to_instruction(self, *, chain_discriminant: int) -> Any:
         """Decode this archive through the Rust-backed standard transaction boundary."""
 
         from .crypto import Instruction
 
-        instruction = Instruction.from_json(self.to_json())
+        instruction = Instruction.from_json(self.to_json(), chain_discriminant=chain_discriminant)
         if instruction.wire_id() != _TOP_UP_INSTRUCTION_WIRE_ID:
             raise RuntimeError("native KAGEMUSHA instruction decoder changed the wire ID")
         if bytes(instruction.to_norito_bytes()) != self.to_norito_bytes():

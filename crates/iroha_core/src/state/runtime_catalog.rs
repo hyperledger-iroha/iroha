@@ -1,5 +1,6 @@
-// Committed catalog additions are reconstructed from protected World parameters. Static config
-// remains the immutable execution-policy baseline; no filesystem manifest is loaded here.
+// Active physical execution catalogs are reconstructed from protected World parameters.
+// Static configuration and retired native storage bindings remain immutable history; no
+// filesystem manifest is loaded here.
 
 fn runtime_catalog_invalid(reason: impl std::fmt::Display) -> LaneLifecycleError {
     LaneLifecycleError::RuntimeCatalog(reason.to_string())
@@ -55,7 +56,7 @@ impl StateView<'_> {
     }
 }
 
-/// Reconstruct effective physical dataspaces from an immutable baseline and committed additions.
+/// Reconstruct active physical dataspaces while retaining their authenticated baseline history.
 pub(crate) fn runtime_catalog_dataspaces(
     baseline: &DataSpaceCatalog,
     runtime: Option<&iroha_data_model::nexus::NexusRuntimeCatalogV1>,
@@ -79,6 +80,21 @@ pub(crate) fn runtime_catalog_dataspaces(
             .iter()
             .map(|addition| addition.descriptor.clone()),
     );
+    let retired: BTreeSet<_> = runtime
+        .retired_dataspaces
+        .iter()
+        .map(|entry| entry.retirement.dataspace_id)
+        .collect();
+    for record in &runtime.retired_dataspaces {
+        if !entries.iter().any(|entry| {
+            entry.id == record.retirement.dataspace_id && entry.alias == record.retirement.alias
+        }) {
+            return Err(runtime_catalog_invalid(
+                "retirement history has no original physical dataspace descriptor",
+            ));
+        }
+    }
+    entries.retain(|entry| !retired.contains(&entry.id));
     DataSpaceCatalog::new(entries).map_err(runtime_catalog_invalid)
 }
 
@@ -177,12 +193,13 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
     pending
         .validate_structure()
         .map_err(runtime_catalog_invalid)?;
-    if plan.additions.is_empty() || !plan.retire.is_empty() {
+    if plan.additions.is_empty() && plan.retire.is_empty() {
         return Err(runtime_catalog_invalid(
             "runtime catalog transition must add lanes without retiring existing lanes",
         ));
     }
     let previous = runtime_catalog_from_parameters(original_parameters)?;
+    validate_runtime_retirement_delta(previous.as_ref(), pending, old_nexus, plan)?;
     let baseline_dataspaces_hash =
         iroha_data_model::nexus::dataspace_catalog_hash(&old_nexus.configured_dataspace_catalog);
     let baseline_manifests_hash = Hash::prehashed(old_registry.baseline_consensus_policy_digest());
@@ -227,6 +244,14 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
         .filter(|addition| !previous_dataspaces.contains(addition))
     {
         if current_dataspaces.by_id(addition.descriptor.id).is_some()
+            || old_nexus
+                .configured_dataspace_catalog
+                .by_id(addition.descriptor.id)
+                .is_some()
+            || pending.retired_dataspaces.iter().any(|entry| {
+                entry.retirement.dataspace_id == addition.descriptor.id
+                    || entry.retirement.alias == addition.descriptor.alias
+            })
             || current_dataspaces
                 .by_alias(&addition.descriptor.alias)
                 .is_some()
@@ -241,11 +266,15 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
     if addition_ids.len() != plan.additions.len()
         || addition_aliases.len() != plan.additions.len()
         || plan.additions.iter().any(|addition| {
-            old_nexus
-                .lane_catalog
-                .lanes()
+            pending
+                .retired_lanes
                 .iter()
-                .any(|lane| lane.id == addition.id || lane.alias == addition.alias)
+                .any(|record| record.lane.id == addition.id || record.lane.alias == addition.alias)
+                || old_nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .any(|lane| lane.id == addition.id || lane.alias == addition.alias)
         })
     {
         return Err(runtime_catalog_invalid(
@@ -274,11 +303,12 @@ impl StateTransaction<'_, '_> {
         additions: &[iroha_data_model::nexus::LaneConfig],
         manifests: &LaneManifestRegistry,
         authority_height: u64,
+        retiring_dataspaces: &BTreeSet<DataSpaceId>,
+        retiring_lanes: &BTreeSet<LaneId>,
     ) -> Result<iroha_data_model::sumeragi_lanes::SumeragiLanePolicy, LaneLifecycleError> {
         use iroha_data_model::sumeragi_lanes::{
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
         };
-
         let mut policy = match self
             .world
             .parameters()
@@ -300,6 +330,21 @@ impl StateTransaction<'_, '_> {
                     .da_layout,
             ),
         };
+        policy.fixed.retain(|lane| {
+            !retiring_dataspaces.contains(&lane.dataspace) && !retiring_lanes.contains(&lane.lane)
+        });
+        policy
+            .routes
+            .retain(|route| !retiring_lanes.contains(&route.lane));
+        if retiring_lanes.iter().any(|lane| policy.is_elastic(*lane))
+            || policy
+                .autoscale
+                .as_ref()
+                .is_some_and(|autoscale| retiring_dataspaces.contains(&autoscale.dataspace))
+        {
+            policy.autoscale = None;
+        }
+
         for lane in additions {
             if lane.id == LaneId::SINGLE
                 || policy.fixed_lane(lane.id).is_some()
@@ -353,6 +398,7 @@ impl StateTransaction<'_, '_> {
     /// block publishes the prepared geometry and registry only after normal accepted execution.
     pub(crate) fn stage_consensus_catalog_transition(
         &mut self,
+        authority: &AccountId,
         payload: &iroha_data_model::nexus::NexusCatalogTransitionV1,
     ) -> Result<(), LaneLifecycleError> {
         use iroha_data_model::nexus::NexusRuntimeCatalogV1;
@@ -381,7 +427,7 @@ impl StateTransaction<'_, '_> {
         if self.lane_lifecycle_already_staged_in_block || self.pending_lane_lifecycle.is_some() {
             return Err(LaneLifecycleError::LifecycleAlreadyStaged);
         }
-        if payload.lane_additions.is_empty() {
+        if payload.lane_additions.is_empty() && payload.lane_retirements.is_empty() {
             return Err(runtime_catalog_invalid(
                 "runtime catalog transition requires at least one new lane",
             ));
@@ -426,13 +472,17 @@ impl StateTransaction<'_, '_> {
                 "effective dataspace catalog differs from its committed baseline and additions",
             ));
         }
-        let mut runtime = previous_runtime.unwrap_or_else(|| NexusRuntimeCatalogV1 {
-            version: NexusRuntimeCatalogV1::VERSION,
-            baseline_dataspaces_hash,
-            baseline_manifests_hash,
-            dataspaces: Vec::new(),
-            manifests: Vec::new(),
-        });
+        let mut runtime = previous_runtime
+            .clone()
+            .unwrap_or_else(|| NexusRuntimeCatalogV1 {
+                retired_dataspaces: Vec::new(),
+                retired_lanes: Vec::new(),
+                version: NexusRuntimeCatalogV1::VERSION,
+                baseline_dataspaces_hash,
+                baseline_manifests_hash,
+                dataspaces: Vec::new(),
+                manifests: Vec::new(),
+            });
         if runtime.baseline_dataspaces_hash != baseline_dataspaces_hash
             || runtime.baseline_manifests_hash != baseline_manifests_hash
         {
@@ -442,6 +492,15 @@ impl StateTransaction<'_, '_> {
         }
         for addition in &payload.dataspace_additions {
             if current_dataspaces.by_id(addition.descriptor.id).is_some()
+                || self
+                    .nexus
+                    .configured_dataspace_catalog
+                    .by_id(addition.descriptor.id)
+                    .is_some()
+                || runtime.retired_dataspaces.iter().any(|entry| {
+                    entry.retirement.dataspace_id == addition.descriptor.id
+                        || entry.retirement.alias == addition.descriptor.alias
+                })
                 || current_dataspaces
                     .by_alias(&addition.descriptor.alias)
                     .is_some()
@@ -463,17 +522,100 @@ impl StateTransaction<'_, '_> {
             ));
         }
         for addition in &payload.lane_additions {
-            if self
-                .nexus
-                .lane_catalog
-                .lanes()
+            if runtime
+                .retired_lanes
                 .iter()
-                .any(|lane| lane.id == addition.id || lane.alias == addition.alias)
+                .any(|record| record.lane.id == addition.id || record.lane.alias == addition.alias)
+                || self
+                    .nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .any(|lane| lane.id == addition.id || lane.alias == addition.alias)
             {
                 return Err(runtime_catalog_invalid(
                     "runtime lane addition attempts to replace an existing ID or alias",
                 ));
             }
+        }
+        let retiring_dataspaces: BTreeSet<_> = payload
+            .dataspace_retirements
+            .iter()
+            .map(|entry| entry.dataspace_id)
+            .collect();
+        let retiring_lanes: BTreeSet<_> = payload.lane_retirements.iter().copied().collect();
+        if !retiring_dataspaces.is_empty() {
+            if retiring_lanes
+                .iter()
+                .any(|lane| self.touched_lanes.contains(lane))
+            {
+                return Err(runtime_catalog_invalid(
+                    "physical retirement cannot remove a lane owning work in the committing block",
+                ));
+            }
+            for request in &payload.dataspace_retirements {
+                ensure_physical_retirement_owner(
+                    &self.world,
+                    &self.nexus.dataspace_catalog,
+                    request,
+                    authority,
+                    self.block_unix_timestamp_ms(),
+                )?;
+                runtime.retired_dataspaces.push(
+                    iroha_data_model::nexus::RuntimeDataSpaceRetirementRecordV1 {
+                        retirement: request.clone(),
+                        retirement_height: block_height,
+                    },
+                );
+            }
+            for lane in &payload.lane_retirements {
+                let descriptor = self
+                    .nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .find(|entry| entry.id == *lane)
+                    .ok_or_else(|| {
+                        runtime_catalog_invalid("retirement targets an unknown physical lane")
+                    })?;
+                let incarnation = *self.lane_incarnations.get(lane).ok_or_else(|| {
+                    runtime_catalog_invalid("retirement lane has no authenticated incarnation")
+                })?;
+                let activation_height = *self
+                    .lane_incarnation_activation_heights
+                    .get(lane)
+                    .ok_or_else(|| {
+                        runtime_catalog_invalid(
+                            "retirement lane has no authenticated activation height",
+                        )
+                    })?;
+                runtime
+                    .retired_lanes
+                    .push(iroha_data_model::nexus::RuntimeLaneRetirementV1 {
+                        lane: descriptor.clone(),
+                        incarnation,
+                        activation_height,
+                        retirement_height: block_height,
+                    });
+            }
+            runtime
+                .retired_dataspaces
+                .sort_by_key(|entry| entry.retirement.dataspace_id);
+            runtime.retired_lanes.sort_by_key(|entry| entry.lane.id);
+            ensure_physical_retirement_closed(
+                &self.world,
+                &retiring_dataspaces,
+                &retiring_lanes,
+                block_height,
+            )?;
+            physical_dataspace_retirement_safety::ensure_physical_dataspace_retirement_safe(
+                &retiring_dataspaces,
+                &retiring_lanes,
+                &self.world,
+                &self.nexus,
+                block_height,
+            )
+            .map_err(runtime_catalog_invalid)?;
         }
         runtime
             .dataspaces
@@ -488,7 +630,7 @@ impl StateTransaction<'_, '_> {
             .map_err(runtime_catalog_invalid)?;
         let plan = LaneLifecyclePlan {
             additions: payload.lane_additions.clone(),
-            retire: Vec::new(),
+            retire: payload.lane_retirements.clone(),
         };
         let updated_dataspaces = runtime_catalog_transition_dataspaces(
             &self.nexus,
@@ -503,6 +645,7 @@ impl StateTransaction<'_, '_> {
             .map_err(runtime_catalog_invalid)?;
         let mut prospective_nexus = self.nexus.clone();
         prospective_nexus.dataspace_catalog = updated_dataspaces.clone();
+        runtime_catalog_project_retired_routes(&mut prospective_nexus, Some(&runtime))?;
         ensure_lane_lifecycle_compliance_ready(
             &prospective_nexus,
             self.lane_compliance.as_deref(),
@@ -518,9 +661,15 @@ impl StateTransaction<'_, '_> {
             &plan,
             block_height,
             false,
+            !payload.lane_retirements.is_empty(),
         )?;
-        lifecycle_update.previous_dataspace_catalog = self.nexus.dataspace_catalog.clone();
-        lifecycle_update.updated_dataspace_catalog = updated_dataspaces;
+        bind_runtime_catalog_update(
+            &mut lifecycle_update,
+            &self.nexus,
+            &prospective_nexus,
+            previous_runtime.as_ref(),
+            &runtime,
+        )?;
         prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
         ensure_live_shared_dataspace_staking_owner_is_not_reset(
@@ -533,7 +682,7 @@ impl StateTransaction<'_, '_> {
         let updated_lane_manifests = Arc::new(
             self.lane_manifests
                 .with_runtime_additions(
-                    &runtime.manifests,
+                    &runtime_catalog_active_manifests(&runtime),
                     &prospective_nexus.lane_catalog,
                     &prospective_nexus.dataspace_catalog,
                     &prospective_nexus.governance,
@@ -557,6 +706,8 @@ impl StateTransaction<'_, '_> {
             block_height.checked_add(2).ok_or_else(|| {
                 runtime_catalog_invalid("native lane activation height overflows")
             })?,
+            &retiring_dataspaces,
+            &retiring_lanes,
         )?;
 
         self.world.mark_axt_lane_incarnation_transitions(

@@ -5,6 +5,7 @@
 //! the native manifest schema and validator authority, and install the complete update atomically.
 use super::{
     DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, MAX_ACTIVE_EXECUTION_LANES,
+    RuntimeDataSpaceRetirementRecordV1, RuntimeDataSpaceRetirementV1, RuntimeLaneRetirementV1,
 };
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
@@ -113,6 +114,10 @@ pub struct NexusCatalogTransitionV1 {
     pub lane_additions: Vec<LaneConfig>,
     /// New exact manifest sources, strictly ordered by lane ID.
     pub manifest_additions: Vec<RuntimeLaneManifestV1>,
+    /// Owner-bound physical retirements, strictly ordered by dataspace identity.
+    pub dataspace_retirements: Vec<RuntimeDataSpaceRetirementV1>,
+    /// Exactly all physical lane IDs of the selected retiring dataspaces.
+    pub lane_retirements: Vec<LaneId>,
 }
 
 /// Protected cumulative overlay persisted through the ordinary World custom-parameter state.
@@ -143,6 +148,10 @@ pub struct NexusRuntimeCatalogV1 {
     pub dataspaces: Vec<RuntimeDataSpaceAdditionV1>,
     /// All authenticated inline manifest additions, strictly ordered by lane ID.
     pub manifests: Vec<RuntimeLaneManifestV1>,
+    /// Immutable owner-bound physical retirement history.
+    pub retired_dataspaces: Vec<RuntimeDataSpaceRetirementRecordV1>,
+    /// Exact historical storage bindings; these lanes are never reused or erased.
+    pub retired_lanes: Vec<RuntimeLaneRetirementV1>,
 }
 
 /// Invalid or non-canonical additive Nexus catalog data.
@@ -268,12 +277,45 @@ impl NexusCatalogTransitionV1 {
         if self.dataspace_additions.is_empty()
             && self.lane_additions.is_empty()
             && self.manifest_additions.is_empty()
+            && self.dataspace_retirements.is_empty()
+            && self.lane_retirements.is_empty()
         {
             return Err(NexusCatalogValidationError::EmptyTransition);
         }
         validate_dataspaces(&self.dataspace_additions)?;
         validate_lanes(&self.lane_additions)?;
         validate_manifests(&self.manifest_additions)?;
+        count(self.dataspace_retirements.len())?;
+        count(self.lane_retirements.len())?;
+        if self
+            .dataspace_retirements
+            .windows(2)
+            .any(|pair| pair[0].dataspace_id >= pair[1].dataspace_id)
+            || self
+                .lane_retirements
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(NexusCatalogValidationError::NonCanonicalOrder(
+                "retirements",
+            ));
+        }
+        for request in &self.dataspace_retirements {
+            request.validate_structure()?;
+        }
+        let retiring = !self.dataspace_retirements.is_empty() || !self.lane_retirements.is_empty();
+        if retiring
+            && (self.dataspace_retirements.is_empty()
+                || self.lane_retirements.is_empty()
+                || self.lane_retirements.contains(&LaneId::SINGLE)
+                || !self.dataspace_additions.is_empty()
+                || !self.lane_additions.is_empty()
+                || !self.manifest_additions.is_empty())
+        {
+            return Err(NexusCatalogValidationError::InvalidDataSpace(
+                "retirement must be a complete separate transition",
+            ));
+        }
         preflight(&bounded_json(self)?, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
     }
 
@@ -326,6 +368,35 @@ impl NexusRuntimeCatalogV1 {
         nonzero(self.baseline_manifests_hash, "baseline_manifests_hash")?;
         validate_dataspaces(&self.dataspaces)?;
         validate_manifests(&self.manifests)?;
+        count(self.retired_dataspaces.len())?;
+        count(self.retired_lanes.len())?;
+        if self
+            .retired_dataspaces
+            .windows(2)
+            .any(|pair| pair[0].retirement.dataspace_id >= pair[1].retirement.dataspace_id)
+            || self
+                .retired_lanes
+                .windows(2)
+                .any(|pair| pair[0].lane.id >= pair[1].lane.id)
+        {
+            return Err(NexusCatalogValidationError::NonCanonicalOrder(
+                "retirement history",
+            ));
+        }
+        for record in &self.retired_dataspaces {
+            record.validate_structure()?;
+        }
+        for record in &self.retired_lanes {
+            record.validate_structure()?;
+            if !self.retired_dataspaces.iter().any(|dataspace| {
+                dataspace.retirement.dataspace_id == record.lane.dataspace_id
+                    && dataspace.retirement_height == record.retirement_height
+            }) {
+                return Err(NexusCatalogValidationError::InvalidLane(
+                    "retired lane has no exact dataspace retirement".into(),
+                ));
+            }
+        }
         preflight(&bounded_json(self)?, MAX_NEXUS_RUNTIME_CATALOG_BYTES)
     }
 
@@ -399,7 +470,7 @@ fn nonzero(hash: Hash, field: &'static str) -> Result<(), NexusCatalogValidation
         Ok(())
     }
 }
-fn validate_alias(alias: &str) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn validate_alias(alias: &str) -> Result<(), NexusCatalogValidationError> {
     if alias.is_empty()
         || alias.trim() != alias
         || alias.len() > MAX_ALIAS_BYTES
@@ -432,7 +503,7 @@ fn validate_dataspaces(
     }
     Ok(())
 }
-fn validate_lanes(entries: &[LaneConfig]) -> Result<(), NexusCatalogValidationError> {
+pub(super) fn validate_lanes(entries: &[LaneConfig]) -> Result<(), NexusCatalogValidationError> {
     count(entries.len())?;
     if entries.windows(2).any(|pair| pair[0].id >= pair[1].id) {
         return Err(NexusCatalogValidationError::NonCanonicalOrder("lanes"));
@@ -558,6 +629,8 @@ mod tests {
     }
     fn transition() -> NexusCatalogTransitionV1 {
         NexusCatalogTransitionV1 {
+            dataspace_retirements: Vec::new(),
+            lane_retirements: Vec::new(),
             version: 1,
             expected_catalog_hash: Hash::new(b"catalog"),
             expected_incarnation_root: Hash::new(b"incarnations"),
@@ -574,6 +647,8 @@ mod tests {
     }
     fn runtime() -> NexusRuntimeCatalogV1 {
         NexusRuntimeCatalogV1 {
+            retired_dataspaces: Vec::new(),
+            retired_lanes: Vec::new(),
             version: 1,
             baseline_dataspaces_hash: Hash::new(b"baseline-ds"),
             baseline_manifests_hash: Hash::new(b"baseline-manifests"),
@@ -623,6 +698,17 @@ mod tests {
         let omitted = text.replace("\"expected_runtime_catalog_hash\":null,", "");
         assert_ne!(omitted, text);
         assert!(json::from_str::<NexusCatalogTransitionV1>(&omitted).is_err());
+        for field in ["dataspace_retirements", "lane_retirements"] {
+            let mut value: json::Value = json::from_str(&text).unwrap();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(json::from_value::<NexusCatalogTransitionV1>(value).is_err());
+        }
+        for field in ["retired_dataspaces", "retired_lanes"] {
+            let mut value: json::Value =
+                json::from_str(&json::to_json(&runtime()).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(json::from_value::<NexusRuntimeCatalogV1>(value).is_err());
+        }
         let state_text = json::to_json(&runtime()).unwrap();
         for altered in [
             state_text.replacen('{', "{\"unknown\":0,", 1),

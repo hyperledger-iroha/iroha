@@ -18,6 +18,7 @@ VALID_ADDRESS = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
 
 def config(*, gas_limit: int | None = 1000) -> TransactionConfig:
     return TransactionConfig(
+        chain_discriminant=753,
         network_id=NETWORK_ID,
         authority="ed0120" + "11" * 32,
         fee_payment={
@@ -100,6 +101,7 @@ def test_transaction_config_is_strict_and_defensively_immutable() -> None:
     }
     metadata = {"labels": ["first"]}
     value = TransactionConfig(
+        chain_discriminant=753,
         network_id=NETWORK_ID,
         authority="ed0120" + "11" * 32,
         fee_payment=fee_payment,
@@ -128,6 +130,7 @@ def test_transaction_config_is_strict_and_defensively_immutable() -> None:
         kwargs = {field: invalid}
         with pytest.raises((TypeError, ValueError), match=field):
             TransactionConfig(
+                chain_discriminant=753,
                 network_id=NETWORK_ID,
                 authority="ed0120" + "11" * 32,
                 fee_payment={"payer": "authority"},
@@ -141,6 +144,7 @@ def test_transaction_config_is_strict_and_defensively_immutable() -> None:
     ):
         with pytest.raises((TypeError, ValueError), match="metadata"):
             TransactionConfig(
+                chain_discriminant=753,
                 network_id=NETWORK_ID,
                 authority="ed0120" + "11" * 32,
                 fee_payment={"payer": "authority"},
@@ -160,6 +164,7 @@ def test_sign_uses_exact_staged_state_without_override_channels(
     monkeypatch.setattr(tx_module.time, "time", lambda: 123.456)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={"payer": "authority"},
@@ -183,6 +188,7 @@ def test_generated_creation_time_is_shared_by_manifest_and_builder(
     monkeypatch.setattr(tx_module.time, "time", lambda: 123.456)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={"payer": "authority"},
@@ -192,7 +198,7 @@ def test_generated_creation_time_is_shared_by_manifest_and_builder(
     monkeypatch.setattr(
         tx_module,
         "TransactionBuilder",
-        lambda *_args: builders.append(RecordingBuilder()) or builders[-1],
+        lambda *_args, **_kwargs: builders.append(RecordingBuilder()) or builders[-1],
     )
 
     first_manifest = draft.to_manifest_dict(include_creation_time=True)
@@ -234,6 +240,7 @@ def test_asset_definition_registration_uses_transaction_authority_as_owner(
         name="coin",
     )
     assert captured["args"] == ("definition",)
+    assert captured["kwargs"]["chain_discriminant"] == 753
     assert captured["kwargs"]["owning_domain"] is None
     assert captured["kwargs"]["balance_scope_policy"] == "Global"
     assert captured["kwargs"]["name"] == "coin"
@@ -291,6 +298,7 @@ def test_native_asset_definition_registration_rejects_owner_override() -> None:
         owning_domain=None,
         balance_scope_policy="Global",
         name="coin",
+        chain_discriminant=753,
     )
     assert isinstance(instruction, Instruction)
 
@@ -301,6 +309,7 @@ def test_native_asset_definition_registration_rejects_owner_override() -> None:
             owning_domain=None,
             balance_scope_policy="Global",
             name="coin",
+            chain_discriminant=753,
         )
 
 
@@ -312,24 +321,28 @@ def test_wallet_transfer_controls_chain_into_one_atomic_draft(
     class FakeInstruction:
         @staticmethod
         def set_asset_transfer_availability(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            assert kwargs.pop("chain_discriminant") == 753
             instruction = ("availability", *args, kwargs)
             calls.append(instruction)
             return instruction
 
         @staticmethod
-        def set_asset_transfer_blacklist(*args: Any) -> tuple[Any, ...]:
+        def set_asset_transfer_blacklist(*args: Any, chain_discriminant: int) -> tuple[Any, ...]:
+            assert chain_discriminant == 753
             instruction = ("blacklist", *args)
             calls.append(instruction)
             return instruction
 
         @staticmethod
-        def set_asset_transfer_control(*args: Any) -> tuple[Any, ...]:
+        def set_asset_transfer_control(*args: Any, chain_discriminant: int) -> tuple[Any, ...]:
+            assert chain_discriminant == 753
             instruction = ("transfer_control", *args)
             calls.append(instruction)
             return instruction
 
         @staticmethod
-        def set_asset_holding_limit(*args: Any) -> tuple[Any, ...]:
+        def set_asset_holding_limit(*args: Any, chain_discriminant: int) -> tuple[Any, ...]:
+            assert chain_discriminant == 753
             instruction = ("holding_limit", *args)
             calls.append(instruction)
             return instruction
@@ -417,7 +430,7 @@ def test_asset_transfer_caps_reject_duplicate_windows_before_native_call(
 ) -> None:
     class FakeInstruction:
         @staticmethod
-        def set_asset_transfer_control(*args: Any) -> tuple[Any, ...]:
+        def set_asset_transfer_control(*args: Any, chain_discriminant: int) -> tuple[Any, ...]:
             raise AssertionError(f"native constructor must not be called: {args!r}")
 
     monkeypatch.setattr(tx_module, "Instruction", FakeInstruction)
@@ -439,7 +452,8 @@ def test_asset_transfer_caps_reject_duplicate_windows_before_native_call(
 class RecordingBuilder:
     """Minimal native-builder stand-in used to inspect authoring calls."""
 
-    def __init__(self, *_args: Any) -> None:
+    def __init__(self, *_args: Any, chain_discriminant: int = 753) -> None:
+        self.chain_discriminant = chain_discriminant
         self.operations: list[tuple[Any, ...]] = []
 
     def use_executable_batch(self) -> None:
@@ -483,7 +497,7 @@ def test_to_builder_is_a_pure_repeatable_snapshot(
     monkeypatch.setattr(
         tx_module,
         "TransactionBuilder",
-        lambda *_args: builders.append(RecordingBuilder()) or builders[-1],
+        lambda *_args, **_kwargs: builders.append(RecordingBuilder()) or builders[-1],
     )
     draft = TransactionDraft(config()).bind_privacy_exact12_capability_manifest_v1(
         manifest  # type: ignore[arg-type]
@@ -504,8 +518,8 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
 ) -> None:
     builders: list[RecordingBuilder] = []
 
-    def make_builder(*args: Any) -> RecordingBuilder:
-        builder = RecordingBuilder(*args)
+    def make_builder(*args: Any, **kwargs: Any) -> RecordingBuilder:
+        builder = RecordingBuilder(*args, **kwargs)
         builders.append(builder)
         return builder
 
@@ -517,6 +531,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
         NETWORK_ID,
         "authority",
         bytes([0x11]) * 32,
+        chain_discriminant=753,
         fee_payment={"payer": "authority", "value": {}},
         entries=[instruction, call],  # type: ignore[list-item]
         creation_time_ms=42,
@@ -535,6 +550,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
             NETWORK_ID,
             "authority",
             bytes([0x11]) * 32,
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
             instructions=[],
             entries=[],
@@ -544,6 +560,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
             NETWORK_ID,
             "authority",
             bytearray(32),  # type: ignore[arg-type]
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
         )
     with pytest.raises(ValueError, match="exactly 32 bytes"):
@@ -551,6 +568,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
             NETWORK_ID,
             "authority",
             bytes(31),
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
         )
 
@@ -575,6 +593,7 @@ def test_build_signed_transaction_rejects_lossy_integer_inputs(
             NETWORK_ID,
             "authority",
             bytes([0x11]) * 32,
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
             **{field: value},
         )
@@ -586,6 +605,7 @@ def test_build_signed_transaction_rejects_non_json_payload_values() -> None:
             NETWORK_ID,
             "authority",
             bytes([0x11]) * 32,
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {"gas": float("nan")}},
         )
     with pytest.raises(TypeError, match="keys must be strings"):
@@ -593,6 +613,7 @@ def test_build_signed_transaction_rejects_non_json_payload_values() -> None:
             NETWORK_ID,
             "authority",
             bytes([0x11]) * 32,
+            chain_discriminant=753,
             fee_payment={"payer": "authority", 1: "not-json"},  # type: ignore[dict-item]
         )
     with pytest.raises(TypeError, match="exact JSON values"):
@@ -600,6 +621,7 @@ def test_build_signed_transaction_rejects_non_json_payload_values() -> None:
             NETWORK_ID,
             "authority",
             bytes([0x11]) * 32,
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
             metadata={"unsupported": object()},
         )
@@ -614,5 +636,65 @@ def test_build_signed_transaction_rejects_label_and_bare_hash_domains(
             retired_domain,  # type: ignore[arg-type]
             "authority",
             b"private",
+            chain_discriminant=753,
             fee_payment={"payer": "authority", "value": {}},
         )
+
+
+@pytest.mark.parametrize("selected", [None, True, -1, 65536, "117"])
+def test_transaction_entry_points_require_exact_selected_chain_before_native_call(
+    monkeypatch, selected
+):
+    monkeypatch.setattr(
+        tx_module,
+        "TransactionBuilder",
+        lambda *a, **k: pytest.fail("invalid chain reached native constructor"),
+    )
+    monkeypatch.setattr(
+        crypto_module,
+        "TransactionBuilder",
+        lambda *a, **k: pytest.fail("invalid chain reached native constructor"),
+    )
+    with pytest.raises(ValueError, match="chain_discriminant"):
+        TransactionConfig(
+            network_id=NETWORK_ID, authority="owned", fee_payment={}, chain_discriminant=selected
+        )
+    with pytest.raises(ValueError, match="chain_discriminant"):
+        crypto_module.build_signed_transaction(
+            NETWORK_ID, "owned", bytes(32), fee_payment={}, chain_discriminant=selected
+        )
+
+
+def test_transaction_entry_points_have_no_implicit_chain_discriminator():
+    with pytest.raises(TypeError, match="chain_discriminant"):
+        TransactionConfig(network_id=NETWORK_ID, authority="owned", fee_payment={})
+    with pytest.raises(TypeError, match="chain_discriminant"):
+        crypto_module.build_signed_transaction(NETWORK_ID, "owned", bytes(32), fee_payment={})
+
+
+def test_explicit_chain_is_retained_by_manifest_native_builder_and_sign(monkeypatch):
+    selected = 117
+    captured = {}
+
+    def builder(*args, **kwargs):
+        captured["builder"] = kwargs
+        return RecordingBuilder(*args, **kwargs)
+
+    monkeypatch.setattr(tx_module, "TransactionBuilder", builder)
+    monkeypatch.setattr(
+        tx_module, "build_signed_transaction", lambda *a, **k: captured.update(sign=k) or "signed"
+    )
+    draft = TransactionDraft(
+        TransactionConfig(
+            network_id=NETWORK_ID,
+            authority="owned",
+            fee_payment={},
+            chain_discriminant=selected,
+            creation_time_ms=42,
+        )
+    )
+    assert draft.to_manifest_dict()["chain_discriminant"] == selected
+    assert draft.to_builder().chain_discriminant == selected
+    draft.sign(bytes(32))
+    assert captured["builder"] == {"chain_discriminant": selected}
+    assert captured["sign"]["chain_discriminant"] == selected

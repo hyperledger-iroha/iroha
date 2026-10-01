@@ -213,6 +213,7 @@ impl FinalitySource for Source<'_> {
         let height = self.chain.checkpoint().height();
         let config_fingerprint = Hash::new(b"fixture config");
         let body = SumeragiFinalityAttestationBody {
+            observed_at_unix_ms: 1_000_000,
             challenge: *challenge,
             network_id: self.chain.network_id(),
             node_id: peer.clone(),

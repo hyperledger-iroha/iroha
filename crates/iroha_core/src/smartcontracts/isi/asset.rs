@@ -5242,7 +5242,11 @@ pub mod isi {
             .fees
             .sponsor_vault_custody_account_id
             .clone();
-        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let destination_id = AssetId::with_scope(
+            source_id.definition().clone(),
+            destination,
+            source_id.scope().clone(),
+        );
         if !crate::executor::is_initial_genesis_context(state_transaction)
             || source_id.account() != &program_id.sponsor
         {

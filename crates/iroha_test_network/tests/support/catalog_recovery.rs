@@ -597,6 +597,8 @@ impl CatalogScenario {
             manifest_hash,
         };
         let transition = NexusCatalogTransitionV1 {
+            dataspace_retirements: Vec::new(),
+            lane_retirements: Vec::new(),
             version: NexusCatalogTransitionV1::VERSION,
             expected_catalog_hash: before.catalog_hash,
             expected_incarnation_root: before.incarnation_root,

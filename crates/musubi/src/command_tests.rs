@@ -1134,12 +1134,21 @@ fn top_level_and_nested_command_inventory_is_exact() {
         command_names(&command),
         BTreeSet::from_iter(
             [
-                "add", "alias", "build", "cache", "call", "check", "deploy", "fetch", "info",
-                "init", "metadata", "network", "new", "owner", "package", "publish", "remove",
-                "search", "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
+                "add", "alias", "artifact", "build", "cache", "call", "check", "deploy", "fetch",
+                "info", "init", "metadata", "network", "new", "owner", "package", "publish",
+                "remove", "search", "test", "tree", "unyank", "update", "versions", "view",
+                "wallet", "yank",
             ]
             .map(str::to_owned)
         )
+    );
+    let artifact = command
+        .get_subcommands()
+        .find(|command| command.get_name() == "artifact")
+        .expect("current native artifact command");
+    assert_eq!(
+        command_names(artifact),
+        BTreeSet::from_iter(["prepare", "inspect", "resume"].map(str::to_owned))
     );
     let wallet = command
         .get_subcommands()

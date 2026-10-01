@@ -93,6 +93,9 @@ use network::{NetworkCommandArgs, run_network};
 #[path = "command_deploy.rs"]
 mod deploy;
 use deploy::{DeployArgs, ViewArgs, run_deploy, run_view};
+#[path = "command_artifact.rs"]
+mod artifact;
+use artifact::{ArtifactArgs, run_artifact};
 #[path = "command_call.rs"]
 mod call;
 use call::{CallArgs, run_call};
@@ -145,6 +148,8 @@ struct Cli {
 }
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Prepare immutable artifacts and recover exact native deployment journals.
+    Artifact(ArtifactArgs),
     /// Create a wallet, obtain testnet XOR, inspect balances and send fee-paying transactions.
     Wallet(WalletArgs),
     /// Build and deploy one contract through a recoverable native transaction plan.
@@ -203,6 +208,7 @@ impl Command {
         match self {
             Self::Wallet(_) => "wallet",
             Self::Deploy(_) => "deploy",
+            Self::Artifact(_) => "artifact",
             Self::Call(_) => "call",
             Self::View(_) => "view",
             Self::Network(_) => "network",
@@ -711,6 +717,7 @@ fn dispatch(
     match command {
         Command::Wallet(args) => run_wallet(manifest_path, args, progress),
         Command::Deploy(args) => run_deploy(manifest_path, args, progress),
+        Command::Artifact(args) => run_artifact(args, progress),
         Command::Call(args) => run_call(manifest_path, args, progress),
         Command::View(args) => run_view(manifest_path, args),
         Command::Network(args) => run_network(manifest_path, args),

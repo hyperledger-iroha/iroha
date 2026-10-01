@@ -142,6 +142,7 @@ impl Fixture {
                 &json::to_json(&proofs.to_vec()).unwrap(),
                 &PyNetworkId { inner: network },
                 label,
+                pyo3::types::PyInt::new(py, 751).as_any(),
                 checkpoint,
             )?;
             Ok((projection, promoted.bind(py).as_bytes().to_vec()))
@@ -356,6 +357,55 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
 }
 
 #[test]
+fn native_selected_output_uses_selected_address_discriminant_and_restores_outer_scope() {
+    use iroha_data_model::account::address::ChainDiscriminantGuard;
+
+    pyo3::Python::initialize();
+    let _outer_discriminant = ChainDiscriminantGuard::enter(751);
+    let f = Fixture::new(false);
+    let checkpoint = f.checkpoint_bytes();
+    let authority = f.selected.entrypoint.authority_opt().unwrap();
+    let outer_authority = json::to_value(authority).unwrap();
+    let mut projected_authorities = Vec::new();
+    let mut promoted_checkpoints = Vec::new();
+    for discriminant in [369, 753] {
+        let (expected_authority, expected_committed) = {
+            let _selected_discriminant = ChainDiscriminantGuard::enter(discriminant);
+            (
+                json::to_value(authority).unwrap(),
+                json::to_value(&f.selected).unwrap(),
+            )
+        };
+        let (projection, promoted) = pyo3::Python::attach(|py| {
+            let (projection, promoted) = verify_committed_transaction_inclusion_py(
+                py,
+                &hex::encode(f.selected.entrypoint_hash.as_ref()),
+                &response(vec![f.selected.clone()]),
+                &f.chain_json(),
+                &PyNetworkId { inner: f.network() },
+                f.checkpoint.chain_id(),
+                pyo3::types::PyInt::new(py, discriminant).as_any(),
+                &checkpoint,
+            )?;
+            Ok::<_, pyo3::PyErr>((projection, promoted.bind(py).as_bytes().to_vec()))
+        })
+        .unwrap();
+        let result: json::Value = json::from_json(&projection).unwrap();
+        assert_eq!(result["authority"], expected_authority);
+        assert_eq!(result["committed_transaction"], expected_committed);
+        assert_eq!(
+            result["transaction_hash"].as_str(),
+            Some(hex::encode(f.selected.entrypoint_hash.as_ref()).as_str()),
+        );
+        assert_eq!(json::to_value(authority).unwrap(), outer_authority);
+        projected_authorities.push(result["authority"].clone());
+        promoted_checkpoints.push(promoted);
+    }
+    assert_ne!(projected_authorities[0], projected_authorities[1]);
+    assert_eq!(promoted_checkpoints[0], promoted_checkpoints[1]);
+}
+
+#[test]
 fn native_selected_output_rejects_rehashed_outputs_and_swapped_rows() {
     pyo3::Python::initialize();
     let f = Fixture::new(false);
@@ -472,4 +522,33 @@ fn native_selected_output_rejects_chain_resource_overflow_before_authentication(
         .unwrap_err()
         .to_string();
     assert!(error.contains("1..4096"));
+}
+
+#[test]
+fn committed_verifier_rejects_boolean_discriminator_before_proof_decode() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    pyo3::Python::initialize();
+    let _outer = ChainDiscriminantGuard::enter(117);
+    pyo3::Python::attach(|py| {
+        let boolean = pyo3::types::PyBool::new(py, true);
+        let error = verify_committed_transaction_inclusion_py(
+            py,
+            "unparsed-hash",
+            &[],
+            "[]",
+            &PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH])
+                .expect("independently selected fixture NetworkId"),
+            "independent-chain",
+            boolean.as_any(),
+            &[],
+        )
+        .expect_err("bool cannot select a root discriminator");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+        assert!(error.to_string().contains("expected_chain_discriminant"));
+    });
+    assert_eq!(
+        chain_discriminant(),
+        117,
+        "invalid input never alters the caller scope"
+    );
 }

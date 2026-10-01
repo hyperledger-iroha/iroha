@@ -55,10 +55,11 @@ summary: Current SF-6 release automation and QA surfaces.
 
 ## Tooling
 
-- `ci/check_sorafs_cli_release.sh` is the committed local release gate for
-  formatting, Clippy, shell syntax, adversarial release-helper tests, and
-  focused SoraFS crate tests.
-- `.github/workflows/sorafs-cli-release.yml` runs the strict release gate,
+- `ci/check_sorafs_cli_release.sh` checks source provenance and shipping features
+  by default. Explicit `--diagnostics` runs formatting, Clippy, shell syntax,
+  adversarial release-helper tests, and focused SoraFS crate tests; these
+  diagnostics are not deployment prerequisites.
+- `.github/workflows/sorafs-cli-release.yml` checks source integrity,
   validates `release/version-map.toml`, builds native Linux x86_64/aarch64,
   macOS x86_64/aarch64, and additional Windows x86_64 `sorafs_cli`,
   `sorafs_fetch`, and `iroha` candidates, packages

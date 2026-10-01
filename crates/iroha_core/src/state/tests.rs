@@ -566,6 +566,7 @@ fn fixture_manual_lifecycle_storage_identity(
         plan,
         height,
         false,
+        false,
     )
     .expect("prepare the exact manual lifecycle identity without publishing it");
     fixture_updated_storage_identity(state, &update, lane_id)

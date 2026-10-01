@@ -562,7 +562,7 @@ pub(super) fn acquire(directory: &PrivateDirectory, file: &str, name: &str) -> R
     Ok(lock)
 }
 
-fn runtime_owned(directory: &PrivateDirectory) -> Result<bool> {
+pub(super) fn runtime_owned(directory: &PrivateDirectory) -> Result<bool> {
     file_owned(directory, "runtime.lock")
 }
 

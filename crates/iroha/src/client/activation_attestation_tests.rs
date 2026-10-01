@@ -353,6 +353,7 @@ fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::Sumeragi
     let (proof, verifier, signer) = current_finality_fixture();
     let node_id = iroha_model_base::peer::PeerId::new(signer.public_key().clone());
     let body = SumeragiFinalityAttestationBody {
+        observed_at_unix_ms: 1_000_000,
         challenge: [17; 32],
         network_id: NetworkId::from_genesis_hash(proof.block_header.hash()),
         node_fingerprint: Hash::new(norito::codec::Encode::encode(&node_id)),

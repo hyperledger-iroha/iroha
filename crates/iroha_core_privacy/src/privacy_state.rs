@@ -5638,7 +5638,13 @@ impl PrivacyOrchardPoolStateV1 {
         )
         .map_err(|_| "Orchard compact frontier is invalid")
     }
-    fn validate_bootstrap_binding(&self, namespace: PrivacyNamespaceV1) -> Result<(), String> {
+    /// Validate the pool namespace and reconstructed governed bootstrap digest.
+    ///
+    /// This structural check grants no execution or governance authority.
+    ///
+    /// # Errors
+    /// Rejects a non-pool namespace, invalid pool bindings or a mismatched digest.
+    pub fn validate_bootstrap_binding(&self, namespace: PrivacyNamespaceV1) -> Result<(), String> {
         let PrivacyNamespaceScopeV1::Pool(pool) = namespace.scope() else {
             return Err("Orchard pool state has a non-pool namespace".to_owned());
         };

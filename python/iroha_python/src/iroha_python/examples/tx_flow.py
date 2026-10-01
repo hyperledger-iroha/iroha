@@ -58,6 +58,7 @@ def main() -> None:
         required=True,
         help="Exact canonical checksummed genesis-derived NetworkId literal",
     )
+    parser.add_argument("--chain-discriminant", required=True, type=int, help="Independently selected native chain discriminator (u16)")
     parser.add_argument(
         "--authority",
         required=True,
@@ -144,6 +145,7 @@ def main() -> None:
 
     config = TransactionConfig(
         network_id=network_id,
+        chain_discriminant=args.chain_discriminant,
         authority=args.authority,
         fee_payment=requested_fee_payment,
         ttl_ms=args.ttl_ms,
@@ -178,6 +180,7 @@ def main() -> None:
 
     client = create_torii_client(
         args.base_url,
+        chain_discriminant=args.chain_discriminant,
         auth_token=args.auth_token,
         api_token=args.api_token,
     )

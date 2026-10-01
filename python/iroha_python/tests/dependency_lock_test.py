@@ -258,7 +258,15 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         assert block is not None
         source = block.group(1)
         assert source.count("Authenticate canonical privacy graph snapshot") == 1
-        assert source.count("fetch --locked --lockfile-path") == 1
+        if artifact_job == "privacy_swift_sdk_parse":
+            assert source.count("fetch --locked --lockfile-path") == 1
+        else:
+            # The stock N-API toolchain consumes the authenticated tracked
+            # workspace lock; the external snapshot independently seals it.
+            assert source.count('fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"') == 1
+            assert 'env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.93.1 cargo)"' in source
+            assert "--lockfile-path" not in source
+            assert "cmp -s \"$release_lock\" Cargo.lock" in source
         assert "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" in source
         assert "source ci/privacy_sdk_cargo_lockfile.sh" in source
         assert "provision-ci" not in source

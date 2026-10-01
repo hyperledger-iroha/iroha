@@ -1,4 +1,4 @@
-"""Static and adversarial tests for the exact-SHA workspace release gate."""
+"""Static guards for the exact-SHA release build and optional diagnostics."""
 
 from __future__ import annotations
 
@@ -64,6 +64,12 @@ RELEASE_GATE_COMMAND = (
 )
 RELEASE_GATE_BUILD = "cargo build --locked --offline --workspace"
 RELEASE_GATE_BUILD_STEP = "- name: Build the full workspace"
+DIAGNOSTIC_CONDITION = (
+    "    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}"
+)
+DIAGNOSTIC_JOBS = (
+    "format", "release-diagnostics", "doc", "test", "coverage", "clippy", "adversarial",
+)
 RETIRED_CENSUS_MARKERS = (
     "taira_release",
     "taira-native-checks",
@@ -72,10 +78,10 @@ RETIRED_CENSUS_MARKERS = (
 )
 
 
-def _release_gate_packages(build_job: str) -> list[str]:
-    """Return the `-p` package list of the build job's release-gate command."""
+def _release_gate_packages(diagnostic_job: str) -> list[str]:
+    """Return the `-p` package list of the optional nextest command."""
 
-    normalized = _normalized(build_job)
+    normalized = _normalized(diagnostic_job)
     start = normalized.find("cargo nextest run ")
     if start < 0:
         return []
@@ -469,22 +475,22 @@ def _validate_release_gate_profile(config: str) -> list[str]:
 
 
 def _validate_release_gate_job(job: str, config: str) -> list[str]:
-    """Return errors when the build job does not run the nextest release gate."""
+    """Require exact-source nextest selection only in the optional diagnostic job."""
 
     errors: list[str] = []
     for marker in RETIRED_CENSUS_MARKERS:
         if marker in job:
-            errors.append(f"build must not run the retired Python release census: {marker}")
+            errors.append(f"release-diagnostics must not run the retired Python release census: {marker}")
     normalized = _normalized(job)
     positions = [
         normalized.find(marker)
         for marker in (
-            NEXTEST_INSTALL_ACTION, RELEASE_GATE_FETCH, RELEASE_GATE_COMMAND, RELEASE_GATE_BUILD,
+            NEXTEST_INSTALL_ACTION, RELEASE_GATE_FETCH, RELEASE_GATE_COMMAND,
         )
     ]
     if not all(position >= 0 for position in positions) or positions != sorted(positions):
         errors.append(
-            "build must install nextest, fetch, run the release gate, then build offline"
+            "release-diagnostics must install nextest, fetch, then run offline"
         )
     packages = _release_gate_packages(job)
     try:
@@ -494,7 +500,7 @@ def _validate_release_gate_job(job: str, config: str) -> list[str]:
     expected = _filter_packages(default_filter)
     if len(packages) != len(set(packages)) or set(packages) != set(expected):
         errors.append(
-            "build release-gate packages must equal the release-gate default-filter packages"
+            "release-diagnostics packages must equal the release-gate default-filter packages"
         )
     return errors
 
@@ -534,12 +540,45 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
         if marker not in workflow:
             errors.append(message)
 
+    for event in ("workflow_dispatch", "workflow_call"):
+        match = re.search(
+            rf"(?ms)^  {event}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:|^permissions:|\Z)",
+            workflow,
+        )
+        body = "" if match is None else match.group("body")
+        if not re.search(
+            r"(?m)^      run_diagnostics:\n"
+            r"        description: [^\n]+\n"
+            r"        required: false\n"
+            r"        type: boolean\n"
+            r"        default: false$",
+            body,
+        ):
+            errors.append(f"{event} diagnostics must be an optional boolean defaulting to false")
+
+    for job_name in DIAGNOSTIC_JOBS:
+        job = _job_block(workflow, job_name)
+        if DIAGNOSTIC_CONDITION not in job:
+            errors.append(f"{job_name} must run only for nightly or explicitly requested diagnostics")
+        if "    continue-on-error: true\n" not in job:
+            errors.append(f"{job_name} diagnostics must not block the release workflow")
+
+    build_job = _job_block(workflow, "build")
+    if re.search(r"(?m)^    (?:if|needs|continue-on-error):", build_job):
+        errors.append("release build must be independent of diagnostic jobs")
+    for marker in ("cargo nextest", "cargo test", "cargo clippy", "cargo fmt", *RETIRED_CENSUS_MARKERS):
+        if marker in build_job:
+            errors.append(f"release build must not run diagnostics: {marker}")
+    if _normalized(build_job).find(RELEASE_GATE_FETCH) > _normalized(build_job).find(RELEASE_GATE_BUILD):
+        errors.append("release build must fetch locked dependencies before building offline")
+
     if re.search(r"(?m)^  pull_request:", workflow):
         errors.append("release workflow must not substitute PR state for release evidence")
 
     expected_runners = {
         "format": "runs-on: ubuntu-latest",
         "build": "runs-on: [self-hosted, Linux, iroha2]",
+        "release-diagnostics": "runs-on: [self-hosted, Linux, iroha2]",
         "doc": "runs-on: [self-hosted, Linux, iroha2]",
         "test": "runs-on: [self-hosted, Linux, iroha2]",
         "coverage": "runs-on: [self-hosted, Linux, iroha2]",
@@ -553,10 +592,14 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
         ),
         "build": (
             f"shared-key: workspace-release-build-{PINNED_RUST}",
+            RELEASE_GATE_FETCH,
+            RELEASE_GATE_BUILD,
+        ),
+        "release-diagnostics": (
+            f"shared-key: workspace-release-diagnostics-{PINNED_RUST}",
             NEXTEST_INSTALL_ACTION,
             RELEASE_GATE_FETCH,
             RELEASE_GATE_COMMAND,
-            RELEASE_GATE_BUILD,
         ),
         "doc": ("cargo doc --locked --workspace --no-deps --all-features",),
         "test": (
@@ -607,7 +650,7 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
         if f"toolchain: {PINNED_RUST}" not in job:
             errors.append(f"{job_name} must pin Rust {PINNED_RUST}")
 
-        if job_name == "build":
+        if job_name == "release-diagnostics":
             errors.extend(_validate_release_gate_job(job, nextest_config))
 
         normalized_job = _normalized(job)
@@ -814,27 +857,46 @@ def _validate_pr_parity(workflow: str) -> list[str]:
 
 
 def test_workspace_release_workflow_is_exact_sha_and_complete() -> None:
-    """Every full-workspace release phase is pinned, locked, and exact-source."""
+    """The release build is independent and optional diagnostics retain exact source."""
 
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert _validate_release_workflow(workflow) == []
+
+
+def test_release_workflow_diagnostics_are_optional_and_nonblocking() -> None:
+    """Diagnostics cannot become default prerequisites or mask a release build failure."""
+
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    for event in ("workflow_dispatch", "workflow_call"):
+        start = workflow.index(f"  {event}:\n")
+        prefix, remaining = workflow[:start], workflow[start:]
+        changed = prefix + _replace_once(remaining, "        default: false", "        default: true")
+        assert f"{event} diagnostics must be an optional boolean defaulting to false" in _validate_release_workflow(changed)
+    for job_name in DIAGNOSTIC_JOBS:
+        changed = _replace_once_in_job(workflow, job_name, DIAGNOSTIC_CONDITION, "    if: true")
+        assert f"{job_name} must run only for nightly or explicitly requested diagnostics" in _validate_release_workflow(changed)
+        changed = _replace_once_in_job(workflow, job_name, "    continue-on-error: true", "    continue-on-error: false")
+        assert f"{job_name} diagnostics must not block the release workflow" in _validate_release_workflow(changed)
+    for field in ("needs: test", "continue-on-error: true", "if: inputs.run_diagnostics"):
+        changed = _replace_once_in_job(workflow, "build", "  build:\n", f"  build:\n    {field}\n")
+        assert "release build must be independent of diagnostic jobs" in _validate_release_workflow(changed)
 
 
 @pytest.mark.parametrize(("old", "new", "expected_error"), (
     (
         "--profile release-gate --locked --offline",
         "--profile ci --locked --offline",
-        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+        f"release-diagnostics is missing required command: {RELEASE_GATE_COMMAND}",
     ),
     (
         "--profile release-gate --locked --offline",
         "--profile release-gate --offline",
-        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+        f"release-diagnostics is missing required command: {RELEASE_GATE_COMMAND}",
     ),
     (
         "--no-tests=fail",
         "--no-tests=pass",
-        f"build is missing required command: {RELEASE_GATE_COMMAND}",
+        f"release-diagnostics is missing required command: {RELEASE_GATE_COMMAND}",
     ),
     (
         RELEASE_GATE_BUILD,
@@ -854,59 +916,61 @@ def test_workspace_release_workflow_is_exact_sha_and_complete() -> None:
     (
         NEXTEST_INSTALL_ACTION,
         "uses: taiki-e/install-action@nextest",
-        f"build is missing required command: {NEXTEST_INSTALL_ACTION}",
+        f"release-diagnostics is missing required command: {NEXTEST_INSTALL_ACTION}",
     ),
     (
         "-p fastpq_prover -p iroha_core",
         "-p fastpq_prover",
-        "build release-gate packages must equal the release-gate default-filter packages",
+        "release-diagnostics packages must equal the release-gate default-filter packages",
     ),
     (
         "-p iroha_test_network",
         "-p iroha_test_network -p integration_tests",
-        "build release-gate packages must equal the release-gate default-filter packages",
+        "release-diagnostics packages must equal the release-gate default-filter packages",
     ),
     (
         "-p iroha_test_network",
         "-p iroha_test_network -p mv",
-        "build release-gate packages must equal the release-gate default-filter packages",
+        "release-diagnostics packages must equal the release-gate default-filter packages",
     ),
     (
         "run: cargo fetch --locked",
         "run: cargo fetch --locked && python3 scripts/taira_release_check.py",
-        "build must not run the retired Python release census: taira_release",
+        "release build must not run diagnostics: taira_release",
     ),
 ))
 def test_release_workflow_guard_rejects_release_gate_drift(
     old: str, new: str, expected_error: str
 ) -> None:
-    """CI cannot weaken, narrow or replace the nextest release gate."""
+    """The optional nextest job retains its locks and selected diagnostic packages."""
 
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    changed = _replace_once_in_job(workflow, "build", old, new)
+    job_name = "release-diagnostics" if expected_error.startswith("release-diagnostics") else "build"
+    changed = _replace_once_in_job(workflow, job_name, old, new)
     assert expected_error in _validate_release_workflow(changed)
 
 
 def test_release_workflow_guard_rejects_reordered_release_gate() -> None:
-    """The offline gate and workspace build must follow the locked fetch."""
+    """Offline diagnostics must follow their own locked fetch."""
 
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    job = _job_block(workflow, "build")
+    job = _job_block(workflow, "release-diagnostics")
     fetch = re.search(r"(?ms)^      - name: Fetch locked dependencies\n.*?(?=^      - )", job)
     assert fetch is not None
     changed = job[:fetch.start()] + job[fetch.end():] + fetch.group(0)
     errors = _validate_release_workflow(workflow.replace(job, changed))
-    assert "build must install nextest, fetch, run the release gate, then build offline" in errors
+    assert "release-diagnostics must install nextest, fetch, then run offline" in errors
 
 
 def test_release_workflow_build_job_imports_no_taira_release_tooling() -> None:
-    """The release gate runs Cargo directly; no Python census or lane helper remains."""
+    """The release build runs locked Cargo without tests or the retired census."""
 
     job = _job_block(RELEASE_WORKFLOW.read_text(encoding="utf-8"), "build")
     assert job
     for marker in RETIRED_CENSUS_MARKERS:
         assert marker not in job
-    assert _release_gate_packages(job)
+    assert not _release_gate_packages(job)
+    assert RELEASE_GATE_BUILD in job
 
 
 def test_release_gate_profile_parses_and_matches_the_workflow() -> None:
@@ -916,7 +980,7 @@ def test_release_gate_profile_parses_and_matches_the_workflow() -> None:
     assert _validate_release_gate_profile(config) == []
     gate = tomllib.loads(config)["profile"]["release-gate"]
     packages = _filter_packages(gate["default-filter"])
-    job = _job_block(RELEASE_WORKFLOW.read_text(encoding="utf-8"), "build")
+    job = _job_block(RELEASE_WORKFLOW.read_text(encoding="utf-8"), "release-diagnostics")
     assert sorted(_release_gate_packages(job)) == sorted(set(packages))
 
 

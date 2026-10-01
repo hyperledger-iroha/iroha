@@ -262,6 +262,7 @@ fn require_parent(
 }
 
 pub(super) enum BoundedOperationExpectation<'a> {
+    Parameter(&'a super::ParameterUpdateRequest),
     Alias(&'a AliasSetupPlanRequestV1, &'a BoundedTransactionOptions),
     Registration(&'a PrivateRootRegistrationRequest),
     Anchor(&'a PrivateRootAnchorRequest),
@@ -269,6 +270,11 @@ pub(super) enum BoundedOperationExpectation<'a> {
 impl BoundedOperationExpectation<'_> {
     pub(super) fn verify(&self, record: &TransactionJournal) -> Result<()> {
         let options = match (self, &record.operation) {
+            (Self::Parameter(request), NativeOperation::ParameterUpdate { parameter, .. })
+                if parameter == &request.parameter =>
+            {
+                &request.options
+            }
             (Self::Alias(expected, options), NativeOperation::AliasSetup { request, .. })
                 if *expected == request =>
             {

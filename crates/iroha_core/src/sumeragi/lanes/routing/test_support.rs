@@ -78,3 +78,17 @@ pub(crate) fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::bloc
     .unwrap()
     .0
 }
+
+/// Explicit closed native lane policy using the actual signed fixture's DA layout.
+/// Component fixtures do not infer a post-genesis schedule from an empty World.
+pub(crate) fn closed_native_lane_policy(scope: SumeragiRootScope) -> Parameter {
+    let genesis = signed_genesis(scope);
+    let epoch = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
+    Parameter::Custom(
+        iroha_data_model::sumeragi_lanes::SumeragiLanePolicy::for_chain(
+            Default::default(),
+            epoch.da_layout,
+        )
+        .into_custom_parameter(),
+    )
+}

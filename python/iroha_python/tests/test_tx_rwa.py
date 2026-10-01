@@ -29,7 +29,8 @@ def _load_tx_module(monkeypatch):
             return cls(payload)
 
         @classmethod
-        def register_rwa(cls, rwa: dict[str, Any]) -> "FakeInstruction":
+        def register_rwa(cls, rwa: dict[str, Any], *, chain_discriminant: int) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record("register_rwa", {"RegisterRwa": {"rwa": rwa}})
 
         @classmethod
@@ -39,7 +40,10 @@ def _load_tx_module(monkeypatch):
             rwa_id: str,
             quantity: str,
             destination: str,
+            *,
+            chain_discriminant: int,
         ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "transfer_rwa",
                 {
@@ -53,33 +57,45 @@ def _load_tx_module(monkeypatch):
             )
 
         @classmethod
-        def merge_rwas(cls, merge: dict[str, Any]) -> "FakeInstruction":
+        def merge_rwas(cls, merge: dict[str, Any], *, chain_discriminant: int) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record("merge_rwas", {"MergeRwas": merge})
 
         @classmethod
-        def redeem_rwa(cls, rwa_id: str, quantity: str) -> "FakeInstruction":
+        def redeem_rwa(
+            cls, rwa_id: str, quantity: str, *, chain_discriminant: int
+        ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "redeem_rwa",
                 {"RedeemRwa": {"rwa": rwa_id, "quantity": quantity}},
             )
 
         @classmethod
-        def freeze_rwa(cls, rwa_id: str) -> "FakeInstruction":
+        def freeze_rwa(cls, rwa_id: str, *, chain_discriminant: int) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record("freeze_rwa", {"FreezeRwa": {"rwa": rwa_id}})
 
         @classmethod
-        def unfreeze_rwa(cls, rwa_id: str) -> "FakeInstruction":
+        def unfreeze_rwa(cls, rwa_id: str, *, chain_discriminant: int) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record("unfreeze_rwa", {"UnfreezeRwa": {"rwa": rwa_id}})
 
         @classmethod
-        def hold_rwa(cls, rwa_id: str, quantity: str) -> "FakeInstruction":
+        def hold_rwa(
+            cls, rwa_id: str, quantity: str, *, chain_discriminant: int
+        ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "hold_rwa",
                 {"HoldRwa": {"rwa": rwa_id, "quantity": quantity}},
             )
 
         @classmethod
-        def release_rwa(cls, rwa_id: str, quantity: str) -> "FakeInstruction":
+        def release_rwa(
+            cls, rwa_id: str, quantity: str, *, chain_discriminant: int
+        ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "release_rwa",
                 {"ReleaseRwa": {"rwa": rwa_id, "quantity": quantity}},
@@ -91,7 +107,10 @@ def _load_tx_module(monkeypatch):
             rwa_id: str,
             quantity: str,
             destination: str,
+            *,
+            chain_discriminant: int,
         ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "force_transfer_rwa",
                 {
@@ -108,7 +127,10 @@ def _load_tx_module(monkeypatch):
             cls,
             rwa_id: str,
             controls: dict[str, Any],
+            *,
+            chain_discriminant: int,
         ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "set_rwa_controls",
                 {"SetRwaControls": {"rwa": rwa_id, "controls": controls}},
@@ -120,14 +142,20 @@ def _load_tx_module(monkeypatch):
             rwa_id: str,
             key: str,
             value: Any,
+            *,
+            chain_discriminant: int,
         ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "set_rwa_key_value",
                 {"SetRwaKeyValue": {"rwa": rwa_id, "key": key, "value": value}},
             )
 
         @classmethod
-        def remove_rwa_key_value(cls, rwa_id: str, key: str) -> "FakeInstruction":
+        def remove_rwa_key_value(
+            cls, rwa_id: str, key: str, *, chain_discriminant: int
+        ) -> "FakeInstruction":
+            assert chain_discriminant == 753
             return cls._record(
                 "remove_rwa_key_value",
                 {"RemoveRwaKeyValue": {"rwa": rwa_id, "key": key}},
@@ -144,6 +172,7 @@ def test_transaction_draft_register_and_merge_rwa_wrap_payload_mappings(monkeypa
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
         tx.TransactionConfig(
+            chain_discriminant=753,
             network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
             authority=AUTHORITY,
             fee_payment=tx.authority_fee_payment(charge_limits=[]),
@@ -184,16 +213,14 @@ def test_transaction_draft_register_and_merge_rwa_wrap_payload_mappings(monkeypa
         "merge_rwas",
     ]
     assert fake_instruction.calls[0]["payload"]["RegisterRwa"]["rwa"]["quantity"] == "10.5"
-    assert (
-        fake_instruction.calls[1]["payload"]["MergeRwas"]["parents"][0]["quantity"]
-        == "1.5"
-    )
+    assert fake_instruction.calls[1]["payload"]["MergeRwas"]["parents"][0]["quantity"] == "1.5"
 
 
 def test_transaction_draft_rwa_scalar_helpers_use_canonical_quantities(monkeypatch) -> None:
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
         tx.TransactionConfig(
+            chain_discriminant=753,
             network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
             authority=AUTHORITY,
             fee_payment=tx.authority_fee_payment(charge_limits=[]),
@@ -226,16 +253,14 @@ def test_transaction_draft_rwa_scalar_helpers_use_canonical_quantities(monkeypat
     assert fake_instruction.calls[1]["payload"]["RedeemRwa"]["quantity"] == "1.25"
     assert fake_instruction.calls[4]["payload"]["HoldRwa"]["quantity"] == "0.75"
     assert fake_instruction.calls[5]["payload"]["ReleaseRwa"]["quantity"] == "0.25"
-    assert (
-        fake_instruction.calls[6]["payload"]["ForceTransferRwa"]["destination"]
-        == DESTINATION
-    )
+    assert fake_instruction.calls[6]["payload"]["ForceTransferRwa"]["destination"] == DESTINATION
 
 
 def test_transaction_draft_rwa_metadata_helpers_forward_json_values(monkeypatch) -> None:
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
         tx.TransactionConfig(
+            chain_discriminant=753,
             network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
             authority=AUTHORITY,
             fee_payment=tx.authority_fee_payment(charge_limits=[]),
@@ -268,7 +293,9 @@ def test_transaction_draft_rwa_metadata_helpers_forward_json_values(monkeypatch)
         "set_rwa_key_value",
         "remove_rwa_key_value",
     ]
-    assert fake_instruction.calls[0]["payload"]["SetRwaControls"]["controls"]["hold_enabled"] is True
+    assert (
+        fake_instruction.calls[0]["payload"]["SetRwaControls"]["controls"]["hold_enabled"] is True
+    )
     assert fake_instruction.calls[1]["payload"]["SetRwaKeyValue"]["value"] == {
         "origin": "AE",
         "score": "9",

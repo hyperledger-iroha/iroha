@@ -570,6 +570,7 @@ impl Chain {
     }
     fn attest(&self, k: &KeyPair, height: u64) -> SumeragiFinalityAttestation {
         let body = SumeragiFinalityAttestationBody {
+            observed_at_unix_ms: 1_000_000,
             challenge: CHALLENGE,
             network_id: self.anchor.network_id,
             node_id: peer(k),

@@ -27,6 +27,7 @@ use std::{
 };
 use thiserror::Error;
 mod axt;
+mod catalog_retirement;
 mod committee;
 mod committee_status;
 mod compliance;
@@ -39,6 +40,7 @@ mod private_settlement;
 mod relay;
 mod runtime_catalog;
 pub use axt::*;
+pub use catalog_retirement::*;
 pub use committee::*;
 pub use committee_status::*;
 pub use compliance::*;

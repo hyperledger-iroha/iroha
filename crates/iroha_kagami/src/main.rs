@@ -26,6 +26,7 @@ mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod network_bootstrap;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -129,6 +130,8 @@ enum Command {
     Genesis(genesis::Args),
     /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
     PrivacyBootstrap(privacy_bootstrap::Args),
+    /// Publish a release-signed parent checkpoint and independently selected installation profile
+    NetworkBootstrap(network_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
     /// Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
@@ -175,6 +178,7 @@ impl<T: Write> RunArgs<T> for Command {
             Kagemusha(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             PrivacyBootstrap(args) => args.run(writer),
+            NetworkBootstrap(args) => args.run(writer),
             Verify(args) => args.run(writer),
             Advanced(args) => args.run(writer),
         }

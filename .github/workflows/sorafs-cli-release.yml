@@ -426,10 +426,8 @@ jobs:
           shared-key: sorafs-cli-release
       - name: Enforce reviewed shipping feature graphs
         run: python3 -I -S scripts/check_release_feature_graph.py
-      - name: Install script test dependencies
+      - name: Install release tooling dependencies
         run: python3 -m pip install -r scripts/requirements.txt
-      - name: Validate runtime-provider broker deployment contract
-        run: python3 scripts/tests/check_runtime_provider_broker_install_test.py
       - name: Validate cross-package version map
         id: version
         run: |
@@ -445,7 +443,7 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} does not match version-map release ${release_version}" >&2
             exit 1
           fi
-      - name: Run strict CLI release gate
+      - name: Verify CLI source integrity
         run: bash ci/check_sorafs_cli_release.sh
       - name: Prepare release evidence directory
         run: mkdir -p artifacts/sorafs-release

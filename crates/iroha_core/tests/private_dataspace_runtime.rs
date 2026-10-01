@@ -300,6 +300,8 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
             })
             .collect::<Vec<_>>();
         NexusCatalogTransitionV1 {
+            dataspace_retirements: Vec::new(),
+            lane_retirements: Vec::new(),
             version: NexusCatalogTransitionV1::VERSION,
             expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(
                 &view.nexus().lane_catalog,

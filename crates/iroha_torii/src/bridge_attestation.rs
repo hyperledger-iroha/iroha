@@ -36,6 +36,8 @@ pub(crate) fn build_failure(error: BuildError, status_committed_height: u64) -> 
         }
         BuildError::RestartRequired => Reason::RestartRequired,
         BuildError::InvalidStatus | BuildError::InvalidBody(_) => Reason::ConflictingState,
+        // A current native clock is required evidence; never substitute a timestamp or startup state.
+        BuildError::ClockUnavailable => Reason::FinalityUnavailable,
         BuildError::FinalityProof(error) | BuildError::GenesisFinalityProof(error) => match error {
             ProofError::Chain(
                 ChainReadError::NotCommitted { .. }
@@ -86,6 +88,56 @@ pub(crate) fn failure_response(
 mod tests {
     use super::*;
     use tower::ServiceExt as _;
+
+    #[tokio::test]
+    async fn unavailable_node_clock_is_a_closed_service_unavailable_response() {
+        for height in [0, 1, 8] {
+            let reason = build_failure(BuildError::ClockUnavailable, height);
+            assert_eq!(reason, Reason::FinalityUnavailable);
+            assert_eq!(reason.readiness_state(), "unavailable");
+            for format in [
+                crate::utils::ResponseFormat::Json,
+                crate::utils::ResponseFormat::Norito,
+            ] {
+                let response = failure_response(reason, [83; 32], height, None, format);
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                );
+                assert_eq!(
+                    response.headers()[axum::http::header::CACHE_CONTROL],
+                    "no-store"
+                );
+                let bytes = axum::body::to_bytes(
+                    response.into_body(),
+                    iroha_torii_shared::bridge_attestation::FINALITY_ATTESTATION_FAILURE_MAX_BYTES,
+                )
+                .await
+                .unwrap();
+                let envelope: iroha_torii_shared::ErrorEnvelope = match format {
+                    crate::utils::ResponseFormat::Norito => norito::decode_canonical_with_limits(
+                        &bytes,
+                        norito::canonical_decode_limits(bytes.len()),
+                    )
+                    .unwrap(),
+                    crate::utils::ResponseFormat::Json => norito::json::from_slice(&bytes).unwrap(),
+                };
+                assert_eq!(
+                    envelope.code(),
+                    iroha_torii_shared::bridge_attestation::FINALITY_ATTESTATION_FAILURE_CODE
+                );
+                let observed = envelope
+                    .details
+                    .unwrap()
+                    .finality_attestation_failure
+                    .unwrap();
+                assert_eq!(observed.reason, Reason::FinalityUnavailable);
+                assert_eq!(observed.challenge, [83; 32]);
+                assert_eq!(observed.height, height);
+                assert!(observed.tip_mismatch.is_none());
+            }
+        }
+    }
 
     #[tokio::test]
     async fn finality_failure_survives_the_actual_http_error_boundary() {

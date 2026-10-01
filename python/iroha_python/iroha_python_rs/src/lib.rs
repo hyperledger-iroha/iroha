@@ -463,6 +463,17 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
     parse_exact_i105_account_id(value, "account_id")
 }
+fn parse_selected_account_id(value: &str) -> PyResult<AccountId> {
+    let account = parse_exact_i105_account_id(value, "account_id")?;
+    AccountAddress::parse_encoded(
+        value,
+        Some(iroha_data_model::account::address::chain_discriminant()),
+    )
+    .map_err(|err| {
+        PyValueError::new_err(format!("account_id does not match selected chain: {err}"))
+    })?;
+    Ok(account)
+}
 fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
     require_non_blank_unpadded(value, field)?;
     if value.chars().any(char::is_whitespace)
@@ -721,6 +732,13 @@ fn parse_asset_id(value: &str) -> PyResult<AssetId> {
         }
     };
     Ok(AssetId::with_scope(definition, account, scope))
+}
+fn parse_selected_asset_id(value: &str) -> PyResult<AssetId> {
+    let account_literal = value.split('#').nth(1).ok_or_else(|| {
+        PyValueError::new_err("asset id must contain its exact selected account id")
+    })?;
+    parse_selected_account_id(account_literal)?;
+    parse_asset_id(value)
 }
 fn require_single_signatory<'a>(account: &'a AccountId, context: &str) -> PyResult<&'a PublicKey> {
     account.try_signatory().ok_or_else(|| {
@@ -5117,7 +5135,8 @@ mod tests {
         let authority = AccountId::new(PublicKey::from(private_key))
             .canonical_i105()
             .expect("canonical authority");
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -5381,7 +5400,7 @@ mod tests {
     }
     include!("tests/python_crypto_boundary_tests.rs");
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_five() {
         assert_eq!(connect_norito_bridge_abi_version_py(), 25);
     }
     #[test]
@@ -5418,7 +5437,8 @@ mod tests {
         let authority = AccountId::new(public_key.clone())
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -5432,14 +5452,17 @@ mod tests {
         assert_eq!(envelope.network_id, python_test_network_id().inner);
         let wrong_network = PyNetworkId::from_exact_bytes(&[0xA7; Hash::LENGTH])
             .expect("marked wrong-network identity");
-        assert!(
-            signed_transaction_envelope_from_versioned_v1_py(
-                &envelope.signed_transaction_versioned,
-                &wrong_network,
-            )
-            .is_err(),
-            "a valid signature from another NetworkId must reject",
-        );
+        Python::attach(|py| {
+            assert!(
+                signed_transaction_envelope_from_versioned_v1_py(
+                    &envelope.signed_transaction_versioned,
+                    &wrong_network,
+                    pyo3::types::PyInt::new(py, 0x02F1).as_any(),
+                )
+                .is_err(),
+                "a valid signature from another NetworkId must reject",
+            );
+        });
         let envelope_json = envelope.to_json().expect("envelope JSON");
         Python::attach(|py| {
             let envelope_dict = envelope.as_dict(py).expect("envelope dictionary");
@@ -5455,17 +5478,23 @@ mod tests {
                 canonical_network_id_literal(&envelope.network_id)
             );
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
-            let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
-                .expect("exact envelope JSON roundtrip");
+            let restored = SignedTransactionEnvelope::from_json(
+                &envelope_type,
+                &envelope_json,
+                pyo3::types::PyInt::new(py, 0x02F1).as_any(),
+            )
+            .expect("exact envelope JSON roundtrip");
             assert_eq!(restored.network_id, envelope.network_id);
             let short_signature_json = envelope_json_with_crypto_fields(
                 &envelope,
                 envelope.signature[..63].to_vec(),
                 envelope.public_key.clone(),
             );
-            let Err(error) =
-                SignedTransactionEnvelope::from_json(&envelope_type, &short_signature_json)
-            else {
+            let Err(error) = SignedTransactionEnvelope::from_json(
+                &envelope_type,
+                &short_signature_json,
+                pyo3::types::PyInt::new(py, 0x02F1).as_any(),
+            ) else {
                 panic!("63-byte Ed25519 envelope signature must reject");
             };
             assert!(
@@ -5486,14 +5515,24 @@ mod tests {
                 let retired =
                     envelope_json.replacen("\"network_id\"", &format!("\"{retired_key}\""), 1);
                 assert!(
-                    SignedTransactionEnvelope::from_json(&envelope_type, &retired).is_err(),
+                    SignedTransactionEnvelope::from_json(
+                        &envelope_type,
+                        &retired,
+                        pyo3::types::PyInt::new(py, 0x02F1).as_any()
+                    )
+                    .is_err(),
                     "retired {retired_key} envelope metadata must reject",
                 );
             }
             let unsupported =
                 envelope_json.replacen("\"authority\"", "\"unsupported\":true,\"authority\"", 1);
             assert!(
-                SignedTransactionEnvelope::from_json(&envelope_type, &unsupported).is_err(),
+                SignedTransactionEnvelope::from_json(
+                    &envelope_type,
+                    &unsupported,
+                    pyo3::types::PyInt::new(py, 0x02F1).as_any()
+                )
+                .is_err(),
                 "unknown envelope metadata must reject",
             );
         });
@@ -5524,7 +5563,7 @@ mod tests {
             ModelTransactionBuilder::new(python_test_network_id().inner, authority, fee_payment)
                 .try_sign(keypair.private_key())
                 .expect("ML-DSA-65 transaction signs");
-        let envelope = signed_transaction_envelope_from_model_v1(&signed)
+        let envelope = signed_transaction_envelope_from_model_v1(&signed, 0x02F1)
             .expect("authenticated ML-DSA-65 envelope");
         assert_eq!(
             envelope.signature.len(),
@@ -5534,8 +5573,12 @@ mod tests {
         let envelope_json = envelope.to_json().expect("ML-DSA-65 envelope JSON");
         Python::attach(|py| {
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
-            let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
-                .expect("ML-DSA-65 envelope JSON roundtrip");
+            let restored = SignedTransactionEnvelope::from_json(
+                &envelope_type,
+                &envelope_json,
+                pyo3::types::PyInt::new(py, 0x02F1).as_any(),
+            )
+            .expect("ML-DSA-65 envelope JSON roundtrip");
             assert_eq!(restored.signature, envelope.signature);
             assert_eq!(restored.public_key, envelope.public_key);
 
@@ -5567,8 +5610,11 @@ mod tests {
             ];
             for (label, signature, public_key, expected) in cases {
                 let malformed = envelope_json_with_crypto_fields(&envelope, signature, public_key);
-                let Err(error) = SignedTransactionEnvelope::from_json(&envelope_type, &malformed)
-                else {
+                let Err(error) = SignedTransactionEnvelope::from_json(
+                    &envelope_type,
+                    &malformed,
+                    pyo3::types::PyInt::new(py, 0x02F1).as_any(),
+                ) else {
                     panic!("{label} must reject");
                 };
                 assert!(
@@ -5602,7 +5648,8 @@ mod tests {
         let authority = AccountId::new(PublicKey::from(private_key.clone()))
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -5673,7 +5720,8 @@ mod tests {
         let authority = AccountId::new(PublicKey::from(private_key))
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -5762,7 +5810,8 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
         for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
-            let err = match TransactionBuilder::new(
+            let err = match TransactionBuilder::construct(
+                0x02F1,
                 &python_test_network_id(),
                 &padded_authority,
                 authority_fee_payment_json(),
@@ -6005,6 +6054,7 @@ mod tests {
                 SAMPLE_RWA_ID,
                 "1.25",
                 &destination,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("transfer rwa builds");
             let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
@@ -6046,6 +6096,7 @@ mod tests {
                 &owner,
                 "2.5",
                 42,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("canonical conviction update");
             assert_eq!(
@@ -6070,6 +6121,7 @@ mod tests {
                         &owner,
                         "2.5",
                         42,
+                        pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
                     )
                     .is_err(),
                     "invalid selector: {referendum_id:?}"
@@ -6082,6 +6134,7 @@ mod tests {
                     "alice@example",
                     "2.5",
                     42,
+                    pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
                 )
                 .is_err(),
                 "owner alias must be rejected"
@@ -6094,6 +6147,7 @@ mod tests {
                         &owner,
                         amount,
                         42,
+                        pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
                     )
                     .is_err(),
                     "noncanonical quantity: {amount:?}"
@@ -6129,8 +6183,12 @@ mod tests {
                     }"#,),
                 )
                 .expect("register payload loads");
-            let instruction =
-                Instruction::register_rwa(&instruction_type, payload.as_any()).expect("builds");
+            let instruction = Instruction::register_rwa(
+                &instruction_type,
+                payload.as_any(),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("builds");
             let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
                 .expect("instruction json decodes");
             let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
@@ -6170,9 +6228,14 @@ mod tests {
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
             let account_id = canonical_i105_from_seed(0x33);
-            let instruction =
-                Instruction::register_account(&instruction_type, py, &account_id, None)
-                    .expect("register account builds");
+            let instruction = Instruction::register_account(
+                &instruction_type,
+                py,
+                &account_id,
+                None,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("register account builds");
             let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
                 .expect("instruction json decodes");
             let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
@@ -6220,8 +6283,12 @@ mod tests {
             proof
                 .set_item("envelope_hash", PyBytes::new(py, &expected_envelope_hash))
                 .expect("envelope hash");
-            let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
-                .expect("VerifyProof instruction builds");
+            let instruction = Instruction::verify_proof(
+                &instruction_type,
+                proof.as_any(),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("VerifyProof instruction builds");
             let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction.inner;
             let verify = instruction_ref
                 .as_any()
@@ -6410,9 +6477,12 @@ mod tests {
                         }"#,),
                 )
                 .expect("merge payload loads");
-            let merge_instruction =
-                Instruction::merge_rwas(&instruction_type, merge_payload.as_any())
-                    .expect("merge builds");
+            let merge_instruction = Instruction::merge_rwas(
+                &instruction_type,
+                merge_payload.as_any(),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("merge builds");
             let merge_decoded =
                 json::from_str::<InstructionBox>(&merge_instruction.to_json().expect("json"))
                     .expect("merge json decodes");
@@ -6459,6 +6529,7 @@ mod tests {
                 &instruction_type,
                 SAMPLE_RWA_ID,
                 controls_payload.as_any(),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("controls build");
             let controls_decoded =
@@ -6488,18 +6559,47 @@ mod tests {
             let instruction_type = py.get_type::<Instruction>();
             let rwa_id = SAMPLE_RWA_ID;
             let destination = canonical_i105_from_seed(0x44);
-            let redeem =
-                Instruction::redeem_rwa(&instruction_type, rwa_id, "2.5").expect("redeem builds");
-            let hold =
-                Instruction::hold_rwa(&instruction_type, rwa_id, "1.25").expect("hold builds");
-            let release =
-                Instruction::release_rwa(&instruction_type, rwa_id, "0.5").expect("release builds");
-            let force =
-                Instruction::force_transfer_rwa(&instruction_type, rwa_id, "4", &destination)
-                    .expect("force transfer builds");
-            let freeze = Instruction::freeze_rwa(&instruction_type, rwa_id).expect("freeze builds");
-            let unfreeze =
-                Instruction::unfreeze_rwa(&instruction_type, rwa_id).expect("unfreeze builds");
+            let redeem = Instruction::redeem_rwa(
+                &instruction_type,
+                rwa_id,
+                "2.5",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("redeem builds");
+            let hold = Instruction::hold_rwa(
+                &instruction_type,
+                rwa_id,
+                "1.25",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("hold builds");
+            let release = Instruction::release_rwa(
+                &instruction_type,
+                rwa_id,
+                "0.5",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("release builds");
+            let force = Instruction::force_transfer_rwa(
+                &instruction_type,
+                rwa_id,
+                "4",
+                &destination,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("force transfer builds");
+            let freeze = Instruction::freeze_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("freeze builds");
+            let unfreeze = Instruction::unfreeze_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("unfreeze builds");
             let metadata = PyDict::new(py);
             metadata.set_item("origin", "AE").expect("origin");
             metadata.set_item("lot", 3).expect("lot");
@@ -6508,11 +6608,16 @@ mod tests {
                 rwa_id,
                 "grade",
                 Some(metadata.as_any()),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("set metadata builds");
-            let remove_metadata =
-                Instruction::remove_rwa_key_value(&instruction_type, rwa_id, "grade")
-                    .expect("remove metadata builds");
+            let remove_metadata = Instruction::remove_rwa_key_value(
+                &instruction_type,
+                rwa_id,
+                "grade",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("remove metadata builds");
             let decoded = |instruction: &Instruction| {
                 json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
                     .expect("instruction json decodes")
@@ -6846,15 +6951,26 @@ mod tests {
             let owner = canonical_i105_from_seed(0x45);
             let destination = canonical_i105_from_seed(0x46);
             let asset_id = format!("7MBRDd8cGFBZkFGdDMwV7S6FPwbw#{owner}");
-            Instruction::mint_asset_quantity(&instruction_type, &asset_id, "1.25")
-                .expect("canonical mint quantity");
-            Instruction::burn_asset_quantity(&instruction_type, &asset_id, "1.25")
-                .expect("canonical burn quantity");
+            Instruction::mint_asset_quantity(
+                &instruction_type,
+                &asset_id,
+                "1.25",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("canonical mint quantity");
+            Instruction::burn_asset_quantity(
+                &instruction_type,
+                &asset_id,
+                "1.25",
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+            )
+            .expect("canonical burn quantity");
             Instruction::transfer_asset_quantity(
                 &instruction_type,
                 &asset_id,
                 "1.25",
                 &destination,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("canonical transfer quantity");
             Instruction::set_asset_transfer_availability(
@@ -6865,6 +6981,7 @@ mod tests {
                 "Disabled",
                 "Disabled",
                 Some("operator close".to_owned()),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("asset transfer availability");
             Instruction::set_asset_transfer_blacklist(
@@ -6872,6 +6989,7 @@ mod tests {
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 true,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("asset transfer blacklist");
             let day_limit = PyDict::new(py);
@@ -6885,6 +7003,7 @@ mod tests {
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 limits.as_any(),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("asset transfer caps");
             Instruction::set_asset_holding_limit(
@@ -6892,6 +7011,7 @@ mod tests {
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 Some("0"),
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("zero asset holding limit");
             Instruction::set_asset_holding_limit(
@@ -6899,11 +7019,16 @@ mod tests {
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 None,
+                pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
             )
             .expect("clear asset holding limit");
             for literal in ["+1", "01", "1.0", "1.2500", "-1", " 1"] {
-                let result =
-                    Instruction::mint_asset_quantity(&instruction_type, &asset_id, literal);
+                let result = Instruction::mint_asset_quantity(
+                    &instruction_type,
+                    &asset_id,
+                    literal,
+                    pyo3::types::PyInt::new((&instruction_type).py(), 0x02F1).as_any(),
+                );
                 let error = match result {
                     Ok(_) => panic!("alternate asset quantity spelling must be rejected"),
                     Err(error) => error,
@@ -7778,8 +7903,9 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105 authority");
         let intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":100}}"#;
-        let mut builder = TransactionBuilder::new(&python_test_network_id(), &authority, intent)
-            .expect("builder constructs");
+        let mut builder =
+            TransactionBuilder::construct(0x02F1, &python_test_network_id(), &authority, intent)
+                .expect("builder constructs");
         builder.set_creation_time_ms(42).expect("creation time");
         let draft = builder.payload_json().expect("payload JSON");
         let envelope = builder
@@ -7787,7 +7913,7 @@ mod tests {
             .expect("exact quote signs");
         assert_eq!(envelope.authority, authority);
         let mut substituted =
-            TransactionBuilder::new(&python_test_network_id(), &authority, intent)
+            TransactionBuilder::construct(0x02F1, &python_test_network_id(), &authority, intent)
                 .expect("builder constructs");
         substituted.set_creation_time_ms(42).expect("creation time");
         let draft = substituted.payload_json().expect("payload JSON");
@@ -7810,7 +7936,8 @@ mod tests {
         let authority = AccountId::new(public_key)
             .canonical_i105()
             .expect("canonical I105 authority");
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -7838,7 +7965,8 @@ mod tests {
     fn transaction_builder_preserves_mixed_batch_order_and_wire_tags() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x41);
-        let mut builder = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#,
@@ -7890,7 +8018,8 @@ mod tests {
     fn transaction_builder_signs_ordinary_admission_and_preserves_instruction_carriers() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x42);
-        let mut instruction_builder = TransactionBuilder::new(
+        let mut instruction_builder = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -7921,7 +8050,8 @@ mod tests {
             .expect("ordinary instruction signature");
 
         assert_eq!(codec::encode_adaptive(signed.payload()), expected_payload);
-        let mut explicit = TransactionBuilder::new(
+        let mut explicit = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -7957,7 +8087,8 @@ mod tests {
         ensure_python();
         let authority = canonical_i105_from_seed(0x43);
         let code_hash = Hash::new(b"python-invalid-batch-code").to_string();
-        let mut empty = TransactionBuilder::new(
+        let mut empty = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -7971,7 +8102,8 @@ mod tests {
                 .to_string()
                 .contains("requires at least one item")
         );
-        let mut without_gas = TransactionBuilder::new(
+        let mut without_gas = TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -7988,9 +8120,13 @@ mod tests {
                 .contains("requires a transaction gas_limit")
         );
         let gas_intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#;
-        let mut invalid =
-            TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
-                .expect("builder");
+        let mut invalid = TransactionBuilder::construct(
+            0x02F1,
+            &python_test_network_id(),
+            &authority,
+            gas_intent,
+        )
+        .expect("builder");
         assert!(
             invalid
                 .add_contract_call("bad", &code_hash, "run", None)
@@ -8017,15 +8153,25 @@ mod tests {
                 )
                 .is_err()
         );
-        let mut ivm = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
-            .expect("builder");
+        let mut ivm = TransactionBuilder::construct(
+            0x02F1,
+            &python_test_network_id(),
+            &authority,
+            gas_intent,
+        )
+        .expect("builder");
         ivm.set_bytecode_hex("00").expect("bytecode");
         assert!(
             ivm.add_instruction(&batch_test_instruction("mixed"))
                 .is_err()
         );
-        let mut items = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
-            .expect("builder");
+        let mut items = TransactionBuilder::construct(
+            0x02F1,
+            &python_test_network_id(),
+            &authority,
+            gas_intent,
+        )
+        .expect("builder");
         items
             .add_instruction(&batch_test_instruction("mixed"))
             .expect("instruction");
@@ -8899,34 +9045,56 @@ fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec>
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
+    chain_discriminant: u16,
 }
 impl Instruction {
     fn new(inner: InstructionBox) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+        }
     }
 }
 #[pymethods]
 impl Instruction {
     #[classmethod]
-    fn from_json(_cls: &Bound<'_, PyType>, payload: &str) -> PyResult<Self> {
+    #[pyo3(signature = (payload, *, chain_discriminant))]
+    fn from_json(
+        _cls: &Bound<'_, PyType>,
+        payload: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = json::from_str::<InstructionBox>(payload)
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
     }
     /// Build the choice-free update of one existing public standalone ballot.
     #[classmethod]
+    #[pyo3(signature = (referendum_id, owner, amount, duration_blocks, *, chain_discriminant))]
     fn update_plain_conviction(
         _cls: &Bound<'_, PyType>,
         referendum_id: &str,
         owner: &str,
         amount: &str,
         duration_blocks: u64,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if !iroha_data_model::governance::is_valid_governance_selector_v1(referendum_id) {
             return Err(PyValueError::new_err(
                 "referendum_id must be a canonical governance selector V1",
             ));
         }
+        AccountAddress::parse_encoded(owner, Some(selected)).map_err(|error| {
+            PyValueError::new_err(format!(
+                "instruction owner differs from the selected chain: {error}"
+            ))
+        })?;
         let instruction = UpdatePlainConviction {
             referendum_id: referendum_id.to_owned(),
             owner: parse_exact_i105_account_id(owner, "owner")?,
@@ -8937,7 +9105,7 @@ impl Instruction {
     }
     /// Construct one canonical native SoraFS replication-order issue.
     #[classmethod]
-    #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None))]
+    #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None, *, chain_discriminant))]
     fn issue_replication_order(
         _cls: &Bound<'_, PyType>,
         order_id: &str,
@@ -8945,7 +9113,11 @@ impl Instruction {
         issued_epoch: u64,
         deadline_epoch: u64,
         musubi_archive: Option<&str>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let order_id = parse_nonzero_lower_hex_32(order_id, "order_id")?;
         if deadline_epoch <= issued_epoch {
             return Err(PyValueError::new_err(
@@ -9014,6 +9186,7 @@ impl Instruction {
     }
     /// Construct one exact six-field SoraFS provider completion.
     #[classmethod]
+    #[pyo3(signature = (order_id, provider_id, completion_epoch, expected_authority, expected_assignment_revision, finalized_anchor, *, chain_discriminant))]
     fn complete_replication_order(
         _cls: &Bound<'_, PyType>,
         order_id: &str,
@@ -9022,7 +9195,11 @@ impl Instruction {
         expected_authority: &Bound<'_, PyDict>,
         expected_assignment_revision: u64,
         finalized_anchor: &Bound<'_, PyDict>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if expected_assignment_revision == 0 {
             return Err(PyValueError::new_err(
                 "expected_assignment_revision must be greater than zero",
@@ -9042,11 +9219,16 @@ impl Instruction {
     }
     /// Construct one canonical native SoraFS replication-order expiration.
     #[classmethod]
+    #[pyo3(signature = (order_id, expiration_epoch, *, chain_discriminant))]
     fn expire_replication_order(
         _cls: &Bound<'_, PyType>,
         order_id: &str,
         expiration_epoch: u64,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         Ok(Self::new(
             ExpireReplicationOrder::new(
                 ReplicationOrderId::new(parse_nonzero_lower_hex_32(order_id, "order_id")?),
@@ -9057,7 +9239,7 @@ impl Instruction {
     }
     /// Construct the atomic smart-contract deployment commit instruction.
     #[classmethod]
-    #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None))]
+    #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None, *, chain_discriminant))]
     fn commit_contract_deployment(
         _cls: &Bound<'_, PyType>,
         expected_deploy_nonce: u64,
@@ -9066,7 +9248,11 @@ impl Instruction {
         contract_alias: &str,
         lease_expiry_ms: Option<u64>,
         expected_previous_contract_address: Option<&str>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = CommitContractDeployment {
             expected_deploy_nonce,
             contract_address: ContractAddress::from_str(contract_address).map_err(|error| {
@@ -9103,11 +9289,16 @@ impl Instruction {
     /// constructed. `plan_json` is the JSON representation of
     /// `LaneLifecyclePlan`.
     #[classmethod]
+    #[pyo3(signature = (status_json, plan_json, *, chain_discriminant))]
     fn nexus_lane_lifecycle(
         _cls: &Bound<'_, PyType>,
         status_json: &str,
         plan_json: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let status = json::from_str::<LaneLifecycleStatusV1>(status_json).map_err(|err| {
             PyValueError::new_err(format!("invalid Nexus lane lifecycle status JSON: {err}"))
         })?;
@@ -9129,7 +9320,14 @@ impl Instruction {
             SetParameter::new(Parameter::Custom(custom)).into(),
         ))
     }
+    #[getter]
+    const fn chain_discriminant(&self) -> u16 {
+        self.chain_discriminant
+    }
     fn to_json(&self) -> PyResult<String> {
+        let _chain_guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         let mut output = String::new();
         self.inner.json_serialize(&mut output);
         Ok(output)
@@ -9157,17 +9355,21 @@ impl Instruction {
     }
     /// Create a new fail-closed fee sponsor program.
     #[classmethod]
-    #[pyo3(signature = (sponsor, payout_account, program_name = "default"))]
+    #[pyo3(signature = (sponsor, payout_account, program_name = "default", *, chain_discriminant))]
     fn create_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         sponsor: &str,
         payout_account: &str,
         program_name: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let sponsor: AccountId = parse_selected_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
-        let payout_account = parse_account_id(payout_account).map_err(|err| {
+        let payout_account = parse_selected_account_id(payout_account).map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid fee sponsor payout account `{payout_account}`: {err}"
             ))
@@ -9187,10 +9389,15 @@ impl Instruction {
     }
     /// Stage an immutable fee sponsor program revision from canonical Norito JSON.
     #[classmethod]
+    #[pyo3(signature = (revision_json, *, chain_discriminant))]
     fn stage_fee_sponsor_program_revision(
         _cls: &Bound<'_, PyType>,
         revision_json: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let revision =
             json::from_str::<FeeSponsorProgramRevision>(revision_json).map_err(|err| {
                 PyValueError::new_err(format!("invalid fee sponsor program revision JSON: {err}"))
@@ -9204,12 +9411,17 @@ impl Instruction {
     }
     /// Schedule an exact staged fee sponsor program revision for activation.
     #[classmethod]
+    #[pyo3(signature = (program_id, revision, activate_at_height, *, chain_discriminant))]
     fn activate_fee_sponsor_program_revision(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
         revision: u64,
         activate_at_height: u64,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if revision == 0 {
             return Err(PyValueError::new_err(
                 "fee sponsor program revision must be non-zero",
@@ -9227,7 +9439,15 @@ impl Instruction {
     }
     /// Pause an active fee sponsor program.
     #[classmethod]
-    fn pause_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (program_id, *, chain_discriminant))]
+    fn pause_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::PauseFeeSponsorProgram {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9237,10 +9457,15 @@ impl Instruction {
     }
     /// Begin the fail-closed drain phase for a fee sponsor program.
     #[classmethod]
+    #[pyo3(signature = (program_id, *, chain_discriminant))]
     fn begin_close_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::BeginCloseFeeSponsorProgram {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9250,7 +9475,15 @@ impl Instruction {
     }
     /// Permanently close a fully drained fee sponsor program.
     #[classmethod]
-    fn close_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (program_id, *, chain_discriminant))]
+    fn close_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::CloseFeeSponsorProgram {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9260,12 +9493,17 @@ impl Instruction {
     }
     /// Enroll one exact canonical account in a fee sponsor program.
     #[classmethod]
+    #[pyo3(signature = (program_id, beneficiary, *, chain_discriminant))]
     fn enroll_fee_sponsor_beneficiary(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
         beneficiary: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let beneficiary = parse_account_id(beneficiary)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let beneficiary = parse_selected_account_id(beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9276,12 +9514,17 @@ impl Instruction {
     }
     /// Remove one exact canonical account from a fee sponsor program.
     #[classmethod]
+    #[pyo3(signature = (program_id, beneficiary, *, chain_discriminant))]
     fn unenroll_fee_sponsor_beneficiary(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
         beneficiary: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let beneficiary = parse_account_id(beneficiary)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let beneficiary = parse_selected_account_id(beneficiary)?;
         Ok(Instruction::new(
             iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary {
                 program_id: parse_fee_sponsor_program_id(program_id)?,
@@ -9292,12 +9535,17 @@ impl Instruction {
     }
     /// Allocate a positive asset amount to one program-isolated fee vault.
     #[classmethod]
+    #[pyo3(signature = (program_id, asset_definition_id, amount, *, chain_discriminant))]
     fn fund_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
         asset_definition_id: &str,
         amount: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let amount = parse_asset_quantity(amount, "fee sponsor funding amount")?;
         if amount.is_zero() {
             return Err(PyValueError::new_err(
@@ -9320,12 +9568,17 @@ impl Instruction {
     }
     /// Withdraw a positive asset amount from a paused or closing program vault.
     #[classmethod]
+    #[pyo3(signature = (program_id, asset_definition_id, amount, *, chain_discriminant))]
     fn withdraw_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         program_id: &str,
         asset_definition_id: &str,
         amount: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let amount = parse_asset_quantity(amount, "fee sponsor withdrawal amount")?;
         if amount.is_zero() {
             return Err(PyValueError::new_err(
@@ -9347,12 +9600,17 @@ impl Instruction {
         ))
     }
     #[classmethod]
+    #[pyo3(signature = (domain_id, metadata=None, *, chain_discriminant))]
     fn register_domain<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         domain_id: &str,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
@@ -9362,13 +9620,18 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (account_id, metadata=None, *, chain_discriminant))]
     fn register_account<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         account_id: &str,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id: AccountId = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id: AccountId = parse_selected_account_id(account_id)?;
         let metadata = py_to_metadata(py, metadata)?;
         let mut new_account = Account::new(account_id);
         new_account.metadata = metadata;
@@ -9376,7 +9639,7 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None))]
+    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None, chain_discriminant))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition<'py>(
         _cls: &Bound<'py, PyType>,
@@ -9390,7 +9653,11 @@ impl Instruction {
         scale: Option<u32>,
         mintable: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{definition_id}`: {err}"
@@ -9446,12 +9713,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None))]
+    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None, chain_discriminant))]
     fn register_zk_asset<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
         vk_unshield: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{asset_definition_id}`: {err}"
@@ -9462,56 +9733,82 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (proof))]
-    fn verify_proof<'py>(_cls: &Bound<'py, PyType>, proof: &Bound<'py, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (proof, *, chain_discriminant))]
+    fn verify_proof<'py>(
+        _cls: &Bound<'py, PyType>,
+        proof: &Bound<'py, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = VerifyProof::new(parse_zk_proof_attachment(proof, "proof")?);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (asset_id, quantity, *, chain_discriminant))]
     fn mint_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let asset_id = parse_asset_id(asset_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let asset_id = parse_selected_asset_id(asset_id)?;
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Mint::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (asset_id, quantity, *, chain_discriminant))]
     fn burn_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let asset_id = parse_asset_id(asset_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let asset_id = parse_selected_asset_id(asset_id)?;
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Burn::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (asset_id, quantity, destination, *, chain_discriminant))]
     fn transfer_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let asset_id = parse_asset_id(asset_id)?;
-        let destination: AccountId = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let asset_id = parse_selected_asset_id(asset_id)?;
+        let destination: AccountId = parse_selected_account_id(destination)?;
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (source_account, asset_definition_id, payments_json, *, mode="Independent"))]
+    #[pyo3(signature = (source_account, asset_definition_id, payments_json, *, mode="Independent", chain_discriminant))]
     fn transfer_asset_batch(
         _cls: &Bound<'_, PyType>,
         source_account: &str,
         asset_definition_id: &str,
         payments_json: &str,
         mode: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let source = parse_account_id(source_account)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let source = parse_selected_account_id(source_account)?;
         let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|error| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{asset_definition_id}`: {error}"
@@ -9533,7 +9830,7 @@ impl Instruction {
         ))
     }
     #[classmethod]
-    #[pyo3(signature = (account_id, asset_definition_id, expected_revision, incoming, outgoing, *, reason=None))]
+    #[pyo3(signature = (account_id, asset_definition_id, expected_revision, incoming, outgoing, *, reason=None, chain_discriminant))]
     fn set_asset_transfer_availability(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
@@ -9542,8 +9839,12 @@ impl Instruction {
         incoming: &str,
         outgoing: &str,
         reason: Option<String>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9574,13 +9875,18 @@ impl Instruction {
         ))
     }
     #[classmethod]
+    #[pyo3(signature = (account_id, asset_definition_id, blacklisted, *, chain_discriminant))]
     fn set_asset_transfer_blacklist(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         asset_definition_id: &str,
         blacklisted: bool,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9592,13 +9898,18 @@ impl Instruction {
         ))
     }
     #[classmethod]
+    #[pyo3(signature = (account_id, asset_definition_id, limits, *, chain_discriminant))]
     fn set_asset_transfer_control(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         asset_definition_id: &str,
         limits: &Bound<'_, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9615,13 +9926,18 @@ impl Instruction {
         ))
     }
     #[classmethod]
+    #[pyo3(signature = (account_id, asset_definition_id, holding_limit=None, *, chain_discriminant))]
     fn set_asset_holding_limit(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         asset_definition_id: &str,
         holding_limit: Option<&str>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let asset_definition_id: AssetDefinitionId =
             asset_definition_id.parse().map_err(|error| {
                 PyValueError::new_err(format!(
@@ -9636,7 +9952,7 @@ impl Instruction {
         ))
     }
     #[classmethod]
-    #[pyo3(signature = (escrow_id, asset_definition_id, destination, amount, *, release_authority=None, expires_at_ms=None, evidence_hashes=None))]
+    #[pyo3(signature = (escrow_id, asset_definition_id, destination, amount, *, release_authority=None, expires_at_ms=None, evidence_hashes=None, chain_discriminant))]
     #[allow(clippy::too_many_arguments)]
     fn open_asset_lock<'py>(
         _cls: &Bound<'py, PyType>,
@@ -9647,17 +9963,21 @@ impl Instruction {
         release_authority: Option<&str>,
         expires_at_ms: Option<u64>,
         evidence_hashes: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let escrow_id = parse_escrow_id(escrow_id, "escrow_id")?;
         let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let destination = parse_account_id(destination)?;
+        let destination = parse_selected_account_id(destination)?;
         let release_authority = match release_authority {
             Some(value) => {
-                let account = parse_account_id(value)?;
+                let account = parse_selected_account_id(value)?;
                 Some(account)
             }
             None => None,
@@ -9677,7 +9997,7 @@ impl Instruction {
     }
     /// Open an ordered, all-of conditional escrow with an immutable on-chain policy.
     #[classmethod]
-    #[pyo3(signature = (escrow_id, asset_definition_id, beneficiary, amount, conditions, expires_at_ms, *, evidence_digests=None))]
+    #[pyo3(signature = (escrow_id, asset_definition_id, beneficiary, amount, conditions, expires_at_ms, *, evidence_digests=None, chain_discriminant))]
     #[allow(clippy::too_many_arguments)]
     fn open_conditional_escrow<'py>(
         _cls: &Bound<'py, PyType>,
@@ -9689,7 +10009,11 @@ impl Instruction {
         conditions: &Bound<'py, PyAny>,
         expires_at_ms: u64,
         evidence_digests: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if expires_at_ms == 0 {
             return Err(PyValueError::new_err(
                 "conditional escrow expires_at_ms must be greater than zero",
@@ -9701,7 +10025,7 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let beneficiary = parse_account_id(beneficiary)?;
+        let beneficiary = parse_selected_account_id(beneficiary)?;
         let amount = parse_typed_quantity(amount, "conditional escrow amount")?;
         if amount.is_zero() {
             return Err(PyValueError::new_err(
@@ -9730,7 +10054,7 @@ impl Instruction {
     }
     /// Attest the next ordered predicate in a native conditional escrow.
     #[classmethod]
-    #[pyo3(signature = (escrow_id, condition_id, value, *, evidence_digest=None))]
+    #[pyo3(signature = (escrow_id, condition_id, value, *, evidence_digest=None, chain_discriminant))]
     fn attest_escrow_condition<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -9738,7 +10062,11 @@ impl Instruction {
         condition_id: &str,
         value: &Bound<'py, PyAny>,
         evidence_digest: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let condition_id: Name = condition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid conditional escrow condition_id `{condition_id}`: {err}"
@@ -9760,18 +10088,31 @@ impl Instruction {
     }
     /// Expire and refund a native conditional escrow after its authoritative deadline.
     #[classmethod]
-    fn expire_conditional_escrow(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (escrow_id, *, chain_discriminant))]
+    fn expire_conditional_escrow(
+        _cls: &Bound<'_, PyType>,
+        escrow_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         Ok(Instruction::new(
             ExpireConditionalEscrow::new(parse_escrow_id(escrow_id, "escrow_id")?).into(),
         ))
     }
     #[classmethod]
+    #[pyo3(signature = (escrow_id, amount, expected_remaining_amount, *, chain_discriminant))]
     fn drawdown_asset_lock(
         _cls: &Bound<'_, PyType>,
         escrow_id: &str,
         amount: &str,
         expected_remaining_amount: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = DrawdownAssetLock::new(
             parse_escrow_id(escrow_id, "escrow_id")?,
             parse_typed_quantity(amount, "asset lock amount")?,
@@ -9783,11 +10124,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (escrow_id, expected_remaining_amount, *, chain_discriminant))]
     fn cancel_asset_lock(
         _cls: &Bound<'_, PyType>,
         escrow_id: &str,
         expected_remaining_amount: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let expected_remaining_amount = parse_typed_quantity(
             expected_remaining_amount,
             "asset lock expected remaining amount",
@@ -9804,19 +10150,31 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn expire_asset_lock(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (escrow_id, *, chain_discriminant))]
+    fn expire_asset_lock(
+        _cls: &Bound<'_, PyType>,
+        escrow_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = ExpireAssetLock::new(parse_escrow_id(escrow_id, "escrow_id")?);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (destination, name, *, payload=None))]
+    #[pyo3(signature = (destination, name, *, payload=None, chain_discriminant))]
     fn grant_account_permission<'py>(
         cls: &Bound<'py, PyType>,
         destination: &str,
         name: &str,
         payload: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let destination: AccountId = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let destination: AccountId = parse_selected_account_id(destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -9826,14 +10184,18 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (destination, name, *, payload=None))]
+    #[pyo3(signature = (destination, name, *, payload=None, chain_discriminant))]
     fn revoke_account_permission<'py>(
         cls: &Bound<'py, PyType>,
         destination: &str,
         name: &str,
         payload: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let destination: AccountId = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let destination: AccountId = parse_selected_account_id(destination)?;
         let permission_name: Ident = name.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid permission name `{name}`: {err}"))
         })?;
@@ -9843,14 +10205,18 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (account_id, key, value=None))]
+    #[pyo3(signature = (account_id, key, value=None, *, chain_discriminant))]
     fn set_account_key_value<'py>(
         cls: &Bound<'py, PyType>,
         account_id: &str,
         key: &str,
         value: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -9859,12 +10225,17 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (account_id, key, *, chain_discriminant))]
     fn remove_account_key_value(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         key: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let account_id = parse_account_id(account_id)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let account_id = parse_selected_account_id(account_id)?;
         let key: Name = key
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
@@ -9872,18 +10243,34 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn register_rwa<'py>(cls: &Bound<'py, PyType>, rwa: &Bound<'py, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (rwa, *, chain_discriminant))]
+    fn register_rwa<'py>(
+        cls: &Bound<'py, PyType>,
+        rwa: &Bound<'py, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa = parse_new_rwa_payload(cls.py(), rwa)?;
         let instruction = iroha_data_model::isi::rwa::RegisterRwa { rwa };
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn merge_rwas<'py>(cls: &Bound<'py, PyType>, merge: &Bound<'py, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (merge, *, chain_discriminant))]
+    fn merge_rwas<'py>(
+        cls: &Bound<'py, PyType>,
+        merge: &Bound<'py, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let instruction = parse_merge_rwas_payload(cls.py(), merge)?;
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (agreement_id, initiator, counterparty, *, custodian=None, cash_leg, collateral_leg, rate_bps, maturity_timestamp_ms, governance))]
+    #[pyo3(signature = (agreement_id, initiator, counterparty, *, custodian=None, cash_leg, collateral_leg, rate_bps, maturity_timestamp_ms, governance, chain_discriminant))]
     #[allow(clippy::too_many_arguments)]
     fn repo_initiate<'py>(
         cls: &Bound<'py, PyType>,
@@ -9896,15 +10283,19 @@ impl Instruction {
         rate_bps: u16,
         maturity_timestamp_ms: u64,
         governance: &Bound<'py, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let agreement_id = RepoAgreementId::from_str(agreement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
-        let initiator = parse_account_id(initiator)?;
-        let counterparty = parse_account_id(counterparty)?;
+        let initiator = parse_selected_account_id(initiator)?;
+        let counterparty = parse_selected_account_id(counterparty)?;
         let custodian = match custodian {
             Some(value) => {
-                let account = parse_account_id(value)?;
+                let account = parse_selected_account_id(value)?;
                 Some(account)
             }
             None => None,
@@ -9927,8 +10318,15 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (agreement_id))]
-    fn repo_unwind(_cls: &Bound<'_, PyType>, agreement_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (agreement_id, *, chain_discriminant))]
+    fn repo_unwind(
+        _cls: &Bound<'_, PyType>,
+        agreement_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let agreement_id = RepoAgreementId::from_str(agreement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
@@ -9936,7 +10334,15 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn repo_margin_call(_cls: &Bound<'_, PyType>, agreement_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (agreement_id, *, chain_discriminant))]
+    fn repo_margin_call(
+        _cls: &Bound<'_, PyType>,
+        agreement_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let agreement_id = RepoAgreementId::from_str(agreement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
@@ -9944,7 +10350,7 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (settlement_id, delivery_leg, payment_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None))]
+    #[pyo3(signature = (settlement_id, delivery_leg, payment_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None, chain_discriminant))]
     #[allow(clippy::too_many_arguments)]
     fn settlement_dvp<'py>(
         cls: &Bound<'py, PyType>,
@@ -9954,7 +10360,11 @@ impl Instruction {
         order: &str,
         atomicity: &str,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let settlement_id = SettlementId::from_str(settlement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid settlement id `{settlement_id}`: {err}"))
         })?;
@@ -9978,7 +10388,7 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (settlement_id, primary_leg, counter_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None))]
+    #[pyo3(signature = (settlement_id, primary_leg, counter_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None, chain_discriminant))]
     #[allow(clippy::too_many_arguments)]
     fn settlement_pvp<'py>(
         cls: &Bound<'py, PyType>,
@@ -9988,7 +10398,11 @@ impl Instruction {
         order: &str,
         atomicity: &str,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let settlement_id = SettlementId::from_str(settlement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid settlement id `{settlement_id}`: {err}"))
         })?;
@@ -10012,14 +10426,19 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (source, domain_id, destination, *, chain_discriminant))]
     fn transfer_domain(
         _cls: &Bound<'_, PyType>,
         source: &str,
         domain_id: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let source = parse_account_id(source)?;
-        let destination = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let source = parse_selected_account_id(source)?;
+        let destination = parse_selected_account_id(destination)?;
         let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
@@ -10027,14 +10446,19 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (source, definition_id, destination, *, chain_discriminant))]
     fn transfer_asset_definition(
         _cls: &Bound<'_, PyType>,
         source: &str,
         definition_id: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let source = parse_account_id(source)?;
-        let destination = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let source = parse_selected_account_id(source)?;
+        let destination = parse_selected_account_id(destination)?;
         let definition_id: AssetDefinitionId = definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid asset definition id `{definition_id}`: {err}"
@@ -10044,14 +10468,19 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (source, nft_id, destination, *, chain_discriminant))]
     fn transfer_nft(
         _cls: &Bound<'_, PyType>,
         source: &str,
         nft_id: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let source = parse_account_id(source)?;
-        let destination = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let source = parse_selected_account_id(source)?;
+        let destination = parse_selected_account_id(destination)?;
         let nft_id: NftId = nft_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
@@ -10059,15 +10488,20 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (source, rwa_id, quantity, destination, *, chain_discriminant))]
     fn transfer_rwa(
         _cls: &Bound<'_, PyType>,
         source: &str,
         rwa_id: &str,
         quantity: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let source = parse_account_id(source)?;
-        let destination = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let source = parse_selected_account_id(source)?;
+        let destination = parse_selected_account_id(destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10081,7 +10515,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn redeem_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, quantity, *, chain_discriminant))]
+    fn redeem_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10093,7 +10536,15 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn freeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, *, chain_discriminant))]
+    fn freeze_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10101,7 +10552,15 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn unfreeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, *, chain_discriminant))]
+    fn unfreeze_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10109,7 +10568,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn hold_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, quantity, *, chain_discriminant))]
+    fn hold_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10121,7 +10589,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn release_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, quantity, *, chain_discriminant))]
+    fn release_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10133,13 +10610,18 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (rwa_id, quantity, destination, *, chain_discriminant))]
     fn force_transfer_rwa(
         _cls: &Bound<'_, PyType>,
         rwa_id: &str,
         quantity: &str,
         destination: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let destination = parse_account_id(destination)?;
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
+        let destination = parse_selected_account_id(destination)?;
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10152,11 +10634,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (rwa_id, controls, *, chain_discriminant))]
     fn set_rwa_controls<'py>(
         cls: &Bound<'py, PyType>,
         rwa_id: &str,
         controls: &Bound<'py, PyAny>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10168,13 +10655,17 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (rwa_id, key, value=None))]
+    #[pyo3(signature = (rwa_id, key, value=None, *, chain_discriminant))]
     fn set_rwa_key_value<'py>(
         cls: &Bound<'py, PyType>,
         rwa_id: &str,
         key: &str,
         value: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10186,7 +10677,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn remove_rwa_key_value(_cls: &Bound<'_, PyType>, rwa_id: &str, key: &str) -> PyResult<Self> {
+    #[pyo3(signature = (rwa_id, key, *, chain_discriminant))]
+    fn remove_rwa_key_value(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        key: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
@@ -10197,15 +10697,19 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (trigger_id, authority, instructions, *, start_ms, **kwargs))]
+    #[pyo3(signature = (trigger_id, authority, instructions, *, start_ms, chain_discriminant, **kwargs))]
     fn register_time_trigger<'py>(
         cls: &Bound<'py, PyType>,
         trigger_id: &str,
         authority: &str,
         instructions: Vec<Bound<'py, Instruction>>,
         start_ms: u64,
+        chain_discriminant: &Bound<'_, PyAny>,
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if instructions.is_empty() {
             return Err(PyValueError::new_err(
                 "time trigger requires at least one instruction",
@@ -10214,7 +10718,7 @@ impl Instruction {
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
-        let authority = parse_account_id(authority)?;
+        let authority = parse_selected_account_id(authority)?;
         if start_ms == 0 {
             return Err(PyValueError::new_err("start_ms must be greater than zero"));
         }
@@ -10244,6 +10748,11 @@ impl Instruction {
         let mut instruction_boxes = Vec::with_capacity(instructions.len());
         for instr in instructions {
             let instruction = instr.borrow();
+            if instruction.chain_discriminant != selected {
+                return Err(PyValueError::new_err(
+                    "trigger instruction selected chain differs from its owner",
+                ));
+            }
             instruction_boxes.push(instruction.inner.clone());
         }
         let executable = Executable::from(instruction_boxes);
@@ -10260,7 +10769,7 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (trigger_id, authority, instructions, *, repeats=None, metadata=None))]
+    #[pyo3(signature = (trigger_id, authority, instructions, *, repeats=None, metadata=None, chain_discriminant))]
     fn register_precommit_trigger<'py>(
         cls: &Bound<'py, PyType>,
         trigger_id: &str,
@@ -10268,7 +10777,11 @@ impl Instruction {
         instructions: Vec<Bound<'py, Instruction>>,
         repeats: Option<u32>,
         metadata: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if instructions.is_empty() {
             return Err(PyValueError::new_err(
                 "pre-commit trigger requires at least one instruction",
@@ -10277,7 +10790,7 @@ impl Instruction {
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
-        let authority = parse_account_id(authority)?;
+        let authority = parse_selected_account_id(authority)?;
         let repeats = match repeats {
             Some(0) => {
                 return Err(PyValueError::new_err(
@@ -10292,6 +10805,11 @@ impl Instruction {
         let mut instruction_boxes = Vec::with_capacity(instructions.len());
         for instr in instructions {
             let instruction = instr.borrow();
+            if instruction.chain_discriminant != selected {
+                return Err(PyValueError::new_err(
+                    "trigger instruction selected chain differs from its owner",
+                ));
+            }
             instruction_boxes.push(instruction.inner.clone());
         }
         let executable = Executable::from(instruction_boxes);
@@ -10308,12 +10826,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (trigger_id, *, args=None))]
+    #[pyo3(signature = (trigger_id, *, args=None, chain_discriminant))]
     fn execute_trigger<'py>(
         cls: &Bound<'py, PyType>,
         trigger_id: &str,
         args: Option<&Bound<'py, PyAny>>,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
@@ -10329,7 +10851,15 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    fn unregister_trigger(_cls: &Bound<'_, PyType>, trigger_id: &str) -> PyResult<Self> {
+    #[pyo3(signature = (trigger_id, *, chain_discriminant))]
+    fn unregister_trigger(
+        _cls: &Bound<'_, PyType>,
+        trigger_id: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
@@ -10337,11 +10867,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (trigger_id, repetitions, *, chain_discriminant))]
     fn mint_trigger_repetitions(
         _cls: &Bound<'_, PyType>,
         trigger_id: &str,
         repetitions: u32,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if repetitions == 0 {
             return Err(PyValueError::new_err(
                 "repetitions must be greater than zero",
@@ -10354,11 +10889,16 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
+    #[pyo3(signature = (trigger_id, repetitions, *, chain_discriminant))]
     fn burn_trigger_repetitions(
         _cls: &Bound<'_, PyType>,
         trigger_id: &str,
         repetitions: u32,
+        chain_discriminant: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
+        let selected = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(selected);
         if repetitions == 0 {
             return Err(PyValueError::new_err(
                 "repetitions must be greater than zero",
@@ -10490,6 +11030,7 @@ fn python_vega_statement_v1(
 #[pyclass(from_py_object, module = "iroha_native._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
+    chain_discriminant: u16,
     network_id: NetworkId,
     authority: AccountId,
     fee_payment: FeePaymentIntent,
@@ -10505,6 +11046,43 @@ struct TransactionBuilder {
         Option<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
 }
 impl TransactionBuilder {
+    fn construct(
+        chain_discriminant: u16,
+        network_id: &PyNetworkId,
+        authority: &str,
+        fee_payment_json: &str,
+    ) -> PyResult<Self> {
+        let _scope =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
+        require_non_blank_unpadded(authority, "authority")?;
+        AccountAddress::parse_encoded(authority, Some(chain_discriminant)).map_err(|error| {
+            PyValueError::new_err(format!(
+                "authority must use the selected chain discriminant: {error}"
+            ))
+        })?;
+        let authority = parse_account_id(authority)?;
+        let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        let creation_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| {
+                PyValueError::new_err(format!("system clock precedes UNIX epoch: {err}"))
+            })?;
+        Ok(Self {
+            chain_discriminant,
+            network_id: network_id.inner,
+            authority,
+            fee_payment,
+            creation_time: Some(creation_time),
+            ttl: None,
+            nonce: None,
+            executable_items: Vec::new(),
+            explicit_batch: false,
+            metadata: Metadata::default(),
+            executable_override: None,
+            attachments: None,
+            privacy_capability_manifest: None,
+        })
+    }
     fn try_add_proof_attachment(&mut self, attachment: ProofAttachment) -> PyResult<()> {
         match &mut self.attachments {
             Some(attachments) => attachments.try_push(attachment),
@@ -10587,7 +11165,10 @@ impl TransactionBuilder {
         py: Python<'_>,
         signed: &crate::privacy_native_actions::SignedPrivacyActionV1,
     ) -> PyResult<PrivacyNativeActionBuildResultV1> {
-        let envelope = signed_transaction_envelope_from_model_v1(signed.signed_transaction())?;
+        let envelope = signed_transaction_envelope_from_model_v1(
+            signed.signed_transaction(),
+            self.chain_discriminant,
+        )?;
         Ok(PrivacyNativeActionBuildResultV1 {
             envelope: Py::new(py, envelope)?,
             protocol_id: signed.protocol_id().canonical_label().to_owned(),
@@ -10670,6 +11251,9 @@ impl TransactionBuilder {
         &self,
         signed: &SignedTransaction,
     ) -> PyResult<SignedTransactionEnvelope> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         let signature: Signature = signed.signature().payload().clone();
         let signature_bytes = signature.payload().to_vec();
         let hash: HashOf<SignedTransaction> = signed.hash();
@@ -10699,29 +11283,24 @@ impl TransactionBuilder {
 #[pymethods]
 impl TransactionBuilder {
     #[new]
-    fn new(network_id: &PyNetworkId, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
-        require_non_blank_unpadded(authority, "authority")?;
-        let authority = parse_account_id(authority)?;
-        let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
-        let creation_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| {
-                PyValueError::new_err(format!("system clock precedes UNIX epoch: {err}"))
-            })?;
-        Ok(Self {
-            network_id: network_id.inner,
+    #[pyo3(signature = (network_id, authority, fee_payment_json, *, chain_discriminant))]
+    fn new(
+        network_id: &PyNetworkId,
+        authority: &str,
+        fee_payment_json: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        Self::construct(
+            py_exact_u16(chain_discriminant, "chain_discriminant")?,
+            network_id,
             authority,
-            fee_payment,
-            creation_time: Some(creation_time),
-            ttl: None,
-            nonce: None,
-            executable_items: Vec::new(),
-            explicit_batch: false,
-            metadata: Metadata::default(),
-            executable_override: None,
-            attachments: None,
-            privacy_capability_manifest: None,
-        })
+            fee_payment_json,
+        )
+    }
+    /// The independently selected address domain retained by this builder.
+    #[getter]
+    fn chain_discriminant(&self) -> u16 {
+        self.chain_discriminant
     }
     /// Bind the exact canonical manifest fetched from authenticated Torii state.
     ///
@@ -10743,6 +11322,9 @@ impl TransactionBuilder {
     }
     /// Replace the exact signature-bound fee payment intent.
     fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
         Ok(())
     }
@@ -10871,6 +11453,9 @@ impl TransactionBuilder {
     }
     /// Add an instruction described by `norito::json` syntax.
     fn add_instruction_json(&mut self, instruction_json: &str) -> PyResult<()> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         if self.executable_override.is_some() {
             return Err(PyValueError::new_err(
                 "raw IVM bytecode cannot be mixed with executable batch items",
@@ -10884,6 +11469,11 @@ impl TransactionBuilder {
     }
     /// Append a pre-built instruction.
     fn add_instruction(&mut self, instruction: &Instruction) -> PyResult<()> {
+        if instruction.chain_discriminant != self.chain_discriminant {
+            return Err(PyValueError::new_err(
+                "instruction selected chain differs from its transaction builder",
+            ));
+        }
         if self.executable_override.is_some() {
             return Err(PyValueError::new_err(
                 "raw IVM bytecode cannot be mixed with executable batch items",
@@ -10914,6 +11504,9 @@ impl TransactionBuilder {
         entrypoint: &str,
         arguments: Option<&[u8]>,
     ) -> PyResult<()> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         if self.executable_override.is_some() {
             return Err(PyValueError::new_err(
                 "raw IVM bytecode cannot be mixed with executable batch items",
@@ -10958,6 +11551,9 @@ impl TransactionBuilder {
     }
     /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
     fn payload_json(&self) -> PyResult<String> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         self.validate_executable()?;
         let payload = self
             .to_model_builder()
@@ -11107,6 +11703,9 @@ impl TransactionBuilder {
         quoted_fee_payment_json: &str,
         private_key: &[u8],
     ) -> PyResult<SignedTransactionEnvelope> {
+        let _scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            self.chain_discriminant,
+        );
         ensure_ed25519_account(&self.authority)?;
         self.validate_executable()?;
         let mut draft =
@@ -11272,7 +11871,15 @@ struct SignedTransactionEnvelope {
 impl SignedTransactionEnvelope {
     /// Construct an envelope from its JSON representation produced by `to_json`.
     #[classmethod]
-    fn from_json(_cls: &Bound<'_, PyType>, json_str: &str) -> PyResult<Self> {
+    #[pyo3(signature = (json_str, *, chain_discriminant))]
+    fn from_json(
+        _cls: &Bound<'_, PyType>,
+        json_str: &str,
+        chain_discriminant: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let chain_discriminant = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+        let _chain_guard =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
         let value: norito::json::Value = norito::json::from_str(json_str).map_err(|err| {
             PyValueError::new_err(format!("failed to parse envelope JSON: {err}"))
         })?;
@@ -11436,7 +12043,8 @@ impl SignedTransactionEnvelope {
                 "envelope network_id does not match the signed transaction NetworkId",
             ));
         }
-        let authenticated = signed_transaction_envelope_from_model_v1(&decoded)?;
+        let authenticated =
+            signed_transaction_envelope_from_model_v1(&decoded, chain_discriminant)?;
         if authenticated.authority != authority
             || authenticated.signed_transaction != signed_transaction
             || authenticated.hash != hash
@@ -12007,7 +12615,10 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
     Ok(json::Value::Object(result))
 }
 #[pyfunction]
-#[pyo3(name = "verify_committed_transaction_inclusion")]
+#[pyo3(
+    name = "verify_committed_transaction_inclusion",
+    signature = (transaction_hash, transaction_response_bytes, *, native_finality_proof_chain_json, expected_network_id, expected_chain, expected_chain_discriminant, trusted_checkpoint)
+)]
 /// Authenticate a selected full output against an independently anchored finality chain.
 fn verify_committed_transaction_inclusion_py(
     py: Python<'_>,
@@ -12016,8 +12627,14 @@ fn verify_committed_transaction_inclusion_py(
     native_finality_proof_chain_json: &str,
     expected_network_id: &PyNetworkId,
     expected_chain: &str,
+    expected_chain_discriminant: &Bound<'_, PyAny>,
     trusted_checkpoint: &[u8],
 ) -> PyResult<(String, Py<PyBytes>)> {
+    let expected_chain_discriminant =
+        py_exact_u16(expected_chain_discriminant, "expected_chain_discriminant")?;
+    let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        expected_chain_discriminant,
+    );
     let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
     let (committed, page) = committed_transaction_verification::authenticate_committed_transaction(
         expected,
@@ -12551,7 +13168,10 @@ fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransa
 }
 fn signed_transaction_envelope_from_model_v1(
     signed: &SignedTransaction,
+    chain_discriminant: u16,
 ) -> PyResult<SignedTransactionEnvelope> {
+    let _chain_guard =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
     })?;
@@ -12575,19 +13195,26 @@ fn signed_transaction_envelope_from_model_v1(
     })
 }
 #[pyfunction]
-#[pyo3(name = "signed_transaction_envelope_from_versioned_v1")]
+#[pyo3(
+    name = "signed_transaction_envelope_from_versioned_v1",
+    signature = (signed_transaction_versioned, network_id, *, chain_discriminant)
+)]
 /// Decode one exact current signed wire and reconstruct its authenticated public envelope.
 fn signed_transaction_envelope_from_versioned_v1_py(
     signed_transaction_versioned: &[u8],
     network_id: &PyNetworkId,
+    chain_discriminant: &Bound<'_, PyAny>,
 ) -> PyResult<SignedTransactionEnvelope> {
+    let chain_discriminant = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+    let _chain_guard =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     if signed.network_id() != Some(&network_id.inner) {
         return Err(PyValueError::new_err(
             "signed transaction network does not match NetworkId",
         ));
     }
-    signed_transaction_envelope_from_model_v1(&signed)
+    signed_transaction_envelope_from_model_v1(&signed, chain_discriminant)
 }
 fn canonical_signed_transaction_hash_v1(bytes: &[u8]) -> PyResult<[u8; Hash::LENGTH]> {
     let signed = decode_canonical_signed_transaction_v1(bytes)?;
@@ -13141,7 +13768,10 @@ fn verify_python_prepared_faucet_context_v1(
 }
 
 #[pyfunction]
-#[pyo3(name = "verify_prepared_transaction_context_v1")]
+#[pyo3(
+    name = "verify_prepared_transaction_context_v1",
+    signature = (signed_transaction_versioned, network_id, expected_authority, binding_json, operation, semantic_hash_hex, fee_payment_json, operation_context_json, *, chain_discriminant)
+)]
 /// Authenticate one fixed-V1 prepared transaction and its exact public operation context.
 #[expect(
     clippy::too_many_arguments,
@@ -13156,13 +13786,24 @@ fn verify_prepared_transaction_context_v1_py(
     semantic_hash_hex: &str,
     fee_payment_json: &str,
     operation_context_json: &str,
+    chain_discriminant: &Bound<'_, PyAny>,
 ) -> PyResult<SignedTransactionEnvelope> {
+    let chain_discriminant = py_exact_u16(chain_discriminant, "chain_discriminant")?;
+    let _chain_guard =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     if !matches!(operation, "onboarding" | "faucet") {
         return Err(PyValueError::new_err(
             "prepared transaction operation must be onboarding or faucet",
         ));
     }
     let semantic_hash = parse_lower_hex_32(semantic_hash_hex, "prepared semantic hash")?;
+    AccountAddress::parse_encoded(expected_authority, Some(chain_discriminant)).map_err(
+        |error| {
+            PyValueError::new_err(format!(
+                "prepared authority differs from the selected chain: {error}"
+            ))
+        },
+    )?;
     let expected_authority = parse_exact_i105_account_id(
         expected_authority,
         "prepared transaction expected authority",
@@ -13275,7 +13916,7 @@ fn verify_prepared_transaction_context_v1_py(
         }
         _ => unreachable!("operation was closed above"),
     }
-    signed_transaction_envelope_from_model_v1(&signed)
+    signed_transaction_envelope_from_model_v1(&signed, chain_discriminant)
 }
 const PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1: &[u8] =
     b"iroha.taira.privacy_action_driver_seed.v1\0";

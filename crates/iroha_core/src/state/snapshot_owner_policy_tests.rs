@@ -348,6 +348,8 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     assert!(baseline.entries().iter().any(|entry| entry.description.is_some()));
     let manifest_hash = [0x63; 32];
     let runtime = NexusRuntimeCatalogV1 {
+        retired_dataspaces: Vec::new(),
+        retired_lanes: Vec::new(),
         version: NexusRuntimeCatalogV1::VERSION,
         baseline_dataspaces_hash: dataspace_catalog_hash(&baseline),
         baseline_manifests_hash: Hash::prehashed(

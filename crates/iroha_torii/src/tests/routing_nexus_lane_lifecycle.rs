@@ -36,6 +36,8 @@ fn lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_stat
     let state = state_for_lifecycle_test();
     let before = handle_get_nexus_lane_lifecycle(&state).unwrap();
     let runtime = NexusRuntimeCatalogV1 {
+        retired_dataspaces: Vec::new(),
+        retired_lanes: Vec::new(),
         version: NexusRuntimeCatalogV1::VERSION,
         baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
             &state.nexus_snapshot().configured_dataspace_catalog,

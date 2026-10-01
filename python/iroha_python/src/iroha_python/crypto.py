@@ -31,6 +31,7 @@ _crypto = load_crypto_extension()
 # native boundary so ordinary signing APIs cannot reinterpret labels or bare
 # byte strings as a NetworkId.
 if TYPE_CHECKING:
+
     class NetworkId(Any):
         """Static view of the required native ``NetworkId`` value."""
 
@@ -48,6 +49,7 @@ def _require_network_id(value: Any, context: str = "network_id") -> NetworkId:
     if not isinstance(value, NetworkId):
         raise TypeError(f"{context} must be a NetworkId")
     return value
+
 
 ED25519_ALGORITHM: Final[str] = "ed25519"
 SECP256K1_ALGORITHM: Final[str] = "secp256k1"
@@ -298,6 +300,8 @@ def _native_issue_replication_order(
     issued_epoch: int,
     deadline_epoch: int,
     musubi_archive: str | None,
+    *,
+    chain_discriminant: int,
 ) -> Any:
     return _native_instruction_builder("issue_replication_order")(
         order_id,
@@ -305,6 +309,7 @@ def _native_issue_replication_order(
         issued_epoch,
         deadline_epoch,
         musubi_archive,
+        chain_discriminant=chain_discriminant,
     )
 
 
@@ -315,6 +320,8 @@ def _native_complete_replication_order(
     expected_authority: Mapping[str, Any],
     expected_assignment_revision: int,
     finalized_anchor: Mapping[str, Any],
+    *,
+    chain_discriminant: int,
 ) -> Any:
     return _native_instruction_builder("complete_replication_order")(
         order_id,
@@ -323,16 +330,15 @@ def _native_complete_replication_order(
         dict(expected_authority),
         expected_assignment_revision,
         dict(finalized_anchor),
+        chain_discriminant=chain_discriminant,
     )
 
 
 def _native_expire_replication_order(
-    order_id: str,
-    expiration_epoch: int,
+    order_id: str, expiration_epoch: int, *, chain_discriminant: int
 ) -> Any:
     return _native_instruction_builder("expire_replication_order")(
-        order_id,
-        expiration_epoch,
+        order_id, expiration_epoch, chain_discriminant=chain_discriminant
     )
 
 
@@ -353,7 +359,7 @@ if TYPE_CHECKING:
         """Typed surface of the dynamically forwarded native instruction value."""
 
         @classmethod
-        def from_json(cls, payload: str) -> Instruction: ...
+        def from_json(cls, payload: str, *, chain_discriminant: int) -> Instruction: ...
 
         @staticmethod
         def update_plain_conviction(
@@ -361,6 +367,8 @@ if TYPE_CHECKING:
             owner: str,
             amount: str,
             duration_blocks: int,
+            *,
+            chain_discriminant: int,
         ) -> Instruction:
             """Build the exact choice-free public conviction update."""
 
@@ -368,8 +376,7 @@ if TYPE_CHECKING:
 
         @staticmethod
         def cancel_asset_lock(
-            escrow_id: str,
-            expected_remaining_amount: str,
+            escrow_id: str, expected_remaining_amount: str, *, chain_discriminant: int
         ) -> Instruction:
             """Build the exact two-argument V1 cancellation instruction."""
 
@@ -382,6 +389,8 @@ if TYPE_CHECKING:
             issued_epoch: int,
             deadline_epoch: int,
             musubi_archive: str | None = None,
+            *,
+            chain_discriminant: int,
         ) -> Instruction:
             """Build one canonical replication-order issue instruction."""
 
@@ -395,6 +404,8 @@ if TYPE_CHECKING:
             expected_authority: ProviderIngestCompletionAuthorityV1,
             expected_assignment_revision: int,
             finalized_anchor: ProviderIngestFinalizedAnchorV1,
+            *,
+            chain_discriminant: int,
         ) -> Instruction:
             """Build the exact six-field provider completion instruction."""
 
@@ -402,8 +413,7 @@ if TYPE_CHECKING:
 
         @staticmethod
         def expire_replication_order(
-            order_id: str,
-            expiration_epoch: int,
+            order_id: str, expiration_epoch: int, *, chain_discriminant: int
         ) -> Instruction:
             """Build one canonical replication-order expiration instruction."""
 
@@ -458,20 +468,18 @@ else:
             owner: str,
             amount: str,
             duration_blocks: int,
+            *,
+            chain_discriminant: int,
         ) -> Any:
             """Build the canonical four-field native conviction update."""
 
             return _native_instruction_builder("update_plain_conviction")(
-                referendum_id,
-                owner,
-                amount,
-                duration_blocks,
+                referendum_id, owner, amount, duration_blocks, chain_discriminant=chain_discriminant
             )
 
         @staticmethod
         def cancel_asset_lock(
-            escrow_id: str,
-            expected_remaining_amount: str,
+            escrow_id: str, expected_remaining_amount: str, *, chain_discriminant: int
         ) -> Any:
             """Build V1 cancellation from an exact lock-ID preimage.
 
@@ -482,6 +490,7 @@ else:
             return _NativeInstruction.cancel_asset_lock(
                 _require_cancel_asset_lock_id(escrow_id),
                 expected_remaining_amount,
+                chain_discriminant=chain_discriminant,
             )
 
         @staticmethod
@@ -491,6 +500,8 @@ else:
             issued_epoch: int,
             deadline_epoch: int,
             musubi_archive: str | None = None,
+            *,
+            chain_discriminant: int,
         ) -> Any:
             """Build a canonical native ``IssueReplicationOrder`` instruction."""
 
@@ -502,6 +513,7 @@ else:
                 issued_epoch,
                 deadline_epoch,
                 musubi_archive,
+                chain_discriminant=chain_discriminant,
             )
 
         @staticmethod
@@ -512,6 +524,8 @@ else:
             expected_authority: ProviderIngestCompletionAuthorityV1,
             expected_assignment_revision: int,
             finalized_anchor: ProviderIngestFinalizedAnchorV1,
+            *,
+            chain_discriminant: int,
         ) -> Any:
             """Build the exact six-field provider completion instruction."""
 
@@ -524,20 +538,19 @@ else:
                 expected_authority,
                 expected_assignment_revision,
                 finalized_anchor,
+                chain_discriminant=chain_discriminant,
             )
 
         @staticmethod
         def expire_replication_order(
-            order_id: str,
-            expiration_epoch: int,
+            order_id: str, expiration_epoch: int, *, chain_discriminant: int
         ) -> Any:
             """Build a canonical native ``ExpireReplicationOrder`` instruction."""
 
             from .sorafs_replication import build_expire_replication_order_instruction
 
             return build_expire_replication_order_instruction(
-                order_id,
-                expiration_epoch,
+                order_id, expiration_epoch, chain_discriminant=chain_discriminant
             )
 
     PrivacyNativeActionBuildResultV1 = _crypto.PrivacyNativeActionBuildResultV1
@@ -662,21 +675,25 @@ def verify_committed_transaction_inclusion(
     native_finality_proof_chain_json: str,
     expected_network_id: NetworkId,
     expected_chain: str,
+    expected_chain_discriminant: int,
     trusted_checkpoint: bytes,
 ) -> Mapping[str, Any]:
     """Authenticate one exact output from an independently selected native checkpoint.
 
     The bounded native proof page starts at the checkpoint and extends through
     consecutive decisions. Network, chain and checkpoint must come from trusted
-    configuration or a previously accepted promoted checkpoint. The returned
+    configuration or a previously accepted promoted checkpoint. The independently
+    selected chain discriminant controls every native account-address projection. The returned
     ``promoted_checkpoint`` is immutable canonical bytes; retain it atomically
     only after accepting the application result. Rejections are authenticated
     too, so application policy must check ``result_ok``.
     """
 
     expected_network_id = _require_network_id(expected_network_id, "expected_network_id")
-    for name, value in (("transaction_response_bytes", transaction_response_bytes),
-                        ("trusted_checkpoint", trusted_checkpoint)):
+    for name, value in (
+        ("transaction_response_bytes", transaction_response_bytes),
+        ("trusted_checkpoint", trusted_checkpoint),
+    ):
         if type(value) is not bytes:
             raise TypeError(f"{name} must be exact immutable bytes")
     if not transaction_response_bytes or len(transaction_response_bytes) > 32 * 1024 * 1024:
@@ -685,20 +702,37 @@ def verify_committed_transaction_inclusion(
         raise ValueError("trusted_checkpoint must contain 1..68 MiB")
     if type(native_finality_proof_chain_json) is not str:
         raise TypeError("native_finality_proof_chain_json must be a string")
-    if not native_finality_proof_chain_json or len(native_finality_proof_chain_json.encode("utf-8")) > 16 * 1024 * 1024:
+    if (
+        not native_finality_proof_chain_json
+        or len(native_finality_proof_chain_json.encode("utf-8")) > 16 * 1024 * 1024
+    ):
         raise ValueError("native_finality_proof_chain_json must contain 1..16 MiB")
     if type(expected_chain) is not str:
         raise TypeError("expected_chain must be a string")
     if not expected_chain or len(expected_chain.encode("utf-8")) > 1024:
         raise ValueError("expected_chain must contain 1..1024 UTF-8 bytes")
+    if type(expected_chain_discriminant) is not int:
+        raise TypeError("expected_chain_discriminant must be an exact integer")
+    if not 0 <= expected_chain_discriminant <= 65535:
+        raise ValueError("expected_chain_discriminant must be a u16")
     native_result = _crypto.verify_committed_transaction_inclusion(
-        transaction_hash, transaction_response_bytes, native_finality_proof_chain_json,
-        expected_network_id, expected_chain, trusted_checkpoint,
+        transaction_hash,
+        transaction_response_bytes,
+        native_finality_proof_chain_json=native_finality_proof_chain_json,
+        expected_network_id=expected_network_id,
+        expected_chain=expected_chain,
+        expected_chain_discriminant=expected_chain_discriminant,
+        trusted_checkpoint=trusted_checkpoint,
     )
     if type(native_result) is not tuple or len(native_result) != 2:
         raise RuntimeError("native committed verifier returned malformed output")
     payload, promoted = native_result
-    if type(payload) is not str or type(promoted) is not bytes or not promoted or len(promoted) > 68 * 1024 * 1024:
+    if (
+        type(payload) is not str
+        or type(promoted) is not bytes
+        or not promoted
+        or len(promoted) > 68 * 1024 * 1024
+    ):
         raise RuntimeError("native committed verifier returned malformed checkpoint output")
     decoded = json.loads(payload)
     if not isinstance(decoded, Mapping) or "promoted_checkpoint" in decoded:
@@ -720,10 +754,19 @@ _VERIFY_SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_V1 = getattr(
 )
 
 
-def signed_transaction_envelope_from_json(payload: str) -> SignedTransactionEnvelope:
+def signed_transaction_envelope_from_json(
+    payload: str,
+    *,
+    chain_discriminant: int,
+) -> SignedTransactionEnvelope:
     """Reconstruct a `SignedTransactionEnvelope` from its JSON representation."""
 
-    return SignedTransactionEnvelope.from_json(payload)
+    if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 0xFFFF:
+        raise ValueError("chain_discriminant must be an exact u16 integer")
+    return SignedTransactionEnvelope.from_json(
+        payload,
+        chain_discriminant=chain_discriminant,
+    )
 
 
 def decode_transaction_receipt_json(payload: bytes) -> str:
@@ -1709,6 +1752,7 @@ def build_signed_transaction(
     authority: str,
     private_key: bytes,
     *,
+    chain_discriminant: int,
     fee_payment: Mapping[str, Any],
     instructions: Optional[Iterable[Instruction]] = None,
     entries: Optional[Iterable[TransactionExecutableEntry]] = None,
@@ -1725,6 +1769,9 @@ def build_signed_transaction(
     network_id:
         Exact typed genesis-derived transaction network. Human-readable chain
         labels and bare hash bytes are not accepted.
+    chain_discriminant:
+        Independently selected native u16 discriminator retained by this builder.
+        Account and sponsor literals must already use this exact I105 domain.
     authority:
         Transaction authority account identifier (domainless encoded account
         literal: canonical I105 only).
@@ -1755,13 +1802,13 @@ def build_signed_transaction(
     """
 
     network_id = _require_network_id(network_id)
+    if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 65535:
+        raise ValueError("chain_discriminant must be an independently selected u16")
     authority = _require_exact_non_empty_string(authority, "authority")
     if type(private_key) is not bytes:
         raise TypeError("private_key must be exact immutable bytes")
     if len(private_key) != ED25519_PRIVATE_KEY_LENGTH:
-        raise ValueError(
-            f"private_key must contain exactly {ED25519_PRIVATE_KEY_LENGTH} bytes"
-        )
+        raise ValueError(f"private_key must contain exactly {ED25519_PRIVATE_KEY_LENGTH} bytes")
     if instructions is not None and entries is not None:
         raise ValueError("instructions and entries are mutually exclusive")
     normalized_fee_payment = _normalize_mapping_payload(fee_payment, "fee_payment")
@@ -1797,6 +1844,7 @@ def build_signed_transaction(
         network_id,
         authority,
         fee_payment_json,
+        chain_discriminant=chain_discriminant,
     )
     if normalized_creation_time_ms is not None:
         builder.set_creation_time_ms(normalized_creation_time_ms)
@@ -2444,19 +2492,24 @@ def canonical_signed_transaction_hash_v1(
 def signed_transaction_envelope_from_versioned_v1(
     signed_transaction_versioned: bytes | bytearray | memoryview,
     network_id: NetworkId,
+    *,
+    chain_discriminant: int,
 ) -> SignedTransactionEnvelope:
-    """Reconstruct an authenticated envelope bound to one exact NetworkId."""
+    """Reconstruct an authenticated envelope in the independently selected chain."""
 
     if not isinstance(
         signed_transaction_versioned,
         (bytes, bytearray, memoryview),
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
+    if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 0xFFFF:
+        raise ValueError("chain_discriminant must be an exact u16 integer")
     network_id = _require_network_id(network_id)
     try:
         result = _crypto.signed_transaction_envelope_from_versioned_v1(
             bytes(signed_transaction_versioned),
             network_id,
+            chain_discriminant=chain_discriminant,
         )
     except AttributeError as exc:
         raise RuntimeError(
@@ -2512,6 +2565,8 @@ def verify_prepared_transaction_context_v1(
     semantic_hash_hex: str,
     fee_payment_json: str,
     operation_context_json: str,
+    *,
+    chain_discriminant: int,
 ) -> SignedTransactionEnvelope:
     """Authenticate one prepared transaction's exact V1 public and semantic context."""
 
@@ -2520,6 +2575,8 @@ def verify_prepared_transaction_context_v1(
         (bytes, bytearray, memoryview),
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
+    if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 0xFFFF:
+        raise ValueError("chain_discriminant must be an exact u16 integer")
     network_id = _require_network_id(network_id)
     try:
         result = _crypto.verify_prepared_transaction_context_v1(
@@ -2531,6 +2588,7 @@ def verify_prepared_transaction_context_v1(
             semantic_hash_hex,
             fee_payment_json,
             operation_context_json,
+            chain_discriminant=chain_discriminant,
         )
     except AttributeError as exc:
         raise RuntimeError(

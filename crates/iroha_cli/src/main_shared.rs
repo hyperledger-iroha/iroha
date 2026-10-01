@@ -29,6 +29,7 @@ mod json_utils;
 mod jurisdiction;
 mod list_support;
 mod nexus;
+mod parameter_prepared;
 mod offline;
 mod operator_key;
 mod runtime;
@@ -5618,6 +5619,14 @@ mod parameter {
         List(List),
         /// Set a system parameter using JSON input from stdin
         Set(Set),
+        /// Quote, sign and retain one bounded original parameter write without dispatch.
+        Prepare(crate::parameter_prepared::RequestArgs),
+        /// Inspect the retained original signed wire without network I/O.
+        Inspect(crate::parameter_prepared::RequestArgs),
+        /// Dispatch the original unattempted parameter write at most once.
+        Submit(crate::parameter_prepared::RequestArgs),
+        /// Reconcile the retained hash without signing or submitting another write.
+        Resume(crate::parameter_prepared::RequestArgs),
     }
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -5625,6 +5634,10 @@ mod parameter {
             match self {
                 List(cmd) => cmd.run(context),
                 Set(cmd) => cmd.run(context),
+                Prepare(args) => crate::parameter_prepared::run(context, crate::parameter_prepared::Action::Prepare, args),
+                Inspect(args) => crate::parameter_prepared::run(context, crate::parameter_prepared::Action::Inspect, args),
+                Submit(args) => crate::parameter_prepared::run(context, crate::parameter_prepared::Action::Submit, args),
+                Resume(args) => crate::parameter_prepared::run(context, crate::parameter_prepared::Action::Resume, args),
             }
         }
     }

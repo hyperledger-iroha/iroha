@@ -34,6 +34,8 @@ CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
 )
+
+
 class _FakeCrypto:
     PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1 = 256 * 1024
     NetworkId = NetworkId
@@ -79,8 +81,11 @@ class _FakeCrypto:
         self,
         wire: object,
         network_id: object,
+        *,
+        chain_discriminant: int,
     ) -> SimpleNamespace:
         self.events.append("reconstruct")
+        assert chain_discriminant == 753
         assert wire == SIGNED_X509_WIRE
         assert network_id == NETWORK_ID
         return self.envelope
@@ -196,7 +201,9 @@ def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
     assert events == []
 
 
-@pytest.mark.parametrize("change", ["origin", "redirect", "encoding", "empty", "oversized", "length", "media-parameters"])
+@pytest.mark.parametrize(
+    "change", ["origin", "redirect", "encoding", "empty", "oversized", "length", "media-parameters"]
+)
 def test_capability_fetch_rejects_response_provenance_and_body_drift(
     monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -354,6 +361,7 @@ def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
 
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={
@@ -367,9 +375,12 @@ def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
 
     statement = b"canonical-typed-statement"
     proof = b"X5S1-proof"
-    assert draft.prepare_privacy_zk_x509_identity_presentation_action_v1(
-        canonical_statement_archive=statement
-    ) == bytes([9]) * 32
+    assert (
+        draft.prepare_privacy_zk_x509_identity_presentation_action_v1(
+            canonical_statement_archive=statement
+        )
+        == bytes([9]) * 32
+    )
     assert (
         draft.sign_privacy_zk_x509_identity_presentation_action_v1(
             b"private-key",
@@ -389,6 +400,7 @@ def test_transaction_draft_rejects_x509_action_mixing_before_native_call(
 ) -> None:
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={

@@ -6,7 +6,7 @@ type rows preserve 373 populated values and 1,492 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`89c611e853909b5c79ee7ff5ac1dc0bb41190e4c4cfa17d3012fb77428388f43`.
+`31db89431c26825ce5a05eecb298618201265189b8c1891959c0c5ba29ef8923`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -139,3 +139,18 @@ dataspace. It also retains the positive account-recovery request generations and
 both private-root records. This gives 331 rows, 373 cases and 1,492 frame forms.
 The merged collection requires fresh native decoding, recapture and all-container
 roundtrip validation; combining prior captures is not current-source qualification.
+
+`SetSorafsReputationJournalAuthorityPolicy` was recaptured by the maintained
+`print_reputation_policy_record_fixture_row` native test on 2026-10-02.
+The current typed policy includes its required `stream_token_delivery` field
+and the bounded default closed template. The emitter validated the policy and
+produced all four root and container frames; this row does not attest an active
+governed stream admission.
+
+The complete maintained `print_native_record_capture_v1` run on 2026-10-02
+decoded, recaptured and exactly re-encoded all 331 rows, 373 populated values and
+1,492 root and container frames against the repaired latest source. Every row
+matched the fixture above. The native capture document has SHA-256
+`d5b5a4037874740431eb4c90acd3d33654dce844a854dcb70d5cf3c58d7b8869` and
+independently records the fixture's input SHA-256. This is structural codec
+evidence; authenticated SDK, platform and ledger admission remain separate gates.

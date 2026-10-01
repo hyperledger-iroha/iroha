@@ -31,12 +31,15 @@ use std::{
 
 #[path = "operations_alias.rs"]
 mod bounded_alias;
+#[path = "operations_parameter.rs"]
+mod parameter_update;
 #[path = "operations_private_root.rs"]
 mod private_root;
 use bounded_alias::AliasFeeBounds;
 use iroha_data_model::private_dataspace::{
     PrivateDataspaceAnchor, PrivateDataspaceAnchorState, PrivateDataspaceRegistration,
 };
+pub use parameter_update::ParameterUpdateRequest;
 use private_root::BoundedTerms;
 pub use private_root::{
     BoundedTransactionOptions, PrivateRootAnchorRequest, PrivateRootRegistrationRequest,
@@ -137,6 +140,8 @@ pub enum NativeOperationKind {
     PrivateRootRegistration,
     /// Exact next compact private-root certificate against retained parent cursor state.
     PrivateRootAnchor,
+    /// Exact bounded native parameter update, including owner-bound catalog transitions.
+    ParameterUpdate,
 }
 
 /// Account-authorized shared native wallet operations.
@@ -258,6 +263,7 @@ impl AccountService {
         requested_fee: FeePaymentIntent,
         journal: &Path,
     ) -> Result<OperationReport> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         self.ensure_deadline()?;
         requested_fee.validate()?;
         self.client
@@ -553,6 +559,10 @@ fn validate_transfer_request(request: &TransferRequest, authority: &AccountId) -
     deny_unknown_fields
 )]
 enum NativeOperation {
+    ParameterUpdate {
+        parameter: iroha_data_model::parameter::Parameter,
+        terms: BoundedTerms,
+    },
     Transfer {
         destination: AccountId,
         amount: Quantity,
@@ -577,9 +587,9 @@ enum NativeOperation {
 impl NativeOperation {
     fn bounded_terms(&self) -> Option<&BoundedTerms> {
         match self {
-            Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
-                Some(terms)
-            }
+            Self::PrivateRootRegistration { terms, .. }
+            | Self::PrivateRootAnchor { terms, .. }
+            | Self::ParameterUpdate { terms, .. } => Some(terms),
             Self::AliasSetup {
                 bounds: AliasFeeBounds::Bounded(terms),
                 ..
@@ -589,9 +599,9 @@ impl NativeOperation {
     }
     fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
         match self {
-            Self::PrivateRootRegistration { .. } | Self::PrivateRootAnchor { .. } => {
-                Ok(BTreeMap::new())
-            }
+            Self::PrivateRootRegistration { .. }
+            | Self::PrivateRootAnchor { .. }
+            | Self::ParameterUpdate { .. } => Ok(BTreeMap::new()),
             Self::Transfer { amount, .. } => Ok(BTreeMap::from([(
                 AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone()),
                 amount.clone(),
@@ -615,10 +625,17 @@ impl NativeOperation {
             Self::AliasSetup { .. } => NativeOperationKind::AliasSetup,
             Self::PrivateRootRegistration { .. } => NativeOperationKind::PrivateRootRegistration,
             Self::PrivateRootAnchor { .. } => NativeOperationKind::PrivateRootAnchor,
+            Self::ParameterUpdate { .. } => NativeOperationKind::ParameterUpdate,
         }
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
+            Self::ParameterUpdate { parameter, terms } => {
+                terms.validate()?;
+                Ok(vec![
+                    iroha_data_model::isi::SetParameter::new(parameter.clone()).into(),
+                ])
+            }
             Self::PrivateRootRegistration {
                 alias,
                 expected_ownership_generation,
@@ -687,6 +704,14 @@ fn transfer_report(
     evidence: Option<&Value>,
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
+        NativeOperation::ParameterUpdate { parameter, terms } => {
+            let parameter_json =
+                norito::json::to_value(parameter).expect("native parameter serializes");
+            (
+                "parameter_update",
+                norito::json!({"parameter": parameter_json, "terms": terms}),
+            )
+        }
         NativeOperation::PrivateRootRegistration {
             alias,
             expected_ownership_generation,

@@ -50,22 +50,17 @@ fn active_owner(
     if selector.normalized_label() != alias {
         return Err(invalid("dataspace alias must be canonical"));
     }
-    let now = state.block_unix_timestamp_ms();
-    let resolved = crate::sns::resolve_active_dataspace_id_by_alias(
-        &state.world,
-        &state.nexus.dataspace_catalog,
-        alias,
-        now,
-    )
-    .map_err(invalid)?;
-    if resolved != dataspace
-        || dataspace == DataSpaceId::UNIVERSAL
+    // A private child is identified by the paid name's native selector. A
+    // preserved physical catalog binding or historical SNS metadata never
+    // selects that independent root's identity.
+    if dataspace == DataSpaceId::UNIVERSAL
         || DataSpaceId::from_hash(&selector.name_hash()) != dataspace
     {
         return Err(invalid(
             "active alias differs from registered private dataspace",
         ));
     }
+    let now = state.block_unix_timestamp_ms();
     crate::sns::active_dataspace_owner_and_generation_by_alias(&state.world, alias, now)
         .map_err(invalid)?
         .ok_or_else(|| invalid("dataspace alias has no active owner"))
@@ -76,11 +71,41 @@ pub(crate) fn ensure_parent_execution_separate(
     world: &impl WorldReadOnly,
     dataspaces: impl IntoIterator<Item = DataSpaceId>,
 ) -> Result<(), String> {
-    if dataspaces
-        .into_iter()
-        .any(|id| world.private_dataspaces().get(id).is_some())
-    {
+    let runtime =
+        crate::state::runtime_catalog_from_world(world).map_err(|error| error.to_string())?;
+    if dataspaces.into_iter().any(|id| {
+        world.private_dataspaces().get(id).is_some()
+            || runtime.as_ref().is_some_and(|catalog| {
+                catalog
+                    .retired_dataspaces
+                    .iter()
+                    .any(|entry| entry.retirement.dataspace_id == id)
+            })
+    }) {
         return Err("physical parent execution cannot claim a registered private root".into());
+    }
+    Ok(())
+}
+
+/// Retired physical lane identities remain reserved by their exact historical ledgers.
+pub(crate) fn ensure_native_policy_preserves_retired_storage(
+    world: &impl WorldReadOnly,
+    policy: &iroha_data_model::sumeragi_lanes::SumeragiLanePolicy,
+) -> Result<(), String> {
+    let Some(runtime) =
+        crate::state::runtime_catalog_from_world(world).map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    if runtime.retired_lanes.iter().any(|entry| {
+        policy.fixed_lane(entry.lane.id).is_some()
+            || policy
+                .routes
+                .iter()
+                .any(|route| route.lane == entry.lane.id)
+            || policy.is_elastic(entry.lane.id)
+    }) {
+        return Err("native fixed, routing or autoscale policy cannot reuse a retired physical storage identity".into());
     }
     Ok(())
 }
@@ -107,6 +132,11 @@ impl Execute for RegisterPrivateDataspace {
         // Existing locally executed public dataspaces cannot be reinterpreted as external roots.
         if state.nexus.dataspace_catalog.by_id(dataspace_id).is_some()
             || state
+                .nexus
+                .dataspace_catalog
+                .by_alias(&self.alias)
+                .is_some()
+            || state
                 .world
                 .sumeragi_lanes()
                 .lanes
@@ -120,10 +150,16 @@ impl Execute for RegisterPrivateDataspace {
         if crate::state::runtime_catalog_from_world(&state.world)
             .map_err(invalid)?
             .is_some_and(|catalog| {
-                catalog
-                    .dataspaces
-                    .iter()
-                    .any(|entry| entry.descriptor.id == dataspace_id)
+                let retirement = catalog.retired_dataspaces.iter().find(|record| {
+                    record.retirement.dataspace_id == dataspace_id
+                        || record.retirement.alias == self.alias
+                });
+                retirement.is_some_and(|record| record.retirement_height >= state.block_height())
+                    || (retirement.is_none()
+                        && catalog
+                            .dataspaces
+                            .iter()
+                            .any(|entry| entry.descriptor.id == dataspace_id))
             })
         {
             return Err(invalid(

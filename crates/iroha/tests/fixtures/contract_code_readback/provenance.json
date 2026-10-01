@@ -11,13 +11,11 @@
   "abiVersion": 1,
   "chainDiscriminant": 369,
   "compilerFingerprint": "kotodama_lang/2.0.0-rc.2.0",
-  "localDevelopmentCompilerSha256": "cad3664e5f0ed408a4065eda1c5fd0231a95faf28eb95d6e6061bc9b05a50257",
-  "localAdmissionCliSha256": "bfa92881af2be909eb98bd1defe7f0e740f5e1ece890820a9eb769eb8f6e5b4b",
   "acceptedReleaseCompiler": false,
   "compilerSourceRevisionAuthenticated": false,
-  "buildAndOutputVerificationPassed": true,
+  "buildAndOutputVerificationPassed": false,
   "generatedOwnerManifestSha256": "b834cc0d047c686ccc2f402ea87bb281cc32e9dd9735b855363e82fd5e3f4661",
-  "nativeAdmission": "Historical parent b1d3c94d08 evidence: PASS; fresh native CLI admitted this artifact and matched the compiler manifest in two independent renders.",
-  "currentNativeCandidateTests": "Pending on merged source. Historical parent b1d3c94d08 evidence: PASS on the current integrated source: 59/59 IVM contract-artifact tests and 16/16 artifact-admission tests; full release qualification remains open.",
-  "currentNativeSdkRouteTests": "Pending on merged source. Historical parent b1d3c94d08 evidence: PASS on the current integrated source: 3/3 Rust SDK signed canonical bounded contract-code readback tests; final-source SDK matrix remains open."
+  "nativeAdmission": "Pending native admission and exact compiler reproduction on the repaired current candidate.",
+  "currentNativeCandidateTests": "Pending qualification on the repaired current source; prior candidate test counts are not current evidence.",
+  "currentNativeSdkRouteTests": "Pending the repaired current source SDK matrix."
 }

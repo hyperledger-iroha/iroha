@@ -13,6 +13,7 @@ mod remote;
 mod remote_failure;
 mod remote_status;
 mod runtime;
+mod startup_receipt;
 mod store;
 mod transport;
 mod workspace;
@@ -33,6 +34,7 @@ pub use remote_status::{
     ManagedDataspaceStatus,
 };
 pub use runtime::run_worker;
+pub use startup_receipt::{ManagedStartupFile, ManagedStartupPeer, ManagedStartupReceipt};
 pub use store::{LocalnetPorts, ManagedStore};
 pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
 

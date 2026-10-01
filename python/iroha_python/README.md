@@ -44,7 +44,7 @@ authority = pair.account_id()  # Canonical domainless I105 account id
 network_id = NetworkId.parse(
     "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
 )
-instruction = Instruction.register_domain("wonderland")
+instruction = Instruction.register_domain("wonderland", chain_discriminant=selected_native_chain_discriminant)
 
 with ToriiClient("http://127.0.0.1:8080", auth_token="dev-token") as client:
     envelope, status = client.build_and_submit_transaction(
@@ -663,6 +663,7 @@ from iroha_python import NetworkId, TransactionConfig, TransactionDraft, authori
 
 draft = TransactionDraft(
     TransactionConfig(
+        chain_discriminant=selected_native_chain_discriminant,
         network_id=NetworkId.parse(
             "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
         ),
@@ -1212,6 +1213,7 @@ from iroha_python import (
 )
 
 config = TransactionConfig(
+    chain_discriminant=selected_native_chain_discriminant,
     network_id=NetworkId.parse(
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
     ),
@@ -1222,6 +1224,7 @@ config = TransactionConfig(
 client = ToriiClient(
     "http://127.0.0.1:8080",
     local_signing_context=LocalSigningContext(config.network_id),
+    chain_discriminant=config.chain_discriminant,
 )
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
@@ -1278,7 +1281,8 @@ exact transaction predicate, signature, freshness, nonce, and involved-account/o
 authorization.
 
 `get_verified_committed_transaction(...)` requires a typed `network_id`, an
-independently selected chain label and complete canonical native checkpoint
+independently selected chain label, an explicit `expected_chain_discriminant`
+(u16 matching the configured client), complete canonical native checkpoint
 bytes, and `native_finality_proof_chain_json` (a Norito JSON array of 1–4096
 `SumeragiFinalityProof` values, at most 16 MiB UTF-8). The checkpoint is bounded
 to 68 MiB. The array starts at the checkpoint height and extends consecutively
@@ -1293,12 +1297,20 @@ network, native `context_id`, execution commitment, executed wire hash/length,
 full output hash and immutable `promoted_checkpoint` bytes. Retain that checkpoint
 atomically with the accepted application result. The low-level
 `verify_committed_transaction_inclusion(...)` accepts the same proof and trust
-inputs with exact committed-query response bytes for offline consumers. Both
-helpers authenticate rejected results; check `result_ok` before treating an
+inputs, including the required chain discriminant, with exact committed-query
+response bytes for offline consumers. The native address scope covers both
+proof decoding and every typed JSON projection, and restores the enclosing
+scope after the call. Both helpers authenticate rejected results; check `result_ok` before treating an
 operation as successful. Header signatures alone do not authenticate outputs.
 The ABI-25 native call returns projection JSON and checkpoint bytes separately.
 An authenticated contract rejection includes a nullable `message` from the
 contract's static error catalog, preserving its exact Unicode text and spacing.
+
+Every transaction config requires the independently selected native chain discriminator.
+The native builder retains that discriminator while decoding, quoting and signing;
+account and sponsor literals must already use its exact I105 domain. Every native
+instruction constructor also requires `chain_discriminant`; instructions retain
+their selected domain while rendering and cannot enter a builder for another domain.
 
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`
@@ -1308,20 +1320,21 @@ in its fee intent:
 from iroha_python import Instruction, NetworkId, TransactionConfig, TransactionDraft, authority_fee_payment
 
 mixed = TransactionDraft(TransactionConfig(
+    chain_discriminant=selected_native_chain_discriminant,
     network_id=NetworkId.parse(
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
     ),
     authority=authority_account_id,
     fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
 ))
-mixed.add_instruction(Instruction.register_domain("before"))
+mixed.add_instruction(Instruction.register_domain("before", chain_discriminant=selected_native_chain_discriminant))
 mixed.add_contract_call(
     contract_address,
     expected_code_hash_hex,  # Exact 32-byte marked code hash as raw hex.
     "settle",
     canonical_argument_record,
 )
-mixed.add_instruction(Instruction.register_domain("after"))
+mixed.add_instruction(Instruction.register_domain("after", chain_discriminant=selected_native_chain_discriminant))
 
 # The signed Batch keeps the exact instruction → call → instruction order.
 envelope = mixed.sign(pair.private_key)
@@ -1341,6 +1354,7 @@ requested_fee_payment = sponsor_fee_payment(
 )
 
 config = TransactionConfig(
+    chain_discriminant=selected_native_chain_discriminant,
     network_id=NetworkId.parse(
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
     ),
@@ -2139,32 +2153,42 @@ NX-16 rollout with deterministic parsing.
 ## Trigger lifecycle walkthrough
 
 ```python
-from iroha_python import Instruction, NetworkId, ToriiClient
+import time
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
+from iroha_python import (Ed25519KeyPair, Instruction, LocalSigningContext, NetworkId,
+                          ToriiClient, authority_fee_payment)
+
+network_id = NetworkId.from_bytes(bytes([0xA5]) * 32)  # select the authenticated genesis
+keypair = Ed25519KeyPair.from_private_key(bytes.fromhex("11" * 32))
+authority = keypair.account_id(discriminant=selected_native_chain_discriminant)
+client = ToriiClient(
+    "http://127.0.0.1:8080", auth_token="admin-token",
+    chain_discriminant=selected_native_chain_discriminant,
+    local_signing_context=LocalSigningContext(network_id),
+)
 trigger_id = "hourly-reward"
 
 # 1) Build the instruction with the high-level helper.
 register = Instruction.register_time_trigger(
     trigger_id=trigger_id,
-    authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    action=Instruction.mint_asset(
-        asset_id="norito:<reward-asset-id-hex>",
-        account_id="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        value=1,
-    ),
-    interval_ms=3_600_000,
-    repeats=None,
+    authority=authority,
+    instructions=[Instruction.mint_asset_quantity(
+        asset_id=f"{reward_asset_definition_id}#{authority}",
+        quantity="1",
+        chain_discriminant=selected_native_chain_discriminant,
+    )],
+    start_ms=int(time.time() * 1000) + 60_000,
+    period_ms=3_600_000,
+    chain_discriminant=selected_native_chain_discriminant,
 )
 
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
-    network_id=NetworkId.parse(
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
-    ),
-    authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+    network_id=network_id,
+    authority=authority,
     private_key=bytes.fromhex("11" * 32),
     instructions=[register],
+    fee_payment=authority_fee_payment(charge_limits=[], gas_limit=gas_cap),
     wait=True,
 )
 assert status["kind"] == "Committed"
@@ -2179,7 +2203,7 @@ for event in client.stream_trigger_events(trigger_id=trigger_id):
     break  # demonstration
 
 # 5) Query triggers with pagination helpers.
-page = client.query_triggers(filter={"authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"}, limit=10)
+page = client.query_triggers(filter={"authority": authority}, limit=10)
 for item in page["items"]:
     print(item["id"])
 

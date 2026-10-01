@@ -158,6 +158,7 @@ impl SnapshotNexusRuntime {
         let mut nexus = self.nexus_projection(baseline)?;
         nexus.dataspace_catalog =
             runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, catalog)?;
+        runtime_catalog_project_retired_routes(&mut nexus, catalog)?;
         if SnapshotNexusOwnerPolicy::from_nexus(&nexus) != self.owner_policy {
             return Err(runtime_catalog_invalid(
                 "canonical runtime ownership differs from its scoped World catalog",
@@ -399,7 +400,7 @@ impl State {
             Arc::new(
                 baseline
                     .with_runtime_additions(
-                        &catalog.manifests,
+                        &runtime_catalog_active_manifests(catalog),
                         &nexus.lane_catalog,
                         &nexus.dataspace_catalog,
                         &nexus.governance,

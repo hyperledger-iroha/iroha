@@ -103,7 +103,10 @@ mod native {
 
     fn authenticate_peer(stream: &UnixStream) -> Result<()> {
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        let uid = rustix::net::sockopt::socket_peercred(stream)?.uid.as_raw();
+        let uid = rustix::net::sockopt::socket_peercred(stream)
+            .map_err(std::io::Error::from)?
+            .uid
+            .as_raw();
         #[cfg(target_os = "macos")]
         let uid = {
             use std::os::fd::AsRawFd as _;
@@ -229,6 +232,13 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn peer_credentials_authenticate_both_owned_socket_pair_ends() {
+            let (left, right) = UnixStream::pair().unwrap();
+            authenticate_peer(&left).unwrap();
+            authenticate_peer(&right).unwrap();
+        }
 
         #[test]
         fn long_workspace_uses_a_short_owner_bound_socket_and_cleans_it() {

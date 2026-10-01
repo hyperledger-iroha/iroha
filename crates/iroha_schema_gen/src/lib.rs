@@ -62,6 +62,10 @@ macro_rules! schema_types {
             iroha_data_model::private_dataspace::PrivateDataspaceRecordProof,
             iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace,
             iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace,
+            // Current owner-bound catalog transitions and immutable physical storage history.
+            iroha_data_model::nexus::NexusCatalogTransitionV1,
+            iroha_data_model::nexus::NexusRuntimeCatalogV1,
+            iroha_data_model::nexus::LaneLifecycleStatusV1,
             iroha_data_model::smart_contract::ContractArtifactId,
             // Current finalized provider authority and signed discovery material.
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
@@ -259,6 +263,7 @@ pub mod complete_data_model {
 mod tests {
     use super::{IntoSchema, complete_data_model::*};
     use iroha_schema::{MetaMap, Metadata};
+    mod catalog_retirement;
     mod final_promotion;
     mod final_promotion_account_custody;
     mod privacy_qualification;
@@ -654,6 +659,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "challenge",
+                "observed_at_unix_ms",
                 "network_id",
                 "node_id",
                 "node_fingerprint",

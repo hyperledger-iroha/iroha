@@ -550,6 +550,8 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
         assert_eq!(view.nexus().configured_dataspace_catalog, baseline);
         assert!(view.runtime_catalog_hash().unwrap().is_none());
         NexusCatalogTransitionV1 {
+            dataspace_retirements: Vec::new(),
+            lane_retirements: Vec::new(),
             version: NexusCatalogTransitionV1::VERSION,
             expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(
                 &view.nexus().lane_catalog,

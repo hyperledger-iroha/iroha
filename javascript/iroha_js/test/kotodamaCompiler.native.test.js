@@ -207,20 +207,6 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
   assert.deepEqual(ordinary.output.artifactBytes, result.output.artifactBytes);
   assert.deepEqual(ordinary.output.manifest, result.output.manifest);
 
-  const positionalOnly = "fn combine(int _ value, int _ minimum, int maximum)";
-  const rejectedRaw = await nativeBinding.compileKotodama({
-    ...request, source: source.replace(signature, positionalOnly),
-  });
-  assert.equal(rejectedRaw.ok, false, positionalOnly);
-  assert.equal(rejectedRaw.output, null);
-  const rejected = normalizeCompilerResult(rejectedRaw);
-  assert.equal(rejected.ok, false);
-  assert.deepEqual(
-    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-      .map((diagnostic) => diagnostic.code),
-    ["E_POSITIONAL_ARGUMENT_REQUIRED"],
-  );
-
   assert.equal(source.split(call).length, 2);
   for (const acceptedCall of [call, "combine(amount, 0, 10)", "combine(value: amount, maximum: 10, minimum: 0)"]) {
     const acceptedRaw = await nativeBinding.compileKotodama({

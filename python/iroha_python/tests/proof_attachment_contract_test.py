@@ -62,7 +62,7 @@ def lane_privacy(
 
 
 def verify(value: object) -> None:
-    Instruction.verify_proof(value)
+    Instruction.verify_proof(value, chain_discriminant=753)
 
 
 def test_proof_attachment_accepts_exact_first_release_shape_and_optional_fields() -> None:

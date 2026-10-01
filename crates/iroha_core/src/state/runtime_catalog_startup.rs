@@ -77,13 +77,13 @@ impl State {
         true
     }
 
-    /// Derive effective dataspaces from the configured baseline and protected committed catalog.
+    /// Derive active execution geometry from the configured baseline and protected committed catalog.
     ///
     /// This read-only projection can be checked before an imported snapshot authorizes runtime
     /// publication. It never promotes restored or locally supplied additions into static policy.
     ///
     /// # Errors
-    /// Rejects malformed committed additions or a configured physical baseline
+    /// Rejects malformed committed catalog history or a configured physical baseline
     /// that differs from retained snapshot or post-genesis authority.
     pub fn nexus_with_committed_catalog(
         &self,
@@ -92,6 +92,24 @@ impl State {
         let runtime = runtime_catalog_from_world(&self.world.view())?;
         nexus.dataspace_catalog =
             runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, runtime.as_ref())?;
+        if let Some(runtime) = &runtime {
+            let retired: BTreeSet<_> = runtime
+                .retired_lanes
+                .iter()
+                .map(|record| record.lane.id)
+                .collect();
+            let lanes = nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .filter(|lane| !retired.contains(&lane.id))
+                .cloned()
+                .collect();
+            nexus.lane_catalog = LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes)?;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            runtime_catalog_project_retired_routes(&mut nexus, Some(runtime))?;
+        }
         // An absent overlay still has an authoritative physical baseline once
         // State is restored or committed. Only fresh H0 construction/replay may
         // replace placeholder defaults with the configured initial baseline.
@@ -139,7 +157,7 @@ impl State {
                 }
                 baseline
                     .with_runtime_additions(
-                        &runtime.manifests,
+                        &runtime_catalog_active_manifests(&runtime),
                         &nexus.lane_catalog,
                         &nexus.dataspace_catalog,
                         &nexus.governance,

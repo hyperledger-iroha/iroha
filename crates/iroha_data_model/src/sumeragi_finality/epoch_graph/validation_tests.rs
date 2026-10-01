@@ -132,6 +132,33 @@ fn scoped_canonical_commitment_decode_preserves_bytes_and_all_other_validation()
 }
 
 #[test]
+fn resource_refusal_preserves_the_enclosing_epoch_validation_scope_for_retry() {
+    let epoch = fixture(4);
+    let value = commitment(&epoch);
+    let bytes = value.preimage().unwrap();
+    let mut validation = EpochValidationScope::new();
+    validation.core_epoch(&epoch).unwrap();
+    let canonical = norito::canonical_decode_limits(bytes.len());
+    let limits = norito::DecodeLimits::new(96, bytes.len(), canonical.max_total_elements(), 0, 32);
+    let refusal = norito::with_decode_limits_scope(limits, || {
+        ExecutionResultCommitment::decode_with_validation(&bytes, &mut validation)
+    });
+    assert!(matches!(
+        refusal,
+        Err(crate::sumeragi_finality::CommitmentError::Resource(
+            norito::core::DecodeResourceError::TotalAllocationExceeded { .. }
+        ))
+    ));
+    assert_eq!(validation.validations, 1);
+    assert_eq!(validation.entries.len(), 1);
+    assert_eq!(
+        ExecutionResultCommitment::decode_with_validation(&bytes, &mut validation).unwrap(),
+        value
+    );
+    assert_eq!(validation.validations, 1);
+}
+
+#[test]
 fn warm_epoch_scope_rejects_substituted_credentials_and_authority_bindings() {
     let epoch = fixture(4);
     let mut validation = EpochValidationScope::new();

@@ -1394,7 +1394,26 @@ fn artifact_instruction_codecs_preserve_exact_dataspace_and_reject_alternate_env
                 json::to_value(&code_hash).unwrap()
             );
             assert_typed_instruction_roundtrip(&instruction, &value);
-            for extra in ["Mint", "Zk", "UploadSmartContractCodeChunk"] {
+            // Scope belongs to canonical signed bytes, even with the same code hash.
+            let mut foreign = value.clone();
+            foreign
+                .as_object_mut()
+                .unwrap()
+                .get_mut(variant)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .get_mut("artifact_id")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    "dataspace_id".into(),
+                    Value::String((dataspace ^ 1).to_string()),
+                );
+            let foreign = value_to_instruction(foreign).expect("exact foreign artifact scope");
+            assert_ne!(foreign.encode(), instruction.encode());
+            for extra in ["Mint", "Zk", "UploadSmartContractCodeChunk", "unexpected"] {
                 if extra != variant {
                     let mut malformed = value.clone();
                     malformed
