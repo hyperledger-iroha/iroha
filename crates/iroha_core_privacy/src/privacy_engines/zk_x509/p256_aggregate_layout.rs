@@ -73,15 +73,12 @@ pub(crate) const P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1: usize =
         + P256_CROSS_TRACE_WRITER_CONSTRAINT_COUNT_V1
         + (P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1
             + P256_ARITHMETIC_COPY_LANES_V1 * (P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + 4));
-/// Registered value-execution count including all three terminal claims.
+/// Registered value-execution local constraint count; endpoint links are joined privately.
 pub(crate) const P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1
-        + P256_VALUE_BUS_LANES_V1
-        + P256_ARITHMETIC_COPY_LANES_V1
-        + P256_CROSS_TRACE_LANES_V1;
-/// Registered sorted value-bus count including its terminal claim.
+    P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1;
+/// Registered sorted value-bus local constraint count; endpoint links are joined privately.
 pub(crate) const P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_VALUE_BUS_STARK_CONSTRAINT_COUNT_V1 + P256_VALUE_BUS_LANES_V1;
+    P256_VALUE_BUS_STARK_CONSTRAINT_COUNT_V1;
 /// Scalar arithmetic source-product columns.
 pub(crate) const P256_SCALAR_ARITHMETIC_SOURCE_AUX_WIDTH_V1: usize =
     8 + P256_SCALAR_BIT_BUS_LANES_V1 * 10;
@@ -105,11 +102,9 @@ pub(crate) const P256_ARITHMETIC_AGGREGATE_CONSTRAINT_COUNT_V1: usize =
     P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1
         + (8 + P256_SCALAR_BIT_BUS_LANES_V1 * 12)
         + (3 + P256_ARITHMETIC_COPY_LANES_V1 * 7);
-/// Registered arithmetic count including scalar and value-copy claims.
+/// Registered arithmetic local constraint count; endpoint links are joined privately.
 pub(crate) const P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_ARITHMETIC_AGGREGATE_CONSTRAINT_COUNT_V1
-        + P256_SCALAR_BIT_BUS_LANES_V1
-        + P256_ARITHMETIC_COPY_LANES_V1;
+    P256_ARITHMETIC_AGGREGATE_CONSTRAINT_COUNT_V1;
 /// Scalar window source-product columns.
 pub(crate) const P256_SCALAR_WINDOW_SOURCE_AUX_WIDTH_V1: usize =
     1 + P256_SCALAR_BIT_BUS_LANES_V1 * 3;
@@ -125,11 +120,12 @@ pub(crate) const P256_WINDOW_AGGREGATE_CONSTRAINT_COUNT_V1: usize =
     P256_WINDOW_STARK_CONSTRAINT_COUNT_V1
         + (3 + P256_CROSS_TRACE_LANES_V1 * 7)
         + (1 + P256_SCALAR_BIT_BUS_LANES_V1 * 5);
-/// Registered window count including cross and scalar terminal claims.
+/// Local source constraints; its four initial values are joined privately in MAIN.
+pub(crate) const P256_WINDOW_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    P256_WINDOW_AGGREGATE_CONSTRAINT_COUNT_V1 - P256_CROSS_TRACE_LANES_V1;
+/// Registered window local constraint count; endpoint links are joined privately.
 pub(crate) const P256_WINDOW_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_WINDOW_AGGREGATE_CONSTRAINT_COUNT_V1
-        + P256_CROSS_TRACE_LANES_V1
-        + P256_SCALAR_BIT_BUS_LANES_V1;
+    P256_WINDOW_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1;
 /// Integrated reduction auxiliary width.
 pub(crate) const P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1: usize =
     P256_REDUCTION_STARK_AUX_WIDTH_V1 + P256_CROSS_TRACE_REDUCTION_AUX_WIDTH_V1;
@@ -139,9 +135,12 @@ pub(crate) const P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1: usize =
 /// Integrated reduction residue count.
 pub(crate) const P256_REDUCTION_AGGREGATE_CONSTRAINT_COUNT_V1: usize =
     P256_REDUCTION_STARK_CONSTRAINT_COUNT_V1 + (2 + P256_CROSS_TRACE_LANES_V1 * 6);
-/// Registered reduction count including its terminal claim.
+/// Local source constraints; its four initial values are joined privately in MAIN.
+pub(crate) const P256_REDUCTION_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    P256_REDUCTION_AGGREGATE_CONSTRAINT_COUNT_V1 - P256_CROSS_TRACE_LANES_V1;
+/// Registered reduction local constraint count; endpoint links are joined privately.
 pub(crate) const P256_REDUCTION_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_REDUCTION_AGGREGATE_CONSTRAINT_COUNT_V1 + P256_CROSS_TRACE_LANES_V1;
+    P256_REDUCTION_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1;
 /// Integrated wallet low-S auxiliary width.
 pub(crate) const P256_LOW_S_AGGREGATE_AUX_WIDTH_V1: usize =
     P256_LOW_S_STARK_AUX_WIDTH_V1 + P256_CROSS_TRACE_LOW_S_AUX_WIDTH_V1;
@@ -151,11 +150,15 @@ pub(crate) const P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1: usize =
 /// Integrated wallet low-S residue count.
 pub(crate) const P256_LOW_S_AGGREGATE_CONSTRAINT_COUNT_V1: usize =
     P256_LOW_S_STARK_CONSTRAINT_COUNT_V1 + (1 + P256_CROSS_TRACE_LANES_V1 * 5);
-/// Registered low-S count including its terminal claim.
+/// Local source constraints; its four initial values are joined privately in MAIN.
+pub(crate) const P256_LOW_S_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    P256_LOW_S_AGGREGATE_CONSTRAINT_COUNT_V1 - P256_CROSS_TRACE_LANES_V1;
+/// Registered low-S local constraint count; endpoint links are joined privately.
 pub(crate) const P256_LOW_S_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_LOW_S_AGGREGATE_CONSTRAINT_COUNT_V1 + P256_CROSS_TRACE_LANES_V1;
+    P256_LOW_S_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1;
 /// Bytes in one complete `(Qx,Qy,r,s,digest)` P-256 input tuple.
-pub(crate) const P256_INPUT_SELECTION_BYTES_V1: usize = 5 * 32;
+#[cfg(test)]
+pub(crate) use super::p256_external_binding_air::P256_INPUT_SELECTION_BYTES_V1;
 /// External-binding committed base width, including both selected byte words,
 /// their range decompositions, and the private depth selector.
 pub(crate) const P256_BINDING_SINK_BASE_WIDTH_V1: usize =
@@ -168,12 +171,12 @@ pub(crate) const P256_BINDING_SINK_CONSTRAINT_COUNT_V1: usize =
     P256_CROSS_TRACE_SINK_CONSTRAINT_COUNT_V1 + 41;
 /// Maximum sink degree including verifier-fixed gates and optional-input selection.
 pub(crate) const P256_BINDING_SINK_CONSTRAINT_DEGREE_V1: u8 = 3;
-/// Registered sink count including its terminal claim.
+/// Registered sink local constraint count; endpoint links are joined privately.
 pub(crate) const P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_BINDING_SINK_CONSTRAINT_COUNT_V1 + P256_CROSS_TRACE_LANES_V1;
-/// Registered scalar-bit bus count including both endpoint claims.
+    P256_BINDING_SINK_CONSTRAINT_COUNT_V1;
+/// Registered scalar-bit bus local constraint count; endpoint links are joined privately.
 pub(crate) const P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1: usize =
-    P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1 + 2 * P256_SCALAR_BIT_BUS_LANES_V1;
+    P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1;
 const CROSS_EVENT_FIXED_WIDTH: usize = 3;
 const CROSS_BOUNDARY_FIXED_WIDTH: usize = 3;
 const SCALAR_EVENT_FIXED_WIDTH: usize = 4;
@@ -258,8 +261,8 @@ const _: () =
 const _: () = assert!(P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1 == 116);
 const _: () = assert!(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1 == 46);
 const _: () = assert!(P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1 == 210);
-const _: () = assert!(P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1 == 222);
-const _: () = assert!(P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1 == 94);
+const _: () = assert!(P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1 == 210);
+const _: () = assert!(P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1 == 90);
 const _: () = assert!(P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1 == 72);
 const _: () = assert!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 == 134);
 const _: () = assert!(P256_WINDOW_AGGREGATE_AUX_WIDTH_V1 == 37);

@@ -36,11 +36,11 @@ use crate::privacy_engines::transparent_stark::{
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
 #[cfg(test)]
-pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree1815:mask-coefficients1816:quotient-bound3158433:quotient-coset-capacity4194303:fri-chunk-capacity589823:six-chunk-composition-capacity3538943:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:standalone-test-constraints898:main-local-constraints890:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree1815:mask-coefficients1816:quotient-bound3158433:quotient-coset-capacity4194303:fri-chunk-capacity589823:main-six-chunk-blinded-stride589687:main-unmasked-quotient-capacity3538121:standalone-test-generic-split:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:private-der-rfc-eight-native-final-row-quotients:no-public-der-terminal-scalars:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 #[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x79, 0xb2, 0xff, 0x93, 0x5e, 0xaf, 0xb3, 0x0e, 0x78, 0xee, 0x6f, 0x68, 0x01, 0x6c, 0x8e, 0xa2,
-    0xd9, 0x54, 0xce, 0xb7, 0x6f, 0x52, 0x92, 0xbb, 0xc2, 0xa3, 0xc7, 0x0c, 0x05, 0x80, 0x1c, 0x4a,
+    0x52, 0x22, 0x81, 0xe1, 0x8b, 0x3e, 0x9f, 0x7c, 0x86, 0x0d, 0xe8, 0xad, 0x23, 0x20, 0xed, 0xd5,
+    0x03, 0xd9, 0xd0, 0x9e, 0x0f, 0x1b, 0x8f, 0x3a, 0x31, 0x9a, 0xc4, 0x7f, 0xbe, 0xe5, 0xe8, 0x26,
 ];
 /// The aggregate native domain shared with SHA, projection, and every bus.
 pub(crate) const ZK_X509_DER_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -50,6 +50,9 @@ pub(crate) const ZK_X509_DER_STARK_BASE_WIDTH_V1: usize = 76;
 pub(crate) const ZK_X509_DER_STARK_AUX_WIDTH_V1: usize = 196;
 pub(crate) const ZK_X509_DER_STARK_FIXED_WIDTH_V1: usize = 14;
 pub(crate) const ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1: usize = 898;
+/// Local DER constraints before the eight cross-registration endpoint equations.
+pub(crate) const ZK_X509_DER_STARK_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1 - 8;
 /// Registered local-expression ceiling. The complete numeric evaluator
 /// independently attains degree seven over multiple affine row directions.
 pub(crate) const ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1: u8 = 7;
@@ -1652,6 +1655,19 @@ pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
         input_byte: terminals.input_byte,
         node: terminals.node,
     })
+}
+/// Exact private DER auxiliary endpoint columns in input-byte then node lane order.
+pub(crate) const fn zk_x509_der_terminal_columns_v1() -> [usize; 8] {
+    [
+        AUX_INPUT_BYTE_AFTER,
+        AUX_INPUT_BYTE_AFTER + 1,
+        AUX_INPUT_BYTE_AFTER + 2,
+        AUX_INPUT_BYTE_AFTER + 3,
+        AUX_NODE_AFTER,
+        AUX_NODE_AFTER + 1,
+        AUX_NODE_AFTER + 2,
+        AUX_NODE_AFTER + 3,
+    ]
 }
 /// Bind ordered input-byte then node claims to the committed final auxiliary
 /// row. This helper is shared by native and aggregate opened-row evaluation.
@@ -3937,7 +3953,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1<A: PolynomialAirFieldV
 /// Evaluate the complete strict-DER adapter, including every challenge-bound
 /// permutation and logarithmic-derivative lookup.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
+pub(crate) fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -3946,7 +3962,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV
     next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509DerStarkChallengesV1,
     _public: ZkX509DerStarkPublicTerminalsV1,
-    terminal_claims: ZkX509DerStarkTerminalClaimsV1,
     residues: &mut Vec<A>,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
     challenges.validate()?;
@@ -3958,11 +3973,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV
         .chain(fixed)
         .chain(next_fixed)
         .any(|value| !value.is_canonical())
-        || terminal_claims
-            .input_byte
-            .iter()
-            .chain(terminal_claims.node.iter())
-            .any(|value| F::canonical(value.0).is_none())
     {
         return Err(ZkX509DerStarkErrorV1::Row);
     }
@@ -4189,20 +4199,82 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV
             ),
         );
     }
+    if residues.len() != ZK_X509_DER_STARK_LOCAL_CONSTRAINT_COUNT_V1 {
+        return Err(ZkX509DerStarkErrorV1::Transition);
+    }
+    Ok(())
+}
+/// Complete standalone DER relation, retaining its own explicit public statement.
+/// MAIN uses the local relation and private joined endpoint quotients instead.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    challenges: ZkX509DerStarkChallengesV1,
+    _public: ZkX509DerStarkPublicTerminalsV1,
+    terminal_claims: ZkX509DerStarkTerminalClaimsV1,
+    residues: &mut Vec<A>,
+) -> Result<(), ZkX509DerStarkErrorV1> {
+    if terminal_claims
+        .input_byte
+        .iter()
+        .chain(&terminal_claims.node)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509DerStarkErrorV1::Row);
+    }
+    evaluate_zk_x509_der_stark_local_residues_into_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        next_fixed,
+        challenges,
+        _public,
+        residues,
+    )?;
     residues.extend(evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
-        last_aggregate,
+        fixed[FIX_LAST_AGGREGATE],
         current_aux,
         terminal_claims,
     ));
-    if residues.len() != ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1 {
-        return Err(ZkX509DerStarkErrorV1::Transition);
-    }
     Ok(())
 }
 /// Allocate and evaluate the complete strict-DER constraint vector.
 ///
 /// Streaming composition builders should use [`evaluate_zk_x509_der_stark_residues_into_v1`] to
 /// reuse one bounded scratch vector across every common-domain row.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    challenges: ZkX509DerStarkChallengesV1,
+    public: ZkX509DerStarkPublicTerminalsV1,
+) -> Result<Vec<A>, ZkX509DerStarkErrorV1> {
+    let mut residues = Vec::with_capacity(ZK_X509_DER_STARK_LOCAL_CONSTRAINT_COUNT_V1);
+    evaluate_zk_x509_der_stark_local_residues_into_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        next_fixed,
+        challenges,
+        public,
+        &mut residues,
+    )?;
+    Ok(residues)
+}
+/// Complete standalone DER constraints including its explicit public endpoints.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],

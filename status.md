@@ -83,21 +83,15 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Ordinary daemon/CLI and normal native/JS/Python frontends have recorded passes
-after compiler and runtime-owner extraction. Fresh targeted privacy controls and
-Core/bridge authority checks have scoped runtime coverage; the binary inventory
-admits 98 declared targets and 23 defaults. Recorded IVM-only, feature-hygiene,
-dependency-boundary and retired-codec pattern guards pass. An earlier all-targets
-check stopped on six fixture/API errors; the latest failed when a new Core ZK
-ordinary Guard composition source was unavailable during compilation. Subsequent
-Core ZK and metadata checks exposed
-issuer-type and API/fixture compilation errors. Source repairs are applied;
-fresh compiler and focused-test validation remain pending. The resolved SDK
-merge remains externally owned. A merge-free workspace retry, metadata
-freshness and observational warm timings remain pending. Apple ABI-25 packaging passes; Swift host fixtures and physical-device
-qualification remain open. Concurrent source and HEAD changes qualify each
-result. Full workspace and same-candidate release validation remain incomplete;
-dependency ownership and pinned compiler-memory measurements remain gates. See
+Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
+Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
+checks cover normal native/JS/Python frontends and dependency/codec guards.
+These results qualify their recorded source. The combined candidate still needs
+fresh compiler and focused-test validation, a merge-free workspace check, genuine
+private-terminal/quotient-mask profile regeneration, current native/SDK consumers
+and executable-metadata freshness. Full workspace tests, physical-device
+qualification and same-candidate release validation remain incomplete.
+Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
@@ -122,10 +116,17 @@ passes.
   with restart, rewards, exits and slashing.
 - **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
   pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
-  300 seconds. Public terminal claims also require a zero-knowledge repair.
-  Prepared transform and selective auxiliary replay changes need native parity
-  and a new complete proof. Historical q77 controls pass; the maximum ordinary
-  producer crosses source changes and cannot qualify the merge. RAM-LFE secure
+  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
+  bind P256/projection byte declarations to the shared trace. The selected-input
+  repair binds bytes to actual P256 values, but native comparison exposed a
+  missing selected-input multiplicity in the closed fixed-schedule compiler.
+  The post-pin privacy selection completes with 942 passes and 14 failures;
+  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
+  corrections require a new native run. The partial private-terminal repair
+  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
+  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
+  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
+  retained artifacts also pass fresh-process verification. RAM-LFE secure
   encryption/full execution, IVM execution/finalized-State binding, protocol and
   side-channel review, hardware/network evidence and final signing remain open
   under the [ZK goals](specs/zk_first_release_goals.md).

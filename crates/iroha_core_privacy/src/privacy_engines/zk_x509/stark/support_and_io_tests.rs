@@ -1547,7 +1547,7 @@ pub(super) fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainP
     .expect("canonical joint post-base challenges")
     .main_post_base()
 }
-fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
+fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256PrivateProductsV1 {
     fn scalar_buses(signature: usize) -> P256BusTerminalClaimsV1 {
         let mut buses = zero_p256_terminal_fixture(P256EcdsaRoleV1::CertificateOrCrl).buses;
         buses.arithmetic_scalar = core::array::from_fn(|lane| {
@@ -1563,7 +1563,7 @@ fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
     let certificate_or_crl = core::array::from_fn(|signature| {
         let mut terminals = zero_p256_terminal_fixture(P256EcdsaRoleV1::CertificateOrCrl);
         terminals.buses = scalar_buses(signature);
-        ZkX509P256CertificateTerminalClaimsV1 {
+        ZkX509P256CertificatePrivateProductsV1 {
             buses: terminals.buses,
             cross_sources: terminals
                 .cross_sources
@@ -1575,9 +1575,9 @@ fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
     });
     let mut wallet = zero_p256_terminal_fixture(P256EcdsaRoleV1::WalletOwnership);
     wallet.buses = scalar_buses(P256_SIGNATURE_COUNT_V1 - 1);
-    ZkX509P256TerminalClaimsV1 {
+    ZkX509P256PrivateProductsV1 {
         certificate_or_crl,
-        wallet: ZkX509P256WalletTerminalClaimsV1 {
+        wallet: ZkX509P256WalletPrivateProductsV1 {
             buses: wallet.buses,
             cross_sources: wallet
                 .cross_sources
@@ -1599,10 +1599,6 @@ pub(super) fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
     }
 }
 pub(super) fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
-    let der = ZkX509DerStarkTerminalClaimsV1 {
-        input_byte: [F(3), F(5), F(7), F(11)],
-        node: [F(13), F(17), F(19), F(23)],
-    };
     let mut sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
     for segment in &mut sha.segments {
         for stream in &mut segment.rfc_stream_products {
@@ -1610,11 +1606,8 @@ pub(super) fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaim
         }
     }
     ZkX509MainTerminalClaimsV1 {
-        der,
-        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_for_der_test_v1(der)
-            .expect("canonical DER/RFC test claims"),
+        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
         sha,
-        p256: p256_main_terminal_claims_fixture_v1(),
     }
 }
 fn main_log19_source_fixture_v1(

@@ -48,9 +48,26 @@ impl MainBoundedTransformPolicyV1 {
         Ok(Self {
             available: ceiling
                 .checked_sub(admitted)
+                .and_then(|available| {
+                    available.checked_sub(
+                        super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1(
+                        ),
+                    )
+                })
                 .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
             backend: fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(
             ),
+        })
+    }
+
+    /// Reserve additional caller-owned private buffers before any allocation or dispatch.
+    pub(super) fn reserve_additional_v1(self, payload: usize) -> Result<Self, ZkX509StarkErrorV1> {
+        Ok(Self {
+            available: self
+                .available
+                .checked_sub(payload)
+                .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
+            ..self
         })
     }
 

@@ -65,7 +65,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Native certificate relation and bounded joined codec exist; activation is unavailable. The corrected RFC temporal relation awaits fresh integrated profile pins. | The complete relation bounds combined X5S1 at 9,420,938 bytes under the unchanged 9,437,184-byte limit. Produce actual maximum-shape proofs, regenerate artifacts, complete independent soundness/hiding review and measure the real implementation. |
+| ZK-X509 | Local certificate AIR components and a bounded joined codec exist; activation is unavailable. Verifier equations connecting P256/projection byte declarations to the shared byte trace remain incomplete. Native comparison exposed missing selected-input multiplicity in the closed fixed-schedule compiler; the complete post-pin privacy selection has 942 passes and 14 failures. | Complete those source joins, remove exposed intermediate claims, regenerate the combined profile and prove the full relation under the unchanged 9,437,184-byte and resource limits. Local proof acceptance does not establish the complete credential relation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -78,13 +78,16 @@ has a log-22 common domain and the accumulator pads its 104 active rows to
 8,192 rows on a log-16 LDE. All six MAIN groups retain their native polynomial
 and transition domains under one joined base root and one joined auxiliary root.
 Full current/next Fp4 DEEP constraints precede verification of the reduced
-current-row query wire. The repaired RFC temporal relation uses 285 base, 280
-auxiliary and 102 verifier-fixed columns, with 1,681 degree-four constraints.
-The combined codec bound is 9,420,938 bytes, leaving 16,246 bytes under the
-unchanged 9,437,184-byte ceiling. Nine geometry controls pass. This resolves the
-encoding preflight failure; it does not establish maximum-shape proof generation,
-resource compliance, soundness, hiding or activation. Those require fresh native
-artifacts and independent qualification of the exact construction.
+current-row query wire. The private terminal repair retains 285 RFC base, 280
+auxiliary and 102 verifier-fixed columns, with 1,702 local degree-four constraints
+and a separate 192-equation MAIN endpoint plan. It removes 364 public scalars;
+384 MAIN and 108 accumulator scalars remain exposed. Canonical quotient chunks
+use independent adjacent masks with 137 Fp4 coefficients and unchanged FRI caps.
+The revised codec arithmetic bounds combined X5S1 at 9,415,166 bytes; native
+profile regeneration passes, while the fixed-schedule repair and further source joins require another profile generation, proof generation and resource measurement.
+The historical 9,420,938-byte proof passes local verification and memory limits
+but exceeds the 300-second proving limit. Its acceptance does not establish the
+missing byte-source joins, full soundness, hiding or activation.
 
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and
@@ -122,7 +125,7 @@ implementation markers must not be substituted for the qualification record in
 | Component | Completion criterion still required |
 | --- | --- |
 | Generic native STARK | Current Binding and Explicit paths reconstruct the complete public trace/composition roots and enforce a zero terminal value. A future hidden-trace AIR still needs a verified initial degree/proximity argument; binary fold consistency alone is insufficient. Standalone public-padding verification remains unavailable, and BFV/Soracloud callers must complete explicit material replay. |
-| FASTPQ | Core ordinary and AXT wrappers select canonical masked DEEP artifacts with bounded verification, six-lane commitments and the complete typed statement. Finish actual full-domain ordinary/AXT proof execution, source-bound admission tests, whole-proof memory/time measurement and independent AIR/FRI, witness-privacy and qROM review within unchanged proof/resource limits. Focused native, actual Metal leaf and full transform checks do not qualify a complete proof. |
+| FASTPQ | Core ordinary and AXT wrappers select canonical masked DEEP artifacts with bounded verification, six-lane commitments and the complete typed statement. Current maximum ordinary and AXT component proofs and fresh retained-artifact verification pass unchanged byte/memory/work limits. Finish finalized-source admission/network behavior, independent AIR/FRI, witness-privacy and qROM review, and broader hardware evidence. Component proof acceptance does not qualify finalized authority. |
 | AXT | Both Core execution pipelines now commit exact ordered canonical transaction wires; missing block-owned commitments cannot be synthesized from transcript identities. Anchor-bound proof verification checks ordered wire membership, exact public roots and context, and mandatory expiry. Consensus witness roots and transfer-batch trees still commit subsets, which cannot substitute for full persisted WSV roots. Complete successful-execution/transfer binding, rooted state witnesses, immutable anchor resolution and durable spend nonces. |
 | BFV/Soracloud | Complete the full BFV-RNS relation, full-size/eight-party KAT, resource measurements and governed parameter/lattice/noise/qROM evidence. The artifact-aware native wrapper is a replay check, not production qualification. |
 | MKHE | Complete the separate atomic 40-limb source/materialization/packing/cross-field/padding verifier and production composite within the unchanged qPCS resource limits. Unavailable stages cannot issue receipts. |

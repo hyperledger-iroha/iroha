@@ -9,13 +9,13 @@
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
 /// Stable digest input for the implemented components.
-pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification";
+pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-public-x5r1-and-private-der-source-terminal-air-links=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-private-committed-terminal-air-links=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification";
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
 ///
 /// The pin binds the exact X5C1/X5C2 proof system rather than only its component name.
 pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x30, 0x79, 0x15, 0x05, 0x9a, 0xa0, 0xf1, 0x73, 0x35, 0x1f, 0xac, 0xf1, 0x34, 0xc2, 0xc0, 0x8d,
-    0xf7, 0x20, 0xe3, 0x65, 0xcf, 0xdb, 0x96, 0xc2, 0x39, 0xec, 0xa4, 0x4c, 0x07, 0xb6, 0x54, 0xbb,
+    0x1b, 0xb7, 0x70, 0x06, 0x53, 0x63, 0xca, 0xc0, 0x35, 0x37, 0xff, 0x83, 0x48, 0x3c, 0xfe, 0x31,
+    0xe5, 0xfa, 0xcf, 0xee, 0x47, 0x9e, 0x4a, 0x8b, 0x12, 0x0f, 0x8a, 0xa2, 0xdd, 0xa0, 0xc0, 0xe6,
 ];
 /// Failure of an implemented zk-X509 AIR primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -336,6 +336,8 @@ mod tests {
             "shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots",
             "root-spki-channel=30+2*public-disclosures",
             "checked-native-lde-scratch-resident-and-work-ceilings",
+            "canonical-chunk-stride9079",
+            "independent-adjacent-fp4-masks137-before-commitment",
             "producer-self-verifies",
         ] {
             assert!(
