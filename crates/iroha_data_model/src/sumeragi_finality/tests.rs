@@ -12,6 +12,34 @@ use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
 use std::{collections::BTreeSet, num::NonZeroU64};
 
+#[test]
+fn finality_root_scope_preserves_original_global_and_private_genesis_authority() {
+    use crate::block::consensus::SumeragiRootScope;
+    use crate::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let global = NativeFinalityFixture::new();
+    assert_eq!(
+        global.verifier().root_scope().unwrap(),
+        SumeragiRootScope::Global
+    );
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: global.network_id(),
+        dataspace_id: iroha_model_base::topology::DataSpaceId::new(u64::MAX - 12),
+    };
+    let mut private = NativeFinalityFixture::start_with_scope("private-scope", scope);
+    let block = private.block_with_submitted_work(private.next_header());
+    private.certify(block);
+    assert_eq!(private.verifier().root_scope().unwrap(), scope);
+    let checkpoint = private.checkpoint();
+    let restored = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &checkpoint,
+        &private.network_id(),
+        private.chain_id(),
+    )
+    .unwrap();
+    assert_eq!(restored.root_scope().unwrap(), scope);
+    assert_ne!(restored.instance(), global.verifier().instance());
+}
+
 pub struct Fixture {
     pub(super) genesis: SignedBlock,
     pub(crate) first: SumeragiFinalityProof,

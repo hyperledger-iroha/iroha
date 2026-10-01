@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Regenerate the platform-independent current Kotodama artifact fixture.
 
+Requires Python 3.10+, Git, and a fresh koto built from the kotodama_toolchain
+package (`cargo build --locked -p kotodama_toolchain --bin koto`).
+
 The canonical fixture contains only source-bound semantic data.  A fresh koto
 binary is copied into a private cache stage before it is executed; its local
 identity is recorded in a cache-only attestation and never enters the checked-in
-JSON.  The existing Rust admission test consumes the resulting fixture and is
-the authoritative executable-policy oracle, so this owner does not compile an
-ad-hoc verifier or accept rustc/rlib inputs.
+JSON.  The exact_current_compiler_artifact_is_admitted test in
+crates/ivm_artifact_admission/tests/current_artifact.rs consumes the resulting
+fixture and is the authoritative executable-policy oracle, so this owner does
+not compile an ad-hoc verifier or accept rustc/rlib inputs.
 
 Write mode creates the canonical JSON directly with O_EXCL in a caller-created,
 owner-only cache stage.  It never publishes to the repository and never unlinks
@@ -53,7 +57,9 @@ ROOT_INPUTS = (
     Path("javascript/iroha_js/src/ivmArtifact.js"),
     Path("javascript/iroha_js/src/kotodamaCompiler/normalize.js"),
 )
-ROOT_PACKAGES = (Path("crates/ivm"),)
+# Start at the executable's owner so the compiler and its runtime/admission
+# dependencies are included without traversing unrelated dev-dependencies.
+ROOT_PACKAGES = (Path("crates/kotodama_toolchain"),)
 # Package tests, examples, benches, fuzzers, and prose do not participate in a
 # normal koto/verifier build. Excluding those developer-only trees keeps the
 # semantic closure exact and prevents unrelated fixture churn.

@@ -31,9 +31,9 @@ Singular requests identify the query by name and optionally include a payload:
 ```json
 {
   "singular": {
-    "type": "FindContractManifestByCodeHash",
+    "type": "FindContractManifestByArtifactId",
     "payload": {
-      "code_hash": "0x00112233…"
+      "artifact_id": { "dataspace_id": 18446744073709551615, "code_hash": "hash:<64-uppercase-hex>#<checksum>" }
     }
   }
 }
@@ -46,7 +46,7 @@ The following singular queries are supported:
 - `FindParameters`
 - `FindAssetDefinitionById` with `{ "asset": "<base58-asset-definition-id>" }`
 - `FindAssetById` with `{ "asset": "<base58-asset-definition-id>", "account_id": "<canonical-i105>", "scope": { "kind": "Global" } }`
-- `FindContractManifestByCodeHash` (requires a 32-byte `code_hash` hex string)
+- `FindContractManifestByArtifactId` (requires `artifact_id` with the exact full-width dataspace and canonical checksummed code hash)
 
 Example singular asset-definition lookup:
 

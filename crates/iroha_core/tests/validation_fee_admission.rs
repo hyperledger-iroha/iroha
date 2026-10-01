@@ -903,12 +903,14 @@ fn install_canonical_post_enactment_validation_fee_state(
     let (contract_artifact, contract_manifest) = payout_contract_artifact();
     let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         contract_artifact,
         &mut state_transaction,
     )
     .expect("register payout-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         contract_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )
@@ -932,12 +934,14 @@ fn install_canonical_post_enactment_validation_fee_state(
     let (pool_artifact, pool_manifest) = pool_contract_artifact();
     let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         pool_artifact,
         &mut state_transaction,
     )
     .expect("register pool-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         pool_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )

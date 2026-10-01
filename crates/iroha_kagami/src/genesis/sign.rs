@@ -21,11 +21,10 @@ use iroha_deploy::genesis::staging::{
 };
 #[cfg(test)]
 use iroha_deploy::genesis::staging::{
-    build_signed_genesis, configured_initial_genesis_state, restage_signed_sumeragi_context_hashes,
-    retired_synthetic_stake_asset_id, staged_default_account_literal, staged_default_pipeline,
-    staged_lane_manifest_registry, staged_signed_native_genesis,
-    staged_signed_native_genesis_with_projection, staged_signed_sumeragi_context_hashes,
-    verify_final_signed_sumeragi_context,
+    build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
+    staged_default_account_literal, staged_default_pipeline, staged_lane_manifest_registry,
+    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
+    staged_signed_sumeragi_context_hashes,
 };
 #[cfg(test)]
 use iroha_genesis::GenesisBlock;
@@ -3593,7 +3592,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
-        let output_dir = fs::canonicalize(temp.path()).expect("canonical localnet output path");
+        let output_dir = fs::canonicalize(temp.path())
+            .expect("canonical localnet output parent")
+            .join("network");
         let seed = "localnet-resign-confidential-policy".to_owned();
         let options = iroha_deploy::localnet::LocalnetOptions {
             sora_profile: Some(iroha_deploy::localnet::SoraProfile::Nexus),

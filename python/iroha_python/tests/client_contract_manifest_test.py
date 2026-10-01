@@ -1016,7 +1016,7 @@ def test_contract_manifest_record_rejects_unknown_top_level_fields() -> None:
         {"code_hash": "d" * 64, "abi_hash": "d" * 64},
         {"code_hash": "B" * 64, "abi_hash": "d" * 64},
         {"abi_hash": "d" * 64},
-        {"code_hash": "b" * 64, "abi_hash": "d" * 64, "code_bytes": None},
+        {"code_hash": "b" * 64, "abi_hash": "d" * 64, "code_bytes": 12},
     ],
 )
 def test_contract_manifest_record_rejects_mismatched_or_noncanonical_hashes(
@@ -1029,7 +1029,7 @@ def test_contract_manifest_record_rejects_mismatched_or_noncanonical_hashes(
     }
     payload.update(mutation)
 
-    with pytest.raises(TypeError, match="hash|code_bytes"):
+    with pytest.raises(TypeError, match="hash|contract bytes"):
         ContractManifestRecord.from_payload(payload)
 
 

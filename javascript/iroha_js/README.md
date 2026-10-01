@@ -3159,8 +3159,9 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
   networkId,
   authority,
   feePayment,
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
   manifest: {
-    codeHash: Buffer.alloc(32, 0xaa),
+    codeHash: Buffer.alloc(32, 0xab),
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
@@ -3175,7 +3176,7 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
-  codeHash: Buffer.alloc(32, 0xaa),
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
   code: fs.readFileSync("./contract.to"),
   privateKey,
 });
@@ -3184,25 +3185,20 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
-  codeHash: Buffer.alloc(32, 0xaa),
+  artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
   reason: "retire archived artifact",
   privateKey,
 });
 ```
 
-`buildRegisterSmartContractCodeInstruction/Transaction` accepts partial manifests
-when governance stages code hashes separately, and the native Norito path
-round-trips the full current manifest metadata surface including
-`entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
-hash length and accept `Buffer`, typed arrays, or base64 strings. Public
-deployment uses two explicit steps: `ToriiClient.registerContractCode` submits
-the manifest and code transaction, then `ToriiClient.setContractAlias` binds or
-updates the canonical address. The SDK intentionally has no one-shot
-`deployContract` compatibility wrapper, so signing and alias mutation remain
-visible to the caller.
-`buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
-reclamation ISI into CI/governance tooling and rejects empty reason strings
-before submission so operators get fast feedback during rehearsals.
+Artifact instructions require `artifactId: { dataspaceId, codeHash }`; the
+same code hash in two dataspaces identifies two separately authorized artifacts.
+Use `deploySmartContractBrowser` for the alias-first upload, manifest, and binding
+workflow. Its authenticated deployment state supplies the dataspace ID.
+`getContractManifest` and `getContractCodeBytes` take that explicit artifact ID
+and canonical account authentication, and verify the returned network and scope.
+Byte reads also verify the artifact hash. Standalone manifest registration uses
+the ordinary signed transaction builders shown above.
 
 The recipe mirrors the same validation rules: keys can be supplied as
 `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`

@@ -9,12 +9,16 @@ use std::{
     collections::{BTreeMap, HashSet},
     fmt, fs,
     io::{self, Cursor, Read, Write},
-    net::{IpAddr, ToSocketAddrs},
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+mod account_registry;
+mod dns;
+use account_registry::{AccountRegistryV1, ProviderCredentialV1, account_request_headers};
+pub use account_registry::{MusubiArchiveDiscoveryErrorV1, MusubiArchiveProviderDiscoveryV1};
 mod bounded_stream;
 mod json_preflight;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -103,11 +107,9 @@ const TOKEN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
 // peak-RSS gate in an isolated deployment-equivalent child. These allocation-free envelopes stop
 // hostile JSON structure and oversized scalar literals before DOM allocation, but they are
 // intentionally not presented as an allocator or process-RSS measurement.
-// TODO: Replace the platform-configured provider-origin map with a finalized provider-advert
-// projection that binds each DNS answer and stream-token verifying key to its enacted advert.
-// The current client pins one exclusively-public DNS answer set for its lifetime and the existing
-// gateway client independently repeats that protection, but the deployment-signed advert/IP
-// binding and server-side adversarial DNS-rebinding qualification are not exposed by Torii yet.
+// Account-mode discovery consumes only the portable verifier's opaque current provider result.
+// TODO: Qualify the composed cold-cache account flow with a governed provider and real TLS/DNS
+// adversarial cases, including revocation during issuance and public-to-private DNS rebinding.
 /// Stable failure class exposed to the Musubi adapter without secret-bearing detail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiArchiveRuntimeFailureClassV1 {
@@ -173,7 +175,7 @@ impl std::error::Error for MusubiArchiveRuntimeErrorV1 {}
 struct ProviderRuntimeV1 {
     provider: ProviderId,
     base_url: Url,
-    operator_key_pair: KeyPair,
+    credential: ProviderCredentialV1,
     http: HttpClient,
 }
 #[derive(Clone)]
@@ -183,14 +185,15 @@ struct PreparedProviderRuntimeV1 {
     operator_public_key: PublicKey,
     operator_private_key_path: PathBuf,
 }
-/// Parsed, secret-free production archive-fetch configuration.
+/// Retained production archive-fetch context with secret-redacted Debug output.
 ///
-/// Provider identities, canonical origins, and operator-key paths are validated and retained, but
+/// Operator-mode provider origins and key paths, or an explicit account registry signer, are retained;
 /// private keys are not opened, DNS is not resolved, and HTTP clients are not built until
 /// [`Self::build_client`] is called after a cache miss. Debug output deliberately omits network
 /// identities, public keys, origins, client labels, and paths.
 #[derive(Clone)]
 pub struct PreparedMusubiArchiveFetchConfigV1 {
+    account_registry: Option<Arc<AccountRegistryV1>>,
     providers: Vec<PreparedProviderRuntimeV1>,
     network_id: NetworkId,
     client_id: String,
@@ -212,7 +215,7 @@ impl fmt::Debug for ProviderRuntimeV1 {
             .debug_struct("ProviderRuntimeV1")
             .field("provider", &self.provider)
             .field("origin_configured", &true)
-            .field("operator_private_key_configured", &true)
+            .field("credential_configured", &true)
             .finish_non_exhaustive()
     }
 }
@@ -244,6 +247,7 @@ struct GatewaySessionV1 {
 }
 /// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
+    account_registry: Option<Arc<AccountRegistryV1>>,
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
     network_id: NetworkId,
     client_id: String,
@@ -263,6 +267,11 @@ impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
     }
 }
 impl PreparedMusubiArchiveFetchConfigV1 {
+    /// Exact independently configured registry network, before any I/O.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
+    }
     /// Parse and validate the fetch subtree from one caller-owned bounded `client.toml` image.
     ///
     /// Relative operator-key paths are resolved against `config_path`, but neither those files nor
@@ -351,6 +360,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         }
         Ok(Self {
             providers,
+            account_registry: None,
             network_id,
             client_id: client_id.to_owned(),
             request_timeout,
@@ -384,12 +394,13 @@ impl PreparedMusubiArchiveFetchConfigV1 {
                 ProviderRuntimeV1 {
                     provider: prepared.provider,
                     base_url: prepared.base_url.clone(),
-                    operator_key_pair,
+                    credential: ProviderCredentialV1::Operator(operator_key_pair),
                     http,
                 },
             );
         }
         Ok(AuthenticatedMusubiArchiveFetchClientV1 {
+            account_registry: self.account_registry.clone(),
             providers,
             network_id: self.network_id,
             client_id: self.client_id.clone(),
@@ -457,6 +468,7 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         commitment
             .validate()
             .map_err(|_| integrity("MUSUBI_ARCHIVE_COMMITMENT_INVALID"))?;
+        self.discover_account_provider(provider)?;
         let runtime = self
             .providers
             .get(&provider)
@@ -1025,9 +1037,25 @@ fn mint_stream_token(
         return Err(integrity("MUSUBI_ARCHIVE_PLAN_RESPONSE_INVALID"));
     }
     let nonce = random_nonce()?;
+    let account_authority = account_registry::refresh_account_authority(runtime, *network_id)?;
+    if let Some(authority) = &account_authority {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| permanent("MUSUBI_ARCHIVE_ACCOUNT_CLOCK_INVALID"))?
+            .as_millis();
+        if now_ms >= u128::from(authority.enrollment_expires_at_unix_ms())
+            || now_ms / 1_000 >= u128::from(authority.discovery().advert().expires_at)
+        {
+            return Err(unavailable("MUSUBI_ARCHIVE_PROVIDER_AUTHORITY_EXPIRED"));
+        }
+    }
     let url = runtime
         .base_url
-        .join("v1/sorafs/storage/token")
+        .join(if account_authority.is_some() {
+            "v1/sorafs/storage/token/account"
+        } else {
+            "v1/sorafs/storage/token"
+        })
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"))?;
     let mut body = norito::json::Map::new();
     body.insert(
@@ -1044,14 +1072,23 @@ fn mint_stream_token(
     body.insert("requests_per_minute".into(), norito::json::Value::Null);
     let body = norito::json::to_vec(&norito::json::Value::Object(body))
         .map_err(|_| permanent("MUSUBI_ARCHIVE_TOKEN_REQUEST_INVALID"))?;
-    let operator_headers = operator_request_headers(runtime, network_id, &url, &body)?;
-    let response = runtime
-        .http
-        .post(url)
-        .header(OPERATOR_PUBLIC_KEY_HEADER, &operator_headers.public_key)
-        .header(OPERATOR_TIMESTAMP_MS_HEADER, &operator_headers.timestamp_ms)
-        .header(OPERATOR_NONCE_HEADER, &operator_headers.nonce)
-        .header(OPERATOR_SIGNATURE_HEADER, &operator_headers.signature_b64)
+    let request = runtime.http.post(url.clone());
+    let request = match &runtime.credential {
+        ProviderCredentialV1::Operator(_) => {
+            let auth = operator_request_headers(runtime, network_id, &url, &body)?;
+            request
+                .header(OPERATOR_PUBLIC_KEY_HEADER, &auth.public_key)
+                .header(OPERATOR_TIMESTAMP_MS_HEADER, &auth.timestamp_ms)
+                .header(OPERATOR_NONCE_HEADER, &auth.nonce)
+                .header(OPERATOR_SIGNATURE_HEADER, &auth.signature_b64)
+        }
+        ProviderCredentialV1::Account {
+            account, key_pair, ..
+        } => request.headers(account_request_headers(
+            account, key_pair, network_id, &url, &body,
+        )?),
+    };
+    let response = request
         .header(CLIENT_HEADER, client_id)
         .header(NONCE_HEADER, &nonce)
         .header(CONTENT_TYPE, APPLICATION_JSON)
@@ -1091,6 +1128,16 @@ fn mint_stream_token(
         .ok_or_else(|| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?
         .to_owned();
     let token = decode_stream_token_exact(&encoded)?;
+    if let Some(authority) = &account_authority {
+        account_registry::verify_current_account_token(
+            &token,
+            &verifying_key_hex,
+            runtime.provider,
+            authority.token_public_key(),
+            authority.token_key_revision(),
+            authority.policy(),
+        )?;
+    }
     if token.body.max_streams != 1 || token.body.rate_limit_bytes < max_chunk_bytes {
         return Err(control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"));
     }
@@ -1114,6 +1161,9 @@ fn operator_request_headers(
     url: &Url,
     body: &[u8],
 ) -> Result<OperatorRequestHeadersV1, MusubiArchiveRuntimeErrorV1> {
+    let ProviderCredentialV1::Operator(operator_key_pair) = &runtime.credential else {
+        return Err(permanent("MUSUBI_ARCHIVE_OPERATOR_CREDENTIAL_REQUIRED"));
+    };
     let timestamp_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_CLOCK_INVALID"))?
@@ -1130,10 +1180,9 @@ fn operator_request_headers(
         &nonce,
     )
     .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
-    let signature = Signature::try_new(runtime.operator_key_pair.private_key(), &message)
+    let signature = Signature::try_new(operator_key_pair.private_key(), &message)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
-    let public_key = runtime
-        .operator_key_pair
+    let public_key = operator_key_pair
         .public_key()
         .try_to_multihash_string()
         .map_err(|_| permanent("MUSUBI_ARCHIVE_OPERATOR_SIGNING_FAILED"))?;
@@ -1534,18 +1583,16 @@ fn pinned_http_client(
         .connect_timeout(request_timeout.min(Duration::from_secs(10)))
         .timeout(request_timeout);
     if !matches!(base_url.host(), Some(Host::Ipv4(_) | Host::Ipv6(_))) {
-        let mut addresses = (host, 443)
-            .to_socket_addrs()
-            .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"))?
-            .collect::<Vec<_>>();
-        addresses.sort_unstable();
-        addresses.dedup();
-        if addresses.is_empty()
-            || addresses.len() > MAX_DNS_ADDRESSES_PER_HOST
-            || addresses.iter().any(|address| !is_public_ip(address.ip()))
-        {
-            return Err(permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"));
-        }
+        let deadline = Instant::now()
+            .checked_add(request_timeout.min(Duration::from_secs(10)))
+            .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"))?;
+        let addresses = dns::resolve(host, 443, deadline).map_err(|error| match error {
+            dns::Error::Invalid => permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"),
+            dns::Error::Deadline => retryable("MUSUBI_ARCHIVE_FETCH_DNS_DEADLINE"),
+            dns::Error::Busy | dns::Error::Unavailable => {
+                unavailable("MUSUBI_ARCHIVE_FETCH_DNS_UNAVAILABLE")
+            }
+        })?;
         builder = builder.resolve_to_addrs(host, &addresses);
     }
     builder
@@ -2031,6 +2078,7 @@ mod tests {
     fn authenticated_fetch_client_exposes_its_fixed_network() {
         let network_id: NetworkId = TEST_NETWORK_ID.parse().expect("test network identity");
         let client = AuthenticatedMusubiArchiveFetchClientV1 {
+            account_registry: None,
             providers: BTreeMap::new(),
             network_id,
             client_id: "test".to_owned(),
@@ -2078,7 +2126,7 @@ mod tests {
         let runtime = ProviderRuntimeV1 {
             provider: ProviderId::new([0x11; 32]),
             base_url: Url::parse("https://8.8.8.8/").expect("fixed provider URL"),
-            operator_key_pair: operator_key_pair.clone(),
+            credential: ProviderCredentialV1::Operator(operator_key_pair.clone()),
             http: HttpClient::builder()
                 .redirect(RedirectPolicy::none())
                 .build()

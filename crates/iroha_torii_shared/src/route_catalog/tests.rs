@@ -50,6 +50,7 @@ mod tests {
     #[test]
     fn credential_bound_authentication_boundaries_require_private_no_store() {
         for policy in [
+            AuthenticationPolicy::PrivateRootOwnerToken,
             AuthenticationPolicy::OnboardingToken,
             AuthenticationPolicy::CanonicalAccountSignature,
             AuthenticationPolicy::OptionalCanonicalAccountSignature,
@@ -75,6 +76,39 @@ mod tests {
                 "unexpected private no-store policy for {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn compact_private_root_exports_require_exact_owner_token_policy() {
+        for route in [
+            sumeragi::PRIVATE_ROOT_REGISTRATION,
+            sumeragi::PRIVATE_ROOT_ANCHOR,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::PrivateRootOwnerToken
+            );
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal
+            );
+            assert_eq!(route.projections(), RouteProjections::SDK);
+            assert!(route.requires_private_no_store());
+            assert!(RouteCatalog::new(&[route]).validate().is_ok());
+            let unauthenticated = route.with_authentication(AuthenticationPolicy::ToriiDefault);
+            assert!(RouteCatalog::new(&[unauthenticated]).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn provider_discovery_is_finite_private_no_store_sdk_evidence() {
+        let route = sorafs::PROVIDER_DISCOVERY;
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.projections(), RouteProjections::SDK);
+        assert!(route.requires_private_no_store());
+        assert!(RouteCatalog::new(&[route]).validate().is_ok());
     }
 
     #[test]
@@ -2345,7 +2379,7 @@ mod tests {
             CatalogValidationErrorKind::PublicMutation,
             CatalogValidationErrorKind::PublicExpensiveCompute,
             CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
-            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
+            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresAuthentication,
             CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
             CatalogValidationErrorKind::StreamingTransportRequiresGet,
         ] {

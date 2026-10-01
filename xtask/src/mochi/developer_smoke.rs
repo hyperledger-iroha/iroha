@@ -1,5 +1,11 @@
 //! Installed-runtime checks with no supplied configuration or build tools on PATH.
 
+use iroha::{client::Client, data_model::account::address::ChainDiscriminantGuard};
+use iroha_data_model::{
+    block::consensus::SumeragiRootScope,
+    smart_contract::{ContractAddress, ContractArtifactId},
+};
+use iroha_deploy::managed::{ManagedDeploymentExecution, ManagedParentReport, ManagedStore};
 use norito::json::{self, Value};
 use std::{
     error::Error,
@@ -14,15 +20,59 @@ use std::{
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const SOURCE: &str = "seiyaku BundleSmoke { view fn quote(int cups) -> int { return cups * 10; } }";
+const PACKAGE_SOURCE: &str =
+    "seiyaku BundlePackage { view fn quote(int cups) -> int { return cups * 30; } }";
+const PACKAGE_MANIFEST: &str = r#"manifest-version = 1
+
+[package]
+namespace = "smoke"
+name = "bundle-package"
+version = "0.1.0"
+edition = "1"
+abi-version = 1
+
+[[contract]]
+name = "bundle-package"
+path = "contract.ko"
+"#;
+
+const BYTECODE_SOURCE: &str =
+    "seiyaku BundleBytecodeFixture { view fn quote(int cups) -> int { return cups * 20; } }";
+
+/// Compile fixture input offline with the canonical compiler, outside every measured command.
+/// This compiler belongs to the test controller; installed products still need only the bundle.
+pub(super) fn prepare_distinct_bytecode() -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(kotodama_lang::compiler::Compiler::new()
+        .compile_source_with_manifest(BYTECODE_SOURCE)
+        .map_err(|_| "canonical bytecode fixture compilation failed")?
+        .0)
+}
+
+pub(super) fn require_distinct_artifacts(deployments: &[&Value]) -> Result<(), Box<dyn Error>> {
+    let mut hashes = std::collections::BTreeSet::new();
+    for deployment in deployments {
+        let value = deployment
+            .get("receipt")
+            .and_then(|receipt| receipt.get("code_hash"))
+            .cloned()
+            .ok_or("missing artifact code hash")?;
+        let hash: iroha_crypto::Hash = json::from_value(value)?;
+        if !hashes.insert(hash) {
+            return Err("deployment input cases must upload distinct artifacts".into());
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
+    let bytecode = prepare_distinct_bytecode()?;
     let mut harness = Harness::new(kagami)?;
-    let result = harness.exercise();
+    let result = harness.exercise(&bytecode);
     // Cleanup is itself a required observation. On uncertainty retain custody and logs instead
     // of deleting a directory which an owned worker or validator could still be using.
     let stopped = harness
         .command(&["localnet", "down"])
-        .and_then(|value| require_phase(&value, "stopped", 0));
+        .and_then(|value| require_zero_owned_resources(&value));
     match (result, stopped) {
         (Ok(()), Ok(())) => Ok(()),
         (result, stopped) => {
@@ -32,17 +82,17 @@ pub(super) fn run(kagami: &Path) -> Result<(), Box<dyn Error>> {
     }
 }
 
-struct Harness {
+pub(super) struct Harness {
     root: tempfile::TempDir,
     kagami: PathBuf,
-    workspace: PathBuf,
+    pub(super) workspace: PathBuf,
     state: PathBuf,
     empty_path: PathBuf,
     sequence: usize,
 }
 
 impl Harness {
-    fn new(kagami: &Path) -> Result<Self, Box<dyn Error>> {
+    pub(super) fn new(kagami: &Path) -> Result<Self, Box<dyn Error>> {
         let root = tempfile::Builder::new()
             .prefix("iroha-bundle-smoke-")
             .tempdir()?;
@@ -61,69 +111,132 @@ impl Harness {
         })
     }
 
-    fn command(&mut self, args: &[&str]) -> Result<Value, Box<dyn Error>> {
+    pub(super) fn command(&mut self, args: &[&str]) -> Result<Value, Box<dyn Error>> {
+        let observation = self.observe_command(args);
+        eprintln!(
+            "[developer-smoke] kagami {}: {:.2}s",
+            args.join(" "),
+            Duration::from_nanos(observation.elapsed_ns).as_secs_f64()
+        );
+        observation.value.ok_or_else(|| {
+            format!(
+                "installed CLI command did not complete: {}",
+                observation.outcome.as_str()
+            )
+            .into()
+        })
+    }
+
+    /// Observe the installed CLI directly; public samples retain only a closed failure code.
+    pub(super) fn observe_command(&mut self, args: &[&str]) -> super::latency::CommandObservation {
+        use super::latency::{CommandObservation, Outcome};
         self.sequence += 1;
         let stdout = self.root.path().join(format!("{}.stdout", self.sequence));
         let stderr = self.root.path().join(format!("{}.stderr", self.sequence));
         let started = Instant::now();
-        let mut child = Command::new(&self.kagami)
-            .args(args)
-            .arg("--state")
-            .arg(&self.state)
-            .arg("--json")
-            .current_dir(&self.workspace)
-            .env("PATH", &self.empty_path)
-            .stdin(Stdio::null())
-            .stdout(File::create(&stdout)?)
-            .stderr(File::create(&stderr)?)
-            .spawn()?;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
+        let result = (|| -> Result<Value, Outcome> {
+            let mut child = Command::new(&self.kagami)
+                .args(args)
+                .arg("--state")
+                .arg(&self.state)
+                .arg("--json")
+                .current_dir(&self.workspace)
+                .env("PATH", &self.empty_path)
+                .stdin(Stdio::null())
+                .stdout(File::create(&stdout).map_err(|_| Outcome::ControllerIo)?)
+                .stderr(File::create(&stderr).map_err(|_| Outcome::ControllerIo)?)
+                .spawn()
+                .map_err(|_| Outcome::SpawnFailed)?;
+            let status = loop {
+                if let Some(status) = child.try_wait().map_err(|_| Outcome::ControllerIo)? {
+                    break status;
+                }
+                if started.elapsed() >= COMMAND_TIMEOUT {
+                    // This unreaped handle belongs to the smoke invocation. The managed worker is
+                    // stopped separately through its authenticated API, never through a stored PID.
+                    child.kill().map_err(|_| Outcome::ControllerIo)?;
+                    child.wait().map_err(|_| Outcome::ControllerIo)?;
+                    return Err(Outcome::TimedOut);
+                }
+                thread::sleep(Duration::from_millis(50));
+            };
+            if !status.success() {
+                return Err(Outcome::CommandFailed);
             }
-            if started.elapsed() >= COMMAND_TIMEOUT {
-                // This unreaped handle belongs to the smoke invocation. The managed worker is
-                // stopped separately through its authenticated API, never through a stored PID.
-                child.kill()?;
-                child.wait()?;
-                return Err(format!("kagami {args:?} exceeded {COMMAND_TIMEOUT:?}").into());
+            let mut bytes = Vec::new();
+            File::open(stdout)
+                .map_err(|_| Outcome::ControllerIo)?
+                .take(MAX_OUTPUT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| Outcome::ControllerIo)?;
+            if bytes.len() as u64 > MAX_OUTPUT {
+                return Err(Outcome::OutputRejected);
             }
-            thread::sleep(Duration::from_millis(50));
-        };
-        if !status.success() {
-            return Err(format!(
-                "kagami {args:?} failed with {status}; inspect {}",
-                stderr.display()
-            )
-            .into());
+            json::from_slice(&bytes).map_err(|_| Outcome::OutputRejected)
+        })();
+        CommandObservation {
+            elapsed_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            outcome: result
+                .as_ref()
+                .map_or_else(|error| *error, |_| Outcome::Succeeded),
+            value: result.ok(),
         }
-        let mut bytes = Vec::new();
-        File::open(stdout)?
-            .take(MAX_OUTPUT + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_OUTPUT {
-            return Err("managed command output exceeds its bound".into());
-        }
-        let value = json::from_slice(&bytes)?;
-        eprintln!(
-            "[developer-smoke] kagami {}: {:.2}s",
-            args.join(" "),
-            started.elapsed().as_secs_f64()
-        );
-        Ok(value)
     }
 
-    fn exercise(&mut self) -> Result<(), Box<dyn Error>> {
+    pub(super) fn retain(self) {
+        let retained = self.root.keep();
+        eprintln!(
+            "retained private developer diagnostics at {}",
+            retained.display()
+        );
+    }
+
+    pub(super) fn stop(&mut self) -> bool {
+        self.command(&["localnet", "down"])
+            .and_then(|value| require_zero_owned_resources(&value))
+            .is_ok()
+    }
+
+    fn exercise(&mut self, prepared_bytecode: &[u8]) -> Result<(), Box<dyn Error>> {
         // The first call must both provision the network and deploy from raw source.
         let first = self.command(&["contract", "deploy", "hello.ko"])?;
         require_deployment(&first)?;
         let initial = self.command(&["localnet", "status"])?;
         require_phase(&initial, "ready", 4)?;
+        self.execute_on_every_peer(&first, "30")?;
         let repeated_up = self.command(&["localnet", "up"])?;
         require_same_context(&initial, &repeated_up)?;
         require_phase(&repeated_up, "ready", 4)?;
         let repeated_deploy = self.command(&["contract", "deploy", "hello.ko"])?;
         require_same_deployment(&first, &repeated_deploy)?;
+        let files = fs::read_dir(&self.workspace)?.collect::<Result<Vec<_>, _>>()?;
+        if files.len() != 1 || files[0].file_name() != "hello.ko" {
+            return Err("config-free deployment wrote additional files into the project".into());
+        }
+        // Deploy the independently hash-checked, distinct setup artifact through the bytecode
+        // entry point. No compiler or external build tool is used by the installed workflow.
+        fs::write(self.workspace.join("hello.to"), prepared_bytecode)?;
+        let bytecode_args = [
+            "contract",
+            "deploy",
+            "hello.to",
+            "--alias",
+            "BundleBytecode::universal",
+        ];
+        let bytecode = self.command(&bytecode_args)?;
+        require_deployment(&bytecode)?;
+        self.execute_on_every_peer(&bytecode, "60")?;
+        let package = self.workspace.join("package");
+        fs::create_dir(&package)?;
+        fs::write(package.join("Musubi.toml"), PACKAGE_MANIFEST)?;
+        fs::write(package.join("contract.ko"), PACKAGE_SOURCE)?;
+        let packaged = self.command(&["contract", "deploy", "package"])?;
+        require_deployment(&packaged)?;
+        self.execute_on_every_peer(&packaged, "90")?;
+        let repeated_bytecode = self.command(&bytecode_args)?;
+        require_same_deployment(&bytecode, &repeated_bytecode)?;
+        let repeated_package = self.command(&["contract", "deploy", "package"])?;
+        require_same_deployment(&packaged, &repeated_package)?;
         let stopped = self.command(&["localnet", "down"])?;
         require_phase(&stopped, "stopped", 0)?;
         let restarted = self.command(&["localnet", "up"])?;
@@ -131,19 +244,185 @@ impl Harness {
         require_same_context(&initial, &restarted)?;
         let retained_deploy = self.command(&["contract", "deploy", "hello.ko"])?;
         require_same_deployment(&first, &retained_deploy)?;
-        let files = fs::read_dir(&self.workspace)?.collect::<Result<Vec<_>, _>>()?;
-        if files.len() != 1 || files[0].file_name() != "hello.ko" {
-            return Err("config-free deployment wrote additional files into the project".into());
+        let retained_bytecode = self.command(&bytecode_args)?;
+        require_same_deployment(&bytecode, &retained_bytecode)?;
+        let retained_package = self.command(&["contract", "deploy", "package"])?;
+        require_same_deployment(&packaged, &retained_package)?;
+        require_distinct_artifacts(&[&first, &bytecode, &packaged])?;
+        for (deployment, expected) in [
+            (&retained_deploy, "30"),
+            (&retained_bytecode, "60"),
+            (&retained_package, "90"),
+        ] {
+            self.execute_on_every_peer(deployment, expected)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn execute_on_every_peer(
+        &self,
+        deployment: &Value,
+        expected_result: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        let store = ManagedStore::open(&self.state)?;
+        let context = store.context(None)?;
+        let prepared = store.prepared(&context.name)?;
+        if prepared.peers.len() != 4 {
+            return Err(
+                "installed execution smoke requires exactly four retained validators".into(),
+            );
+        }
+        let config = context.load_client_config()?;
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let artifact = receipt_artifact(deployment, &context.network_id, context.dataspace_id)?;
+        let address: ContractAddress = json::from_value(
+            deployment
+                .get("receipt")
+                .and_then(|receipt| receipt.get("contract_address"))
+                .cloned()
+                .ok_or("deployment has no contract address")?,
+        )?;
+        let authority = config.account.clone();
+        // IVM integers use canonical decimal strings in JSON, including small values.
+        let payload = norito::json!({"cups": "3"});
+        for (index, peer) in prepared.peers.iter().enumerate() {
+            let mut selected = config.clone();
+            selected.torii_api_url = peer.torii_url.parse()?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let client = Client::builder(selected)
+                .build()?
+                .with_request_deadline(deadline);
+            let mut first_error = None;
+            let response = loop {
+                match client.post_contract_view_json(
+                    &authority,
+                    Some(&address),
+                    None,
+                    "quote",
+                    Some(&payload),
+                    1_500_000,
+                ) {
+                    Ok(response) => break response,
+                    Err(error) if Instant::now() < deadline => {
+                        first_error.get_or_insert_with(|| format!("{error:#}"));
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "live contract view failed on peer {index}: {error:#}; first failure: {}",
+                            first_error.as_deref().unwrap_or("same request")
+                        )
+                        .into());
+                    }
+                }
+            };
+            require_view(&response, &address, &artifact, expected_result)?;
+            if client.get_contract_code_bytes(&artifact)?.is_empty() {
+                return Err("deployed artifact readback is empty".into());
+            }
         }
         Ok(())
     }
 }
 
-fn require_phase(value: &Value, phase: &str, peers: u64) -> Result<(), Box<dyn Error>> {
+fn receipt_artifact(
+    deployment: &Value,
+    network: &str,
+    dataspace: u64,
+) -> Result<ContractArtifactId, Box<dyn Error>> {
+    require_deployment(deployment)?;
+    let execution: ManagedDeploymentExecution = json::from_value(
+        deployment
+            .get("execution")
+            .cloned()
+            .ok_or("deployment omits its original execution scope")?,
+    )?;
+    let parent: Option<ManagedParentReport> = json::from_value(
+        deployment
+            .get("parent")
+            .cloned()
+            .ok_or("deployment omits its separate parent observation")?,
+    )?;
+    let valid_scope = match execution.root_scope {
+        SumeragiRootScope::Global => dataspace == 0 && parent.is_none(),
+        SumeragiRootScope::Dataspace {
+            parent_network_id,
+            dataspace_id,
+        } => {
+            dataspace_id.as_u64() == dataspace
+                && parent.as_ref().is_some_and(|parent| {
+                    parent.parent_network_id == parent_network_id
+                        && parent.child_network_id == execution.network_id
+                })
+        }
+    };
+    if execution.network_id.to_string() != network || !valid_scope {
+        return Err("deployment execution or parent observation belongs to another root".into());
+    }
+    let receipt = deployment
+        .get("receipt")
+        .ok_or("missing deployment receipt")?;
+    if receipt.get("network_id").and_then(Value::as_str) != Some(network)
+        || receipt.get("dataspace_id").and_then(Value::as_u64) != Some(dataspace)
+        || receipt
+            .get("stored_artifact_matches")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "deployment receipt differs from the selected network or artifact scope".into(),
+        );
+    }
+    Ok(ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::new(dataspace),
+        json::from_value(
+            receipt
+                .get("code_hash")
+                .cloned()
+                .ok_or("missing artifact hash")?,
+        )?,
+    ))
+}
+
+fn require_view(
+    response: &Value,
+    address: &ContractAddress,
+    artifact: &ContractArtifactId,
+    expected_result: &str,
+) -> Result<(), Box<dyn Error>> {
+    if address.dataspace_id()? != artifact.dataspace_id
+        || response.get("ok").and_then(Value::as_bool) != Some(true)
+        || response.get("contract_address") != Some(&json::to_value(address)?)
+        || response.get("code_hash_hex").and_then(Value::as_str)
+            != Some(hex::encode(artifact.code_hash.as_ref()).as_str())
+        || response.get("entrypoint").and_then(Value::as_str) != Some("quote")
+        || response.get("result").and_then(Value::as_str) != Some(expected_result)
+    {
+        return Err(
+            "live view did not execute the exact deployed contract with the expected result".into(),
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn require_phase(value: &Value, phase: &str, peers: u64) -> Result<(), Box<dyn Error>> {
     if value.get("phase").and_then(Value::as_str) != Some(phase)
         || value.get("running_peers").and_then(Value::as_u64) != Some(peers)
     {
         return Err(format!("expected {phase} with {peers} validators").into());
+    }
+    Ok(())
+}
+
+fn require_zero_owned_resources(value: &Value) -> Result<(), Box<dyn Error>> {
+    // A failed startup remains Failed after authenticated down; its zero-owned-peer result is
+    // safe cleanup, not a conversion of that failed attempt into success.
+    if !matches!(
+        value.get("phase").and_then(Value::as_str),
+        Some("stopped" | "failed")
+    ) || value.get("running_peers").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("cleanup did not authenticate zero owned validators".into());
     }
     Ok(())
 }
@@ -158,9 +437,19 @@ fn require_same_context(before: &Value, after: &Value) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn require_deployment(value: &Value) -> Result<(), Box<dyn Error>> {
+pub(super) fn require_deployment(value: &Value) -> Result<(), Box<dyn Error>> {
+    let commit = value
+        .get("receipt")
+        .and_then(|receipt| receipt.get("commit"));
     if value.get("status").and_then(Value::as_str) != Some("applied")
-        || !value.get("receipt").is_some_and(Value::is_object)
+        || !commit.is_some_and(|commit| {
+            commit.get("terminal_kind").and_then(Value::as_str) == Some("Applied")
+                && commit.get("resolved_from").and_then(Value::as_str) == Some("state")
+                && commit
+                    .get("block_height")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|height| height > 1)
+        })
         || value
             .get("journal")
             .and_then(Value::as_str)
@@ -186,13 +475,146 @@ fn require_same_deployment(before: &Value, after: &Value) -> Result<(), Box<dyn 
 mod tests {
     use super::*;
 
+    #[test]
+    fn live_execution_evidence_rejects_other_network_scope_artifact_or_return_value() {
+        use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+        use iroha_data_model::{NetworkId, account::AccountId};
+        use iroha_model_base::topology::DataSpaceId;
+
+        let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"installed smoke network",
+        )));
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let scope = DataSpaceId::new(u64::MAX);
+        let parent_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"installed smoke parent"),
+        ));
+        let address = ContractAddress::derive(&network, &account, 1, scope).unwrap();
+        let artifact = ContractArtifactId::new(scope, Hash::new(b"installed smoke artifact"));
+        let execution = ManagedDeploymentExecution {
+            network_id: network,
+            root_scope: SumeragiRootScope::Dataspace {
+                parent_network_id: parent_network,
+                dataspace_id: scope,
+            },
+        };
+        let parent = ManagedParentReport {
+            parent_network_id: parent_network,
+            child_network_id: network,
+            observation: iroha_deploy::managed::ManagedParentObservation::NotConfigured,
+        };
+        let deployment = norito::json!({
+            "status": "applied",
+            "journal": "retained",
+            "execution": execution,
+            "parent": parent,
+            "receipt": {
+                "commit": {"terminal_kind": "Applied", "resolved_from": "state", "block_height": 5},
+                "network_id": network,
+                "dataspace_id": scope,
+                "code_hash": (artifact.code_hash),
+                "stored_artifact_matches": true,
+            },
+        });
+        assert_eq!(
+            receipt_artifact(&deployment, &network.to_string(), u64::MAX).unwrap(),
+            artifact
+        );
+        assert!(receipt_artifact(&deployment, "other network", u64::MAX).is_err());
+        assert!(receipt_artifact(&deployment, &network.to_string(), 0).is_err());
+        let mut wrong_execution = deployment.clone();
+        wrong_execution.as_object_mut().unwrap().insert(
+            "execution".into(),
+            json::to_value(&ManagedDeploymentExecution {
+                network_id: parent_network,
+                ..execution
+            })
+            .unwrap(),
+        );
+        assert!(receipt_artifact(&wrong_execution, &network.to_string(), u64::MAX).is_err());
+        let mut wrong_parent = deployment.clone();
+        wrong_parent.as_object_mut().unwrap().insert(
+            "parent".into(),
+            json::to_value(&ManagedParentReport {
+                child_network_id: parent_network,
+                ..parent
+            })
+            .unwrap(),
+        );
+        assert!(receipt_artifact(&wrong_parent, &network.to_string(), u64::MAX).is_err());
+        let mut missing_execution = deployment.clone();
+        missing_execution
+            .as_object_mut()
+            .unwrap()
+            .remove("execution");
+        assert!(receipt_artifact(&missing_execution, &network.to_string(), u64::MAX).is_err());
+        let mut global = deployment.clone();
+        let fields = global.as_object_mut().unwrap();
+        fields.insert(
+            "execution".into(),
+            json::to_value(&ManagedDeploymentExecution {
+                network_id: network,
+                root_scope: SumeragiRootScope::Global,
+            })
+            .unwrap(),
+        );
+        fields.insert("parent".into(), Value::Null);
+        fields
+            .get_mut("receipt")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("dataspace_id".into(), 0_u64.into());
+        assert_eq!(
+            receipt_artifact(&global, &network.to_string(), 0).unwrap(),
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, artifact.code_hash)
+        );
+        global
+            .as_object_mut()
+            .unwrap()
+            .insert("parent".into(), deployment.get("parent").unwrap().clone());
+        assert!(receipt_artifact(&global, &network.to_string(), 0).is_err());
+        let response = norito::json!({
+            "ok": true,
+            "contract_address": address,
+            "code_hash_hex": (hex::encode(artifact.code_hash.as_ref())),
+            "entrypoint": "quote",
+            "result": "30",
+        });
+        require_view(&response, &address, &artifact, "30").unwrap();
+        let mut wrong_result = response.clone();
+        wrong_result
+            .as_object_mut()
+            .unwrap()
+            .insert("result".into(), "31".into());
+        assert!(require_view(&wrong_result, &address, &artifact, "30").is_err());
+        let mut numeric_result = response.clone();
+        numeric_result
+            .as_object_mut()
+            .unwrap()
+            .insert("result".into(), 30.into());
+        assert!(require_view(&numeric_result, &address, &artifact, "30").is_err());
+        let mut wrong_artifact = artifact;
+        wrong_artifact.code_hash = Hash::new(b"another artifact");
+        assert!(require_view(&response, &address, &wrong_artifact, "30").is_err());
+        let other_address = ContractAddress::derive(&network, &account, 2, scope).unwrap();
+        assert!(require_view(&response, &other_address, &artifact, "30").is_err());
+        let mut wrong_scope = artifact;
+        wrong_scope.dataspace_id = DataSpaceId::new(0);
+        assert!(require_view(&response, &address, &wrong_scope, "30").is_err());
+    }
+
     /// Exercise an already-built matching runtime without invoking Cargo from the bundle.
     #[test]
     #[ignore = "requires IROHA_DEVEX_BUNDLE_BIN pointing to matching native runtime binaries"]
     fn installed_runtime_without_configuration() {
         let directory = std::env::var_os("IROHA_DEVEX_BUNDLE_BIN")
             .map(PathBuf::from)
-            .expect("set IROHA_DEVEX_BUNDLE_BIN to the installed runtime bin directory");
+            .expect("set IROHA_DEVEX_BUNDLE_BIN to the canonical installed runtime directory (Contents/MacOS on macOS, bin elsewhere)");
         let kagami = directory.join(if cfg!(windows) {
             "kagami.exe"
         } else {
@@ -230,9 +652,9 @@ mod tests {
             .is_err()
         );
         assert!(require_same_context(&Value::Null, &Value::Null).is_err());
-        let receipt = norito::json!({"status": "applied", "receipt": {"commit": "original"}, "journal": "retained"});
+        let receipt = norito::json!({"status": "applied", "receipt": {"commit": {"terminal_kind": "Applied", "resolved_from": "state", "block_height": 5}}, "journal": "retained"});
         require_same_deployment(&receipt, &receipt).unwrap();
-        let changed = norito::json!({"status": "applied", "receipt": {"commit": "new"}, "journal": "retained"});
+        let changed = norito::json!({"status": "applied", "receipt": {"commit": {"terminal_kind": "Applied", "resolved_from": "state", "block_height": 6}}, "journal": "retained"});
         assert!(require_same_deployment(&receipt, &changed).is_err());
         assert!(require_same_deployment(&Value::Null, &Value::Null).is_err());
         assert!(
@@ -242,4 +664,89 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn cleanup_accepts_only_authenticated_stopped_or_failed_zero() {
+        for phase in ["stopped", "failed"] {
+            require_zero_owned_resources(&norito::json!({"phase": phase, "running_peers": 0}))
+                .unwrap();
+            assert!(
+                require_zero_owned_resources(&norito::json!({"phase": phase, "running_peers": 1}))
+                    .is_err()
+            );
+        }
+        for phase in ["starting", "ready", "unknown"] {
+            assert!(
+                require_zero_owned_resources(&norito::json!({"phase": phase, "running_peers": 0}))
+                    .is_err()
+            );
+        }
+        assert!(require_zero_owned_resources(&Value::Null).is_err());
+        assert!(require_zero_owned_resources(&norito::json!({"phase": "failed"})).is_err());
+    }
+
+    #[test]
+    fn deployment_requires_native_applied_state_evidence() {
+        let applied = norito::json!({"status": "applied", "receipt": {"commit": {"terminal_kind": "Applied", "resolved_from": "state", "block_height": 5}}, "journal": "retained"});
+        require_deployment(&applied).unwrap();
+        for (field, value) in [
+            ("terminal_kind", Value::from("Committed")),
+            ("resolved_from", Value::from("cache")),
+            ("block_height", Value::from(1_u64)),
+        ] {
+            let mut changed = applied.clone();
+            changed
+                .as_object_mut()
+                .unwrap()
+                .get_mut("receipt")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .get_mut("commit")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), value);
+            assert!(require_deployment(&changed).is_err());
+        }
+        let mut no_commit = applied.clone();
+        no_commit
+            .as_object_mut()
+            .unwrap()
+            .get_mut("receipt")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("commit");
+        assert!(require_deployment(&no_commit).is_err());
+    }
+}
+#[test]
+fn distinct_inputs_require_distinct_typed_artifact_hashes() {
+    let deployments: Vec<_> = [b"source".as_slice(), b"bytecode", b"package"]
+        .into_iter()
+        .map(|bytes| norito::json!({"receipt": {"code_hash": (iroha_crypto::Hash::new(bytes))}}))
+        .collect();
+    require_distinct_artifacts(&deployments.iter().collect::<Vec<_>>()).unwrap();
+    assert!(require_distinct_artifacts(&[&deployments[0], &deployments[0]]).is_err());
+    assert!(require_distinct_artifacts(&[&Value::Null]).is_err());
+}
+
+#[test]
+fn fixture_behaviors_compile_to_three_distinct_complete_artifacts() {
+    let compiled: Vec<_> = [SOURCE, BYTECODE_SOURCE, PACKAGE_SOURCE]
+        .into_iter()
+        .map(|source| {
+            kotodama_lang::compiler::Compiler::new()
+                .compile_source_with_manifest(source)
+                .unwrap()
+                .0
+        })
+        .collect();
+    let hashes: std::collections::BTreeSet<_> = compiled
+        .iter()
+        .map(|bytes| ivm::contract_code_hash(bytes))
+        .collect();
+    assert_eq!(hashes.len(), 3);
+    assert_eq!(prepare_distinct_bytecode().unwrap(), compiled[1]);
 }

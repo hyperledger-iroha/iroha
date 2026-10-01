@@ -250,6 +250,9 @@ pub type ProductionSorafsArchiveTransportV1 =
 /// Parsed secret-free fetch configuration that defers operator keys, DNS, and HTTP clients.
 pub type PreparedProductionSorafsArchiveTransportV1 =
     iroha_storage_client::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
+pub use iroha_storage_client::musubi_archive_fetch::{
+    MusubiArchiveDiscoveryErrorV1, MusubiArchiveProviderDiscoveryV1,
+};
 /// Parse the fetch subtree from the same bounded `client.toml` image used by registry reads.
 ///
 /// # Errors

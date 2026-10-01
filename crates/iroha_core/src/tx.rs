@@ -9573,6 +9573,11 @@ pub mod tests {
     impl IvmAdmissionFixture {
         fn new() -> Self {
             let (world, authority_id, keypair) = world_with_authority("wonderland");
+            let mut parameters = world.parameters.block();
+            parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ));
+            parameters.commit();
             let state = State::new_with_chain(
                 world,
                 Kura::blank_kura_for_testing(),
@@ -9594,7 +9599,7 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
             let builder = TransactionBuilder::new(
@@ -9711,7 +9716,10 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
-            code_hash,
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -9785,7 +9793,7 @@ pub mod tests {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut state_tx = block.transaction();
         // Build minimal program with abi_version=1 (current baseline)
@@ -9816,6 +9824,8 @@ pub mod tests {
             Json::new(manifest),
         );
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
@@ -9924,7 +9934,10 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x5A;
         tx1.world.contract_manifests.insert(
-            code_hash,
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -10130,9 +10143,13 @@ pub mod tests {
             provenance: None,
         }
         .signed(&fixture.keypair);
-        tx1.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
+        tx1.world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+            manifest.clone(),
+        );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
@@ -10140,6 +10157,8 @@ pub mod tests {
         let mut block2 = fixture.state.block(header2);
         let mut state_tx = block2.transaction();
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
@@ -11934,7 +11953,10 @@ pub mod tests {
             total_size,
             chunk_count: 1,
         };
-        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            code_hash,
+        );
         let missing_upload_metadata = validate_instruction!(
             UploadSmartContractCodeChunk {
                 artifact_id,
@@ -12034,7 +12056,9 @@ pub mod tests {
             "successful finalization must clear staging"
         );
         let cancelled_artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-            DataSpaceId::UNIVERSAL, Hash::new(b"owner-scoped cleanup"));
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"owner-scoped cleanup"),
+        );
         let accepted_cancel_stage = validate_instruction!(
             UploadSmartContractCodeChunk {
                 artifact_id: cancelled_artifact_id,

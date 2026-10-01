@@ -12297,6 +12297,7 @@ mod evidence_http_tests {
     include!("client/validator_committee_tests.rs");
     include!("client/consensus_keys_tests.rs");
     include!("client/activation_attestation_tests.rs");
+    include!("client/sns_lease_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
@@ -13900,7 +13901,7 @@ pub enum TxConfirmationStatus {
 pub const DEFAULT_TRANSACTION_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default poll interval used by the explicit transaction-wait helper.
 pub const DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// Timing options for the fixed global transaction-finality wait.
+/// Timing options for a state-resolved `Applied` wait; the called method selects its scope.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionWaitOptions {
     /// Maximum monotonic time for status requests, polling sleeps and finality admission.
@@ -14598,6 +14599,7 @@ include!("client/canonical_request_auth.rs");
 include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
 include!("client/sumeragi_finality.rs");
+include!("client/sns_lease.rs");
 /// Representation of `Iroha` client.
 impl Client {
     /// Configure a new client before validating its immutable context.
@@ -16168,33 +16170,87 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
-        crate::blocking::reject_inside_async_runtime()?;
-        let mut wait =
-            transaction_wait::PollState::new(hash, options, self.http_transport.deadline())?;
-        let polling_client = self.with_request_deadline(wait.deadline());
-        loop {
-            wait.begin_poll()?;
-            if let Some(outcome) =
-                wait.observe(polling_client.get_transaction_status_response_global(hash))?
-            {
-                return Ok(outcome);
-            }
-            std::thread::sleep(wait.next_delay()?);
-        }
+        self.wait_for_transaction_applied_scoped(hash, options, transaction_wait::Scope::Global)
     }
-    pub(crate) async fn wait_until_transaction_applied(
+
+    /// Wait for this configured peer to report the exact transaction as state-resolved `Applied`.
+    ///
+    /// Every request explicitly uses local scope; no fanout or submission occurs. Cached
+    /// observations remain pending. One absolute deadline includes transport, decoding and
+    /// backpressure waits. A local rejection or expiry fails this peer observation without
+    /// creating an authoritative global [`TransactionFinalityFailure`].
+    ///
+    /// # Errors
+    /// Returns binding, transport, malformed status, local terminal observation or deadline errors.
+    pub fn wait_for_transaction_applied_local(
         &self,
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
+        self.wait_for_transaction_applied_scoped(hash, options, transaction_wait::Scope::Local)
+    }
+
+    fn wait_for_transaction_applied_scoped(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+        scope: transaction_wait::Scope,
+    ) -> Result<TransactionWaitOutcome> {
+        crate::blocking::reject_inside_async_runtime()?;
         let mut wait =
-            transaction_wait::PollState::new(hash, options, self.http_transport.deadline())?;
+            transaction_wait::PollState::new(hash, options, self.http_transport.deadline(), scope)?;
         let polling_client = self.with_request_deadline(wait.deadline());
         loop {
             wait.begin_poll()?;
             if let Some(outcome) = wait.observe(
                 polling_client
-                    .get_global_transaction_status_response(hash)
+                    .get_transaction_status_response_with_scope(hash, Some(scope.as_str())),
+            )? {
+                return Ok(outcome);
+            }
+            std::thread::sleep(wait.next_delay()?);
+        }
+    }
+
+    pub(crate) async fn wait_until_transaction_applied(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        self.wait_until_transaction_applied_scoped(hash, options, transaction_wait::Scope::Global)
+            .await
+    }
+
+    /// Asynchronously wait for the exact configured peer's state-resolved `Applied` observation.
+    ///
+    /// Uses the same explicit local scope, absolute deadline and failure boundary as
+    /// [`Self::wait_for_transaction_applied_local`]. Never submits or falls back to fanout.
+    ///
+    /// # Errors
+    /// Returns binding, transport, malformed status, local terminal observation or deadline errors.
+    pub async fn wait_until_transaction_applied_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        self.wait_until_transaction_applied_scoped(hash, options, transaction_wait::Scope::Local)
+            .await
+    }
+
+    async fn wait_until_transaction_applied_scoped(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+        scope: transaction_wait::Scope,
+    ) -> Result<TransactionWaitOutcome> {
+        let mut wait =
+            transaction_wait::PollState::new(hash, options, self.http_transport.deadline(), scope)?;
+        let polling_client = self.with_request_deadline(wait.deadline());
+        loop {
+            wait.begin_poll()?;
+            if let Some(outcome) = wait.observe(
+                polling_client
+                    .fetch_transaction_status_response_with_scope(hash, Some(scope.as_str()))
                     .await,
             )? {
                 return Ok(outcome);
@@ -20262,6 +20318,7 @@ impl Client {
         if response.network_id != self.network_id
             || response.artifact_id != *artifact_id
             || response.manifest.code_hash != Some(artifact_id.code_hash)
+            || response.manifest.abi_hash.is_none()
         {
             return Err(eyre!(
                 "contract manifest response substitutes the requested network or artifact identity"
@@ -28469,7 +28526,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "6105b45abb0080bc6aea6e72093990ee7f5749c604683ea2f75a60b95a88d4fb",
+            "72fff8fd63bb7a8660839062f9a03800d978cf36df92d21ff140ba5e991f0431",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact
@@ -28634,6 +28691,7 @@ mod tests {
             code_bytes: Some(base64::engine::general_purpose::STANDARD.encode(code)),
         };
         canonical.manifest.code_hash = Some(artifact_id.code_hash);
+        canonical.manifest.abi_hash = Some(iroha_crypto::Hash::new(b"manifest ABI"));
         let body = norito::json::to_json(&canonical).expect("manifest envelope");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);

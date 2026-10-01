@@ -2455,7 +2455,11 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
         ),
         AccountRouteMatrixCase::PermissionsSigned => assert_eq!(
             super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
-            ToriiFanoutRouteScopeV1::AllDataspaces
+            ToriiFanoutRouteScopeV1::TargetAccount {
+                account_id: authority.to_string(),
+                caller_account_id: Some(authority.to_string()),
+            },
+            "permissions fanout must retain the exact authenticated principal on every route",
         ),
         AccountRouteMatrixCase::PermissionsUnsigned => {
             assert!(

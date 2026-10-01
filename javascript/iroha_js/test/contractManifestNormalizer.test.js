@@ -40,7 +40,8 @@ test("public manifest builder preserves the Rust fixture and canonical instructi
 
   const encoded = noritoEncodeInstruction(instruction, 753);
   const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
-  assert.notEqual(encoded.indexOf(rustManifest), -1, "instruction must contain exact Rust manifest bytes");
+  const schemaFixture = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest: fixture.manifest } }), 753);
+  assert.notEqual(schemaFixture.indexOf(rustManifest), -1, "scoped schema fixture must contain exact Rust manifest bytes");
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded, instruction);
   assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
@@ -58,7 +59,7 @@ test("entrypoint getters retain their validation order", () => {
   for (const field of fields) observe(entrypoint, field, events);
   const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
   assert.deepEqual(events, fields);
-  assert.deepEqual(instruction.RegisterSmartContractCode.manifest, fixture.manifest);
+  assert.deepEqual(instruction.RegisterSmartContractCode.manifest, { ...fixture.manifest, code_hash: canonicalHashLiteral(Buffer.alloc(32, 0x11)) });
 });
 
 test("an entrypoint getter failure stops before later entrypoint fields", () => {

@@ -750,11 +750,25 @@ seiyaku GovernedReadFixture {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
-    let code_hash = register_code_bytes(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), artifact, &mut transaction)
-        .expect("register governed contract bytes");
+    let code_hash = register_code_bytes(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        artifact,
+        &mut transaction,
+    )
+    .expect("register governed contract bytes");
     assert_eq!(code_hash, verified.code_hash);
-    register_manifest(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), signed_manifest, &mut transaction)
-        .expect("register governed contract manifest");
+    register_manifest(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        signed_manifest,
+        &mut transaction,
+    )
+    .expect("register governed contract manifest");
     transaction
         .world_mut_for_testing()
         .bind_inactive_contract_subject_for_testing(
@@ -2580,7 +2594,13 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
         .view()
         .world()
         .contract_manifests()
-        .get(&code_hash)
+        .get(
+            &iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &contract_address,
+                code_hash,
+            )
+            .unwrap(),
+        )
         .cloned()
         .expect("registered manifest");
     manifest.provenance = None;
@@ -2590,7 +2610,14 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     transaction
         .world_mut_for_testing()
         .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+        .insert(
+            iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &contract_address,
+                code_hash,
+            )
+            .unwrap(),
+            manifest,
+        );
     transaction.apply();
     block
         .commit_world_overlay_for_testing()

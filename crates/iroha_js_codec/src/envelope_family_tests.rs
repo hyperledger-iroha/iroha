@@ -195,11 +195,11 @@ const ROUTING_CASES: [(&str, &str); 52] = [
     ),
     (
         r#"{"RegisterSmartContractBytes":{}}"#,
-        "RegisterSmartContractBytes.code_hash field missing",
+        "RegisterSmartContractBytes must contain exactly [artifact_id, code]; missing [artifact_id, code], unexpected []",
     ),
     (
         r#"{"RemoveSmartContractBytes":{}}"#,
-        "RemoveSmartContractBytes.code_hash field missing",
+        "RemoveSmartContractBytes must contain exactly [artifact_id]; missing [artifact_id], unexpected []",
     ),
     (r#"{"zk":{}}"#, "unsupported zk instruction variant"),
     (
@@ -645,7 +645,10 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RegisterSmartContractBytes",
             Box::new(RegisterSmartContractBytes {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 code: vec![0x49, 0x56, 0x4d, 0x00],
             })
             .into_instruction_box(),
@@ -653,7 +656,10 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 reason: Some("superseded".to_owned()),
             })
             .into_instruction_box(),
@@ -661,7 +667,10 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
-                code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
                 reason: None,
             })
             .into_instruction_box(),

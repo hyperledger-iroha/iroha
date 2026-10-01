@@ -582,6 +582,28 @@ class ContractManifestTest {
     }
 
     @Test
+    fun optionalArtifactBytesAreCanonicalBoundedAndDigestBound() {
+        val digest = org.hyperledger.iroha.sdk.crypto.IrohaHash.prehash(
+            "iroha:ivm:contract-artifact:v1\u0000".toByteArray(StandardCharsets.UTF_8) + byteArrayOf(0),
+        )
+        val literal = org.hyperledger.iroha.sdk.core.util.HashLiteral.canonicalize(digest)
+        val hash = digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val response = fullResponse()
+            .replace("hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2", literal)
+            .replace("b".repeat(64), hash).trimEnd().removeSuffix("}")
+        fun decode(suffix: String) = ContractManifestJsonParser.parseRecord(
+            "$response$suffix}".toByteArray(StandardCharsets.UTF_8),
+        )
+        assertNull(decode("").codeBytes)
+        assertNull(decode(",\"code_bytes\":null").codeBytes)
+        assertEquals("AA==", decode(",\"code_bytes\":\"AA==\"").codeBytes)
+        for (invalid in listOf("AB==", "AA", "AAAA", "", " AA==", "A".repeat(((16 * 1024 * 1024 + 2) / 3) * 4))) {
+            assertFails { decode(",\"code_bytes\":\"$invalid\"") }
+        }
+        assertFails { decode(",\"code_bytes\":1") }
+    }
+
+    @Test
     fun artifactIdentityAndEnvelopeRejectRetiredAndForeignScopes() {
         val hash = "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
         val maximum = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)

@@ -1,5 +1,5 @@
 //! Current consensus result commitments shared by execution and independent proof readers.
-use super::{NativeLaneStateProof, ScheduleOutcome};
+use super::{EpochValidationScope, NativeLaneStateProof, ScheduleOutcome};
 use crate::{
     block::execution_output::ExecutionOutputV1, events::EventBox,
     parameter::system::SumeragiParameters, transaction::signed::TransactionEntrypoint,
@@ -281,6 +281,17 @@ impl ExecutionResultCommitment {
     /// # Errors
     /// An inconsistent height, invalid graph, missing required pulse or malformed pulse.
     pub fn validate(&self) -> Result<(), CommitmentError> {
+        self.validate_with_validation(&mut EpochValidationScope::new())
+    }
+    /// Validate this complete commitment with exact epoch work owned by one enclosing walk.
+    ///
+    /// # Errors
+    /// The same execution, schedule, lane and beacon errors as [`Self::validate`]. This
+    /// workspace does not replace certificate, signature or current source authentication.
+    pub fn validate_with_validation(
+        &self,
+        validation: &mut EpochValidationScope,
+    ) -> Result<(), CommitmentError> {
         self.execution.validate()?;
         if self.height == 0 || self.schedule.height != self.height {
             return Err(CommitmentError::Schedule(
@@ -288,7 +299,7 @@ impl ExecutionResultCommitment {
             ));
         }
         self.schedule
-            .validate()
+            .validate_with_validation(validation)
             .map_err(|error| CommitmentError::Schedule(error.to_string()))?;
         let current = &self.schedule.current;
         if !self.native_lanes.verify(
@@ -349,6 +360,16 @@ impl ExecutionResultCommitment {
     /// # Errors
     /// The bytes are not one canonical frame of this type.
     pub fn decode(preimage: &[u8]) -> Result<Self, CommitmentError> {
+        Self::decode_with_validation(preimage, &mut EpochValidationScope::new())
+    }
+    /// Decode and fully validate one canonical result using an enclosing walk's epoch work.
+    ///
+    /// # Errors
+    /// Rejects the same noncanonical, oversized or malformed commitment as [`Self::decode`].
+    pub fn decode_with_validation(
+        preimage: &[u8],
+        validation: &mut EpochValidationScope,
+    ) -> Result<Self, CommitmentError> {
         if preimage.len() > MAX_RESULT_PREIMAGE_BYTES {
             return Err(CommitmentError::PreimageLength(preimage.len()));
         }
@@ -370,7 +391,7 @@ impl ExecutionResultCommitment {
             ),
         )
         .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
-        decoded.validate()?;
+        decoded.validate_with_validation(validation)?;
         Ok(decoded)
     }
 

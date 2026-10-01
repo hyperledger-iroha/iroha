@@ -148,6 +148,11 @@ fn signed_plan_roundtrip_rejects_context_artifact_fee_and_instruction_substituti
     let decoded: PlanRecord = norito::json::from_slice(&encoded)?;
     validate_plan(&decoded, &config)?;
     let mut changed = record.clone();
+    changed.preflight.fee_quotes[0]
+        .observation
+        .route_dataspace_id = DataSpaceId::new(u64::MAX);
+    assert!(validate_plan(&changed, &config).is_err());
+    changed = record.clone();
     changed.preflight.deploy_nonce += 1;
     assert!(validate_plan(&changed, &config).is_err());
     changed = record.clone();
@@ -792,5 +797,17 @@ fn ambiguous_or_rejected_progress_never_claims_applied_and_recovery_never_resubm
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn fee_quote_route_requires_the_exact_full_width_deployment_dataspace() -> Result<()> {
+    let (_, record) = fixture()?;
+    let mut quote = record.preflight.fee_quotes[0].clone();
+    let dataspace = DataSpaceId::new(u64::MAX);
+    quote.observation.route_dataspace_id = dataspace;
+    native::validate_quote_route(&quote, dataspace)?;
+    assert!(native::validate_quote_route(&quote, DataSpaceId::UNIVERSAL).is_err());
+    assert!(native::validate_quote_route(&quote, DataSpaceId::new(u64::MAX - 1)).is_err());
     Ok(())
 }

@@ -70,14 +70,20 @@ mod kagemusha_commands;
 #[cfg(feature = "app_api")]
 mod kagemusha_state;
 mod ledger_state_finality;
+#[cfg(feature = "app_api")]
+mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
 mod parliament_tle_release;
 pub mod privacy_issuance_api;
+mod private_dataspaces;
+mod private_root_export;
 #[doc(hidden)]
 pub mod profile_stats;
+#[cfg(feature = "app_api")]
+mod provider_discovery;
 #[cfg(feature = "push")]
 mod push;
 #[cfg(any(test, feature = "bench"))]
@@ -85,6 +91,7 @@ mod push;
 pub mod query_load_profiles;
 /// SCCP v1 public read API.
 mod sccp;
+mod sns_lease;
 mod staking_preparation;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
@@ -15160,12 +15167,58 @@ fn torii_target_account_routes(
         )
     })
 }
+#[cfg(all(test, feature = "app_api"))]
+mod private_account_routing_tests;
+
+fn resolve_torii_private_root_account_route(
+    state_view: &iroha_core::state::StateView<'_>,
+    dataspace_id: DataSpaceId,
+) -> Result<RoutingDecision, queue::RoutingResolveError> {
+    let nexus = state_view.nexus();
+    let [lane] = nexus.lane_catalog.lanes() else {
+        return Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id });
+    };
+    let [dataspace] = nexus.dataspace_catalog.entries() else {
+        return Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id });
+    };
+    if lane.id != LaneId::SINGLE
+        || lane.dataspace_id != dataspace_id
+        || lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted
+        || dataspace.id != dataspace_id
+        || !state_view.is_lane_active_for_authority(lane.id)
+    {
+        return Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id });
+    }
+    // In particular, never use the Global-root lane-zero materialization rule
+    // as a fallback for missing physical authority on an independent root.
+    iroha_core::queue::resolve_routing_decision(
+        RoutingDecision::new(LaneId::SINGLE, dataspace_id),
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+}
+
 fn resolve_torii_target_account_routes(
     app: &AppState,
     account_id: &AccountId,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let state_view = app.state.view();
     let world = state_view.world();
+    let root_scope = iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        .ok_or(queue::RoutingResolveError::UnauthenticatedRootScope)?;
+    if let iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+        dataspace_id, ..
+    } = root_scope
+    {
+        // Account identity is universal; its label/UAID directory is not physical root
+        // authority. An independent private ledger reads its own lane zero only. The
+        // caller's canonical authentication and read grants are still checked by the
+        // account handler and again when executing the selected route.
+        return Ok(vec![resolve_torii_private_root_account_route(
+            &state_view,
+            dataspace_id,
+        )?]);
+    }
     let account_scope = world.account_scope_entry(account_id).map_err(|_error| {
         queue::RoutingResolveError::UnknownDataspace {
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -16192,6 +16245,34 @@ fn torii_visible_account_read_routes(
 ) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let world = state_view.world();
+    match iroha_core::sumeragi::lanes::routing::committed_root_scope(world) {
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+            dataspace_id,
+            ..
+        }) => {
+            // A private root has no public account-read routes. Logical account
+            // labels and UAID materialization cannot replace its revocable grant.
+            let Some(caller) = caller else {
+                return Vec::new();
+            };
+            let all: Permission = CanReadAllLedgerData.into();
+            let own: Permission = CanReadRestrictedDataspace {
+                dataspace: dataspace_id,
+            }
+            .into();
+            if !torii_account_has_permission(world, caller, &all)
+                && !torii_account_has_permission(world, caller, &own)
+            {
+                return Vec::new();
+            }
+            return resolve_torii_private_root_account_route(&state_view, dataspace_id)
+                .ok()
+                .into_iter()
+                .collect();
+        }
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global) => {}
+        None => return Vec::new(),
+    }
     let mut visible_dataspaces = torii_public_dataspace_ids(app);
     if let Some(caller) = caller
         && let Ok(account) = world.account(caller)
@@ -37508,6 +37589,9 @@ macro_rules! catalog_route_policy {
     (limited_public_post($handler:path, $limit:expr)) => {
         catalog_post($handler).layer(DefaultBodyLimit::max($limit))
     };
+    (private_root_owner_get($handler:path)) => {
+        catalog_get($handler).authenticated_in_handler(HandlerAuthentication::PrivateRootOwnerToken)
+    };
     (onboarding_get($handler:path)) => {
         catalog_get($handler).authenticated_onboarding()
     };
@@ -38052,6 +38136,10 @@ impl Torii {
             EVIDENCE_COUNT => operator_get(handler_sumeragi_evidence_count, app_state);
             EVIDENCE_LIST => operator_get(handler_sumeragi_evidence, app_state);
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
+            PRIVATE_DATASPACE_RECORD_PROOF => public_get(private_dataspaces::record_proof);
+            SNS_DATASPACE_LEASE => public_get(sns_lease::handler);
+            PRIVATE_ROOT_REGISTRATION => private_root_owner_get(private_root_export::registration);
+            PRIVATE_ROOT_ANCHOR => private_root_owner_get(private_root_export::anchor);
             BRIDGE_FINALITY_ATTESTATION => public_get(handler_bridge_finality_attestation);
             BRIDGE_FINALITY_ATTESTATION_LATEST => public_get(handler_bridge_finality_attestation_latest);
             BRIDGE_FINALITY_BUNDLE => public_get(handler_bridge_finality_bundle);
@@ -39153,6 +39241,7 @@ impl Torii {
             builder, sorafs;
             STORAGE_PEERS => public_get(sorafs::api::handle_get_sorafs_storage_peers);
             PROVIDERS => public_get(sorafs::api::handle_get_sorafs_providers);
+            PROVIDER_DISCOVERY => public_get(provider_discovery::handler);
             PROVIDER_ADVERT => limited_protocol_handshake_post(sorafs::api::handle_post_sorafs_provider_advert, sorafs_manifest::provider_advert::PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1);
             ROUTING_PROVIDERS => public_get(sorafs::delegated_routing::handle_get_routing_providers);
             ROUTING_PEERS => public_get(sorafs::delegated_routing::handle_get_routing_peers);
@@ -39242,6 +39331,15 @@ impl Torii {
             STORAGE_PLAN => limited_public_get(sorafs::api::handle_get_sorafs_storage_plan, sorafs_body_limit);
         );
         let stream_token_app_state = builder.state().clone();
+        builder.route(
+            &route_catalog::sorafs::STORAGE_ACCOUNT_TOKEN,
+            catalog_post(sorafs::api::handle_post_sorafs_storage_account_token)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_canonical_account_body(
+                    stream_token_app_state.clone(),
+                    sorafs_body_limit,
+                ),
+        );
         builder.route(
             &route_catalog::sorafs::STORAGE_TOKEN,
             catalog_post(sorafs::api::handle_post_sorafs_storage_token_authenticated)

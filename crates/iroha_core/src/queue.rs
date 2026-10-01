@@ -110,6 +110,7 @@ pub use router::{
 };
 pub(crate) use router::{
     matchers_match_with_world, native_execution_target, native_instruction_execution_target,
+    private_genesis_instruction_target,
 };
 #[cfg(test)]
 use std::sync::Barrier;
@@ -8794,13 +8795,21 @@ pub mod tests {
         let artifact_operations = [
             (
                 "register bytes",
-                InstructionBox::from(RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(RegisterSmartContractBytes {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     code: code.clone(),
                 }),
             ),
             (
                 "upload chunk",
-                InstructionBox::from(UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(UploadSmartContractCodeChunk {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     total_size,
                     chunk_index: 0,
                     chunk_count: 1,
@@ -8809,7 +8818,11 @@ pub mod tests {
             ),
             (
                 "finalize upload",
-                InstructionBox::from(FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     total_size,
                     chunk_count: 1,
                 }),
@@ -8847,7 +8860,12 @@ pub mod tests {
                 .unwrap_or_else(|error| panic!("{label} metadata should be satisfied: {error:?}"));
         }
         let cancel = InstructionBox::from(
-            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)},
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
+            },
         );
         let tx = accepted_tx_with(
             validator,

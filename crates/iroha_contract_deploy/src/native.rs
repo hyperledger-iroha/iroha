@@ -358,6 +358,19 @@ pub fn quote_and_resign_transaction(
     Ok((transaction, quote))
 }
 
+/// Bind fee preflight to the dataspace already selected by native deployment state.
+pub(super) fn validate_quote_route(
+    quote: &FeeQuoteResponse,
+    expected_dataspace: DataSpaceId,
+) -> Result<()> {
+    if quote.observation.route_dataspace_id != expected_dataspace {
+        return Err(eyre!(
+            "fee quote route differs from the exact contract dataspace"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;

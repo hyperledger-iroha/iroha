@@ -680,6 +680,46 @@
       }
     ]
   },
+  "AdmissionHistoryRecordV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "genesis_origin",
+        "type": "Option<GenesisAdmissionOriginV1>"
+      },
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "predecessor",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "recorded_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "owner",
+        "type": "Option<AccountId>"
+      },
+      {
+        "name": "revoked",
+        "type": "bool"
+      },
+      {
+        "name": "material",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "AggregationRule": {
     "Enum": [
       {
@@ -739,6 +779,62 @@
       {
         "discriminant": 10,
         "tag": "Sm2"
+      }
+    ]
+  },
+  "AmxCertifiedBlockV1": {
+    "Struct": [
+      {
+        "name": "consensus_header",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "commit_qc",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "result_preimage",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "AmxForeignInstanceV1": {
+    "Struct": [
+      {
+        "name": "instance",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "current",
+        "type": "ValidatorEpochContextV1"
+      },
+      {
+        "name": "previous",
+        "type": "Option<ValidatorEpochContextV1>"
+      }
+    ]
+  },
+  "AmxWriteProofV1": {
+    "Struct": [
+      {
+        "name": "present",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "siblings",
+        "type": "Vec<Array<u8, 32>>"
+      }
+    ]
+  },
+  "AnchorPrivateDataspace": {
+    "Struct": [
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "anchor",
+        "type": "Vec<u8>"
       }
     ]
   },
@@ -3176,8 +3272,8 @@
   "CancelSmartContractCodeUpload": {
     "Struct": [
       {
-        "name": "code_hash",
-        "type": "Hash"
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       }
     ]
   },
@@ -3391,6 +3487,10 @@
       },
       {
         "name": "result_preimage",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "availability",
         "type": "Vec<u8>"
       }
     ]
@@ -3688,11 +3788,23 @@
   },
   "ContractAddress": "String",
   "ContractArgumentRecord": "Vec<u8>",
-  "ContractCodeRegistered": {
+  "ContractArtifactId": {
     "Struct": [
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
       {
         "name": "code_hash",
         "type": "Hash"
+      }
+    ]
+  },
+  "ContractCodeRegistered": {
+    "Struct": [
+      {
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       },
       {
         "name": "registrar",
@@ -3703,8 +3815,8 @@
   "ContractCodeRemoved": {
     "Struct": [
       {
-        "name": "code_hash",
-        "type": "Hash"
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       },
       {
         "name": "removed_by",
@@ -3799,6 +3911,22 @@
       {
         "name": "expires_at_height",
         "type": "u64"
+      }
+    ]
+  },
+  "ContractErrorMessage": {
+    "Struct": [
+      {
+        "name": "error_type",
+        "type": "String"
+      },
+      {
+        "name": "code",
+        "type": "u32"
+      },
+      {
+        "name": "message",
+        "type": "String"
       }
     ]
   },
@@ -3978,6 +4106,10 @@
         "type": "Option<Vec<ContractErrorTypeDescriptor>>"
       },
       {
+        "name": "error_messages",
+        "type": "Option<Vec<ContractErrorMessage>>"
+      },
+      {
         "name": "kotoba",
         "type": "Option<Vec<KotobaTranslationEntry>>"
       },
@@ -4112,6 +4244,10 @@
       {
         "name": "code",
         "type": "u32"
+      },
+      {
+        "name": "message",
+        "type": "Option<String>"
       }
     ]
   },
@@ -4545,6 +4681,34 @@
       {
         "name": "row_parity_stripes",
         "type": "u16"
+      }
+    ]
+  },
+  "DataAvailabilityLayout": {
+    "Struct": [
+      {
+        "name": "encoding",
+        "type": "PayloadEncoding"
+      },
+      {
+        "name": "chunk_size_bytes",
+        "type": "u32"
+      },
+      {
+        "name": "data_shards",
+        "type": "u16"
+      },
+      {
+        "name": "parity_shards",
+        "type": "u16"
+      },
+      {
+        "name": "max_payload_size_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_chunk_count",
+        "type": "u32"
       }
     ]
   },
@@ -7743,8 +7907,8 @@
   "FinalizeSmartContractCodeUpload": {
     "Struct": [
       {
-        "name": "code_hash",
-        "type": "Hash"
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       },
       {
         "name": "total_size",
@@ -7881,11 +8045,11 @@
       }
     ]
   },
-  "FindContractManifestByCodeHash": {
+  "FindContractManifestByArtifactId": {
     "Struct": [
       {
-        "name": "code_hash",
-        "type": "Hash"
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       }
     ]
   },
@@ -9732,6 +9896,18 @@
       {
         "name": "transcript_root",
         "type": "Hash"
+      }
+    ]
+  },
+  "GenesisAdmissionOriginV1": {
+    "Struct": [
+      {
+        "name": "entrypoint_index",
+        "type": "u32"
+      },
+      {
+        "name": "instruction_digest",
+        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -16061,6 +16237,9 @@
   "Option<GameOutcomeV1>": {
     "Option": "GameOutcomeV1"
   },
+  "Option<GenesisAdmissionOriginV1>": {
+    "Option": "GenesisAdmissionOriginV1"
+  },
   "Option<GovernanceCertificateId>": {
     "Option": "GovernanceCertificateId"
   },
@@ -16331,6 +16510,9 @@
   "Option<SortOrder>": {
     "Option": "SortOrder"
   },
+  "Option<StreamTokenDiscoveryProofV1>": {
+    "Option": "StreamTokenDiscoveryProofV1"
+  },
   "Option<StreamTokenExecutionV1>": {
     "Option": "StreamTokenExecutionV1"
   },
@@ -16379,11 +16561,17 @@
   "Option<ValidatorEpochBoundaryV1>": {
     "Option": "ValidatorEpochBoundaryV1"
   },
+  "Option<ValidatorEpochContextV1>": {
+    "Option": "ValidatorEpochContextV1"
+  },
   "Option<Vec<Array<u8, 32>>>": {
     "Option": "Vec<Array<u8, 32>>"
   },
   "Option<Vec<AxtRemoteSpendClaimV1>>": {
     "Option": "Vec<AxtRemoteSpendClaimV1>"
+  },
+  "Option<Vec<ContractErrorMessage>>": {
+    "Option": "Vec<ContractErrorMessage>"
   },
   "Option<Vec<ContractErrorTypeDescriptor>>": {
     "Option": "Vec<ContractErrorTypeDescriptor>"
@@ -17895,6 +18083,14 @@
       {
         "discriminant": 9,
         "tag": "RandomnessRedrawBudgetExhausted"
+      }
+    ]
+  },
+  "PayloadEncoding": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "reed_solomon16"
       }
     ]
   },
@@ -19917,6 +20113,178 @@
   "PrivacySecurityReductionDigestV1": "Array<u8, 32>",
   "PrivacyStatementSchemaDigestV1": "Array<u8, 32>",
   "PrivacyVerifierDigestV1": "Array<u8, 32>",
+  "PrivateDataspaceAdmissionPolicy": {
+    "Struct": [
+      {
+        "name": "max_registered_roots",
+        "type": "u32"
+      },
+      {
+        "name": "max_roots_per_owner",
+        "type": "u32"
+      }
+    ]
+  },
+  "PrivateDataspaceAnchor": {
+    "Struct": [
+      {
+        "name": "parent_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "child_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "certificate",
+        "type": "AmxCertifiedBlockV1"
+      }
+    ]
+  },
+  "PrivateDataspaceAnchorState": {
+    "Struct": [
+      {
+        "name": "registration",
+        "type": "PrivateDataspaceRegistration"
+      },
+      {
+        "name": "tracker",
+        "type": "AmxForeignInstanceV1"
+      },
+      {
+        "name": "cursor",
+        "type": "PrivateDataspaceCursor"
+      }
+    ]
+  },
+  "PrivateDataspaceCursor": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "consensus_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "result",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "PrivateDataspaceRecord": {
+    "Struct": [
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "alias",
+        "type": "String"
+      },
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "ownership_generation",
+        "type": "u64"
+      },
+      {
+        "name": "anchor",
+        "type": "PrivateDataspaceAnchorState"
+      }
+    ]
+  },
+  "PrivateDataspaceRecordProof": {
+    "Struct": [
+      {
+        "name": "parent_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "parent_height",
+        "type": "u64"
+      },
+      {
+        "name": "parent_result",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "record",
+        "type": "PrivateDataspaceRecord"
+      },
+      {
+        "name": "inclusion",
+        "type": "AmxWriteProofV1"
+      }
+    ]
+  },
+  "PrivateDataspaceRegistration": {
+    "Struct": [
+      {
+        "name": "scope",
+        "type": "SumeragiRootScope"
+      },
+      {
+        "name": "child_chain_id",
+        "type": "ChainId"
+      },
+      {
+        "name": "child_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "instance",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "genesis_cursor",
+        "type": "PrivateDataspaceCursor"
+      },
+      {
+        "name": "initial_epoch",
+        "type": "ValidatorEpochContextV1"
+      }
+    ]
+  },
+  "PrivateDataspaceRegistry": {
+    "Struct": [
+      {
+        "name": "records",
+        "type": "Vec<PrivateDataspaceRecord>"
+      }
+    ]
+  },
+  "PrivateRootFeePolicy": {
+    "Struct": [
+      {
+        "name": "asset_definition_id",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "base_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_byte_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_instruction_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_gas_unit_fee",
+        "type": "Quantity"
+      }
+    ]
+  },
   "ProofAttachment": {
     "Struct": [
       {
@@ -20343,6 +20711,46 @@
     ]
   },
   "ProposalContentId": "Array<u8, 32>",
+  "ProviderAdmissionHeadProofV1": {
+    "Struct": [
+      {
+        "name": "head",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "predecessor",
+        "type": "Option<Vec<u8>>"
+      }
+    ]
+  },
+  "ProviderDiscoveryProofV1": {
+    "Struct": [
+      {
+        "name": "world",
+        "type": "WorldStateSnapshotV1"
+      },
+      {
+        "name": "council",
+        "type": "ProviderAdmissionHeadProofV1"
+      },
+      {
+        "name": "provider",
+        "type": "ProviderAdmissionHeadProofV1"
+      },
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "advert",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "stream_token",
+        "type": "Option<StreamTokenDiscoveryProofV1>"
+      }
+    ]
+  },
   "ProviderDisputeEventV1": {
     "Struct": [
       {
@@ -20941,6 +21349,50 @@
       {
         "name": "declaration",
         "type": "Vec<u8>"
+      }
+    ]
+  },
+  "RegisterPrivateDataspace": {
+    "Struct": [
+      {
+        "name": "alias",
+        "type": "String"
+      },
+      {
+        "name": "expected_ownership_generation",
+        "type": "u64"
+      },
+      {
+        "name": "registration",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "RegisteredAccountReadV1": {
+    "Struct": [
+      {
+        "name": "https_host",
+        "type": "String"
+      },
+      {
+        "name": "https_port",
+        "type": "u16"
+      },
+      {
+        "name": "ttl_secs",
+        "type": "u64"
+      },
+      {
+        "name": "max_streams",
+        "type": "u16"
+      },
+      {
+        "name": "rate_limit_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "requests_per_minute",
+        "type": "u32"
       }
     ]
   },
@@ -24517,8 +24969,8 @@
       },
       {
         "discriminant": 7,
-        "tag": "FindContractManifestByCodeHash",
-        "type": "FindContractManifestByCodeHash"
+        "tag": "FindContractManifestByArtifactId",
+        "type": "FindContractManifestByArtifactId"
       },
       {
         "discriminant": 8,
@@ -25585,6 +26037,18 @@
       {
         "name": "max_output_bytes",
         "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "SnsLeaseProofV1": {
+    "Struct": [
+      {
+        "name": "world",
+        "type": "WorldStateSnapshotV1"
+      },
+      {
+        "name": "record",
+        "type": "Vec<u8>"
       }
     ]
   },
@@ -27289,6 +27753,26 @@
       }
     ]
   },
+  "StreamTokenCustodyControlIndexV1": {
+    "Struct": [
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "ordinal",
+        "type": "u32"
+      }
+    ]
+  },
   "StreamTokenCustodyControlRecordV1": {
     "Struct": [
       {
@@ -27325,6 +27809,22 @@
       },
       {
         "name": "control_state",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "active_enrollment",
+        "type": "Option<Vec<u8>>"
+      }
+    ]
+  },
+  "StreamTokenDiscoveryProofV1": {
+    "Struct": [
+      {
+        "name": "head",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "record",
         "type": "Vec<u8>"
       }
     ]
@@ -28261,6 +28761,31 @@
       {
         "name": "params",
         "type": "ChainParamsRecord"
+      }
+    ]
+  },
+  "SumeragiRootScope": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "global"
+      },
+      {
+        "discriminant": 1,
+        "tag": "dataspace",
+        "type": "SumeragiRootScope::Dataspace"
+      }
+    ]
+  },
+  "SumeragiRootScope::Dataspace": {
+    "Struct": [
+      {
+        "name": "parent_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
       }
     ]
   },
@@ -29807,8 +30332,8 @@
   "UploadSmartContractCodeChunk": {
     "Struct": [
       {
-        "name": "code_hash",
-        "type": "Hash"
+        "name": "artifact_id",
+        "type": "ContractArtifactId"
       },
       {
         "name": "total_size",
@@ -30007,6 +30532,10 @@
   "ValidatorEpochContextV1": {
     "Struct": [
       {
+        "name": "da_layout",
+        "type": "DataAvailabilityLayout"
+      },
+      {
         "name": "version",
         "type": "u16"
       },
@@ -30113,6 +30642,9 @@
   },
   "Vec<ConditionalEscrowConditionState>": {
     "Vec": "ConditionalEscrowConditionState"
+  },
+  "Vec<ContractErrorMessage>": {
+    "Vec": "ContractErrorMessage"
   },
   "Vec<ContractErrorTypeDescriptor>": {
     "Vec": "ContractErrorTypeDescriptor"
@@ -30513,6 +31045,9 @@
   "Vec<PrivacyReleaseStageReceiptV1>": {
     "Vec": "PrivacyReleaseStageReceiptV1"
   },
+  "Vec<PrivateDataspaceRecord>": {
+    "Vec": "PrivateDataspaceRecord"
+  },
   "Vec<ProofAttachment>": {
     "Vec": "ProofAttachment"
   },
@@ -30650,6 +31185,9 @@
   },
   "Vec<Vec<u8>>": {
     "Vec": "Vec<u8>"
+  },
+  "Vec<WorldStateSnapshotEntryV1>": {
+    "Vec": "WorldStateSnapshotEntryV1"
   },
   "Vec<u32>": {
     "Vec": "u32"
@@ -30974,6 +31512,50 @@
       {
         "name": "view",
         "type": "Option<u64>"
+      }
+    ]
+  },
+  "WorldStateElementKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Table"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Cell"
+      }
+    ]
+  },
+  "WorldStateSnapshotEntryV1": {
+    "Struct": [
+      {
+        "name": "field_id",
+        "type": "String"
+      },
+      {
+        "name": "kind",
+        "type": "WorldStateElementKindV1"
+      },
+      {
+        "name": "key_hash",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "value_hash",
+        "type": "Hash"
+      }
+    ]
+  },
+  "WorldStateSnapshotV1": {
+    "Struct": [
+      {
+        "name": "schema_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "entries",
+        "type": "Vec<WorldStateSnapshotEntryV1>"
       }
     ]
   },

@@ -1,9 +1,11 @@
 //! Native admission transitions and finalized readers over a certified four-validator chain.
+
 use super::test_fixture::{
     NOW, ProviderAdmissionTestFixtureV1 as Fixture, key, raw, sign_envelope,
 };
 use super::*;
 use iroha_data_model::sorafs::capacity::ProviderId;
+use iroha_data_model::sorafs::provider_admission::history::AdmissionHistoryPathV1;
 use sorafs_manifest::provider_admission::compute_envelope_digest;
 #[test]
 fn finalized_admission_expiry_cannot_be_reopened_by_a_lagging_local_clock() {
@@ -160,9 +162,10 @@ fn native_head_needs_durable_qc_and_exact_owner_and_retained_predecessor() {
     );
     f.commit(
         |tx| {
-            tx.world
-                .smart_contract_state
-                .remove(native::path(Some(provider), "history/1"));
+            tx.world.smart_contract_state.remove(native::path(
+                Some(provider),
+                AdmissionHistoryPathV1::Revision(1),
+            ));
             assert!(native::read_head(tx.world(), Some(provider)).is_err());
         },
         true,
@@ -217,29 +220,34 @@ fn rollback_to_retained_head_is_rejected_and_full_history_preserves_emergency_re
         |tx| {
             // Exhausted ordinary history must never prevent a terminal revocation.
             tx.world.smart_contract_state.insert(
-                native::path(None, "history_bytes"),
+                native::path(None, AdmissionHistoryPathV1::HistoryBytes),
                 native::encode(&PROVIDER_ADMISSION_HISTORY_MAX_BYTES_V1).unwrap(),
             );
             assert!(apply(Action::Revoke(native::encode(&revoke).unwrap()), tx).unwrap());
             let latest = tx
                 .world
                 .smart_contract_state
-                .get(&native::path(Some(provider), "head"))
+                .get(&native::path(Some(provider), AdmissionHistoryPathV1::Head))
                 .unwrap()
                 .clone();
             let original = tx
                 .world
                 .smart_contract_state
-                .get(&native::path(Some(provider), "history/1"))
+                .get(&native::path(
+                    Some(provider),
+                    AdmissionHistoryPathV1::Revision(1),
+                ))
                 .unwrap()
                 .clone();
-            tx.world
-                .smart_contract_state
-                .insert(native::path(Some(provider), "head"), original);
+            tx.world.smart_contract_state.insert(
+                native::path(Some(provider), AdmissionHistoryPathV1::Head),
+                original,
+            );
             assert!(native::read_head(tx.world(), Some(provider)).is_err());
-            tx.world
-                .smart_contract_state
-                .insert(native::path(Some(provider), "head"), latest);
+            tx.world.smart_contract_state.insert(
+                native::path(Some(provider), AdmissionHistoryPathV1::Head),
+                latest,
+            );
             assert!(
                 native::read_head(tx.world(), Some(provider))
                     .unwrap()

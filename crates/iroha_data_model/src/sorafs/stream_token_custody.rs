@@ -8,6 +8,8 @@ use crate::{
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub mod history;
+
 /// Total immutable history capacity per provider, including emergency revocations.
 pub const STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1: u64 = 8_194;
 /// Configure/enroll ceiling, reserving two final transitions for both revocation flags.
@@ -16,7 +18,7 @@ pub const STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1: u64 = 8_194;
 /// 22 years; exhaustion fails closed and is not a disk-retention or per-token cardinality policy.
 pub const STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1: u64 = 8_192;
 /// Hard complete native record size, including header and payload padding.
-pub const STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1: usize = 16 * 1024;
+pub const STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1: usize = 40 * 1024;
 /// Domain separating native control history digests from statements and operation receipts.
 pub const STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.stream-token.custody-control.v1\0";
@@ -120,6 +122,11 @@ pub struct StreamTokenCustodyControlRecordV1 {
     /// Canonical Manifest `SignerCustodyControlStateV1`, not a competing signed schema.
     #[norito(json = "crate::json_helpers::base64_vec")]
     pub control_state: Vec<u8>,
+    /// Original canonical signed active enrollment, absent exactly when no head is enrolled.
+    /// Configure clears it, Enroll retains its verified input, and Revoke preserves it.
+    /// This public attestation supplies the exact signed validity interval to read-only clients.
+    #[norito(required)]
+    pub active_enrollment: Option<Vec<u8>>,
 }
 
 #[cfg(test)]
@@ -149,6 +156,49 @@ pub fn stream_token_custody_request_digest_v1(
     Ok(*iroha_crypto::Hash::new(bytes).as_ref())
 }
 impl StreamTokenCustodyControlRecordV1 {
+    /// Check that retained original enrollment bytes exactly match the control's active head.
+    /// This structural restoration check does not grant current use or authenticate finality.
+    /// # Errors
+    /// Rejects missing, oversized, noncanonical, or substituted enrollment originals.
+    pub fn validate_active_enrollment(
+        &self,
+        state: &sorafs_manifest::signer::custody_control::SignerCustodyControlStateV1,
+    ) -> Result<(), StreamTokenCustodyCommitmentErrorV1> {
+        use sorafs_manifest::signer::custody::{
+            SIGNER_CUSTODY_MAX_BYTES_V1, SignerCustodyRecordV1,
+        };
+        let invalid = StreamTokenCustodyCommitmentErrorV1;
+        match (&self.active_enrollment, state.active_head) {
+            (None, None) => Ok(()),
+            (Some(bytes), Some(head)) if bytes.len() <= SIGNER_CUSTODY_MAX_BYTES_V1 => {
+                let record: SignerCustodyRecordV1 = norito::decode_canonical_with_limits(
+                    bytes,
+                    norito::DecodeLimits::new(
+                        4096,
+                        SIGNER_CUSTODY_MAX_BYTES_V1,
+                        8192,
+                        256 * 1024,
+                        16,
+                    ),
+                )
+                .map_err(|_| invalid)?;
+                let statement = &record.statement;
+                if record.canonical_digest().map_err(|_| invalid)? != head.record_digest
+                    || statement.binding != state.policy.binding
+                    || statement.authority != state.policy.attester_authority
+                    || statement.sequence != head.sequence
+                    || statement.anchor != head.approved_anchor
+                    || statement.revoked
+                    || statement.issued_at_unix_ms >= statement.expires_at_unix_ms
+                {
+                    return Err(invalid);
+                }
+                Ok(())
+            }
+            _ => Err(invalid),
+        }
+    }
+
     /// Compute the canonical native record digest, without claiming execution or finality.
     ///
     /// # Errors

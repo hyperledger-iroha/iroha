@@ -39,8 +39,18 @@ async fn reserved_drop_enqueues_and_retains_one_physical_release_through_shutdow
     let first = cleanup.try_reserve().unwrap();
     let second = cleanup.try_reserve().unwrap();
     assert!(cleanup.try_reserve().is_err());
-    let one = capture.admit(&request("cleanup-one")).unwrap();
-    let two = capture.admit(&request("cleanup-two")).unwrap();
+    let one = capture
+        .admit(
+            &request("cleanup-one"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
+    let two = capture
+        .admit(
+            &request("cleanup-two"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     assert_eq!(fixture.active_leases(), 2);
     let first = first.arm(capture.clone(), one);
     let second = second.arm(capture.clone(), two);
@@ -52,7 +62,12 @@ async fn reserved_drop_enqueues_and_retains_one_physical_release_through_shutdow
     // The receiver freed one queue slot, but the physical release remains occupied.
     let third = cleanup.try_reserve().unwrap();
     assert!(cleanup.try_reserve().is_err());
-    let three = capture.admit(&request("cleanup-three")).unwrap();
+    let three = capture
+        .admit(
+            &request("cleanup-three"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     let third = third.arm(capture, three);
     drop(second);
     drop(third);
@@ -83,7 +98,12 @@ async fn closing_receiver_drains_previously_reserved_tickets_and_late_results() 
     let cleanup = StreamTokenCleanupV1::new(1, shutdown.clone()).unwrap();
     let worker = cleanup.start().unwrap();
     let ticket = cleanup.try_reserve().unwrap();
-    let record = capture.admit(&request("late-owned-result")).unwrap();
+    let record = capture
+        .admit(
+            &request("late-owned-result"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     shutdown.send();
     tokio::time::sleep(Duration::from_millis(5)).await;
     assert!(
@@ -124,8 +144,18 @@ async fn ambiguous_release_fences_admission_and_drains_without_retry_or_success_
     let worker = cleanup.start().unwrap();
     let first = cleanup.try_reserve().unwrap();
     let second = cleanup.try_reserve().unwrap();
-    let one = capture.admit(&request("ambiguous-one")).unwrap();
-    let two = capture.admit(&request("ambiguous-two")).unwrap();
+    let one = capture
+        .admit(
+            &request("ambiguous-one"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
+    let two = capture
+        .admit(
+            &request("ambiguous-two"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     provider.release_fault.store(1, Ordering::Release);
     drop(first.arm(capture.clone(), one));
     wait_until(|| shutdown.is_sent()).await;
@@ -153,8 +183,18 @@ async fn provider_panic_is_observable_and_does_not_drop_the_receiver() {
     let worker = cleanup.start().unwrap();
     let first = cleanup.try_reserve().unwrap();
     let second = cleanup.try_reserve().unwrap();
-    let one = capture.admit(&request("panic-one")).unwrap();
-    let two = capture.admit(&request("panic-two")).unwrap();
+    let one = capture
+        .admit(
+            &request("panic-one"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
+    let two = capture
+        .admit(
+            &request("panic-two"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     provider.release_fault.store(2, Ordering::Release);
     drop(first.arm(capture.clone(), one));
     wait_until(|| shutdown.is_sent()).await;
@@ -176,7 +216,12 @@ async fn receiver_loss_marks_outstanding_work_unresolved_without_calling_from_dr
     let cleanup = StreamTokenCleanupV1::new(1, shutdown.clone()).unwrap();
     let worker = cleanup.start().unwrap();
     let ticket = cleanup.try_reserve().unwrap();
-    let record = capture.admit(&request("receiver-loss")).unwrap();
+    let record = capture
+        .admit(
+            &request("receiver-loss"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     // Fault-inject loss of this test's own idle receiver; no physical call is in flight.
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
@@ -225,7 +270,12 @@ async fn receiver_loss_between_drop_precheck_and_send_settles_pending_exactly_on
     let cleanup = StreamTokenCleanupV1::new(1, shutdown.clone()).unwrap();
     let worker = cleanup.start().unwrap();
     let ticket = cleanup.try_reserve().unwrap();
-    let record = capture.admit(&request("send-loss-race")).unwrap();
+    let record = capture
+        .admit(
+            &request("send-loss-race"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     let mut lease = ticket.arm(capture, record);
     let permit = lease.permit.take().unwrap();
     let work = lease.work.take().unwrap();
@@ -258,7 +308,12 @@ async fn receiver_loss_after_claim_preserves_late_physical_acknowledgement() {
     let cleanup = StreamTokenCleanupV1::new(1, shutdown.clone()).unwrap();
     let worker = cleanup.start().unwrap();
     let ticket = cleanup.try_reserve().unwrap();
-    let record = capture.admit(&request("claimed-loss-race")).unwrap();
+    let record = capture
+        .admit(
+            &request("claimed-loss-race"),
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     let lease = ticket.arm(capture, record);
     let settlement = Arc::clone(&lease.work.as_ref().unwrap().settlement);
     provider.gate_point.store(1, Ordering::Release);

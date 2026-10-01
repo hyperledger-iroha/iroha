@@ -1,27 +1,28 @@
 //! Qualified stream-token gateway admission and durable callback reconciliation.
 //!
-//! The external provider owns atomic quota admission, sealed monotonic gateway
-//! sequencing, active concurrency leases, and the ordered callback outbox. This
-//! module only derives the public launch binding, performs an exact startup
-//! readback, and supervises replay into the committed reputation runtime.
+//! Native consensus owns atomic quota admission, monotonic gateway sequencing, active leases
+//! and the ordered callback outbox. The daemon signs bounded native actions and independently
+//! challenged Checks; only their opaque verified readbacks cross the Torii capture boundary.
+//! Startup reconciliation finishes before Torii begins serving.
 use iroha_config::parameters::actual::SorafsTokenConfig;
+use iroha_data_model::sorafs::stream_token_gateway::{
+    StreamTokenGatewayAdmissionErrorV1, StreamTokenGatewayAdmissionQualificationV1,
+};
 use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_torii::sorafs::{
-    StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
-    StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
-};
-use sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1;
+use iroha_torii::sorafs::StreamTokenReputationDeliveryV1;
+use iroha_torii::sorafs::{StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionProviderV1};
 use std::{fmt, sync::Arc, time::Duration};
+pub(crate) mod native;
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Fail-closed launcher error without runtime credentials or evidence payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamTokenGatewayRuntimeErrorV1 {
-    /// A provider was injected while stream-token issuance is disabled.
+    /// A provider was injected where the native launch path forbids external authority.
     UnexpectedProvider,
-    /// Enabled issuance has no deployment-owned admission provider.
+    /// Enabled issuance has no configured native admission provider.
     MissingProvider,
-    /// Enabled issuance has no active committed reputation callback.
+    /// Enabled issuance has no finalized native reputation delivery owner.
     MissingReputationCallback,
     /// The configured compliance gateway identity is absent or malformed.
     InvalidGatewayIdentity,
@@ -36,13 +37,13 @@ impl fmt::Display for StreamTokenGatewayRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::UnexpectedProvider => {
-                "disabled stream-token issuance rejects an unexpected gateway admission provider"
+                "stream-token issuance rejects an unexpected gateway admission provider"
             }
             Self::MissingProvider => {
-                "enabled stream-token issuance requires a deployment-owned gateway admission provider"
+                "enabled stream-token issuance requires the configured native gateway admission provider"
             }
             Self::MissingReputationCallback => {
-                "enabled stream-token issuance requires an active committed reputation callback"
+                "enabled stream-token issuance requires an finalized native reputation delivery owner"
             }
             Self::InvalidGatewayIdentity => {
                 "enabled stream-token issuance requires a canonical compliance gateway identity"
@@ -82,7 +83,7 @@ pub fn prepare_capture(
     tokens: &SorafsTokenConfig,
     compliance_gateway_id: Option<&str>,
     provider: Option<Arc<dyn StreamTokenGatewayAdmissionProviderV1>>,
-    reputation: Option<Arc<dyn ReputationNativeOutcomeAdmissionApiV1>>,
+    reputation: Option<Arc<dyn StreamTokenReputationDeliveryV1>>,
 ) -> Result<Option<Arc<StreamTokenAdmissionCaptureV1>>, StreamTokenGatewayRuntimeErrorV1> {
     if !tokens.enabled {
         return if provider.is_none() {
@@ -94,6 +95,24 @@ pub fn prepare_capture(
     let provider = provider.ok_or(StreamTokenGatewayRuntimeErrorV1::MissingProvider)?;
     let reputation =
         reputation.ok_or(StreamTokenGatewayRuntimeErrorV1::MissingReputationCallback)?;
+    let (handle, qualification) = configured_binding(network_id, tokens, compliance_gateway_id)?;
+    let capture = Arc::new(StreamTokenAdmissionCaptureV1::try_new(
+        handle.clone(),
+        qualification,
+        tokens.admission_reconcile_max_items,
+        Duration::from_millis(tokens.admission_operation_timeout_ms),
+        provider,
+        reputation,
+    )?);
+    capture.reconcile_pending()?;
+    Ok(Some(capture))
+}
+fn configured_binding(
+    network_id: &NetworkId,
+    tokens: &SorafsTokenConfig,
+    compliance_gateway_id: Option<&str>,
+) -> Result<(String, StreamTokenGatewayAdmissionQualificationV1), StreamTokenGatewayRuntimeErrorV1>
+{
     let handle = tokens
         .admission_provider_handle
         .as_ref()
@@ -117,17 +136,13 @@ pub fn prepare_capture(
         max_tracked_tokens: tokens.admission_max_tracked_tokens,
         lease_ttl_ms: tokens.admission_lease_ttl_ms,
     };
-    let capture = Arc::new(StreamTokenAdmissionCaptureV1::try_new(
-        handle.clone(),
-        qualification,
-        tokens.admission_reconcile_max_items,
-        provider,
-        reputation,
-    )?);
-    capture.reconcile_pending()?;
-    Ok(Some(capture))
+    qualification.validate()?;
+    if !iroha_config::parameters::is_production_runtime_handle(handle) {
+        return Err(StreamTokenGatewayRuntimeErrorV1::IncompleteBinding);
+    }
+    Ok((handle.clone(), qualification))
 }
-/// Start bounded replay of externally durable callbacks after startup.
+/// Start bounded replay of consensus-owned callbacks after startup.
 pub fn start_reconciler(
     capture: Arc<StreamTokenAdmissionCaptureV1>,
     poll_interval: Duration,
@@ -188,18 +203,10 @@ const fn is_transient(error: StreamTokenGatewayAdmissionErrorV1) -> bool {
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::sorafs::{
-        capacity::ProviderId,
-        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
-    };
-    use iroha_torii::sorafs::{
+    use iroha_data_model::sorafs::stream_token_gateway::{
         StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionReadbackV1,
         StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
         StreamTokenGatewayAdmissionResultV1,
-    };
-    use sorafs_node::reputation::runtime::{
-        ReputationJournalEnqueueOutcomeV1, ReputationNativeOutcomeAdmissionStateV1,
-        ReputationRuntimeError, StreamTokenReputationAdmissionOutcomeV1,
     };
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
     fn network_id(seed: u8) -> NetworkId {
@@ -243,8 +250,12 @@ mod tests {
         fn handle(&self) -> &str {
             HANDLE
         }
+        fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1 {
+            self.qualification
+        }
         fn qualification(
             &self,
+            _deadline: std::time::Instant,
         ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>
         {
             Ok(self.qualification)
@@ -252,6 +263,7 @@ mod tests {
         fn admit(
             &self,
             _request: &StreamTokenGatewayAdmissionRequestV1,
+            _deadline: std::time::Instant,
         ) -> Result<StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayAdmissionErrorV1>
         {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
@@ -259,6 +271,7 @@ mod tests {
         fn pending(
             &self,
             _max_items: u32,
+            _deadline: std::time::Instant,
         ) -> Result<StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionErrorV1>
         {
             Ok(self.readback.clone())
@@ -266,37 +279,39 @@ mod tests {
         fn acknowledge(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
+            _deadline: std::time::Instant,
         ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
         fn release_lease(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
+            _deadline: std::time::Instant,
         ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
+            Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
+        }
+        fn confirm_serving(
+            &self,
+            _request: &StreamTokenGatewayAdmissionRequestV1,
+            _record: StreamTokenGatewayAdmissionRecordV1,
+            _deadline: std::time::Instant,
+        ) -> Result<StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionErrorV1>
+        {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
     }
     #[derive(Debug)]
     struct ReputationProbe;
-    impl ReputationNativeOutcomeAdmissionApiV1 for ReputationProbe {
-        fn activation_state(
-            &self,
-        ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
-            Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+    impl StreamTokenReputationDeliveryV1 for ReputationProbe {
+        fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1 {
+            qualification(7)
         }
-        fn record_por_terminal(
+        fn deliver(
             &self,
-            _provider_id: ProviderId,
-            _outcome: PorTerminalOutcomeV1,
-        ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
-            Err(ReputationRuntimeError::InvalidRuntimePolicy)
-        }
-        fn record_authenticated_stream_token_validation(
-            &self,
-            _provider_id: ProviderId,
-            _outcome: StreamTokenValidationOutcomeV1,
-        ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
-            Err(ReputationRuntimeError::InvalidRuntimePolicy)
+            _record: StreamTokenGatewayAdmissionRecordV1,
+            _deadline: std::time::Instant,
+        ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+            Err(StreamTokenGatewayAdmissionErrorV1::ReputationCallback)
         }
     }
     fn provider(
@@ -313,7 +328,7 @@ mod tests {
             },
         })
     }
-    fn reputation() -> Arc<dyn ReputationNativeOutcomeAdmissionApiV1> {
+    fn reputation() -> Arc<dyn StreamTokenReputationDeliveryV1> {
         Arc::new(ReputationProbe)
     }
     #[test]
@@ -328,7 +343,7 @@ mod tests {
         .expect("qualified capture")
         .expect("enabled capture");
         capture
-            .validate_expected_binding(HANDLE, qualification(7), 16)
+            .validate_expected_binding(HANDLE, qualification(7), 16, Duration::from_millis(30_000))
             .expect("exact binding");
     }
     #[test]
@@ -378,7 +393,7 @@ mod tests {
         assert_eq!(error, StreamTokenGatewayRuntimeErrorV1::UnexpectedProvider);
     }
     #[test]
-    fn enabled_service_requires_active_reputation_callback() {
+    fn enabled_service_requires_native_reputation_delivery() {
         let error = prepare_capture(
             &network_id(0x61),
             &token_config(),

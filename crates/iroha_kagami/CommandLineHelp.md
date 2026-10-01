@@ -13,6 +13,10 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet down`↴](#kagami-localnet-down)
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
+* [`kagami dataspace`↴](#kagami-dataspace)
+* [`kagami dataspace up`↴](#kagami-dataspace-up)
+* [`kagami dataspace status`↴](#kagami-dataspace-status)
+* [`kagami dataspace networks`↴](#kagami-dataspace-networks)
 * [`kagami context`↴](#kagami-context)
 * [`kagami context list`↴](#kagami-context-list)
 * [`kagami context show`↴](#kagami-context-show)
@@ -83,6 +87,7 @@ Common tasks:
 
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet` — Start and manage a persistent localnet without supplying configuration
+* `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
@@ -268,6 +273,7 @@ Generate an operator-owned network bundle without starting validators
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
 
   Default value: `00000000-0000-0000-0000-000000000000`
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
 * `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
 
   Possible values: `dataspace`, `nexus`
@@ -311,6 +317,73 @@ Generate an operator-owned network bundle without starting validators
 
   Possible values: `permissioned`, `npos`
 
+
+
+
+## `kagami dataspace`
+
+Run an owner-private local dataspace attached to an installed remote network
+
+**Usage:** `kagami dataspace <COMMAND>`
+
+###### **Subcommands:**
+
+* `up` — Create, fund, register, and select four private validators without supplying configuration
+* `status` — Observe local validators and independently verified parent attachment separately
+* `networks` — List the independently pinned network profiles supplied by this installation
+
+
+
+## `kagami dataspace up`
+
+Create, fund, register, and select four private validators without supplying configuration
+
+**Usage:** `kagami dataspace up [OPTIONS] --network <NETWORK> <ALIAS>`
+
+###### **Arguments:**
+
+* `<ALIAS>` — Canonical private dataspace alias to lease on the parent
+
+###### **Options:**
+
+* `--network <NETWORK>` — Exact independently installed parent profile, such as taira
+* `--name <NAME>` — Store-local context name (defaults to the dataspace alias)
+* `--timeout <TIMEOUT>` — Complete parent authentication, local startup, and attachment budget in seconds
+
+  Default value: `60`
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami dataspace status`
+
+Observe local validators and independently verified parent attachment separately
+
+**Usage:** `kagami dataspace status [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami dataspace networks`
+
+List the independently pinned network profiles supplied by this installation
+
+**Usage:** `kagami dataspace networks [OPTIONS]`
+
+###### **Options:**
+
+* `--json` — Emit the installed profile names as one JSON array
 
 
 
@@ -1022,7 +1095,7 @@ Generate per-client CLI configs from a base client.toml
 
 ###### **Options:**
 
-* `--base-config <PATH>` — Base client config to copy `chain`, `network_id`, `torii_url`, `api_token`, and `basic_auth` from
+* `--base-config <PATH>` — Base client config to copy the chain, exact network identity, Torii URL, and credentials from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
 * `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
 

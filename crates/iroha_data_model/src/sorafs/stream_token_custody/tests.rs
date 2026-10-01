@@ -119,6 +119,7 @@ fn custody_control_record_roundtrips_binary_and_json() {
         recorded_at_unix_ms: 5,
         authority: AccountId::new(key.public_key().clone()),
         control_state: vec![6, 7, 8],
+        active_enrollment: None,
     };
     let frame = norito::encode_canonical(&record).expect("canonical control record");
     assert_eq!(
@@ -166,6 +167,7 @@ fn public_native_custody_commitments_bind_exact_authority_and_execution_record()
         recorded_at_unix_ms: 1000,
         authority: authority(1),
         control_state: vec![3; 16],
+        active_enrollment: None,
     };
     let digest = record.canonical_digest().unwrap();
     record.ordinal = 1;

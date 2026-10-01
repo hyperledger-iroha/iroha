@@ -13,6 +13,63 @@ static BATCH_PROGRESS: [FairProgress; metal_cost::BATCH_FAMILIES] =
 const CALIBRATION_BUDGET: Duration = Duration::from_secs(8);
 const DISCOVERY_RETRY: Duration = Duration::from_secs(30);
 const DISCOVERY_BUDGET: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn applying_acceleration_policy_does_not_discover_metal() {
+        const CHILD: &str = "IVM_METAL_LAZY_CONFIG_TEST";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let path = module_path!().split_once("::").expect("crate module").1;
+            let test = format!("{path}::applying_acceleration_policy_does_not_discover_metal");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test, "--nocapture"])
+                .env(CHILD, "1")
+                .env_remove("IVM_DISABLE_METAL")
+                .output()
+                .expect("isolated acceleration configuration test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            assert!(stdout.contains("1 passed; 0 failed; 0 ignored"), "{stdout}");
+            return;
+        }
+
+        crate::set_acceleration_config(crate::AccelerationConfig {
+            enable_metal: true,
+            enable_cuda: false,
+            max_gpus: None,
+            resource_limits: iroha_accel::RegistryLimits::STANDARD,
+            ..Default::default()
+        });
+        assert!(metal_policy_enabled());
+        assert_eq!(DEVICES.len(), 0);
+        // Check after policy application: entering this gate beforehand would suppress the
+        // very discovery this test must catch. The gate records attempts even without a GPU.
+        let discovery = DISCOVERY
+            .try_enter(Instant::now(), Duration::MAX)
+            .expect("applying policy must leave discovery untouched");
+        // Hold ordinary discovery admission to model pending qualification. Even on a GPU
+        // host, enabled policy must not be reported as availability or successful parity.
+        let pending = crate::acceleration_runtime_status().metal;
+        assert!(pending.configured);
+        assert!(!pending.available);
+        assert!(!pending.parity_ok);
+        drop(discovery);
+        crate::set_acceleration_config(crate::AccelerationConfig {
+            enable_metal: false,
+            enable_cuda: false,
+            ..Default::default()
+        });
+        let disabled = crate::acceleration_runtime_status().metal;
+        assert!(!disabled.configured);
+        assert!(!disabled.available);
+        assert!(!disabled.parity_ok);
+    }
+}
+
 thread_local! {
     static ACTIVE: RefCell<Option<DeviceLease<MetalState>>> = const { RefCell::new(None) };
     static HEALTH: RefCell<Option<HealthLease>> = const { RefCell::new(None) };

@@ -2,7 +2,7 @@
 //!
 //! A journal is one owner-private directory holding, in order:
 //! - `operation.json`: the exact prepared operation (for example a signed
-//!   transaction), written once with [`Journal::write_operation`];
+//!   transaction), published atomically by [`Journal::create_prepared`];
 //! - `submission.json`: a durable marker recorded by
 //!   [`Journal::record_submission`] *before* the only dispatch, so a crash can
 //!   never cause a blind resubmission;
@@ -14,26 +14,22 @@
 //! group/other permissions. The deployment engine's exact-wire canary writes
 //! (`iroha_deploy` gate G6, P2) are meant to use the same journal.
 use eyre::{Result, WrapErr as _, eyre};
+use iroha_fs::{FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
 use std::{
-    fs::{self, File},
-    io::{Read as _, Write as _},
+    fs::File,
     path::{Path, PathBuf},
 };
 
 const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
-
-/// Name of the only evidence record, written by [`Journal::write_applied_evidence`].
 const APPLIED_EVIDENCE: &str = "applied.json";
 
-/// Retained private operation directory and its exclusive process lock.
+/// Retained private operation directory and its exclusive native process lock.
 pub struct Journal {
     path: PathBuf,
-    #[cfg(unix)]
-    directory: File,
-    #[cfg(unix)]
-    _lock: File,
+    directory: PrivateDirectory,
+    lock: File,
 }
 
 impl core::fmt::Debug for Journal {
@@ -51,27 +47,56 @@ impl Journal {
         &self.path
     }
 
-    /// Create a fresh owner-private journal directory and hold its exclusive lock.
+    /// Reserve an unprepared journal and hold its exclusive lock.
+    /// Callers using this reservation API must explicitly recover a provably unprepared journal
+    /// after interruption. When the operation already exists, use [`Self::create_prepared`].
     ///
     /// # Errors
-    /// Fails when the parent is missing, the directory already exists, or the
-    /// platform lacks descriptor-relative file and lock support.
+    /// Refuses missing or unsafe parents, existing directories, and native custody failures.
     pub fn create(path: &Path) -> Result<Self> {
         Self::acquire(path, true)
+    }
+
+    /// Atomically publish the complete original operation and lock, then acquire the journal.
+    /// No partial journal can appear at `path` between directory creation and retaining the signed
+    /// bytes. An uncertain publication is reconciled by reopening this same path, never preparing
+    /// or submitting a replacement transaction. Existing evidence is never overwritten.
+    ///
+    /// # Errors
+    /// Invalid/oversized operation, unsafe or missing parent, existing destination, competing owner,
+    /// or native publication failure. Private staging siblings can remain after interruption.
+    pub fn create_prepared<T: JsonSerialize>(path: &Path, operation: &T) -> Result<Self> {
+        let bytes = json::to_vec(operation)?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            eyre::bail!("operation exceeds the journal byte bound");
+        }
+        let absolute = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let name = absolute
+            .file_name()
+            .ok_or_else(|| eyre!("journal must name an operation directory"))?;
+        let parent = OwnerDirectory::open(
+            absolute
+                .parent()
+                .ok_or_else(|| eyre!("journal has no parent"))?,
+        )?;
+        let directory =
+            parent.publish_private_child(name, &[("lock", &[]), ("operation.json", &bytes)])?;
+        Self::lock_directory(directory, false)
     }
 
     /// Reopen an existing journal and hold its exclusive lock.
     ///
     /// # Errors
-    /// Fails when the directory or lock is missing, unsafe, replaced, or
-    /// already held by another operation.
+    /// Refuses missing, unsafe or replaced directories and locks, and competing owners.
     pub fn open(path: &Path) -> Result<Self> {
         Self::acquire(path, false)
     }
 
-    #[cfg(unix)]
     fn acquire(path: &Path, create: bool) -> Result<Self> {
-        use rustix::fs::{Mode, OFlags};
         let absolute = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -85,58 +110,33 @@ impl Journal {
             .ok_or_else(|| eyre!("journal has no parent directory"))?
             .canonicalize()
             .wrap_err("journal parent must already exist")?;
-        let parent = File::from(rustix::fs::open(
-            &parent_path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::empty(),
-        )?);
-        if create {
-            rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700)).wrap_err(
+        let parent = OwnerDirectory::open(&parent_path)?;
+        let directory = if create {
+            parent.create_private_child(name).wrap_err(
                 "journal must be a fresh directory; existing evidence is never replaced",
-            )?;
-            parent.sync_all()?;
-        }
-        let directory = File::from(
-            rustix::fs::openat(
-                &parent,
-                name,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-                Mode::empty(),
-            )
-            .wrap_err("journal must be a real directory")?,
-        );
-        validate_private_metadata(&directory.metadata()?, true)?;
-        let lock_flags = OFlags::RDWR
-            | OFlags::CLOEXEC
-            | OFlags::NOFOLLOW
-            | OFlags::NONBLOCK
-            | if create {
-                OFlags::CREATE | OFlags::EXCL
-            } else {
-                OFlags::empty()
-            };
-        let lock = File::from(
-            rustix::fs::openat(&directory, "lock", lock_flags, Mode::from_raw_mode(0o600))
-                .wrap_err("cannot open the journal's private lock")?,
-        );
-        validate_private_metadata(&lock.metadata()?, false)?;
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            )?
+        } else {
+            PrivateDirectory::open(parent.path().join(name))?
+        };
+        Self::lock_directory(directory, create)
+    }
+
+    fn lock_directory(directory: PrivateDirectory, create: bool) -> Result<Self> {
+        let lock = if create {
+            directory.create_lock("lock")?
+        } else {
+            directory.open_existing_lock("lock")?
+        };
+        lock.try_lock()
             .wrap_err("another account operation holds this journal")?;
-        directory.sync_all()?;
+        directory.sync()?;
         let result = Self {
-            path: parent_path.join(name),
+            path: directory.path().to_owned(),
             directory,
-            _lock: lock,
+            lock,
         };
         result.revalidate()?;
         Ok(result)
-    }
-
-    #[cfg(not(unix))]
-    fn acquire(_: &Path, _: bool) -> Result<Self> {
-        eyre::bail!(
-            "durable account operation journals require Unix descriptor and file-lock support"
-        )
     }
 
     /// Retain the exact canonical JSON of a prepared operation, once.
@@ -210,47 +210,25 @@ impl Journal {
         }
     }
 
-    #[cfg(unix)]
     fn revalidate(&self) -> Result<()> {
-        use std::os::unix::fs::MetadataExt as _;
-        let current = fs::symlink_metadata(&self.path)
-            .wrap_err("journal directory moved during the operation")?;
-        let pinned = self.directory.metadata()?;
-        validate_private_metadata(&current, true)?;
-        if current.dev() != pinned.dev() || current.ino() != pinned.ino() {
-            eyre::bail!("journal path no longer identifies the retained directory");
+        self.directory.revalidate()?;
+        let current = self.directory.open_read("lock")?;
+        if FileIdentity::of(&current)? != FileIdentity::of(&self.lock)? {
+            eyre::bail!("journal lock no longer identifies the retained ownership file");
         }
         Ok(())
     }
 
-    #[cfg(unix)]
     fn read_optional(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        use rustix::fs::{Mode, OFlags};
         self.revalidate()?;
-        let descriptor = match rustix::fs::openat(
-            &self.directory,
-            name,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-            Mode::empty(),
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(rustix::io::Errno::NOENT) => return Ok(None),
-            Err(error) => {
-                return Err(eyre!(error)).wrap_err("cannot open private journal evidence");
+        match self.directory.read(name, MAX_JOURNAL_BYTES) {
+            Ok(bytes) => {
+                self.revalidate()?;
+                Ok(Some(bytes.to_vec()))
             }
-        };
-        let mut file = File::from(descriptor);
-        validate_private_metadata(&file.metadata()?, false)?;
-        let mut bytes = Vec::new();
-        std::io::Read::by_ref(&mut file)
-            .take((MAX_JOURNAL_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > MAX_JOURNAL_BYTES {
-            eyre::bail!("operation journal exceeds its bounded size");
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).wrap_err("cannot read private journal evidence"),
         }
-        validate_private_metadata(&file.metadata()?, false)?;
-        self.revalidate()?;
-        Ok(Some(bytes))
     }
 
     fn read(&self, name: &str) -> Result<Vec<u8>> {
@@ -259,76 +237,82 @@ impl Journal {
         })
     }
 
-    #[cfg(unix)]
     fn install(&self, name: &str, bytes: &[u8]) -> Result<()> {
-        use rustix::fs::{AtFlags, Mode, OFlags};
         if bytes.len() > MAX_JOURNAL_BYTES {
             eyre::bail!("operation evidence exceeds its bounded size");
         }
         self.revalidate()?;
-        let temporary = format!(".pending-{}", hex::encode(rand::random::<[u8; 16]>()));
-        let mut file = File::from(rustix::fs::openat(
-            &self.directory,
-            temporary.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::from_raw_mode(0o600),
-        )?);
-        let result: Result<()> = (|| {
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            self.revalidate()?;
-            rustix::fs::linkat(
-                &self.directory,
-                temporary.as_str(),
-                &self.directory,
-                name,
-                AtFlags::empty(),
-            )
+        self.directory
+            .write_atomic(name, bytes, PublishMode::CreateNew)
             .wrap_err("immutable journal evidence already exists or could not be installed")?;
-            Ok(())
-        })();
-        let removed = rustix::fs::unlinkat(&self.directory, temporary.as_str(), AtFlags::empty());
-        self.directory.sync_all()?;
-        result?;
-        removed?;
         if self.read(name)? != bytes {
             eyre::bail!("saved operation evidence differs from its retained bytes");
         }
         Ok(())
     }
-
-    #[cfg(not(unix))]
-    fn read_optional(&self, _: &str) -> Result<Option<Vec<u8>>> {
-        eyre::bail!("durable account journals require Unix support")
-    }
-
-    #[cfg(not(unix))]
-    fn install(&self, _: &str, _: &[u8]) -> Result<()> {
-        eyre::bail!("durable account journals require Unix support")
-    }
 }
 
-#[cfg(unix)]
-fn validate_private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    if metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o077 != 0
-        || if directory {
-            !metadata.is_dir()
-        } else {
-            !metadata.is_file() || metadata.nlink() != 1
-        }
-    {
-        eyre::bail!(
-            "journal evidence must be owner-private, owned by the current user, and free of symlinks or hard links"
-        );
-    }
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    #[test]
+    fn prepared_creation_atomically_retains_original_bytes_and_survives_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = OwnerDirectory::open(root.path()).unwrap();
+        let interrupted = parent.create_private_child("unpublished").unwrap();
+        interrupted.create_lock("lock").unwrap().sync_all().unwrap();
+        let path = root.path().join("operation");
+        let operation = norito::json!({"signed": "original"});
+        let journal = Journal::create_prepared(&path, &operation).unwrap();
+        assert_eq!(
+            journal.read_operation::<norito::json::Value>().unwrap(),
+            operation
+        );
+        assert!(!journal.submission_recorded(&operation).unwrap());
+        assert!(
+            Journal::create_prepared(&path, &norito::json!({"signed": "replacement"})).is_err()
+        );
+        drop(journal);
+        let journal = Journal::open(&path).unwrap();
+        assert_eq!(
+            journal.read_operation::<norito::json::Value>().unwrap(),
+            operation
+        );
+        assert!(journal.record_submission(&operation).unwrap());
+        assert!(!journal.record_submission(&operation).unwrap());
+        let absent = root.path().join("too-large");
+        assert!(Journal::create_prepared(&absent, &"x".repeat(MAX_JOURNAL_BYTES)).is_err());
+        assert!(!absent.exists());
+    }
+
+    #[test]
+    fn journal_open_never_recreates_a_missing_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operation");
+        drop(Journal::create(&path).unwrap());
+        fs::remove_file(path.join("lock")).unwrap();
+        assert!(Journal::open(&path).is_err());
+        assert!(!path.join("lock").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn retained_journal_refuses_a_replaced_lock_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operation");
+        let journal = Journal::create(&path).unwrap();
+        fs::rename(path.join("lock"), path.join("old-lock")).unwrap();
+        let replacement = journal.directory.create_lock("lock").unwrap();
+        assert!(
+            journal
+                .write_operation(&norito::json!({"wire": "no"}))
+                .is_err()
+        );
+        assert!(!path.join("operation.json").exists());
+        drop(replacement);
+    }
 
     #[test]
     fn journal_creation_is_exclusive_and_retained_writes_are_immutable() {
@@ -426,6 +410,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn journal_rejects_a_special_file_substituted_for_its_lock() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("operation");

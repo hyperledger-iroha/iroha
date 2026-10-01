@@ -46,6 +46,9 @@ use crate::{
 };
 #[path = "call_runtime.rs"]
 mod call_runtime;
+#[cfg(test)]
+#[path = "ivm/tests/hardware_discovery.rs"]
+mod hardware_discovery_tests;
 mod input_cursor;
 #[cfg(test)]
 mod snapshot;
@@ -70,6 +73,7 @@ static SUPPRESS_BANNER: AtomicBool = AtomicBool::new(false);
 static HARDWARE_CAPABILITIES: OnceLock<HardwareCapabilities> = OnceLock::new();
 #[cfg(test)]
 thread_local! {
+    static HARDWARE_CAPABILITY_LOOKUPS_FOR_TEST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static REFUSE_WORKER_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REFUSE_TRACE_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static REFUSE_DIAGNOSTIC_SNAPSHOT_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -377,6 +381,8 @@ pub fn set_banner_enabled(enabled: bool) {
     SUPPRESS_BANNER.store(!enabled, Ordering::Relaxed);
 }
 fn hardware_capabilities_snapshot() -> &'static HardwareCapabilities {
+    #[cfg(test)]
+    HARDWARE_CAPABILITY_LOOKUPS_FOR_TEST.with(|count| count.set(count.get() + 1));
     HARDWARE_CAPABILITIES.get_or_init(|| {
         HardwareCapabilities::new(crate::cuda::cuda_available(), vector::metal_available())
     })
@@ -450,17 +456,17 @@ impl Default for AccelerationPolicy {
 pub struct IvmConfig {
     gas_limit: u64,
     acceleration: AccelerationPolicy,
-    capabilities: HardwareCapabilities,
+    capabilities: Option<HardwareCapabilities>,
     stack_policy: IvmStackPolicy,
 }
 impl IvmConfig {
-    /// Create a configuration with the provided gas limit and adaptive acceleration policy.
+    /// Create an adaptive configuration without discovering optional accelerators.
     #[must_use]
     pub fn new(gas_limit: u64) -> Self {
         Self {
             gas_limit,
             acceleration: AccelerationPolicy::default(),
-            capabilities: *hardware_capabilities_snapshot(),
+            capabilities: None,
             stack_policy: IvmStackPolicy::V1,
         }
     }
@@ -485,10 +491,11 @@ impl IvmConfig {
     pub fn with_forced_simd(self, choice: Option<SimdChoice>) -> Self {
         self.with_acceleration(self.acceleration().with_forced_simd(choice))
     }
-    /// Override the detected hardware capabilities.
+    /// Override the diagnostic capability snapshot without discovering accelerators.
+    /// Actual dispatch still requires the backend's own qualification and custody checks.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
-        self.capabilities = capabilities;
+        self.capabilities = Some(capabilities);
         self
     }
     /// Gas limit to enforce for the VM.
@@ -501,10 +508,12 @@ impl IvmConfig {
     pub const fn acceleration(&self) -> AccelerationPolicy {
         self.acceleration
     }
-    /// Hardware capabilities the VM should expose.
+    /// Query the diagnostic capability snapshot, discovering and qualifying hardware on the
+    /// first automatic query. Explicit overrides are returned without discovery.
     #[must_use]
-    pub const fn capabilities(&self) -> HardwareCapabilities {
+    pub fn capabilities(&self) -> HardwareCapabilities {
         self.capabilities
+            .unwrap_or_else(|| *hardware_capabilities_snapshot())
     }
     /// Immutable ABI policy used to derive the VM's guest stack.
     #[must_use]
@@ -534,14 +543,14 @@ impl IvmConfig {
     pub fn to_builder(self) -> IvmConfigBuilder {
         self.builder()
     }
-    /// Return a copy with capabilities transformed by `f`.
+    /// Resolve the capability snapshot and retain the explicit result of `f`.
     #[must_use]
     pub fn map_capabilities<F>(self, f: F) -> Self
     where
         F: FnOnce(HardwareCapabilities) -> HardwareCapabilities,
     {
         Self {
-            capabilities: f(self.capabilities),
+            capabilities: Some(f(self.capabilities())),
             ..self
         }
     }
@@ -551,17 +560,17 @@ impl IvmConfig {
 pub struct IvmConfigBuilder {
     gas_limit: u64,
     acceleration: AccelerationPolicy,
-    capabilities: HardwareCapabilities,
+    capabilities: Option<HardwareCapabilities>,
     stack_policy: IvmStackPolicy,
 }
 impl IvmConfigBuilder {
-    /// Begin building a configuration with the provided gas limit.
+    /// Begin building a configuration without discovering optional accelerators.
     #[must_use]
     pub fn new(gas_limit: u64) -> Self {
         Self {
             gas_limit,
             acceleration: AccelerationPolicy::default(),
-            capabilities: *hardware_capabilities_snapshot(),
+            capabilities: None,
             stack_policy: IvmStackPolicy::V1,
         }
     }
@@ -571,7 +580,7 @@ impl IvmConfigBuilder {
         Self {
             gas_limit: config.gas_limit(),
             acceleration: config.acceleration(),
-            capabilities: config.capabilities(),
+            capabilities: config.capabilities,
             stack_policy: config.stack_policy(),
         }
     }
@@ -603,10 +612,10 @@ impl IvmConfigBuilder {
         self.acceleration = self.acceleration.with_forced_simd(choice);
         self
     }
-    /// Override hardware capabilities.
+    /// Override the diagnostic capability snapshot without discovering accelerators.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
-        self.capabilities = capabilities;
+        self.capabilities = Some(capabilities);
         self
     }
     /// Finalise the builder and produce a configuration.
@@ -716,13 +725,13 @@ impl IvmBuilder {
         self.host_config = Some(Box::new(move |vm| vm.set_host(host)));
         self
     }
-    /// Override the hardware capabilities seen by the constructed VM.
-    /// Useful for deterministic tests that need to force accelerator availability.
+    /// Override the constructed VM's diagnostic capability snapshot without discovery.
+    /// This does not bypass backend qualification or alter dispatch ownership.
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
-        self.config.capabilities = capabilities;
+        self.config.capabilities = Some(capabilities);
         self
     }
-    /// Return a builder with capabilities transformed by `f`.
+    /// Resolve the capability snapshot and retain the explicit result of `f` in this builder.
     #[must_use]
     pub fn map_capabilities_builder<F>(mut self, f: F) -> Self
     where
@@ -763,27 +772,32 @@ impl IvmBuilder {
     ///
     /// This respects the banner suppression flag and leaves the configuration
     /// unreturned; prefer [`build_with_config`](Self::build_with_config) when the
-    /// caller needs to reuse the configuration later.
+    /// caller needs to reuse the configuration later. A visible banner queries accelerator
+    /// availability; a suppressed banner does not discover hardware.
     pub fn build(self) -> IVM {
         let mut vm = IVM::new_from_config(self.config);
         if let Some(config) = self.host_config {
             config(&mut vm);
         }
-        let scheduler_threads = vm.scheduler_limits.0;
-        IVM::startup_banner(
-            scheduler_threads,
-            vm.max_vector_lanes,
-            vm.hardware_capabilities(),
-            vm.use_metal,
-            vm.use_cuda,
-            self.suppress_banner,
-        );
+        // Check before evaluating arguments: even a suppressed banner must not trigger
+        // device discovery, qualification or calibration through its capability query.
+        if !self.suppress_banner && !SUPPRESS_BANNER.load(Ordering::Relaxed) {
+            let capabilities = vm.hardware_capabilities();
+            IVM::startup_banner(
+                vm.scheduler_limits.0,
+                vm.max_vector_lanes,
+                capabilities,
+                vm.acceleration_policy.allow_metal() && capabilities.metal_available(),
+                vm.acceleration_policy.allow_cuda() && capabilities.cuda_available(),
+                self.suppress_banner,
+            );
+        }
         vm
     }
     /// Consume the builder and return both the final configuration and VM.
     ///
-    /// The returned configuration is the exact snapshot applied to the VM and can be fed back into
-    /// [`IvmBuilder::with_config`] to construct additional VMs with identical settings.
+    /// The returned configuration preserves automatic discovery or the explicit capability
+    /// override and can construct additional VMs with identical settings.
     pub fn build_with_config(self) -> (IvmConfig, IVM) {
         let cfg = self.config;
         let vm = self.build();
@@ -1453,10 +1467,6 @@ pub struct IVM {
     prepared_loads: u64,
     /// Operator-configured scheduler thread limits reported in the startup banner.
     scheduler_limits: (usize, usize),
-    /// Is Metal GPU acceleration available?
-    use_metal: bool,
-    /// Is CUDA GPU acceleration available?
-    use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
     zk_mode: bool,
     /// Collect formal proof traces while preserving ZK-mode execution semantics.
@@ -1470,7 +1480,7 @@ pub struct IVM {
     /// simple INPUT TLV bump allocator for host-returned pointers.
     input_bump_next: u64,
     acceleration_policy: AccelerationPolicy,
-    hardware_capabilities: HardwareCapabilities,
+    hardware_capabilities: Option<HardwareCapabilities>,
     // Release aggregate charges after every owned allocation above is destroyed.
     cache_reservation: crate::cache_memory::MemoryReservation,
 }
@@ -1794,8 +1804,6 @@ impl IVM {
             #[cfg(test)]
             prepared_loads: 0,
             scheduler_limits,
-            use_metal: false,
-            use_cuda: false,
             zk_mode: false,
             zk_trace_enabled: false,
             entrypoint_pc: None,
@@ -1804,18 +1812,14 @@ impl IVM {
             pc_alignment: 0,
             input_bump_next: 0,
             acceleration_policy: AccelerationPolicy::deterministic(),
-            hardware_capabilities: config.capabilities(),
+            hardware_capabilities: config.capabilities,
         };
-        vm.set_hardware_capabilities(config.capabilities());
         vm.set_acceleration_policy(config.acceleration());
         Ok(vm)
     }
     fn apply_acceleration_policy(&mut self, policy: AccelerationPolicy) {
-        let caps = self.hardware_capabilities;
         self.acceleration_policy = policy;
         vector::set_thread_forced_simd(policy.forced_simd());
-        self.use_metal = policy.allow_metal() && caps.metal_available();
-        self.use_cuda = policy.allow_cuda() && caps.cuda_available();
     }
     /// Enable or disable zero-knowledge features.
     ///
@@ -2513,30 +2517,34 @@ impl IVM {
     pub(crate) fn prepared_loads(&self) -> u64 {
         self.prepared_loads
     }
-    /// Returns `true` when CUDA acceleration is enabled for this VM instance.
+    /// Query whether policy enables CUDA in the diagnostic capability snapshot.
+    /// A disabled policy returns immediately; actual dispatch independently qualifies hardware.
     pub fn uses_cuda(&self) -> bool {
-        self.use_cuda
+        self.acceleration_policy.allow_cuda() && self.hardware_capabilities().cuda_available()
     }
     /// Returns the acceleration policy currently applied to this VM.
     pub fn acceleration_policy(&self) -> AccelerationPolicy {
         self.acceleration_policy
     }
-    /// Returns the hardware accelerators detected on this host.
+    /// Query the diagnostic capability snapshot, discovering and qualifying hardware on the
+    /// first automatic query. Explicit overrides are returned without discovery.
     pub fn hardware_capabilities(&self) -> HardwareCapabilities {
         self.hardware_capabilities
+            .unwrap_or_else(|| *hardware_capabilities_snapshot())
     }
-    /// Override the hardware capabilities snapshot for this VM instance.
+    /// Override this VM's diagnostic capability snapshot without discovering accelerators.
+    /// This does not bypass backend qualification or alter dispatch ownership.
     pub fn set_hardware_capabilities(&mut self, capabilities: HardwareCapabilities) {
-        self.hardware_capabilities = capabilities;
-        self.apply_acceleration_policy(self.acceleration_policy);
+        self.hardware_capabilities = Some(capabilities);
     }
-    /// Update the acceleration policy and recompute hardware usage flags.
+    /// Update the acceleration policy without discovering optional accelerators.
     pub fn set_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         self.apply_acceleration_policy(policy);
     }
-    /// Returns `true` when Metal acceleration is enabled for this VM instance.
+    /// Query whether policy enables Metal in the diagnostic capability snapshot.
+    /// A disabled policy returns immediately; actual dispatch independently qualifies hardware.
     pub fn uses_metal(&self) -> bool {
-        self.use_metal
+        self.acceleration_policy.allow_metal() && self.hardware_capabilities().metal_available()
     }
     /// Current program counter (byte offset into code region).
     pub fn pc(&self) -> u64 {

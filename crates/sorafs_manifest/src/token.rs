@@ -7,6 +7,8 @@ use thiserror::Error;
 pub const STREAM_TOKEN_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.stream-token.signature.v1\0";
 /// Maximum lifetime of a first-release stream token, in seconds.
 pub const STREAM_TOKEN_MAX_TTL_SECS_V1: u64 = 3_600;
+/// Maximum tolerated future issuance skew for an otherwise valid token, in seconds.
+pub const STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
 /// Maximum canonical Norito stream-token frame accepted in the first release.
 pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2_048;
 /// Maximum canonical base64 stream-token header accepted in the first release.
@@ -187,6 +189,24 @@ impl StreamTokenV1 {
             .verify_strict(&message, &sig)
             .map_err(StreamTokenError::SignatureInvalid)
     }
+    /// Verify against the canonical Iroha public key carried by governed signer custody.
+    /// # Errors
+    /// Rejects non-Ed25519, malformed or weak keys and invalid token signatures.
+    pub fn verify_public_key(
+        &self,
+        public_key: &iroha_crypto::PublicKey,
+    ) -> Result<(), StreamTokenError> {
+        let (algorithm, bytes) = public_key.to_bytes();
+        if algorithm != iroha_crypto::Algorithm::Ed25519 {
+            return Err(StreamTokenError::InvalidSignatureFormat);
+        }
+        let bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
+        let key = VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
+        self.verify(&key)
+    }
     /// Compute the canonical hash of the token body for logging or caching.
     pub fn body_hash(&self) -> Result<Blake3Hash, StreamTokenError> {
         let bytes = self.body.to_canonical_bytes()?;
@@ -210,6 +230,19 @@ pub enum StreamTokenError {
 mod tests {
     use super::*;
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SigningKey};
+    #[test]
+    fn canonical_public_key_uses_the_same_strict_signature_verifier() {
+        let signer = SigningKey::from_bytes(&[0x71; 32]);
+        let public = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &signer.verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let mut token = StreamTokenV1::sign(sample_body(), &signer).unwrap();
+        token.verify_public_key(&public).unwrap();
+        token.signature[0] ^= 1;
+        assert!(token.verify_public_key(&public).is_err());
+    }
     const SMALL_ORDER_R: [u8; PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

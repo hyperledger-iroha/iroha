@@ -99,7 +99,7 @@ impl ManagedStore {
 
     pub(super) fn directory(&self, name: &str) -> Result<PrivateDirectory> {
         validate_name(name)?;
-        Ok(PrivateDirectory::open(&self.networks.path().join(name))?)
+        Ok(self.networks.open_child(name)?)
     }
 
     /// Start or reconnect to a named network, preparing its generation only once.
@@ -110,6 +110,57 @@ impl ManagedStore {
     /// # Errors
     /// Invalid input, competing ownership, preparation, binary changes, startup or readiness failure.
     pub fn up(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
+        self.up_environment(request, RootKind::Global, true, |_| Ok(()))
+    }
+
+    /// Start or reconnect to an independently signed private root under the same native owner.
+    ///
+    /// The caller authenticates parent admission separately. This operation prepares and starts
+    /// only the local child validators; it does not publish parent registration or certificates.
+    ///
+    /// # Errors
+    /// Rejects an invalid or changed private identity, unsafe custody, or failed native readiness.
+    pub fn up_private_root(
+        &self,
+        request: &LocalnetRequest,
+        spec: &crate::localnet::PrivateRootSpec,
+    ) -> Result<ManagedStatus> {
+        self.up_private_root_bound(request, spec, |_| Ok(()))
+    }
+
+    pub(super) fn up_private_root_bound(
+        &self,
+        request: &LocalnetRequest,
+        spec: &crate::localnet::PrivateRootSpec,
+        retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
+    ) -> Result<ManagedStatus> {
+        spec.validate()
+            .map_err(|_| Error::Invalid("invalid private-root SNS identity".into()))?;
+        self.up_environment(
+            request,
+            RootKind::Private { spec: spec.clone() },
+            true,
+            retain_context,
+        )
+    }
+
+    /// Restart an existing generation with its exact retained root identity and signer.
+    ///
+    /// # Errors
+    /// Rejects missing or malformed metadata, changed binaries, or failed native readiness.
+    pub fn up_retained(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
+        let directory = self.directory(&request.name)?;
+        let retained = generation::read(&directory)?;
+        self.up_environment(request, retained.root_kind, false, |_| Ok(()))
+    }
+
+    fn up_environment(
+        &self,
+        request: &LocalnetRequest,
+        root_kind: RootKind,
+        allow_preparation: bool,
+        retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
+    ) -> Result<ManagedStatus> {
         transport::supported()?;
         validate_name(&request.name)?;
         if request.startup_timeout.is_zero() || request.startup_timeout > Duration::from_secs(600) {
@@ -123,10 +174,19 @@ impl ManagedStore {
         let directory = self.networks.ensure_child(&request.name)?;
         let _operation = acquire(&directory, "operation.lock", &request.name)?;
         let mut reservations = None;
-        let retained = match directory.read(MANIFEST, MAX_METADATA) {
-            Ok(bytes) => {
-                let retained: RetainedLocalnet = decode(&bytes)?;
-                validate_prepared(&request.name, directory.path(), &retained.prepared)?;
+        let retained = match generation::read(&directory) {
+            Ok(retained) => {
+                if retained.root_kind != root_kind {
+                    return Err(Error::Invalid(
+                        "managed generation has a different immutable root identity".into(),
+                    ));
+                }
+                validate_prepared(
+                    &request.name,
+                    directory.path(),
+                    &retained.prepared,
+                    &root_kind,
+                )?;
                 if retained.launcher.blake3 != launcher.blake3
                     || retained.daemon.blake3 != daemon.blake3
                 {
@@ -134,30 +194,34 @@ impl ManagedStore {
                 }
                 retained
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !allow_preparation {
+                    return Err(Error::Invalid(
+                        "retained managed generation disappeared; refusing to replace its identity"
+                            .into(),
+                    ));
+                }
                 let ports = LocalnetPorts::reserve()?;
-                let bundle = directory.create_child(&format!("generation-{}", random_token()))?;
-                let prepared =
-                    crate::localnet::prepare_localnet(&request.name, bundle.path(), &ports)?;
-                validate_prepared(&request.name, directory.path(), &prepared)?;
-                let retained = RetainedLocalnet {
-                    prepared,
-                    launcher,
-                    daemon,
-                    startup_timeout_ms: u64::try_from(request.startup_timeout.as_millis())
-                        .map_err(|_| Error::Invalid("startup timeout is too large".into()))?,
-                };
-                directory.write_atomic(MANIFEST, &encode(&retained)?, PublishMode::CreateNew)?;
+                let retained =
+                    generation::prepare(&directory, request, root_kind, launcher, daemon, &ports)?;
                 reservations = Some(ports);
                 retained
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
-        let remaining = request
-            .startup_timeout
-            .checked_sub(started.elapsed())
-            .ok_or(Error::Timeout(request.startup_timeout))?;
+        // Binding is serialized with this exact validated generation, before spawn and before
+        // any reset can acquire operation.lock. No callback may activate parent operations.
+        retain_context(&retained.prepared)?;
+        runtime::startup_remaining(started, request.startup_timeout)?;
         if let Ok(status) = exchange(&directory, "status") {
+            let status = observe_startup_status(
+                &directory,
+                &retained.prepared.context,
+                status,
+                started,
+                request.startup_timeout,
+                true,
+            )?;
             if status.phase == ManagedPhase::Ready {
                 self.select(&request.name)?;
                 return Ok(status);
@@ -180,8 +244,6 @@ impl ManagedStore {
                 .arg(self.root())
                 .arg("--name")
                 .arg(&request.name)
-                .arg("--startup-timeout-ms")
-                .arg(remaining.as_millis().to_string())
                 .stdin(Stdio::null())
                 .stdout(output)
                 .stderr(errors);
@@ -196,6 +258,12 @@ impl ManagedStore {
                 })?,
                 PublishMode::Replace,
             )?;
+            // Binary verification and durable status publication consume the caller's same
+            // startup budget; the worker must not receive the earlier, larger remainder.
+            let remaining = runtime::startup_remaining(started, request.startup_timeout)?;
+            command
+                .arg("--startup-timeout-ms")
+                .arg(remaining.as_millis().to_string());
             drop(reservations.take());
             let mut worker = command.spawn()?;
             // Reap this exact child eventually without blocking the CLI after successful startup.
@@ -205,10 +273,21 @@ impl ManagedStore {
         }
         loop {
             if started.elapsed() >= request.startup_timeout {
-                let _ = exchange(&directory, "down");
-                return Err(Error::Timeout(request.startup_timeout));
+                return expire_startup(
+                    &directory,
+                    &retained.prepared.context,
+                    request.startup_timeout,
+                );
             }
             if let Ok(status) = exchange(&directory, "status") {
+                let status = observe_startup_status(
+                    &directory,
+                    &retained.prepared.context,
+                    status,
+                    started,
+                    request.startup_timeout,
+                    false,
+                )?;
                 match status.phase {
                     ManagedPhase::Ready => {
                         self.select(&request.name)?;
@@ -219,6 +298,11 @@ impl ManagedStore {
                 }
             } else if let Ok(bytes) = directory.read(STATUS, MAX_METADATA) {
                 let status: ManagedStatus = decode(&bytes)?;
+                if status.context != retained.prepared.context {
+                    return Err(Error::Invalid(
+                        "retained status belongs to another managed identity".into(),
+                    ));
+                }
                 if status.phase == ManagedPhase::Failed && !runtime_owned(&directory)? {
                     return Ok(status);
                 }
@@ -233,13 +317,24 @@ impl ManagedStore {
     /// Missing context, custody failure, or live ownership without a reachable control endpoint.
     pub fn status(&self, name: &str) -> Result<ManagedStatus> {
         let directory = self.directory(name)?;
+        let retained = generation::read(&directory)?;
+        validate_prepared(
+            name,
+            directory.path(),
+            &retained.prepared,
+            &retained.root_kind,
+        )?;
         if let Ok(status) = exchange(&directory, "status") {
+            if status.context != retained.prepared.context {
+                return Err(Error::Invalid(
+                    "worker status belongs to another managed identity".into(),
+                ));
+            }
             return Ok(status);
         }
         if runtime_owned(&directory)? {
             return Err(Error::Busy(name.into()));
         }
-        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
         match directory.read(STATUS, MAX_METADATA) {
             Ok(bytes) => {
                 let mut last: ManagedStatus = decode(&bytes)?;
@@ -364,8 +459,13 @@ impl ManagedStore {
     /// Missing generation, malformed metadata, escaped paths or unsafe private custody.
     pub fn prepared(&self, name: &str) -> Result<PreparedLocalnet> {
         let directory = self.directory(name)?;
-        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
-        validate_prepared(name, directory.path(), &retained.prepared)?;
+        let retained = generation::read(&directory)?;
+        validate_prepared(
+            name,
+            directory.path(),
+            &retained.prepared,
+            &retained.root_kind,
+        )?;
         Ok(retained.prepared)
     }
 
@@ -383,7 +483,7 @@ impl ManagedStore {
                 .into_string()
                 .map_err(|_| Error::Invalid("invalid context filename".into()))?;
             validate_name(&name)?;
-            if entry.path().join(MANIFEST).try_exists()? {
+            if entry.path().join(generation::DIRECTORY).try_exists()? {
                 names.push(name);
             }
         }
@@ -405,8 +505,13 @@ impl ManagedStore {
             ));
         }
         let directory = self.directory(name)?;
-        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
-        validate_prepared(name, directory.path(), &retained.prepared)?;
+        let retained = generation::read(&directory)?;
+        validate_prepared(
+            name,
+            directory.path(),
+            &retained.prepared,
+            &retained.root_kind,
+        )?;
         let log_name = match peer {
             Some(index) => retained
                 .prepared
@@ -504,16 +609,36 @@ pub(super) fn validate_prepared(
     name: &str,
     root: &Path,
     prepared: &PreparedLocalnet,
+    root_kind: &RootKind,
 ) -> Result<()> {
-    if prepared.context.name != name
-        || prepared.peers.len() != 4
-        || prepared.context.dataspace_id != 0
-        || prepared.context.dataspace_alias != "universal"
-    {
+    let generation_root = root.join(generation::DIRECTORY);
+    let root = generation_root.as_path();
+    if prepared.context.name != name || prepared.peers.len() != 4 {
         return Err(Error::Invalid(
-            "prepared localnet must bind its exact name, universal dataspace and four validators"
-                .into(),
+            "prepared localnet must bind its exact name and four validators".into(),
         ));
+    }
+    match root_kind {
+        RootKind::Global
+            if prepared.context.dataspace_id != 0
+                || prepared.context.dataspace_alias != "universal" =>
+        {
+            return Err(Error::Invalid(
+                "global localnet must bind the universal dataspace".into(),
+            ));
+        }
+        RootKind::Private { spec } => {
+            spec.validate()
+                .map_err(|_| Error::Invalid("invalid retained private-root SNS identity".into()))?;
+            if prepared.context.dataspace_id != spec.dataspace_id.as_u64()
+                || prepared.context.dataspace_alias != spec.dataspace_alias
+            {
+                return Err(Error::Invalid(
+                    "private context differs from its immutable root identity".into(),
+                ));
+            }
+        }
+        RootKind::Global => {}
     }
     let mut endpoints = std::collections::BTreeSet::new();
     let mut configs = std::collections::BTreeSet::new();
@@ -560,6 +685,13 @@ pub(super) fn validate_prepared(
         ));
     }
     iroha_fs::read_private(&prepared.context.client_config, MAX_METADATA)?;
+    if let RootKind::Private { spec } = root_kind {
+        let generation =
+            prepared.context.client_config.parent().ok_or_else(|| {
+                Error::Invalid("private context has no generation directory".into())
+            })?;
+        crate::localnet::verify_private_root(generation, prepared, spec)?;
+    }
     Ok(())
 }
 
@@ -587,4 +719,49 @@ pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<Man
             action: action.into(),
         },
     )
+}
+
+pub(super) fn observe_startup_status(
+    directory: &PrivateDirectory,
+    context: &ManagedContext,
+    status: ManagedStatus,
+    started: Instant,
+    timeout: Duration,
+    initial_observation: bool,
+) -> Result<ManagedStatus> {
+    if status.context != *context {
+        return Err(Error::Invalid(
+            "worker status belongs to another managed identity".into(),
+        ));
+    }
+    // IPC consumes the same foreground budget. Do not select a late Ready. An initial
+    // observation of a previously ready worker belongs to a prior successful invocation:
+    // a slow repeated `up` must not stop that healthy retained network.
+    if started.elapsed() >= timeout {
+        if initial_observation && status.phase == ManagedPhase::Ready {
+            return Err(Error::Timeout(timeout));
+        }
+        return expire_startup(directory, context, timeout);
+    }
+    Ok(status)
+}
+
+pub(super) fn expire_startup(
+    directory: &PrivateDirectory,
+    context: &ManagedContext,
+    timeout: Duration,
+) -> Result<ManagedStatus> {
+    if let Ok(status) = exchange(directory, "startup_expired") {
+        if status.context != *context {
+            return Err(Error::Invalid(
+                "startup cancellation belongs to another managed identity".into(),
+            ));
+        }
+        if status.phase == ManagedPhase::Failed && status.running_peers == 0 {
+            return Ok(status);
+        }
+    }
+    // A worker already shutting down may not answer. Its own same bounded deadline still
+    // publishes the closed failure; never replace that evidence with a fabricated stopped state.
+    Err(Error::Timeout(timeout))
 }

@@ -228,8 +228,8 @@ upload and finalize bytecode, register the locally signed manifest, then submit
 alias target. Torii never accepts deployment private keys and does not expose a
 server-side deploy or deploy-bundle route. The maintained public HTTP paths are:
 
-- `GET /v1/contracts/code/{code_hash}` and
-  `GET /v1/contracts/code-bytes/{code_hash}` for registered artifacts
+- `GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}` and
+  `GET /v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes` for registered artifacts
 - `POST /v1/contracts/aliases/resolve` for the current signed alias binding
 - `POST /v1/contracts/view/batch` for batched read-only contract queries in one
   round-trip

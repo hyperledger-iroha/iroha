@@ -9433,17 +9433,21 @@ mod tests {
             por_recorder_authority: account(1),
             dispute_recorder_authority: account(2),
             token_recorder_authority: account(3),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         };
         ReputationFinalizedProjectionV1 {
             key: ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), height, block_hash)
                 .expect("valid exact key"),
             finalized_at_unix_ms: 1_750_000_000_000 + height,
-            authority_policy: ReputationJournalAuthorityPolicyRecordV1::try_new(
-                policy,
-                account(4),
-                1_700_000_000_000,
-            )
+            authority_policy: ReputationJournalAuthorityPolicyRecordV1::try_new(policy,
+(account(4)).clone(),
+1_700_000_000_000,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: 1_700_000_000_000, authority: (account(4)).clone(),
+    }))
             .expect("valid activated authority policy"),
             proof_outcomes: Vec::new(),
             journal_events: Vec::new(),
@@ -9464,11 +9468,14 @@ mod tests {
         policy.revision = policy.revision.checked_add(1).expect("test revision");
         policy.predecessor_policy_digest = Some(predecessor.authority_policy.policy_digest);
         policy.por_recorder_authority = account(recorder_marker);
-        projection.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(
-            policy,
-            account(4),
-            predecessor.finalized_at_unix_ms.saturating_add(1),
-        )
+        projection.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(policy,
+(account(4)).clone(),
+predecessor.finalized_at_unix_ms.saturating_add(1),
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: predecessor.finalized_at_unix_ms.saturating_add(1), authority: (account(4)).clone(),
+    }))
         .expect("rotated authority policy");
         projection
     }
@@ -9481,7 +9488,14 @@ mod tests {
         policy.revision = policy.revision.checked_add(1).expect("test revision");
         policy.predecessor_policy_digest = Some(predecessor.policy_digest);
         policy.por_recorder_authority = account(recorder_marker);
-        ReputationJournalAuthorityPolicyRecordV1::try_new(policy, account(4), activated_at_unix_ms)
+        ReputationJournalAuthorityPolicyRecordV1::try_new(policy,
+(account(4)).clone(),
+activated_at_unix_ms,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: activated_at_unix_ms, authority: (account(4)).clone(),
+    }))
             .expect("rotated authority policy record")
     }
     fn journal_event(
@@ -12005,11 +12019,14 @@ mod tests {
         let mut rotated = second.authority_policy.policy.clone();
         rotated.revision += 1;
         rotated.predecessor_policy_digest = Some(first.authority_policy.policy_digest);
-        second.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(
-            rotated,
-            account(4),
-            first.finalized_at_unix_ms,
-        )
+        second.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(rotated,
+(account(4)).clone(),
+first.finalized_at_unix_ms,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: first.finalized_at_unix_ms, authority: (account(4)).clone(),
+    }))
         .expect("construct exact successor policy");
         {
             let archive = open_archive(&gc_directory, bounds());
@@ -12314,11 +12331,14 @@ mod tests {
             .expect("remove original predecessor");
             let substituted_policy = first.authority_policy.policy.clone();
             let substituted_activation = first.authority_policy.activated_at_unix_ms;
-            let substituted = ReputationJournalAuthorityPolicyRecordV1::try_new(
-                substituted_policy,
-                account(0x7F),
-                substituted_activation,
-            )
+            let substituted = ReputationJournalAuthorityPolicyRecordV1::try_new(substituted_policy,
+(account(0x7F)).clone(),
+substituted_activation,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: substituted_activation, authority: (account(0x7F)).clone(),
+    }))
             .expect("construct substituted activation metadata");
             let substituted = PersistedReputationAuthorityPolicyV1::try_new(substituted)
                 .expect("persist substituted predecessor");
@@ -12636,11 +12656,14 @@ mod tests {
         let mut different_policy = projection.clone();
         let mut different_body = different_policy.authority_policy.policy.clone();
         different_body.por_recorder_authority = account(0x61);
-        different_policy.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(
-            different_body,
-            account(0x62),
-            1_700_000_000_000,
-        )
+        different_policy.authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(different_body,
+(account(0x62)).clone(),
+1_700_000_000_000,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: 1_700_000_000_000, authority: (account(0x62)).clone(),
+    }))
         .expect("construct different genesis policy");
         assert!(matches!(
             archive.insert(different_policy),

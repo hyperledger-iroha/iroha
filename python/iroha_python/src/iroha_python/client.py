@@ -7905,6 +7905,25 @@ class ContractArtifactId:
         return f"/v1/contracts/artifacts/{self.dataspace_id}/{self.code_hash}"
 
 
+def _decode_contract_artifact_bytes(encoded: Any, artifact_id: ContractArtifactId) -> bytes:
+    """Validate bounded canonical base64 against the complete scoped artifact digest."""
+    if not isinstance(encoded, str):
+        raise TypeError("contract bytes must be a base64 string")
+    if len(encoded) > 4 * ((16 * 1024 * 1024 + 2) // 3):
+        raise ValueError("contract bytes exceed the artifact limit")
+    try:
+        code = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("contract bytes must be canonical base64") from error
+    if base64.b64encode(code).decode("ascii") != encoded or len(code) > 16 * 1024 * 1024:
+        raise ValueError("contract bytes are noncanonical or exceed the artifact limit")
+    digest = bytearray(hashlib.blake2b(b"iroha:ivm:contract-artifact:v1\0" + code, digest_size=32).digest())
+    digest[-1] |= 1
+    if digest.hex() != artifact_id.code_hash:
+        raise RuntimeError("contract bytes digest differs from the requested artifact")
+    return code
+
+
 @dataclass(frozen=True)
 class ContractManifestRecord:
     """Contract manifest bound to one exact network and dataspace artifact."""
@@ -7914,6 +7933,7 @@ class ContractManifestRecord:
     manifest: ContractManifest
     code_hash: Optional[str]
     abi_hash: Optional[str]
+    code_bytes: Optional[bytes] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ContractManifestRecord":
@@ -7921,7 +7941,7 @@ class ContractManifestRecord:
             raise TypeError("manifest response must be an object")
         _contract_exact_fields(
             payload,
-            ("network_id", "artifact_id", "manifest", "code_hash", "abi_hash"),
+            ("network_id", "artifact_id", "manifest", "code_hash", "abi_hash", "code_bytes"),
             "manifest response",
         )
         manifest_payload = payload.get("manifest")
@@ -7945,8 +7965,10 @@ class ContractManifestRecord:
         artifact_id = ContractArtifactId.from_payload(payload.get("artifact_id"))
         if artifact_id.code_hash != manifest.code_hash:
             raise TypeError("artifact_id.code_hash differs from the manifest hash")
+        encoded = payload.get("code_bytes")
+        code_bytes = None if encoded is None else _decode_contract_artifact_bytes(encoded, artifact_id)
         return cls(network_id=network_id, artifact_id=artifact_id,
-                   manifest=manifest, code_hash=code_hash, abi_hash=abi_hash)
+                   manifest=manifest, code_hash=code_hash, abi_hash=abi_hash, code_bytes=code_bytes)
 
 
 @dataclass(frozen=True)
@@ -20737,19 +20759,7 @@ class ToriiClient(
         returned_artifact = ContractArtifactId.from_payload(payload["artifact_id"])
         if payload["network_id"] != expected_network or returned_artifact != artifact_id:
             raise RuntimeError("contract bytes response substitutes network or artifact identity")
-        encoded = payload["code_b64"]
-        if not isinstance(encoded, str):
-            raise TypeError("contract bytes code_b64 must be a string")
-        try:
-            code = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as error:
-            raise ValueError("contract bytes code_b64 must be canonical base64") from error
-        if base64.b64encode(code).decode("ascii") != encoded or len(code) > 16 * 1024 * 1024:
-            raise ValueError("contract bytes are noncanonical or exceed the artifact limit")
-        digest = bytearray(hashlib.blake2b(b"iroha:ivm:contract-artifact:v1\0" + code, digest_size=32).digest())
-        digest[-1] |= 1
-        if digest.hex() != artifact_id.code_hash:
-            raise RuntimeError("contract bytes digest differs from the requested artifact")
+        _decode_contract_artifact_bytes(payload["code_b64"], artifact_id)
         return payload
 
     # ------------------------------------------------------------------

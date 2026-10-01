@@ -8,6 +8,74 @@ use std::{
 include!("../runtime_artifact_tests.rs");
 
 #[test]
+fn parent_admission_is_explicit_and_exclusive_to_global_localnets() {
+    let seed = b"localnet-private-root-admission";
+    let peers = build_peers(4, Some(seed), 8_080, 13_337).unwrap();
+    let (genesis_public_key, _) = generate_genesis_key_pair(Some(seed), GENESIS_SEED).unwrap();
+    let chain_id = "disposable-parent-localnet";
+    let original = generate_raw_genesis(
+        &genesis_public_key,
+        SumeragiConsensusMode::Permissioned,
+        chain_id,
+        &peers,
+    )
+    .unwrap();
+    let policy_id = PrivateDataspaceAdmissionPolicy::parameter_id();
+    assert!(
+        !original
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+    let enabled = append_localnet_private_root_admission_policy(original.clone(), chain_id)
+        .unwrap()
+        .effective_parameters()
+        .unwrap();
+    assert_eq!(
+        PrivateDataspaceAdmissionPolicy::from_custom_parameter(
+            enabled.custom().get(&policy_id).unwrap()
+        )
+        .unwrap(),
+        PrivateDataspaceAdmissionPolicy {
+            max_registered_roots: 64,
+            max_roots_per_owner: 8,
+        }
+    );
+    let public =
+        append_localnet_private_root_admission_policy(original.clone(), PUBLIC_TAIRA_CHAIN_ID)
+            .unwrap();
+    assert!(
+        !public
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+
+    let mut context = original.sumeragi_context_parameters().clone();
+    context.root_scope = SumeragiRootScope::Dataspace {
+        parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::new(b"parent admission fixture")),
+        ),
+        dataspace_id: DataSpaceId::new(u64::MAX),
+    };
+    let private = original
+        .into_builder()
+        .with_sumeragi_context_parameters(context)
+        .build_raw()
+        .unwrap();
+    let private = append_localnet_private_root_admission_policy(private, chain_id).unwrap();
+    assert!(
+        !private
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+}
+
+#[test]
 fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(
         known_chain_discriminant_for_chain_id(PUBLIC_TAIRA_CHAIN_ID).unwrap(),
@@ -949,6 +1017,15 @@ fn localnet_genesis_for_opts_and_client(
         )
         .expect("extend genesis");
     }
+    genesis = append_localnet_service_accounts(genesis, &[client_account_id])
+        .expect("register generated localnet fixture service account");
+    genesis = append_localnet_service_fee_bootstrap(
+        genesis,
+        &genesis_account_id,
+        client_account_id,
+        client_account_id,
+    )
+    .expect("fund generated localnet fixture services");
     genesis = apply_parameter_overrides(
         genesis,
         opts.peers,

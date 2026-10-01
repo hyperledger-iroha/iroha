@@ -20,6 +20,7 @@ fn issued() -> StreamTokenV1 {
             PROVIDER,
             "sorafs.sf1@1.0.0".into(),
             TokenOverrides::default(),
+            None,
         )
         .expect("real four-signature and completed-observer fixture")
         .token

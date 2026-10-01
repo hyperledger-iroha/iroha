@@ -612,7 +612,8 @@ pub fn configured_initial_genesis_state(
         &mut world,
         &provisional.0,
         &nexus.dataspace_catalog,
-    );
+    )
+    .map_err(|error| eyre!("initialize authenticated genesis SNS policies: {error}"))?;
     // Even the generic default profile needs an authenticated configured catalog.
     // A blank test Kura has no production network/geometry binding to restore.
     let kura_config = config.map_or_else(staged_default_kura, |config| config.kura.clone());
@@ -835,6 +836,7 @@ mod tests {
         },
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::chain::ChainId;
     use iroha_model_base::peer::PeerId;
 
     fn default_test_topology() -> Vec<GenesisTopologyEntry> {

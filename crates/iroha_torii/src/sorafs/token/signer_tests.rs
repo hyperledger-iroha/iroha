@@ -333,6 +333,7 @@ fn issuer_signs_exact_payload_and_verifies_before_release() {
             [0x11; 32],
             "sorafs.sf1@1.0.0".to_owned(),
             TokenOverrides::default(),
+            None,
         )
         .expect("issue verified token");
     let payloads = signer
@@ -379,6 +380,71 @@ fn issuer_signs_exact_payload_and_verifies_before_release() {
     );
 }
 #[test]
+fn admitted_account_policy_limits_the_shared_issuer_and_isolates_quotas() {
+    use sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1;
+    let (issuer, _) = issuer_and_signer(5, TestSignerMode::Sign);
+    let public =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
+            .unwrap();
+    let account = iroha_data_model::account::AccountId::new(public.public_key().clone());
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"account quota network",
+        )),
+    );
+    let subject = StreamTokenQuotaSubject::from_authenticated_account(network, &account);
+    assert_ne!(
+        subject,
+        StreamTokenQuotaSubject::from_authenticated_operator(public.public_key())
+    );
+    let policy = RegisteredAccountReadV1 {
+        https_host: "storage.example.com".into(),
+        https_port: 443,
+        ttl_secs: 10,
+        max_streams: 1,
+        rate_limit_bytes: 1024,
+        requests_per_minute: 1,
+    };
+    let issue = issuer
+        .issue_token(
+            subject,
+            vec![0xAA],
+            [0x11; 32],
+            "sorafs.sf1@1.0.0".into(),
+            TokenOverrides::default(),
+            Some(&policy),
+        )
+        .unwrap();
+    assert_eq!(issue.token.body.max_streams, 1);
+    assert_eq!(issue.token.body.rate_limit_bytes, 1024);
+    assert_eq!(issue.token.body.ttl_epoch - issue.token.body.issued_at, 10);
+    assert_eq!(issue.remaining_quota, 0);
+    assert!(matches!(
+        issuer.issue_token(
+            subject,
+            vec![0xAA],
+            [0x11; 32],
+            "sorafs.sf1@1.0.0".into(),
+            TokenOverrides::default(),
+            Some(&policy)
+        ),
+        Err(StreamTokenIssuerError::IssuanceQuotaExceeded { limit: 1, .. })
+    ));
+    let mut excessive = TokenOverrides::default();
+    excessive.max_streams = Some(2);
+    assert!(matches!(
+        issuer.issue_token(
+            subject,
+            vec![0xAA],
+            [0x11; 32],
+            "sorafs.sf1@1.0.0".into(),
+            excessive,
+            Some(&policy)
+        ),
+        Err(StreamTokenIssuerError::InvalidPolicy { .. })
+    ));
+}
+#[test]
 fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
     for (label, call, expected_sign_calls) in [
         ("before signing", 2, 0),
@@ -399,7 +465,8 @@ fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
                     vec![0xAA],
                     PROVIDER,
                     "sorafs.sf1@1.0.0".into(),
-                    TokenOverrides::default()
+                    TokenOverrides::default(),
+                    None,
                 ),
                 Err(StreamTokenIssuerError::SignerEvidenceInvalid)
             ),
@@ -416,7 +483,8 @@ fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
                 vec![0xAA],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
         ));
@@ -437,6 +505,7 @@ fn unavailable_completed_proof_source_prevents_provider_call() {
             PROVIDER,
             "sorafs.sf1@1.0.0".into(),
             TokenOverrides::default(),
+            None,
         ),
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)
     ));
@@ -485,6 +554,7 @@ fn runtime_signer_probe_unavailability_before_signing_is_payload_free() {
             PROVIDER,
             "sorafs.sf1@1.0.0".into(),
             TokenOverrides::default(),
+            None,
         )
         .expect_err("fresh observer unavailable");
     assert!(matches!(
@@ -514,6 +584,7 @@ fn runtime_signer_failures_are_payload_free_and_consume_reserved_quota() {
                 [0x11; 32],
                 "sorafs.sf1@1.0.0".to_owned(),
                 TokenOverrides::default(),
+                None,
             )
             .expect_err("runtime signer failure must fail issuance");
         assert_eq!(
@@ -529,6 +600,7 @@ fn runtime_signer_failures_are_payload_free_and_consume_reserved_quota() {
                 [0x11; 32],
                 "sorafs.sf1@1.0.0".to_owned(),
                 TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
         ));
@@ -550,6 +622,7 @@ fn invalid_runtime_signer_output_never_releases_a_token() {
                 [0x11; 32],
                 "sorafs.sf1@1.0.0".to_owned(),
                 TokenOverrides::default(),
+                None,
             )
             .expect_err("invalid signer_backend output cannot release a token");
         match mode {
@@ -580,6 +653,7 @@ fn ambiguous_completion_recovers_exact_body_once_and_preserves_reserved_quota() 
             PROVIDER,
             "sorafs.sf1@1.0.0".into(),
             TokenOverrides::default(),
+            None,
         );
         match mode {
             TestSignerMode::Ambiguous => {
@@ -605,7 +679,8 @@ fn ambiguous_completion_recovers_exact_body_once_and_preserves_reserved_quota() 
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
         ));
@@ -632,7 +707,8 @@ fn signed_completed_observations_require_exact_receipt_and_separate_release_phas
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::SignerEvidenceInvalid)
         ));
@@ -662,7 +738,8 @@ fn valid_same_key_renewal_cannot_relabel_a_pending_operation() {
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::SignerEvidenceInvalid)
         ));
@@ -677,7 +754,8 @@ fn valid_same_key_renewal_cannot_relabel_a_pending_operation() {
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
         ));
@@ -747,6 +825,7 @@ fn independent_local_finality_and_clock_fences_reject_signed_but_ineligible_hist
             PROVIDER,
             "sorafs.sf1@1.0.0".into(),
             TokenOverrides::default(),
+            None,
         );
         if fault == 2 {
             assert!(matches!(
@@ -794,6 +873,7 @@ fn token_expiry_during_finality_read_is_rechecked_before_release() {
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
                 short.clone(),
+                None,
             )
             .expect("every signed fixture is eligible before its exclusive deadline");
         let signer = SignedFixture::with_expiry_case(case);
@@ -816,7 +896,8 @@ fn token_expiry_during_finality_read_is_rechecked_before_release() {
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                short
+                short,
+                None,
             ),
             Err(StreamTokenIssuerError::SignerEvidenceInvalid)
         ));
@@ -855,7 +936,8 @@ fn signed_lower_historical_hashes_require_local_membership_even_with_valid_curre
                 vec![0xaa],
                 PROVIDER,
                 "sorafs.sf1@1.0.0".into(),
-                TokenOverrides::default()
+                TokenOverrides::default(),
+                None,
             ),
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
         ));
@@ -885,6 +967,7 @@ fn authenticated_subject_quota_is_enforced() {
             provider,
             "sorafs.sf1@1.0.0".to_string(),
             overrides.clone(),
+            None,
         )
         .expect("first token");
     assert_eq!(first.remaining_quota, 1);
@@ -895,6 +978,7 @@ fn authenticated_subject_quota_is_enforced() {
             provider,
             "sorafs.sf1@1.0.0".to_string(),
             overrides.clone(),
+            None,
         )
         .expect("second token");
     assert_eq!(second.remaining_quota, 0);
@@ -905,6 +989,7 @@ fn authenticated_subject_quota_is_enforced() {
             provider,
             "sorafs.sf1@1.0.0".to_string(),
             overrides.clone(),
+            None,
         )
         .expect_err("quota exceeded");
     assert!(matches!(
@@ -931,6 +1016,7 @@ fn authenticated_subject_quota_is_enforced() {
             provider,
             "sorafs.sf1@1.0.0".to_string(),
             overrides,
+            None,
         )
         .expect("quota reset");
     assert_eq!(refreshed.remaining_quota, 1);
@@ -980,6 +1066,7 @@ fn zero_and_above_ceiling_overrides_fail_closed() {
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
                 overrides,
+                None,
             ),
             Err(StreamTokenIssuerError::InvalidPolicy { .. })
         ));
@@ -991,6 +1078,7 @@ fn zero_and_above_ceiling_overrides_fail_closed() {
             provider,
             "sorafs.sf1@1.0.0".to_string(),
             TokenOverrides::default(),
+            None,
         )
         .expect("invalid requests must not consume issuance quota");
     assert_eq!(valid.remaining_quota, 1);
@@ -1006,6 +1094,7 @@ fn issuance_state_capacity_fails_closed_and_prunes_idle_subjects() {
                 PROVIDER,
                 "sorafs.sf1@1.0.0".to_string(),
                 TokenOverrides::default(),
+                None,
             )
             .expect("client admitted");
     }
@@ -1016,6 +1105,7 @@ fn issuance_state_capacity_fails_closed_and_prunes_idle_subjects() {
             PROVIDER,
             "sorafs.sf1@1.0.0".to_string(),
             TokenOverrides::default(),
+            None,
         ),
         Err(StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { capacity: 2 })
     ));
@@ -1036,6 +1126,7 @@ fn issuance_state_capacity_fails_closed_and_prunes_idle_subjects() {
             PROVIDER,
             "sorafs.sf1@1.0.0".to_string(),
             TokenOverrides::default(),
+            None,
         )
         .expect("stale client pruned before capacity check");
 }
@@ -1080,6 +1171,7 @@ fn concurrent_issuance_never_exceeds_authenticated_subject_budget() {
                 PROVIDER,
                 "sorafs.sf1@1.0.0".to_string(),
                 TokenOverrides::default(),
+                None,
             ) {
                 Ok(_) => {
                     successes.fetch_add(1, Ordering::Relaxed);
@@ -1112,6 +1204,7 @@ fn poisoned_issuance_state_fails_closed() {
             PROVIDER,
             "sorafs.sf1@1.0.0".to_string(),
             TokenOverrides::default(),
+            None,
         ),
         Err(StreamTokenIssuerError::IssuanceQuotaStateUnavailable)
     ));

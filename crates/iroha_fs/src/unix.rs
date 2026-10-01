@@ -12,6 +12,9 @@ use std::{
 #[cfg(target_vendor = "apple")]
 #[path = "apple_acl.rs"]
 mod apple_acl;
+#[cfg(target_vendor = "apple")]
+#[path = "apple_inventory.rs"]
+mod apple_inventory;
 
 #[derive(Debug)]
 struct Link {
@@ -103,13 +106,16 @@ fn unchanged(before: &fs::Metadata, after: &fs::Metadata) -> bool {
         && before.ctime_nsec() == after.ctime_nsec()
 }
 
+#[path = "unix/private_files.rs"]
+mod private_files;
+
 impl Directory {
     pub(super) fn open(path: &Path, create: bool) -> io::Result<Self> {
-        Self::open_with_policy(path, create, true, 0)
+        Self::open_with_policy(path, create, true, 0, true)
     }
 
     pub(super) fn open_owned(path: &Path, create: bool) -> io::Result<Self> {
-        let mut directory = Self::open_with_policy(path, create, false, 0)?;
+        let mut directory = Self::open_with_policy(path, create, false, 0, true)?;
         if directory.current().file.metadata()?.uid() != rustix::process::geteuid().as_raw() {
             return Err(denied("writable directory requires current ownership"));
         }
@@ -121,7 +127,7 @@ impl Directory {
     }
 
     pub(super) fn open_reader(path: &Path) -> io::Result<Self> {
-        Self::open_with_policy(path, false, false, 0)
+        Self::open_with_policy(path, false, false, 0, true)
     }
 
     pub(super) fn identity(&self) -> io::Result<FileIdentity> {
@@ -157,6 +163,7 @@ impl Directory {
         create: bool,
         private: bool,
         redirects: u8,
+        allow_system_aliases: bool,
     ) -> io::Result<Self> {
         if redirects > 8 {
             return Err(denied("too many operating-system directory links"));
@@ -206,8 +213,9 @@ impl Directory {
                 Err(error) => {
                     // Only immutable system-owned aliases (e.g. macOS /var -> /private/var)
                     // may redirect traversal. Restart and validate the complete resolved ancestry.
-                    if let Ok(link) =
-                        rustix::fs::statat(&parent.file, name, AtFlags::SYMLINK_NOFOLLOW)
+                    if allow_system_aliases
+                        && let Ok(link) =
+                            rustix::fs::statat(&parent.file, name, AtFlags::SYMLINK_NOFOLLOW)
                         && FileType::from_raw_mode(link.st_mode) == FileType::Symlink
                         && link.st_uid == 0
                         && parent.file.metadata()?.uid() == 0
@@ -217,7 +225,13 @@ impl Directory {
                         for tail in &parts[index + 1..] {
                             resolved.push(tail.as_os_str());
                         }
-                        return Self::open_with_policy(&resolved, create, private, redirects + 1);
+                        return Self::open_with_policy(
+                            &resolved,
+                            create,
+                            private,
+                            redirects + 1,
+                            true,
+                        );
                     }
                     return Err(error.into());
                 }
@@ -363,6 +377,8 @@ impl Directory {
             before,
             private: private || create_new,
             writable: create_new,
+            read_only: false,
+            publishable: create_new,
         };
         retained.revalidate()?;
         if create_new {
@@ -502,6 +518,49 @@ impl Directory {
         Ok(file)
     }
 
+    pub(super) fn open_exact_lock(&self, name: &OsStr, create_new: bool) -> io::Result<File> {
+        self.revalidate()?;
+        let mut flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        if create_new {
+            flags |= OFlags::CREATE | OFlags::EXCL;
+        }
+        let file = File::from(rustix::fs::openat(
+            &self.current().file,
+            name,
+            flags,
+            Mode::from_raw_mode(0o600),
+        )?);
+        validate_file(&file, true)?;
+        if identity(&self.open_read(name)?)? != identity(&file)? {
+            return Err(changed());
+        }
+        if create_new {
+            file.sync_all()?;
+            self.current().file.sync_all()?;
+        }
+        self.revalidate()?;
+        Ok(file)
+    }
+
+    pub(super) fn remove_empty(mut self) -> io::Result<()> {
+        self.revalidate()?;
+        if self.links.len() < 2 {
+            return Err(denied("filesystem root cannot be removed"));
+        }
+        if Arc::strong_count(self.links.last().ok_or_else(changed)?) != 1 {
+            return Err(denied("directory removal has live descendant handles"));
+        }
+        let current = self.links.pop().ok_or_else(changed)?;
+        let parent = self.links.last().ok_or_else(changed)?;
+        rustix::fs::unlinkat(
+            &parent.file,
+            current.path.file_name().ok_or_else(changed)?,
+            AtFlags::REMOVEDIR,
+        )?;
+        parent.file.sync_all()?;
+        self.revalidate()
+    }
+
     pub(super) fn open_ownership_lock(&self, name: &OsStr) -> io::Result<File> {
         self.open_mutable(name, false)
     }
@@ -617,6 +676,8 @@ pub struct RetainedFile {
     before: fs::Metadata,
     private: bool,
     writable: bool,
+    read_only: bool,
+    publishable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -677,6 +738,9 @@ impl RetainedFile {
     pub(super) fn revalidate(&self) -> io::Result<()> {
         self.directory.revalidate()?;
         let after = validate_file(&self.file, self.private)?;
+        if self.read_only {
+            private_files::validate_read_only(&self.file)?;
+        }
         if identity(&self.file)? != self.identity()?
             || (!self.writable && !unchanged(&self.before, &after))
         {
@@ -715,5 +779,5 @@ pub fn read_external(
     maximum: usize,
     private: bool,
 ) -> io::Result<Zeroizing<Vec<u8>>> {
-    Directory::open_with_policy(parent, false, false, 0)?.read(name, maximum, private)
+    Directory::open_with_policy(parent, false, false, 0, true)?.read(name, maximum, private)
 }

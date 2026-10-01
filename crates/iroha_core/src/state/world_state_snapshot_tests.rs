@@ -10,6 +10,157 @@ use iroha_model_base::domain::DomainId;
 use std::cell::Cell;
 
 #[test]
+fn provider_snapshot_publishes_original_current_heads_and_refuses_an_obsolete_cut() {
+    use crate::smartcontracts::isi::sorafs_provider_admission::test_fixture::{
+        NOW, ProviderAdmissionTestFixtureV1,
+    };
+    use iroha_data_model::{
+        sorafs::provider_admission::{
+            discovery::{ProviderDiscoveryProofRefV1, ProviderDiscoveryProofV1},
+            history::AdmissionHistoryRecordV1,
+        },
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier},
+    };
+    let mut fixture = ProviderAdmissionTestFixtureV1::new();
+    fixture.admit();
+    let chain = fixture.chain();
+    let tip = chain.committed(chain.height());
+    let validators = chain
+        .validators()
+        .iter()
+        .map(|(peer, pop)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(
+        chain.genesis(),
+        &chain.state().chain_id_ref().to_string(),
+        validators,
+    )
+    .unwrap();
+    let genesis_proof = crate::sumeragi::finality::build_proof(&chain.state().view(), 1).unwrap();
+    verifier.verify(&genesis_proof).unwrap();
+    let proof =
+        crate::sumeragi::finality::build_proof(&chain.state().view(), chain.height()).unwrap();
+    let verified = verifier.verify(&proof).unwrap();
+    let mut advert: sorafs_manifest::ProviderAdvertV1 =
+        norito::decode_from_bytes(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sorafs_manifest/provider_admission/advert_v1.to"
+        )))
+        .unwrap();
+    let key = iroha_crypto::KeyPair::from_private_key(
+        iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x21; 32])
+            .unwrap(),
+    )
+    .unwrap();
+    advert.network_id = *chain.network_id().as_bytes();
+    advert.body = fixture.envelope().advert_body.clone();
+    advert.issued_at = NOW;
+    advert.expires_at = NOW + 60;
+    advert.signature.signature = iroha_crypto::Signature::new(
+        key.private_key(),
+        &advert.signature_payload_bytes().unwrap(),
+    )
+    .payload()
+    .to_vec();
+    let advert = norito::encode_canonical(&advert).unwrap();
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let selected = chain
+        .state()
+        .with_native_provider_admission_snapshot_v1(
+            &tip,
+            fixture.provider(),
+            &budget,
+            |originals| {
+                assert_eq!(
+                    originals.world.root().unwrap(),
+                    tip.commitment().execution.world_state_root
+                );
+                assert_eq!(
+                    originals.world.schema_hash,
+                    State::native_world_schema_hash_v1().unwrap()
+                );
+                let head = AdmissionHistoryRecordV1::decode_frame(originals.provider_head).unwrap();
+                assert_eq!(head.owner.as_ref(), Some(originals.owner));
+                assert!(!head.revoked);
+                assert!(originals.provider_predecessor.is_none());
+                assert!(originals.council_predecessor.is_none());
+                let response = ProviderDiscoveryProofRefV1::new(
+                    originals.world,
+                    originals.council_head,
+                    originals.council_predecessor,
+                    originals.provider_head,
+                    originals.provider_predecessor,
+                    originals.owner,
+                    &advert,
+                    originals.stream_token,
+                );
+                norito::encode_canonical(&response).map_err(|e| e.to_string())
+            },
+        )
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), 0);
+    let selected = ProviderDiscoveryProofV1::decode_frame(&selected).unwrap();
+    selected
+        .verify(
+            chain.network_id(),
+            fixture.provider(),
+            State::native_world_schema_hash_v1().unwrap(),
+            &verified,
+            NOW + 1,
+        )
+        .unwrap();
+    fixture.revoke();
+    let called = Cell::new(false);
+    assert!(
+        fixture
+            .state()
+            .with_native_provider_admission_snapshot_v1(&tip, fixture.provider(), &budget, |_| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+}
+
+#[test]
+fn provider_snapshot_missing_authority_and_insufficient_budget_never_call_consumer() {
+    use crate::smartcontracts::isi::sorafs_provider_admission::test_fixture::ProviderAdmissionTestFixtureV1;
+    let mut fixture = ProviderAdmissionTestFixtureV1::new();
+    fixture.admit();
+    let tip = fixture.chain().committed(fixture.chain().height());
+    let called = Cell::new(false);
+    for (provider, bytes) in [
+        (fixture.provider(), 0),
+        // Snapshot storage can fit while native authority decoder scratch cannot.
+        (fixture.provider(), 17 * 1024 * 1024),
+        (
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xFA; 32]),
+            32 * 1024 * 1024,
+        ),
+    ] {
+        assert!(
+            fixture
+                .state()
+                .with_native_provider_admission_snapshot_v1(
+                    &tip,
+                    provider,
+                    &AllocationBudget::new(bytes),
+                    |_| {
+                        called.set(true);
+                        Ok(())
+                    }
+                )
+                .is_err()
+        );
+    }
+    assert!(!called.get());
+}
+
+#[test]
 fn complete_cold_snapshot_matches_original_accumulator_and_registry() {
     let world = World::new();
     let overlay = world.block();
@@ -197,6 +348,111 @@ fn asset_chain() -> (CertifiedTestChain, AssetDefinitionId) {
     let mut chain = CertifiedTestChain::start(config).unwrap();
     chain.commit_at(2_000, Vec::new());
     (chain, asset)
+}
+
+#[test]
+fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunded_cut() {
+    use iroha_data_model::{
+        sns::lease::{SnsLeaseProofRefV1, SnsLeaseProofV1},
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier},
+    };
+    let (mut chain, _) = asset_chain();
+    let selector =
+        crate::sns::selector_for_domain(&DomainId::try_new("snapshot", "universal").unwrap())
+            .unwrap();
+    let record = crate::sns::record_by_selector(chain.state().view().world(), &selector)
+        .unwrap()
+        .unwrap();
+    let validators = chain
+        .validators()
+        .iter()
+        .map(|(peer, pop)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let mut verifier = SumeragiFinalityVerifier::new(
+        chain.genesis(),
+        &chain.state().chain_id_ref().to_string(),
+        validators,
+    )
+    .unwrap();
+    verifier
+        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 1).unwrap())
+        .unwrap();
+    let verified = verifier
+        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 2).unwrap())
+        .unwrap();
+    let tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let bytes = chain
+        .state()
+        .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |world, bytes| {
+            assert_eq!(
+                world.root().unwrap(),
+                tip.commitment().execution.world_state_root
+            );
+            norito::encode_canonical(&SnsLeaseProofRefV1::new(world, bytes))
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), 0);
+    let proof = SnsLeaseProofV1::decode_frame(&bytes).unwrap();
+    assert_eq!(
+        proof
+            .verify(
+                chain.network_id(),
+                &selector,
+                &record.owner,
+                State::native_world_schema_hash_v1().unwrap(),
+                &verified,
+                2_000
+            )
+            .unwrap()
+            .record(),
+        &record
+    );
+    let called = Cell::new(false);
+    assert!(
+        chain
+            .state()
+            .with_native_sns_lease_snapshot_v1(
+                &tip,
+                &selector,
+                &AllocationBudget::new(0),
+                |_, _| {
+                    called.set(true);
+                    Ok(())
+                }
+            )
+            .is_err()
+    );
+    let missing = iroha_data_model::sns::NameSelectorV1::new(
+        iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
+        "missing",
+    )
+    .unwrap();
+    assert!(
+        chain
+            .state()
+            .with_native_sns_lease_snapshot_v1(&tip, &missing, &budget, |_, _| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    chain.commit_at(3_000, vec![]);
+    assert!(
+        chain
+            .state()
+            .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |_, _| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]

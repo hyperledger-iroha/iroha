@@ -193,6 +193,9 @@ pub use iroha_data_model::block::lane_admission::{
 /// Deterministic routing resolution failure against configured Nexus catalogs.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RoutingResolveError {
+    /// Immutable signed-genesis root scope is missing, malformed, or unsupported.
+    #[error("routing requires authenticated signed-genesis root scope")]
+    UnauthenticatedRootScope,
     /// An atomic settlement cannot be routed because its signed movement list is invalid.
     #[error("invalid atomic settlement movements: {reason}")]
     InvalidAtomicSettlement {
@@ -328,6 +331,7 @@ impl RoutingResolveError {
     #[must_use]
     pub const fn as_label(&self) -> &'static str {
         match self {
+            Self::UnauthenticatedRootScope => "unauthenticated_root_scope",
             Self::InvalidAtomicSettlement { .. } => "invalid_atomic_settlement",
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
@@ -2734,6 +2738,36 @@ pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
                 .is::<iroha_data_model::isi::SetParameter>()
             || instruction_routes_to_universal_dataspace(instruction),
     })
+}
+
+/// Resolve one instruction solely for an authenticated original private genesis source.
+/// Private genesis initializes its own alias registry; ordinary alias acquisition remains global.
+/// This classification grants no authority: callers must retain the original genesis capability.
+pub(crate) fn private_genesis_instruction_target<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspaces: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    if let Some(alias) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+    {
+        return Ok(NativeExecutionTarget {
+            dataspace: Some(alias.intent.target().dataspace_id()),
+            global: false,
+        });
+    }
+    if instruction
+        .as_any()
+        .is::<iroha_data_model::isi::SetParameter>()
+    {
+        return Ok(NativeExecutionTarget {
+            dataspace: None,
+            global: false,
+        });
+    }
+    native_instruction_execution_target(instruction, dataspaces, world, ledger_time_ms)
 }
 
 /// Return the concrete dataspace participants of a native AMX candidate.
@@ -9147,6 +9181,7 @@ mod sccp_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::World;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{

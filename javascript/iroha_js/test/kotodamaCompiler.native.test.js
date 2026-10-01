@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { normalizeCompilerResult } from "../src/kotodamaCompiler/normalize.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import { makeNativeTest, nativeBinding } from "./helpers/native.js";
 
 const nativeTest = makeNativeTest(test, { require: "compileKotodama" });
@@ -18,6 +20,32 @@ nativeTest("native Kotodama success uses an explicit null diagnostics sentinel",
   assert.notEqual(raw.output, null);
   assert.equal(raw.diagnosticsJson, null);
   assert.equal(normalizeCompilerResult(raw).ok, true);
+});
+
+nativeTest("native Kotodama compiler matches the generated current Rust artifact fixture", async () => {
+  const fixture = parseStrictLosslessIntegerJson(
+    readFileSync(new URL("./fixtures/current_rust_contract_artifact.json", import.meta.url), "utf8"),
+    "current Rust contract artifact fixture",
+  );
+  const source = readFileSync(
+    new URL("./fixtures/current_rust_contract_artifact.ko", import.meta.url),
+    "utf8",
+  );
+  const raw = await nativeBinding.compileKotodama({ source, sourceName: fixture.source, zk: false });
+  assert.equal(raw.ok, true, raw.diagnosticsJson);
+  const result = normalizeCompilerResult(raw);
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    Buffer.from(result.output.artifactBytes),
+    Buffer.from(fixture.artifact_base64, "base64"),
+    "regenerate the fixture with the current Rust compiler",
+  );
+  assert.equal(result.output.codeHashHex, fixture.artifact_semantics.code_hash_hex);
+  assert.equal(result.output.abiHashHex, fixture.artifact_semantics.abi_hash_hex);
+  assert.deepEqual(
+    parseStrictLosslessIntegerJson(raw.output.manifestJson, "native compiler manifest"),
+    fixture.manifest,
+  );
 });
 
 nativeTest("native Kotodama failure uses an explicit null output sentinel", async () => {
@@ -166,22 +194,57 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
   // Keep the call unchanged and alter only one declaration marker at a time.
   const signature = "fn combine(int _ value, int minimum, int maximum)";
   assert.equal(source.split(signature).length, 2);
-  for (const [replacement, expectedCode] of [
-    ["fn combine(int value, int minimum, int maximum)", "E_NAMED_ARGUMENTS_REQUIRED"],
-    ["fn combine(int _ value, int _ minimum, int maximum)", "E_POSITIONAL_ARGUMENT_REQUIRED"],
-  ]) {
-    const rejectedRaw = await nativeBinding.compileKotodama({
-      ...request, source: source.replace(signature, replacement),
-    });
-    assert.equal(rejectedRaw.ok, false, replacement);
-    assert.equal(rejectedRaw.output, null);
-    const rejected = normalizeCompilerResult(rejectedRaw);
-    assert.equal(rejected.ok, false);
-    assert.deepEqual(
-      rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-        .map((diagnostic) => diagnostic.code),
-      [expectedCode],
-      replacement,
-    );
-  }
+  // Ordinary parameters accept positional values as well as their names.
+  const ordinaryRaw = await nativeBinding.compileKotodama({
+    ...request,
+    source: source.replace(signature, "fn combine(int value, int minimum, int maximum)"),
+  });
+  assert.equal(ordinaryRaw.ok, true, ordinaryRaw.diagnosticsJson);
+  assert.equal(ordinaryRaw.diagnosticsJson, null);
+  const ordinary = normalizeCompilerResult(ordinaryRaw);
+  assert.equal(ordinary.ok, true);
+  assert.deepEqual(ordinary.output.artifactBytes, result.output.artifactBytes);
+  assert.deepEqual(ordinary.output.manifest, result.output.manifest);
+
+  const positionalOnly = "fn combine(int _ value, int _ minimum, int maximum)";
+  const rejectedRaw = await nativeBinding.compileKotodama({
+    ...request, source: source.replace(signature, positionalOnly),
+  });
+  assert.equal(rejectedRaw.ok, false, positionalOnly);
+  assert.equal(rejectedRaw.output, null);
+  const rejected = normalizeCompilerResult(rejectedRaw);
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(
+    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => diagnostic.code),
+    ["E_POSITIONAL_ARGUMENT_REQUIRED"],
+  );
+});
+
+nativeTest("native Kotodama preserves required argument names for builtins", async () => {
+  const source = `seiyaku NativeBuiltinLabels {
+    view fn update() {
+      var List<int, 2> values = [1];
+      let _ = values.try_set(index: 0, value: 1);
+    }
+  }`;
+  const request = { source, sourceName: "contracts/native-builtin-labels.ko", zk: false };
+  const raw = await nativeBinding.compileKotodama(request);
+  assert.equal(raw.ok, true, raw.diagnosticsJson);
+  assert.equal(raw.diagnosticsJson, null);
+  assert.equal(normalizeCompilerResult(raw).ok, true);
+
+  const rejectedRaw = await nativeBinding.compileKotodama({
+    ...request,
+    source: source.replace("values.try_set(index: 0, value: 1)", "values.try_set(0, 1)"),
+  });
+  assert.equal(rejectedRaw.ok, false);
+  assert.equal(rejectedRaw.output, null);
+  const rejected = normalizeCompilerResult(rejectedRaw);
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(
+    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => diagnostic.code),
+    ["E_NAMED_ARGUMENTS_REQUIRED"],
+  );
 });

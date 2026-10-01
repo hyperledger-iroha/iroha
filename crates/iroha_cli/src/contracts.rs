@@ -699,7 +699,7 @@ impl Run for BuildManifestArgs {
         }
         let rendered = norito::json::to_json_pretty(&manifest)?;
         if let Some(path) = self.out {
-            std::fs::write(&path, rendered.as_bytes())
+            write_manifest_output(&path, rendered.as_bytes())
                 .wrap_err_with(|| format!("write manifest to {}", path.display()))?;
             context.println(format_args!("Wrote manifest to {}", path.display()))?;
         } else {
@@ -707,6 +707,23 @@ impl Run for BuildManifestArgs {
         }
         Ok(())
     }
+}
+fn write_manifest_output(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "manifest output requires a file name",
+        )
+    })?;
+    iroha_fs::OwnerDirectory::open(parent)?.write_atomic(
+        name,
+        bytes,
+        iroha_fs::PublishMode::Replace,
+    )
 }
 fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Result<Vec<u8>> {
     if let Some(path) = code_file {
@@ -3234,5 +3251,36 @@ impl Run for ManifestArgs {
             context.print_data(&v)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod manifest_publication_tests {
+    use super::write_manifest_output;
+
+    #[test]
+    fn manifest_publication_is_private_atomic_and_replaces_only_regular_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manifest.json");
+        write_manifest_output(&path, b"first").unwrap();
+        assert_eq!(&*iroha_fs::read_private(&path, 32).unwrap(), b"first");
+        write_manifest_output(&path, b"second").unwrap();
+        assert_eq!(&*iroha_fs::read_private(&path, 32).unwrap(), b"second");
+        let non_file = directory.path().join("directory");
+        std::fs::create_dir(&non_file).unwrap();
+        assert!(write_manifest_output(&non_file, b"rejected").is_err());
+        assert!(non_file.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_publication_rejects_symlink_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let victim = directory.path().join("victim.json");
+        std::fs::write(&victim, b"unchanged").unwrap();
+        let output = directory.path().join("manifest.json");
+        std::os::unix::fs::symlink(&victim, &output).unwrap();
+        assert!(write_manifest_output(&output, b"rejected").is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"unchanged");
     }
 }

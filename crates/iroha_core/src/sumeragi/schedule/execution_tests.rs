@@ -8,6 +8,13 @@ use iroha_model_base::peer::PeerId;
 
 fn registered_world(context: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1) -> World {
     let mut world = World::new();
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     for member in &context.committee {
         world.register_validator_pop_for_testing(
             member.validator.public_key().clone(),

@@ -7825,6 +7825,8 @@ export interface ContractCallSimulateResponse {
 }
 
 export interface ContractManifestRecord {
+  /** Optional canonical base64 bytes, verified against artifact_id when present. */
+  code_bytes?: string;
   network_id: string;
   artifact_id: { dataspace_id: string; code_hash: string };
   manifest: {

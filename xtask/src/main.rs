@@ -168,6 +168,20 @@ enum CommandKind {
         matrix: Option<PathBuf>,
         smoke: bool,
         stage: Option<PathBuf>,
+        network_profiles: Option<PathBuf>,
+    },
+    MochiLatency {
+        bundle: PathBuf,
+        output: PathBuf,
+    },
+    MochiLatencyReport {
+        samples: PathBuf,
+        output: PathBuf,
+    },
+    MochiLatencyRemote {
+        bundle: PathBuf,
+        driver: PathBuf,
+        output: PathBuf,
     },
     KagamiProfiles {
         options: kagami_profiles::KagamiProfileOptions,
@@ -1150,8 +1164,10 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             matrix,
             smoke,
             stage,
+            network_profiles,
         } => {
-            let result = mochi::bundle_mochi(&output, &profile, archive)?;
+            let result =
+                mochi::bundle_mochi(&output, &profile, archive, network_profiles.as_deref())?;
             let smoke_passed = if smoke {
                 mochi::run_bundle_smoke(&result)?;
                 true
@@ -1164,6 +1180,19 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             if let Some(stage_root) = stage {
                 mochi::stage_bundle(&result, &stage_root)?;
             }
+        }
+        CommandKind::MochiLatency { bundle, output } => {
+            mochi::latency::collect(&bundle, &output)?;
+        }
+        CommandKind::MochiLatencyReport { samples, output } => {
+            mochi::latency::summarize(&samples, &output)?;
+        }
+        CommandKind::MochiLatencyRemote {
+            bundle,
+            driver,
+            output,
+        } => {
+            mochi::latency::collect_remote(&bundle, &driver, &output)?;
         }
         CommandKind::KagamiProfiles { options } => {
             kagami_profiles::generate(options)?;
@@ -2585,6 +2614,7 @@ where
             let mut matrix: Option<PathBuf> = None;
             let mut smoke = false;
             let mut stage: Option<PathBuf> = None;
+            let mut network_profiles: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2616,12 +2646,25 @@ where
                         };
                         stage = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--network-profiles" => {
+                        let Some(path) = pending.next() else {
+                            return Err(
+                                "expected installation artifact path after --network-profiles"
+                                    .into(),
+                            );
+                        };
+                        if network_profiles.is_some() {
+                            return Err("--network-profiles may be supplied only once".into());
+                        }
+                        network_profiles = Some(normalize_path(Path::new(&path))?);
+                    }
                     flag => {
                         return Err(format!("unknown flag for mochi-bundle: {flag}").into());
                     }
                 }
             }
             let output = output.unwrap_or_else(default_mochi_bundle_path);
+            mochi::validate_bundle_profile(&profile)?;
             Ok(CommandKind::MochiBundle {
                 output,
                 profile,
@@ -2629,6 +2672,51 @@ where
                 matrix,
                 smoke,
                 stage,
+                network_profiles,
+            })
+        }
+        "mochi-latency" | "mochi-latency-report" | "mochi-latency-remote" => {
+            let reporting = cmd == "mochi-latency-report";
+            let remote = cmd == "mochi-latency-remote";
+            let input_flag = if reporting { "--samples" } else { "--bundle" };
+            let mut input = None;
+            let mut output = None;
+            let mut driver = None;
+            let mut pending = args.peekable();
+            while let Some(flag) = pending.next() {
+                let target = if flag == input_flag {
+                    &mut input
+                } else if flag == "--out" {
+                    &mut output
+                } else if remote && flag == "--driver" {
+                    &mut driver
+                } else {
+                    return Err("unsupported diagnostic latency flag".into());
+                };
+                if target.is_some() {
+                    return Err("duplicate diagnostic latency flag".into());
+                }
+                let value = pending.next().ok_or("missing diagnostic latency path")?;
+                *target = Some(normalize_path(Path::new(&value))?);
+            }
+            let input = input.ok_or("missing diagnostic latency input")?;
+            let output = output.ok_or("missing --out diagnostic path")?;
+            Ok(if remote {
+                CommandKind::MochiLatencyRemote {
+                    bundle: input,
+                    driver: driver.ok_or("missing --driver release test executable")?,
+                    output,
+                }
+            } else if reporting {
+                CommandKind::MochiLatencyReport {
+                    samples: input,
+                    output,
+                }
+            } else {
+                CommandKind::MochiLatency {
+                    bundle: input,
+                    output,
+                }
             })
         }
         "kagami-profiles" => {

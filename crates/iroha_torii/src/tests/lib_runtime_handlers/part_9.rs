@@ -1134,17 +1134,16 @@ async fn app_api_vk_and_proofs_lists_ok() {
 async fn app_api_get_by_id_not_found_returns_404() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-    // Contract code by hash (non-existent)
-    let resp = super::handler_get_contract_code(
-        State(app.clone()),
-        headers.clone(),
-        crate::loopback_connect_info(),
-        axum::extract::Path(
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+    // An admitted exact artifact lookup preserves a scoped absence result.
+    let resp = routing::handle_get_contract_code(
+        app.state.clone(),
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"missing artifact"),
         ),
     )
     .await
-    .expect("ok mapping")
+    .expect("scoped absence mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     // VK by backend/name (non-existent)

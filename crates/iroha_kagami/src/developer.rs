@@ -3,7 +3,8 @@
 use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use clap::{Args, Subcommand};
@@ -14,10 +15,13 @@ use iroha_data_model::{
     transaction::FeePaymentIntent,
 };
 use iroha_deploy::managed::{
-    self, InstalledRuntime, ManagedContext, ManagedPhase, ManagedStatus, ManagedStore,
-    default_state_root, workspace_state_root,
+    self, DataspaceRequest, InstalledRuntime, ManagedContext, ManagedDataspaceStatus, ManagedPhase,
+    ManagedStatus, ManagedStore, default_state_root, workspace_state_root,
 };
 use iroha_primitives::numeric::Quantity;
+use musubi::archive_fetch::{
+    MusubiArchiveDiscoveryErrorV1, PreparedProductionSorafsArchiveTransportV1,
+};
 use musubi::deployment_runtime::{AliasSelection, ContractInput, DeploymentRuntime};
 
 use crate::{Outcome, RunArgs, localnet, tui};
@@ -120,6 +124,41 @@ pub(crate) struct ResetArgs {
     name: String,
     #[command(flatten)]
     store: StoreArgs,
+}
+
+/// Run an owner-private local dataspace attached to one independently installed parent.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DataspaceCommand {
+    /// Create, fund, register, and select four private validators without supplying configuration.
+    Up(DataspaceUpArgs),
+    /// Observe local validators and independently verified parent attachment separately.
+    Status(ContextShowArgs),
+    /// List the independently pinned network profiles supplied by this installation.
+    Networks(NetworksArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DataspaceUpArgs {
+    /// Canonical private dataspace alias to lease on the parent.
+    alias: String,
+    /// Exact independently installed parent profile, such as taira.
+    #[arg(long)]
+    network: String,
+    /// Store-local context name (defaults to the dataspace alias).
+    #[arg(long)]
+    name: Option<String>,
+    /// Complete parent authentication, local startup, and attachment budget in seconds.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=60))]
+    timeout: u64,
+    #[command(flatten)]
+    store: StoreArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct NetworksArgs {
+    /// Emit the installed profile names as one JSON array.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Select and inspect managed developer identities and endpoints.
@@ -294,6 +333,58 @@ impl<T: Write> RunArgs<T> for ContextCommand {
     }
 }
 
+impl<T: Write> RunArgs<T> for DataspaceCommand {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        match self {
+            Self::Up(args) => {
+                let runtime = InstalledRuntime::discover()?;
+                let store = args.store.open()?;
+                let request = DataspaceRequest {
+                    name: args.name.unwrap_or_else(|| args.alias.clone()),
+                    network: args.network,
+                    alias: args.alias,
+                    timeout: Duration::from_secs(args.timeout),
+                };
+                tui::status("Authenticating the installed parent and preparing private validators");
+                match store.up_dataspace(&runtime, &request) {
+                    Ok(status) => print_dataspace_status(writer, &status, args.store.json),
+                    Err(error) => {
+                        // Partial work remains under the same owner and exact journals. Emit a
+                        // safe observation when available while preserving a nonzero outcome.
+                        if let Ok(Some(status)) = store.dataspace_status(&request.name) {
+                            print_dataspace_status(writer, &status, args.store.json)?;
+                        }
+                        Err(error.into())
+                    }
+                }
+            }
+            Self::Status(args) => {
+                let store = args.store.open()?;
+                let context = store.context(args.name.as_deref())?;
+                let status = store.dataspace_status(&context.name)?.ok_or_else(|| {
+                    eyre!(
+                        "context `{}` has no remote dataspace attachment",
+                        context.name
+                    )
+                })?;
+                print_dataspace_status(writer, &status, args.store.json)
+            }
+            Self::Networks(args) => {
+                let profiles = InstalledRuntime::discover()?.network_profiles()?;
+                let names: Vec<_> = profiles.names().collect();
+                if args.json {
+                    write_json(writer, &names)
+                } else {
+                    for name in names {
+                        writeln!(writer, "{name}")?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 impl<T: Write> RunArgs<T> for ContractCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self::Deploy(args) = self;
@@ -330,10 +421,45 @@ impl<T: Write> RunArgs<T> for ContractCommand {
         let context = store
             .ensure_selected(&runtime, args.context.as_deref(), Duration::from_secs(30))?
             .context;
+        let target = store.capture_deployment(&context)?;
         let config = context.load_client_config()?;
         let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
         let journal_root = store.root().join("deployments").join(&context.name);
-        let runtime = DeploymentRuntime::new(config, journal_root);
+        let registry_root = store.root().to_path_buf();
+        let registry_context = context.name.clone();
+        let runtime = DeploymentRuntime::new(config, journal_root).with_build_registry_resolver(
+            Arc::new(move || {
+                // The canonical package service calls this only when a graph needs its exact
+                // registry identity. Source, bytecode and local packages never enter it.
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let store = ManagedStore::open(&registry_root)?;
+                let Some(registry) = store.build_registry(&runtime, &registry_context, deadline)?
+                else {
+                    return Ok(None);
+                };
+                let parent = registry.config().clone();
+                let transport = PreparedProductionSorafsArchiveTransportV1::from_account_registry(
+                    parent.clone(),
+                    Arc::new(move |provider| {
+                        registry.discover(provider, deadline).map_err(|error| {
+                            if Instant::now() >= deadline {
+                                MusubiArchiveDiscoveryErrorV1::Deadline
+                            } else {
+                                match error {
+                                    iroha_deploy::bootstrap::BootstrapError::Busy
+                                    | iroha_deploy::bootstrap::BootstrapError::Io(_) => {
+                                        MusubiArchiveDiscoveryErrorV1::Unavailable
+                                    }
+                                    _ => MusubiArchiveDiscoveryErrorV1::Rejected,
+                                }
+                            }
+                        })
+                    }),
+                    Duration::from_secs(30),
+                )?;
+                Ok(Some((parent, transport)))
+            }),
+        );
         let mut progress = deployment_progress;
         let mut review = |preflight: &DeploymentPreflight| {
             ensure!(
@@ -368,21 +494,22 @@ impl<T: Write> RunArgs<T> for ContractCommand {
                 &mut progress,
             )?
         };
+        let report = target.finish(&store, deployed.receipt, deployed.journal)?;
         if args.store.json {
-            write_json(
-                writer,
-                &norito::json!({
-                    "status": "applied",
-                    "context": (context.name),
-                    "receipt": (deployed.receipt),
-                    "journal": (deployed.journal),
-                }),
-            )
+            write_json(writer, &report.to_json()?)
         } else {
-            writeln!(writer, "Deployed {}", deployed.receipt.contract_alias)?;
-            writeln!(writer, "address: {}", deployed.receipt.contract_address)?;
-            writeln!(writer, "code_hash: {}", deployed.receipt.code_hash)?;
-            writeln!(writer, "journal: {}", deployed.journal.display())?;
+            writeln!(
+                writer,
+                "{}: {}",
+                report.execution_summary(),
+                report.receipt.contract_alias
+            )?;
+            writeln!(writer, "address: {}", report.receipt.contract_address)?;
+            writeln!(writer, "code_hash: {}", report.receipt.code_hash)?;
+            writeln!(writer, "journal: {}", report.journal.display())?;
+            if let Some(parent) = report.parent_summary() {
+                writeln!(writer, "{parent}")?;
+            }
             Ok(())
         }
     }
@@ -454,6 +581,37 @@ fn print_status(writer: &mut impl Write, status: &ManagedStatus, json: bool) -> 
     Ok(())
 }
 
+fn print_dataspace_status(
+    writer: &mut impl Write,
+    status: &ManagedDataspaceStatus,
+    json: bool,
+) -> Outcome {
+    if json {
+        return write_json(writer, status);
+    }
+    print_status(writer, &status.local, false)?;
+    writeln!(
+        writer,
+        "parent {}: {}",
+        status.attachment.network,
+        status.attachment.stage.as_str()
+    )?;
+    if let Some(wallet) = &status.attachment.wallet_status {
+        writeln!(writer, "parent operation: {wallet}")?;
+    }
+    if let Some(confirmed) = &status.attachment.parent_confirmed {
+        writeln!(
+            writer,
+            "last verified parent receipt: height {}",
+            confirmed.parent_height
+        )?;
+    }
+    if let Some(reason) = &status.attachment.failure {
+        writeln!(writer, "attachment: {reason}")?;
+    }
+    Ok(())
+}
+
 fn print_context(writer: &mut impl Write, context: &ManagedContext, json: bool) -> Outcome {
     if json {
         return write_json(writer, context);
@@ -508,6 +666,90 @@ mod tests {
         ));
         assert!(crate::Cli::try_parse_from(["kagami", "localnet", "reset"]).is_err());
         assert!(crate::Cli::try_parse_from(["kagami", "localnet-wizard"]).is_err());
+    }
+
+    #[test]
+    fn dataspace_up_needs_only_alias_and_explicit_installed_parent() {
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "dataspace",
+            "up",
+            "privateapp",
+            "--network",
+            "taira",
+        ])
+        .unwrap();
+        let crate::Command::Dataspace(DataspaceCommand::Up(args)) = cli.command else {
+            panic!("expected private dataspace startup");
+        };
+        assert_eq!(args.alias, "privateapp");
+        assert_eq!(args.network, "taira");
+        assert!(args.name.is_none());
+        assert_eq!(args.timeout, 60);
+        assert!(args.store.state.is_none());
+        assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "up", "privateapp"]).is_err());
+        for timeout in ["0", "61"] {
+            assert!(
+                crate::Cli::try_parse_from([
+                    "kagami",
+                    "dataspace",
+                    "up",
+                    "privateapp",
+                    "--network",
+                    "taira",
+                    "--timeout",
+                    timeout,
+                ])
+                .is_err()
+            );
+        }
+        assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "status", "--json"]).is_ok());
+        assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "networks", "--json"]).is_ok());
+    }
+
+    #[test]
+    fn dataspace_output_separates_local_readiness_from_parent_evidence() {
+        use iroha_deploy::managed::{
+            ManagedAttachmentFailure, ManagedAttachmentPhase, ManagedAttachmentStatus,
+        };
+        let status = ManagedDataspaceStatus {
+            local: ManagedStatus {
+                context: ManagedContext {
+                    name: "privateapp".into(),
+                    chain_id: "fixture".into(),
+                    network_id: "fixture-network".into(),
+                    account_id: "fixture-account".into(),
+                    dataspace_id: 42,
+                    dataspace_alias: "privateapp".into(),
+                    torii_url: "http://127.0.0.1:8080/".into(),
+                    client_config: PathBuf::from("/private/fixture"),
+                },
+                phase: ManagedPhase::Ready,
+                running_peers: 4,
+                failure: None,
+            },
+            attachment: ManagedAttachmentStatus {
+                network: "taira".into(),
+                stage: ManagedAttachmentPhase::Funding,
+                wallet_status: None,
+                local_successor: None,
+                parent_confirmed: None,
+                failure: Some(ManagedAttachmentFailure::PreparationFailed),
+            },
+        };
+        let mut text = Vec::new();
+        print_dataspace_status(&mut text, &status, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.contains("Ready (4 validators)"));
+        assert!(text.contains("parent taira: funding"));
+        assert!(text.contains("attachment: operation preparation failed"));
+        assert!(!text.contains("last verified parent receipt"));
+        let mut json = Vec::new();
+        print_dataspace_status(&mut json, &status, true).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<ManagedDataspaceStatus>(&json).unwrap(),
+            status
+        );
     }
 
     #[test]

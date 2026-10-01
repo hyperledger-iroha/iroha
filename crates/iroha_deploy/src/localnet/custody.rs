@@ -105,6 +105,39 @@ pub(super) fn validate_private_tree(path: &Path, executables: &[&Path]) -> Resul
     Ok(())
 }
 
+/// Sync every validated private file and directory before publishing a completed generation.
+pub(crate) fn sync_private_tree(path: &Path) -> Result<()> {
+    let root = PrivateDirectory::open(path)?;
+    let mut pending = vec![(root.path().to_path_buf(), false)];
+    let mut count = 0;
+    while let Some((path, visited)) = pending.pop() {
+        root.revalidate()?;
+        let directory = PrivateDirectory::open(path)?;
+        if visited {
+            directory.sync()?;
+            continue;
+        }
+        pending.push((directory.path().to_path_buf(), true));
+        for entry in fs::read_dir(directory.path())? {
+            let entry = entry?;
+            count += 1;
+            ensure!(
+                count <= 16384,
+                "localnet artifact tree exceeds its entry bound"
+            );
+            if entry.file_type()?.is_dir() {
+                pending.push((entry.path(), false));
+            } else {
+                // This validated existing-file handle includes native flush authority on Windows.
+                directory
+                    .open_existing_lock(entry.file_name())?
+                    .sync_all()?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +156,7 @@ mod tests {
         assert!(write_private_file_atomic(&root.join("key"), b"replaced").is_err());
         create_file(&root.join("stream")).unwrap();
         validate_private_tree(&root, &[]).unwrap();
+        sync_private_tree(&root).unwrap();
         assert!(prepare_empty_private_directory(&root).is_err());
         assert_eq!(
             iroha_fs::read_private(root.join("manifest"), 16)

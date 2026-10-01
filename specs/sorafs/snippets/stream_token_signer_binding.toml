@@ -1,19 +1,34 @@
 # Public configuration template, not deployment qualification or working trust defaults.
 # Replace every placeholder and zero generation/interval with independently reviewed values.
-# Never put a private key, seed, credential, session or device PIN in this file.
+# Never put a private key, seed, credential contents, session or device PIN in this file.
 [sorafs.storage]
 enabled = true
 provider_id_hex = "<reviewed-nonzero-64-lowercase-hex-provider-id>"
 
 [sorafs.storage.stream_tokens]
 enabled = true
-admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
+admission_provider_handle = "software://sorafs/stream-admission/primary"
 admission_provider_revision = 0 # Required reviewed nonzero admission generation.
 admission_provider_policy_digest_hex = "<reviewed-nonzero-64-lowercase-hex-policy-digest>"
+admission_reconcile_interval_ms = 1000 # Native delivery reconciliation cadence; 1..=60000.
+admission_operation_timeout_ms = 30000 # One absolute budget across admission and callbacks; 1..=60000.
 default_ttl_secs = 900
 default_max_streams = 8
 default_rate_limit_bytes = 104857600
 default_requests_per_minute = 60
+
+# Required whenever issuance is enabled. The three accounts and credential paths
+# must be independent, and the governed gateway and recorder policies must authorize their roles.
+# Paths identify runtime-only, owner-controlled credential files; no keys go here.
+[sorafs.storage.stream_tokens.admission_native]
+operator = "<reviewed-canonical-domainless-gateway-operator>"
+operator_credential = "<absolute-owner-only-gateway-operator-credential>"
+observer = "<reviewed-canonical-domainless-gateway-observer>"
+observer_credential = "<absolute-owner-only-gateway-observer-credential>"
+reputation_recorder = "<reviewed-canonical-domainless-reputation-recorder>"
+reputation_recorder_credential = "<absolute-owner-only-reputation-recorder-credential>"
+fee_payment_json = "<canonical-authorized-norito-json-gateway-fee-intent>"
+clock_uncertainty_ms = 250 # Explicit closed UTC uncertainty; 0..=5000.
 
 [sorafs.storage.stream_tokens.signer]
 runtime_handle = "software://sorafs/stream-token/primary"

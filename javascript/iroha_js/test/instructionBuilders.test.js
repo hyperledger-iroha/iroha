@@ -2362,6 +2362,9 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
       errorTypes: [
         { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
       ],
+      errorMessages: [
+        { error_type: "LedgerError", code: 7, message: "The transfer amount is invalid." },
+      ],
       kotoba: [
         {
           msgId: "contract.title",
@@ -2425,6 +2428,9 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         ],
         error_types: [
           { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
+        ],
+        error_messages: [
+          { error_type: "LedgerError", code: 7, message: "The transfer amount is invalid." },
         ],
         kotoba: [
           {

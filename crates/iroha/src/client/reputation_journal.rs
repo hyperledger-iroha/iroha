@@ -220,6 +220,7 @@ mod tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
@@ -433,11 +434,14 @@ mod tests {
         let client = client_with_base_url(base_url());
 
         let policy = policy(&client.account);
-        let policy_record = ReputationJournalAuthorityPolicyRecordV1::try_new(
-            policy,
-            client.account.clone(),
-            SOURCE_TIME_MS,
-        )
+        let policy_record = ReputationJournalAuthorityPolicyRecordV1::try_new(policy,
+(client.account.clone()).clone(),
+SOURCE_TIME_MS,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: SOURCE_TIME_MS, authority: (client.account.clone()).clone(),
+    }))
         .expect("policy record");
         let finalized_cursor = ReputationJournalFinalizedCursorV1 {
             height: 7,

@@ -698,6 +698,7 @@ mod tests;
 
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
+pub use world_state_snapshot::ProviderAdmissionSnapshotOriginalsV1;
 
 #[path = "world_state_cut.rs"]
 pub(crate) mod world_state_cut;

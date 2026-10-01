@@ -88,7 +88,44 @@ impl PhysicalExecutionPolicyRoute {
         world: &W,
         tx: &dyn TransactionRoutingView,
         ledger_time_ms: u64,
+        scope: iroha_data_model::block::consensus::SumeragiRootScope,
     ) -> Result<Self, PhysicalPolicyRouteRejection> {
+        if let iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+            dataspace_id,
+            ..
+        } = scope
+        {
+            let Some(iroha_data_model::transaction::Executable::Instructions(instructions)) =
+                tx.executable()
+            else {
+                return Err(PhysicalPolicyRouteRejection::Routing(
+                    "private_genesis_requires_instructions",
+                ));
+            };
+            for instruction in instructions {
+                let target = private_genesis_instruction_target(
+                    &**instruction,
+                    &nexus.dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )
+                .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?;
+                if target.global
+                    || target
+                        .dataspace
+                        .is_some_and(|target| target != dataspace_id)
+                {
+                    return Err(PhysicalPolicyRouteRejection::DataspaceMismatch);
+                }
+            }
+            let route = super::resolve_routing_decision(
+                RoutingDecision::new(nexus.routing_policy.default_lane, dataspace_id),
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+            )
+            .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?;
+            return Ok(Self(route));
+        }
         Self::single(
             evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 nexus,
@@ -116,6 +153,96 @@ mod tests {
         AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneConfig,
     };
     use nonzero_ext::nonzero;
+
+    #[test]
+    fn private_genesis_alias_projection_is_exact_while_ordinary_registry_stays_global() {
+        use iroha_data_model::{
+            NetworkId,
+            alias_setup::{
+                AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+                ResolvedDataSpaceV1,
+            },
+            block::consensus::SumeragiRootScope,
+            isi::{Log, alias_setup::EnsureAlias},
+            nexus::{DataSpaceCatalog, DataSpaceMetadata},
+            transaction::{FeePaymentIntent, TransactionBuilder},
+        };
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+        let ds = DataSpaceId::new(u64::MAX - 23);
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"parent"),
+        ));
+        let scope = SumeragiRootScope::Dataspace {
+            parent_network_id: network,
+            dataspace_id: ds,
+        };
+        let mut nexus = Nexus::default();
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                dataspace_id: ds,
+                ..LaneConfig::default()
+            }],
+        )
+        .unwrap();
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: ds,
+            alias: "private".into(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .unwrap();
+        nexus.routing_policy.default_dataspace = ds;
+        let world = crate::state::World::new();
+        for target in [ds, DataSpaceId::UNIVERSAL, DataSpaceId::new(23)] {
+            let instruction = EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace: ResolvedDataSpaceV1::new("private".parse().unwrap(), target),
+                    owner: ALICE_ID.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset:
+                        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                            .parse()
+                            .unwrap(),
+                    max_amount: 1_u32.into(),
+                    valid_until_ms: u64::MAX,
+                },
+            );
+            let signed = TransactionBuilder::new(
+                network,
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(vec![], None),
+            )
+            .with_instructions(vec![
+                iroha_data_model::isi::InstructionBox::from(Log::new(
+                    iroha_logger::Level::INFO,
+                    "bootstrap".into(),
+                )),
+                instruction.into(),
+            ])
+            .sign(ALICE_KEYPAIR.private_key());
+            let accepted =
+                crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
+            assert!(
+                PhysicalExecutionPolicyRoute::resolve(&nexus, &world.view(), &accepted, 1, 0)
+                    .is_err(),
+                "ordinary alias acquisition must retain parent-registry routing"
+            );
+            let bootstrap =
+                PhysicalExecutionPolicyRoute::genesis(&nexus, &world.view(), &accepted, 0, scope);
+            if target == ds {
+                assert_eq!(bootstrap.unwrap().decision().dataspace_id, ds);
+            } else {
+                assert_eq!(
+                    bootstrap,
+                    Err(PhysicalPolicyRouteRejection::DataspaceMismatch)
+                );
+            }
+        }
+    }
 
     #[test]
     fn queue_and_execution_share_both_height_guards_and_checked_successor() {

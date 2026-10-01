@@ -20932,7 +20932,7 @@ test("getContractManifest rejects noncanonical or inconsistent hash projections"
         abi_hash: null,
         code_bytes: null,
       }).getContractManifest({ dataspaceId: "0", codeHash: "bb".repeat(32) }, canonicalReadOptions()),
-    /bounded artifact byte count/u,
+    /code_bytes must be a base64 string/u,
   );
   await assert.rejects(
     () =>
@@ -22027,7 +22027,7 @@ test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => 
       return "Y29kZQ==";
     },
   });
-  const withSymbol = ARTIFACT_READ_RESPONSE;
+  const withSymbol = { ...ARTIFACT_READ_RESPONSE };
   withSymbol[Symbol("attacker")] = true;
   for (const payload of [
     {},

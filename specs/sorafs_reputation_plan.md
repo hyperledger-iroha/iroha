@@ -54,13 +54,20 @@ and retention take that same State view, revalidate durable boundary identity,
 and bind compacted floors to the certified header/result identity rather than
 a node-local choice of quorum signatures. Startup accepts an empty height-zero
 bootstrap or equal recovered State/Kura heights; retired sidecar receipts and
-pending-replay archive modes are removed. An independently
-authenticated journal-transaction submitter remains injected, and the daemon
-does not construct a queue-backed submitter or adapt the validator key. The
+pending-replay archive modes are removed. An independently authenticated
+PoR journal-transaction submitter remains injected; that path constructs no
+queue-backed fallback and does not adapt the validator key. The
 committed publication projection is exposed to Torii only after a fresh
 successful reconciliation and authenticated Governance DAG readback.
-Production threshold-signing, authenticated DAG publication/readback/head
-inclusion, and stream-token-owner adapters remain open. The PoR owner now
+Production threshold-signing and authenticated DAG publication/readback/head
+inclusion adapters remain open. Native stream-token admission now atomically
+retains an exact reputation delivery intent or an explicit exclusion. Its
+independent configured recorder signs only the source-owned unsigned payload
+after a fresh certified Check and current permission revalidation. Committed
+delivery, expiry or governed cancellation closes the counted callback; final
+Serving additionally requires delivered reputation and acknowledgement.
+The generic local stream-token producer is removed. Native service, recovery
+and cold-fetch qualification remain open. The PoR owner now
 retains sequence/digest-bound terminal work and the standard launcher
 supervises exact durable admission and acknowledgement before authenticated
 replay-archive compaction. The integrated Rust build, lint, and test matrix for
@@ -101,7 +108,7 @@ Checked-in response-file examples cover provider and metrics canaries.
 ## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
-| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration requires deployment-injected authenticated journal submission; no validator-key or queue-backed fallback is constructed. The standard daemon owns the compact Kura-authenticated historical archive/query and captures each exact current-consensus committed State boundary. Integrated validation and reviewed deployment evidence remain open. |
+| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. The PoR producer requires deployment-injected authenticated journal submission; no validator-key or queue-backed PoR fallback is constructed. Native token delivery has a separate source-owned exact-payload authority. The standard daemon owns the compact Kura-authenticated historical archive/query and captures each exact current-consensus committed State boundary. Integrated validation and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
 | API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
@@ -129,30 +136,34 @@ Checked-in response-file examples cover provider and metrics canaries.
 
 ## Data Sources & Normalisation
 - **PoR/PDP/PoTR**: success ratios are derived from the native PoR journal and
-  finalized proof-outcome feed. The externally authenticated PoR and counted
-  stream-token journal-submission boundary is present. The PoR owner invokes
-  its exact durable callback through a bounded supervised worker whenever the
-  reputation runtime is enabled. Optional replay-archive compaction shares that
-  worker but is not a prerequisite for native PoR admission. The actual
-  regional stream-token owner still needs to invoke its callback.
+  finalized proof-outcome feed. The externally authenticated PoR
+  journal-submission boundary is present. The PoR owner invokes its exact
+  durable callback through a bounded supervised worker whenever the reputation
+  runtime is enabled. Optional replay-archive compaction shares that worker but
+  is not a prerequisite for native PoR admission. This producer does not
+  authorize native stream-token delivery.
 - **Latency**: P95 latency from PoTR receipts (hot/warm tiers). Normalise to `[0,1]` by mapping 0 ms→1.0, 90 s→0 (hot) / 5 min→0 (warm).
 - **Disputes**: count governance disputes resolved against provider per 1k
   orders. Native capacity-dispute `Opened` and `Resolved` journal transitions
   are authoritative; capacity telemetry never creates a dispute implicitly.
 - **Token violations**: rate of throttle breaches and unauthorized access
-  attempts. Native journal admission uses a hard-cut gateway-id/non-zero-
-  sequence/request-context binding and a bounded durable per-gateway high-water
-  mark. Exact replay is idempotent; stale or substituted sequence reuse fails
-  closed across restart. The data model derives the gateway id from
-  length-framed chain and compliance-gateway identities and defines a canonical
+  attempts. Native gateway admission retains permanent indexed source and
+  delivery records binding the gateway, nonzero sequence, request digest and
+  serving attempt. Counted intents bind the original admission, source-time
+  recorder policy and complete unsigned append payload, including its fee and
+  finite expiry. Exact replay retains those original bytes; a local checkpoint
+  cannot authorize a replacement append. The data model derives the gateway id
+  from the exact network and compliance-gateway identities and defines a canonical
   request-context digest over the authoritative serving provider, manifest
   digest/CID, chunk profile, nonce digest, missing-or-exact-header commitment,
   and CAR-range or exact-chunk route. Raw nonce, token bytes, aliases, PII, and
   forwarding metadata are not retained. A `ProviderMismatch` is attributed to
   the authoritative serving provider, never the token's caller-controlled
-  provider claim. This is a source-model foundation: configuration, broker,
-  Torii capture, a sealed ordered gateway outbox, and the regional callback
-  owner remain open.
+  provider claim. Torii capture and the daemon native callback share one
+  absolute operation deadline through delivery, acknowledgement and final
+  Serving. Broker-supplied gateway authority and the generic local token
+  producer are retired; genuine service and multi-replica recovery
+  qualification remain open.
 - **Repair escalations**: projected from the existing finalized native repair
   event feed.
 - **Orderbook and settlement**: projected from the existing finalized native
@@ -251,10 +262,13 @@ publication authority.
   appends the revision-one `Opened` journal event in the same transaction.
   Telemetry penalties and alerts do not create disputes.
 - Recorder-policy source-time intervals include their own activation and exclude
-  the successor activation. A new cutover must occur strictly after the validated
-  journal terminal's authoritative record time, before either policy record is
-  written. Record times never decrease and each source time is at most its record
-  time, so this constant-time terminal check protects every retained interval.
+  the successor activation. A new cutover must occur strictly after both the
+  validated journal terminal's authoritative record time and the committed
+  native token source-time watermark, before either policy record is written.
+  The watermark advances atomically with each admission, including excluded
+  outcomes, so rotation cannot reassign an already admitted pending source.
+  Original recorder, fee and expiry remain fixed; current registration and
+  record permission still govern signing and append execution.
   Exact historical policy/authority replay is resolved before new-cutover
   admission and preserves the original activation; rotation never rewrites
   committed events or their policy history.
@@ -318,7 +332,7 @@ publication authority.
   payload-free status are wired. The configured compact archive is
   Kura-authenticated at startup and captures the exact published committed State
   before the executor acknowledges apply or advances to another height. The standard daemon has no
-  validator-key or queue-backed journal fallback. It also drains retained
+  validator-key or queue-backed PoR journal fallback. It also drains retained
   native PoR terminals into durable reputation admission under the configured
   bounded cadence even when optional replay archival is disabled. External
   threshold-signing and authenticated Governance DAG adapters, integrated Rust
@@ -490,7 +504,7 @@ publication authority.
     fails before the reputation checkpoint opens. No private key, credential,
     endpoint, or signed payload enters the qualification.
   - Implemented: `IrohaRuntimeDeps` requires an externally authenticated
-    journal-transaction submitter. The queue-backed validator-key submitter,
+    PoR journal-transaction submitter. The queue-backed validator-key submitter,
     the unsound current-head state adapter, and both fallbacks were removed.
     The immutable historical query is no longer injectable: the daemon opens
     the explicitly bounded archive, performs zero-gap reconciliation against
@@ -505,13 +519,19 @@ publication authority.
     activation time, canonical continuation, non-zero bounded request limit,
     and exact finalized cursor—before opening the reputation checkpoint. This
     closes bootstrap response admission.
+  - Implemented: Native stream-token callbacks use their committed admission
+    intent and an independent recorder credential. Certified Checks bind the
+    original source and exact unsigned append payload; current permissions and
+    the publication fence are revalidated before signing. Queue acceptance
+    cannot close delivery, and reconciliation never creates another payload.
+    Accepted serving requires committed delivery and acknowledgement.
   - Open under `V1-BLOCK-REPUTATION-RUNTIME-01`:
     `ReputationThresholdSignerClientV1` and
-    `ReputationGovernanceDagClientV1` adapters; concrete stream-token
-    callback-owner wiring; genuine qualification of the configured PoR replay
-    archive and external threshold software-signing service; current DAG head/inclusion proof; integrated Rust
-    validation; and reviewed four-peer rotation, recovery, retry, and failover
-    evidence remain outstanding. No ledger page, credential, signature, or
+    `ReputationGovernanceDagClientV1` adapters; genuine qualification of the
+    native stream-token service, configured PoR replay archive and external
+    threshold software-signing service; current DAG head/inclusion proof;
+    integrated Rust validation; and reviewed four-peer rotation, recovery,
+    retry, and failover evidence remain outstanding. No ledger page, credential, signature, or
     acknowledgement may be synthesized as a fallback.
 - REST endpoints:
   - Removed: the local-authoritative `POST /v1/sorafs/reputation/latest`
@@ -660,7 +680,7 @@ publication authority.
 
 ## Security & Compliance
 - Native journal admission verifies the governed recorder identity, exact unit
-  permissions, active policy digest, provider binding, committing block time,
+  permissions, exact source-time policy digest, provider binding, committing block time,
   global/source continuity, and exact historical replay. The ingest service
   must consume the finalized typed query and must not trust telemetry,
   Governance DAG mirrors, or a local database as the event authority.
@@ -701,12 +721,12 @@ publication authority.
 ## Rollout Plan
 1. Complete integrated source validation, then add the remaining authenticated
    journal transaction/query SDK builders.
-2. Exercise the daemon-owned immutable historical archive/query plus the
-   externally authenticated governed PoR/regional counted stream-token
-   transaction submitter and qualified PoR replay archive; wire the actual
-   stream-token owner to the durable callback. The projector already consumes
-   the committed proof, unified journal, repair, orderbook, and reserve query
-   families.
+2. Exercise the daemon-owned immutable historical archive/query, externally
+   authenticated PoR submitter and qualified PoR replay archive, plus the native
+   stream-token exact-intent callback through final Serving. Qualify rotation,
+   expiry, cancellation and multi-replica recovery. The projector already
+   consumes the committed proof, unified journal, repair, orderbook, and reserve
+   query families.
 3. Supply external threshold signer and authenticated Governance DAG
    publication/readback/head-inclusion adapters to the already-supervised
    runtime. Reconcile canonical publication acknowledgements without
@@ -737,10 +757,11 @@ Completed local foundations:
   telemetry remains penalty/alert input and cannot mutate the dispute map.
 - Sequence/digest-bound PoR terminal ownership, exact durable reputation
   admission/acknowledgement, and reputation-first authenticated replay-archive
-  compaction are wired into the standard launcher. Stream-token admission has
-  a bounded restart-safe per-gateway sequence fence, and the canonical
-  payload-free request-context model is implemented. The sealed ordered gateway
-  outbox and regional callback owner remain deployment integration items.
+  compaction are wired into the standard launcher. Native stream-token
+  admission atomically owns immutable delivery intents and terminal dispositions;
+  the daemon callback signs the exact committed payload under fresh certified
+  authority. The retired local token producer supplies no replay authority.
+  Complete service and multi-replica recovery qualification remain open.
 - Canonical reputation schemas, scoring, penalties, smoothing, trust-edge
   iteration, snapshot validation, Merkle roots, and provider proofs.
 - Governance DAG payload validation and the keyless finalized multi-feed

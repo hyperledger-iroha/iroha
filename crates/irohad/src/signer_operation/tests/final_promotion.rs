@@ -62,7 +62,7 @@ fn assert_no_constructor_io(source: &Source, provider: &Provider, path: &Path) {
     assert_eq!(state.commits, 0);
     assert!(state.used_ids.is_empty());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+    assert_eq!(crate::signer_operation::journal::test_record_count(path), 0);
 }
 fn ceremony(
     directory: &Path,
@@ -207,7 +207,10 @@ fn final_promotion_uses_fresh_audit_head_and_rejects_a_racing_predecessor() {
                 SignerFinalPromotionErrorV1::Operation(SignerOperationErrorV1::ReservationConflict)
             );
             assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
-            assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+            assert_eq!(
+                crate::signer_operation::journal::test_record_count(&path),
+                0
+            );
         } else {
             assert_eq!(service.sign().unwrap().intent.previous_audit, head);
             assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
@@ -395,7 +398,7 @@ fn final_promotion_constructor_checks_fresh_custody_after_validating_the_pinned_
     assert_eq!(state.signing_reads, 0);
     assert!(state.used_ids.is_empty());
     assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+    assert_eq!(crate::signer_operation::journal::test_record_count(path), 0);
 }
 
 #[test]
@@ -492,7 +495,7 @@ fn final_promotion_provider_failures_never_release_or_retry() {
         assert!(service.sign().is_err());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         assert_eq!(source.state.lock().unwrap().commits, 0);
-        assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+        assert_eq!(crate::signer_operation::journal::test_record_count(path), 0);
     }
 }
 
@@ -504,7 +507,7 @@ fn final_promotion_failed_commit_retains_unrecoverable_tombstone() {
     source.state.lock().unwrap().fail_commit = true;
     assert!(service.sign().is_err());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
-    assert_eq!(fs::read_dir(path).unwrap().count(), 1);
+    assert_eq!(crate::signer_operation::journal::test_record_count(path), 1);
     assert!(service.recover().is_err());
     assert!(service.sign().is_err());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);

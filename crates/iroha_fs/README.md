@@ -10,6 +10,17 @@ network policy, process signalling or persistent PID authority.
 - `read_private` and `read_regular` perform bounded, stable descriptor reads into
   zeroizing allocations. `RetainedFile` supports streaming with explicit custody
   revalidation; `seal` freezes a completed writer's observation without reopening.
+- Immutable journals use `open_exact` to reject all directory redirects and
+  noncanonical spelling. `visit_private_files` streams bounded metadata, including
+  incomplete private tombstones, without collecting names or reading bodies.
+  Relative retained files share the existing ancestor handles.
+- `PendingPrivateFile` permits bounded Write/Seek without exposing its descriptor.
+  Consuming `seal_read_only` enforces exact Unix `0400` or a protected owner-read-only
+  Windows DACL and returns opaque `SealedPrivateFile` with only Read/Seek. Recovery
+  through `open_retained_read_only` rejects writable or oversized files. `publish_new_name` consumes
+  the exact sealed creator for durable no-replace sibling publication; failures
+  preserve evidence for reconciliation. Original descriptor rights stay private
+  through publication; no writable handle can escape from either capability.
 - File publication stages and syncs before atomic replacement. Directory
   publication consumes the retained source, requires an absent destination, and
   rejects live descendants. A failure after publication requires reconciliation.
@@ -24,7 +35,8 @@ network policy, process signalling or persistent PID authority.
 Unix admission uses owner modes, no-follow descriptor-relative operations,
 single-link files, metadata/namespace revalidation and directory `fsync`.
 Root-owned sticky temporary ancestors and immutable root-owned system aliases
-are admitted. macOS extended ACL grants are checked separately from mode bits.
+are admitted by general paths; `open_exact` rejects aliases. macOS extended ACL
+grants are checked separately from mode bits.
 
 Windows admission requires a local NTFS volume, protected current-user DACLs for
 private material, safe system/current-user ancestors, no reparse points, and
@@ -45,3 +57,7 @@ Run `cargo test -p iroha_fs` on each native release runner. Cross-target
 platform compilation but does not qualify native ACL, sharing, rename, or crash
 durability behavior. Windows-specific tests include protected DACL admission and
 inherited-handle fencing; release qualification must execute them on Windows.
+
+Private-file admission costs are derived in
+[PRIVATE_FILE_ACCOUNTING.md](PRIVATE_FILE_ACCOUNTING.md). These are finite local
+resource charges, not consensus parameters or native-platform qualification.

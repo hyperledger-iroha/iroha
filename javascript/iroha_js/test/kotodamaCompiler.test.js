@@ -299,6 +299,7 @@ function compilerArtifactFixture({
   states = 0,
   errorTypes = 0,
   errorMessages = [],
+  omitErrorMessages = false,
   callables = Array.from({ length: entrypoints }, (_, index) => callableFixture({ entryPc: index * 4 })),
   omitCallables = false,
   interfaceAbiByte = 0x23,
@@ -319,7 +320,7 @@ function compilerArtifactFixture({
     ...(omitCallables ? [] : [field(concatBytes(u64Le(callables.length), ...callables.map(field)))]),
     field(vector(states)),
     field(vector(errorTypes)),
-    field(concatBytes(u64Le(errorMessages.length), ...errorMessages.map((entry) => field(concatBytes(field(stringField(entry.error_type)), field(u32Le(entry.code)), field(stringField(entry.message))))))),
+    ...(omitErrorMessages ? [] : [field(concatBytes(u64Le(errorMessages.length), ...errorMessages.map((entry) => field(concatBytes(field(stringField(entry.error_type)), field(u32Le(entry.code)), field(stringField(entry.message)))))))]),
   );
   const frame = concatBytes(
     new TextEncoder().encode("NRT0"),
@@ -2730,6 +2731,30 @@ test("loopback development compiler services may use HTTP", async () => {
   }
 });
 
+
+test("compiler artifact requires the error-message catalog field even when empty", async () => {
+  const emptyCatalog = (manifest) => { manifest.error_messages = []; };
+  const complete = serviceSuccessWithArtifact(compilerArtifactFixture(), emptyCatalog);
+  const accepted = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return complete; } },
+    "seiyaku Demo {}",
+  );
+  assert.deepEqual(accepted.output.manifest.error_messages, []);
+
+  // Recompute the frame CRC and artifact hash so the missing field is the
+  // structural failure, rather than an unrelated authentication mismatch.
+  const incomplete = serviceSuccessWithArtifact(
+    compilerArtifactFixture({ omitErrorMessages: true }),
+    emptyCatalog,
+  );
+  await assert.rejects(
+    compileKotodamaWithNativeBinding(
+      { async compileKotodama() { return incomplete; } },
+      "seiyaku Demo {}",
+    ),
+    /embedded contract interface\.field10\.length contains a truncated or oversized compact length/u,
+  );
+});
 
 test("compiler output authenticates static error messages against embedded bytes", async () => {
   const error = { identity: "Demo::Failure", variants: [{ name: "Rejected", code: 7 }] };

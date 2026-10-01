@@ -64,6 +64,7 @@ fn validate_initial_permission_payload_constraints(
         | "CanUpsertSorafsProviderCredit"
         | "CanManageSorafsProofOutcomePolicy"
         | "CanManageSorafsReputationJournalPolicy"
+        | "CanManageSorafsStreamTokenGateway"
         | "CanRecordSorafsReputationJournal"
         | "CanResolveSorafsCapacityDispute" => {
             if permission.payload() != &Json::new(()) {
@@ -88,6 +89,29 @@ fn validate_initial_permission_payload_constraints(
         "CanCheckSorafsFinalPromotionAccountCustody" => validate_exact_deployment_permission!(
             executor_permission::sorafs::CanCheckSorafsFinalPromotionAccountCustody
         ),
+        "CanOperateSorafsStreamTokenGateway" => {
+            let token = executor_permission::sorafs::CanOperateSorafsStreamTokenGateway::try_from(
+                permission,
+            )
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if token.gateway_id == [0; 32] || Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact nonzero gateway scope",
+                ));
+            }
+        }
+        "CanCheckSorafsStreamTokenGateway" => {
+            let token =
+                executor_permission::sorafs::CanCheckSorafsStreamTokenGateway::try_from(permission)
+                    .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if token.gateway_id == [0; 32] || Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact nonzero gateway scope",
+                ));
+            }
+        }
         "CanManageSorafsStreamTokenCustody" => {
             let token = executor_permission::sorafs::CanManageSorafsStreamTokenCustody::try_from(
                 permission,
@@ -573,6 +597,35 @@ fn initial_permission_capability_root_authority(
                 executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
+        "CanManageSorafsStreamTokenGateway" => false,
+        "CanOperateSorafsStreamTokenGateway" | "CanCheckSorafsStreamTokenGateway" => {
+            let gateway_id = if permission.name() == "CanOperateSorafsStreamTokenGateway" {
+                decode!(executor_permission::sorafs::CanOperateSorafsStreamTokenGateway).gateway_id
+            } else {
+                decode!(executor_permission::sorafs::CanCheckSorafsStreamTokenGateway).gateway_id
+            };
+            let manager: Permission =
+                executor_permission::sorafs::CanManageSorafsStreamTokenGateway.into();
+            if state_transaction.world.accounts().get(authority).is_none()
+                || !authority_has_permission(&state_transaction.world, authority, &manager)?
+            {
+                false
+            } else {
+                // A real same-network policy roots this exact scope. Admission eligibility is
+                // deliberately separate: disabled or expired policies must still drain safely.
+                crate::query::stream_token_gateway::storage::read_current(
+                    state_transaction.world(),
+                    state_transaction.network_id(),
+                    gateway_id,
+                )
+                .map_err(|_| {
+                    ValidationFail::NotPermitted(
+                        "gateway permission requires an intact configured policy".to_owned(),
+                    )
+                })?
+                .is_some()
+            }
+        }
         "CanInvokeContractEntrypoint" => contract_entrypoint_permission_delegation_allowed(
             state_transaction,
             authority,
@@ -782,11 +835,21 @@ fn initial_permission_revocation_allowed(
 }
 fn validate_initial_account_permission_destination(
     _state_transaction: &StateTransaction<'_, '_>,
-    _permission: &Permission,
+    permission: &Permission,
     _destination: &AccountId,
-    _is_genesis: bool,
+    is_genesis: bool,
     _is_revoke: bool,
 ) -> Result<(), ValidationFail> {
+    if is_genesis
+        && matches!(
+            permission.name().as_ref(),
+            "CanOperateSorafsStreamTokenGateway" | "CanCheckSorafsStreamTokenGateway"
+        )
+    {
+        return Err(ValidationFail::NotPermitted(
+            "gateway scoped permissions require a configured post-genesis scope".to_owned(),
+        ));
+    }
     Ok(())
 }
 fn validate_initial_permission_or_role_mutation(
@@ -2538,6 +2601,16 @@ fn normalize_role_permission_for_initial_executor(
         )));
     }
     validate_initial_permission_payload_constraints(permission)?;
+    if is_initial_genesis_context(state_transaction)
+        && matches!(
+            permission.name().as_ref(),
+            "CanOperateSorafsStreamTokenGateway" | "CanCheckSorafsStreamTokenGateway"
+        )
+    {
+        return Err(ValidationFail::NotPermitted(
+            "gateway scoped permissions require a configured post-genesis scope".to_owned(),
+        ));
+    }
     if permission.name() == "CanTransferAsset" {
         let normalized = executor_permission::asset::CanTransferAsset::try_from(permission)
             .map_err(|err| {
@@ -2634,6 +2707,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsPopIssuer",
     "CanUpsertSorafsProviderCredit",
     "CanManageSorafsStreamTokenCustody",
+    "CanManageSorafsStreamTokenGateway",
+    "CanOperateSorafsStreamTokenGateway",
+    "CanCheckSorafsStreamTokenGateway",
     "CanManageSorafsFinalPromotionCustody",
     "CanOperateSorafsFinalPromotion",
     "CanCheckSorafsFinalPromotion",

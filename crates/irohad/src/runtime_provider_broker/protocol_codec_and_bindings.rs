@@ -1525,7 +1525,6 @@ fn validate_observation(
     }
     match requested.slot {
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id()
-            || slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id()
             || slot == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id()
             || slot == IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor.wire_id()
             || slot == IrohaRuntimeProviderSlotV1::TransparencyLeaderLease.wire_id()
@@ -3400,20 +3399,10 @@ fn reputation_journal_request_to_wire(
     request: &sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1,
 ) -> Result<ReputationJournalTransactionRequestWireV1, BrokerError> {
     request.validate().map_err(|_| BrokerError::Rejected)?;
-    let (instruction_kind, canonical_instruction) = match &request.instruction {
-        sorafs_node::reputation::runtime::ReputationJournalAppendInstructionV1::Por(
-            instruction,
-        ) => (
-            1,
-            encode_canonical(instruction, MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1)?,
-        ),
-        sorafs_node::reputation::runtime::ReputationJournalAppendInstructionV1::StreamToken(
-            instruction,
-        ) => (
-            2,
-            encode_canonical(instruction, MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1)?,
-        ),
-    };
+    let canonical_instruction = encode_canonical(
+        &request.instruction,
+        MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1,
+    )?;
     Ok(ReputationJournalTransactionRequestWireV1 {
         sequence: request.sequence,
         network_id: request.network_id,
@@ -3422,30 +3411,17 @@ fn reputation_journal_request_to_wire(
         source_id: request.source_id,
         attempt: request.attempt,
         idempotency_key: request.idempotency_key,
-        instruction_kind,
         canonical_instruction,
     })
 }
 fn reputation_journal_request_from_wire(
     wire: ReputationJournalTransactionRequestWireV1,
 ) -> Result<sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1, BrokerError> {
-    let instruction = match wire.instruction_kind {
-        1 => sorafs_node::reputation::runtime::ReputationJournalAppendInstructionV1::Por(
-            decode_canonical::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>(
-                &wire.canonical_instruction,
-                MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1,
-            )?,
-        ),
-        2 => sorafs_node::reputation::runtime::ReputationJournalAppendInstructionV1::StreamToken(
-            decode_canonical::<
-                iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry,
-            >(
-                &wire.canonical_instruction,
-                MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1,
-            )?,
-        ),
-        _ => return Err(BrokerError::Rejected),
-    };
+    let instruction =
+        decode_canonical::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>(
+            &wire.canonical_instruction,
+            MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1,
+        )?;
     let request = sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1 {
         sequence: wire.sequence,
         network_id: wire.network_id,

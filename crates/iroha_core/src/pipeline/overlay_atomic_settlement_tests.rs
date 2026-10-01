@@ -14,10 +14,12 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId, AssetId,
     },
     domain::Domain,
+    fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
     isi::{
         AtomicSettlementMovement, AtomicSettlementMovements, Grant, Instruction, SettleAtomic,
         SettlementDetails,
     },
+    parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter},
     permission::Permission,
 };
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
@@ -34,6 +36,41 @@ fn owner(index: u16) -> AccountId {
             .public_key()
             .clone(),
     )
+}
+
+fn expected_transcript(instruction: &SettleAtomic, sponsor: &AccountId) -> TransferTranscript {
+    let mut received = Quantity::zero();
+    let deltas = instruction
+        .movements()
+        .as_slice()
+        .iter()
+        .map(|movement| {
+            let before = received.clone();
+            received = received
+                .checked_add(&movement.quantity)
+                .expect("bounded sum");
+            TransferDeltaTranscript {
+                from_account: movement.source.account().clone(),
+                to_account: sponsor.clone(),
+                asset_definition: movement.source.definition().clone(),
+                amount: movement.quantity.clone(),
+                from_balance_before: Quantity::from(1000_u32),
+                from_balance_after: Quantity::from(1000_u32)
+                    .checked_sub(&movement.quantity)
+                    .expect("prefunded fixture source"),
+                to_balance_before: before,
+                to_balance_after: received.clone(),
+                from_smt_witness: TransferSmtWitness::default(),
+                to_smt_witness: TransferSmtWitness::default(),
+            }
+        })
+        .collect();
+    TransferTranscript {
+        batch_hash: Hash::new(b"atomic-overlay-carrier"),
+        authority_digest: crate::fastpq::authority_digest(sponsor),
+        poseidon_preimage_digest: None,
+        deltas,
+    }
 }
 
 fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, AccountId) {
@@ -94,7 +131,7 @@ fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, Ac
         [],
     );
     let state = State::new(
-        world,
+        super::test_support::with_global_root(world),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -105,6 +142,56 @@ fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, Ac
         nonzero!(100_u64),
         Metadata::default(),
     );
+    // This exact fixture corpus includes 255 transfers with fixed Ed25519 owners
+    // and prefunded quantities. Measure its complete canonical transcript/statement
+    // under a finite local construction cap, then freeze all six policy dimensions
+    // before block admission. Raising D alone leaves I/M/S at the bootstrap corpus.
+    // The successful test compares this sizing input against the actual emitted
+    // transcript; it does not replace execution, source ownership or quota checks.
+    let transcript = expected_transcript(&instruction, &sponsor);
+    let measured =
+        crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage(
+            transcript.batch_hash,
+            [&transcript],
+            crate::fastpq::FastpqSourceStatementBuildLimits {
+                max_executed_entries: 1,
+                max_transcripts: 1,
+                max_deltas: count,
+                max_input_transcript_bytes: 4 * 1024 * 1024,
+                max_statement_bytes: 4 * 1024 * 1024,
+                max_total_statement_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .expect("exact atomic fixture fits its bounded sizing corpus");
+    let mut parameters = state.world.parameters.block();
+    let baseline = parameters.get().block().fastpq_source();
+    let mut intrinsic = baseline.intrinsic;
+    intrinsic.max_transcripts = intrinsic
+        .max_transcripts
+        .max(u32::try_from(measured.transcripts).unwrap());
+    intrinsic.max_deltas = intrinsic
+        .max_deltas
+        .max(u32::try_from(measured.deltas).unwrap());
+    intrinsic.max_input_transcript_bytes = intrinsic
+        .max_input_transcript_bytes
+        .max(u64::try_from(measured.input_transcript_bytes).unwrap());
+    intrinsic.max_statement_bytes = intrinsic
+        .max_statement_bytes
+        .max(u64::try_from(measured.max_statement_bytes).unwrap());
+    intrinsic.max_total_statement_bytes = intrinsic
+        .max_total_statement_bytes
+        .max(u64::try_from(measured.total_statement_bytes).unwrap());
+    let profile = FastpqSourcePolicyV1::from_sizing(
+        parameters.get().block().execution_output(),
+        intrinsic,
+        baseline.mandatory,
+        1,
+    )
+    .expect("bounded atomic component profile");
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+    parameters.commit();
     (state, instruction, sponsor)
 }
 
@@ -216,8 +303,10 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
             let (state, instruction, sponsor) = fixture(count, false);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_consents(&mut block, &instruction, &sponsor, None);
-            let mut state_tx = block.transaction();
-            state_tx.tx_call_hash = Some(Hash::new(b"atomic-overlay-carrier"));
+            // Retain the finite direct-component invocation before borrowing its effects.
+            // This fixture exercises overlay execution, not network input or publication.
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::new(b"atomic-overlay-carrier"));
             assert_eq!(state_tx.pending_transfer_transcript_count_for_testing(), 0);
             let event_count = state_tx.world.internal_event_buf.len();
             overlay(instruction.clone(), direct)
@@ -273,6 +362,16 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
                 *intent_hash,
                 instruction.intent_hash().expect("full intent")
             );
+            state_tx.apply();
+            let expected = expected_transcript(&instruction, &sponsor);
+            assert_eq!(
+                block
+                    .drain_transfer_transcripts()
+                    .remove(&expected.batch_hash)
+                    .expect("one retained settlement transcript"),
+                vec![expected],
+                "finite sizing corpus must match the original executed transcript"
+            );
         }
     }
 }
@@ -283,8 +382,8 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
         let (state, instruction, sponsor) = fixture(255, false);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, Some(254));
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"missing-final-consent"));
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::new(b"missing-final-consent"));
         let before = observable(&state_tx);
         assert_eq!(
             before.1, 0,
@@ -307,8 +406,7 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
         let (state, instruction, sponsor) = fixture(255, true);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, None);
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"final-scope-policy"));
+        let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"final-scope-policy"));
         let before = observable(&state_tx);
         assert_eq!(before.1, 0);
         let error = overlay(instruction, direct)

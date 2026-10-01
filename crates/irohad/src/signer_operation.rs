@@ -39,7 +39,6 @@ mod authority;
 /// Authoritative enrollment and terminal custody-control transitions.
 pub mod control;
 /// Owner-only supervisor-credential software key provider for opaque operations.
-#[cfg(unix)]
 pub mod credential_provider;
 /// Canonical final-promotion producer with immutable receipts and fresh audit predecessors.
 // TODO: Compile the final-promotion producer outside tests once a configured finalized state
@@ -47,7 +46,6 @@ pub mod credential_provider;
 #[cfg(all(unix, test))]
 pub mod final_promotion;
 /// Immutable bounded receipt staging shared by canonical signer operation producers.
-#[cfg(unix)]
 pub mod journal;
 mod recovery;
 use authority::SignerOperationAuthorityV1;
@@ -58,7 +56,6 @@ pub use authority::SignerOperationFinalizedReadSourceV1;
 #[cfg(all(unix, test))]
 pub mod release_manifest;
 /// Provider-scoped stream-token producer with durable recovery and no raw signature output.
-#[cfg(unix)]
 pub mod stream_token;
 use recovery::{RecoveredSignerOperationV1, RecoveredSignerSignatureV1};
 

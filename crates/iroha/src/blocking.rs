@@ -538,6 +538,25 @@ impl Client {
             .block_on(self.inner.wait_until_transaction_applied(hash, options))?
     }
 
+    /// Wait for the configured peer's exact local, state-resolved `Applied` observation.
+    ///
+    /// No global fanout is used; local rejection/expiry does not constitute global finality
+    /// failure evidence. The native shared waiter retains one absolute request deadline.
+    ///
+    /// # Errors
+    /// Returns status, binding, local terminal observation, deadline, transport, or
+    /// [`BlockingCallError`] failures.
+    pub fn wait_for_transaction_applied_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        self.runtime.block_on(
+            self.inner
+                .wait_until_transaction_applied_local(hash, options),
+        )?
+    }
+
     /// Refresh the context-local node compatibility decision.
     ///
     /// # Errors

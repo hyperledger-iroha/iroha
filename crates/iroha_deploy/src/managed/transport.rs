@@ -167,6 +167,10 @@ mod native {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     authenticate_peer(&stream)?;
+                    // BSD/macOS accept inherits the listener's nonblocking mode. A client
+                    // may not have written its frame yet, so restore blocking I/O before
+                    // applying the finite per-connection timeouts below.
+                    stream.set_nonblocking(false)?;
                     stream.set_read_timeout(Some(IO_TIMEOUT))?;
                     stream.set_write_timeout(Some(IO_TIMEOUT))?;
                     Ok(Some(Connection(stream)))
@@ -194,15 +198,15 @@ mod native {
             decode(&read_frame(&mut self.0)?)
         }
 
-        pub(crate) fn reply(&mut self, status: &ManagedStatus) -> Result<()> {
+        pub(crate) fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
             write_frame(&mut self.0, &encode(status)?)
         }
     }
 
-    pub(crate) fn request(
+    pub(crate) fn request_as<T: JsonDeserialize>(
         directory: &PrivateDirectory,
         request: &ControlRequest,
-    ) -> Result<ManagedStatus> {
+    ) -> Result<T> {
         let directory = ipc_directory(directory, false)?;
         let before = validate_endpoint(&directory)?;
         let mut stream = UnixStream::connect(endpoint(&directory))?;
@@ -242,6 +246,54 @@ mod native {
             drop(listener);
             assert!(!socket.exists());
         }
+
+        #[test]
+        fn accepted_control_connection_waits_for_delayed_and_partial_frames() {
+            let _resources = super::super::super::native_test_guard();
+            let temporary = tempfile::tempdir().unwrap();
+            let directory =
+                PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+            let listener = Listener::bind(&directory).unwrap();
+            let mut client = UnixStream::connect(&listener.path).unwrap();
+            let mut connection = listener.accept().unwrap().unwrap();
+            assert_eq!(connection.0.read_timeout().unwrap(), Some(IO_TIMEOUT));
+            assert_eq!(connection.0.write_timeout().unwrap(), Some(IO_TIMEOUT));
+            // Accept remains a polling operation even though its accepted stream blocks.
+            assert!(listener.accept().unwrap().is_none());
+            let request = ControlRequest {
+                token: "c".repeat(64),
+                action: "status".into(),
+            };
+            let mut frame = Vec::new();
+            write_frame(&mut frame, &encode(&request).unwrap()).unwrap();
+            let (entered, ready) = std::sync::mpsc::channel();
+            let (sender, received) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                entered.send(()).unwrap();
+                sender.send(connection.receive()).unwrap();
+            });
+            ready.recv_timeout(IO_TIMEOUT).unwrap();
+            let before_frame = received.recv_timeout(Duration::from_millis(50));
+            let prefix = client.write_all(&frame[..2]);
+            let partial_header = received.recv_timeout(Duration::from_millis(50));
+            let remainder = client.write_all(&frame[2..]);
+            let complete = received.recv_timeout(IO_TIMEOUT + Duration::from_secs(1));
+            // Join before assertions so the pre-fix early WouldBlock path leaves no reader.
+            reader.join().unwrap();
+            assert!(matches!(
+                before_frame,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            assert!(matches!(
+                partial_header,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            prefix.unwrap();
+            remainder.unwrap();
+            let actual = complete.unwrap().unwrap();
+            assert_eq!(actual.action, request.action);
+            assert_eq!(actual.token, request.token);
+        }
     }
 }
 
@@ -275,16 +327,26 @@ mod native {
         pub(crate) fn receive(&mut self) -> Result<ControlRequest> {
             Err(Error::Invalid("native IPC unavailable".into()))
         }
-        pub(crate) fn reply(&mut self, _: &ManagedStatus) -> Result<()> {
+        pub(crate) fn reply<T: JsonSerialize>(&mut self, _: &T) -> Result<()> {
             supported()
         }
     }
-    pub(crate) fn request(_: &PrivateDirectory, _: &ControlRequest) -> Result<ManagedStatus> {
+    pub(crate) fn request_as<T: JsonDeserialize>(
+        _: &PrivateDirectory,
+        _: &ControlRequest,
+    ) -> Result<T> {
         Err(Error::Invalid("native IPC unavailable".into()))
     }
 }
 
-pub(crate) use native::{Listener, detach, request, supported};
+pub(crate) use native::{Listener, detach, request_as, supported};
+
+pub(crate) fn request(
+    directory: &PrivateDirectory,
+    request: &ControlRequest,
+) -> Result<ManagedStatus> {
+    request_as(directory, request)
+}
 
 #[cfg(test)]
 mod tests {
@@ -304,5 +366,45 @@ mod tests {
         assert_eq!(read_frame(&mut frame.as_slice()).unwrap(), b"public-status");
         frame.pop();
         assert!(read_frame(&mut frame.as_slice()).is_err());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_control_roundtrips_typed_attachment_observations() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let listener = Listener::bind(&directory).unwrap();
+        let expected = ManagedAttachmentStatus {
+            network: "fixture".into(),
+            stage: ManagedAttachmentPhase::Connecting,
+            wallet_status: None,
+            local_successor: None,
+            parent_confirmed: None,
+            failure: None,
+        };
+        let reply = expected.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(mut connection) = listener.accept().unwrap() {
+                    assert_eq!(connection.receive().unwrap().action, "attachment_status");
+                    connection.reply(&reply).unwrap();
+                    return;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let actual: ManagedAttachmentStatus = request_as(
+            &directory,
+            &ControlRequest {
+                token: "c".repeat(64),
+                action: "attachment_status".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        server.join().unwrap();
     }
 }

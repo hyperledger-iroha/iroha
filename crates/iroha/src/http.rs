@@ -6,6 +6,9 @@ pub use http::{Method, Response, StatusCode};
 use std::{future::Future, pin::Pin, time::Duration};
 use url::Url;
 
+mod public;
+pub use public::{MAX_PUBLIC_READ_BYTES, PublicHttpClient, PublicHttpError};
+
 /// Fully prepared HTTP request passed to an injected client transport.
 pub struct TransportRequest {
     /// HTTP method.

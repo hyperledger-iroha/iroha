@@ -1345,7 +1345,7 @@ pub mod sorafs {
         /// Shared private signer-journal inventory resident-credit ceiling (bytes).
         pub const SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES: Bytes = Bytes(16 * 1024 * 1024);
         /// Concurrent logical directory/metadata probe credits across every signer purpose.
-        pub const SIGNER_JOURNAL_INVENTORY_METADATA_PROBES: u64 = 300_000;
+        pub const SIGNER_JOURNAL_INVENTORY_METADATA_PROBES: u64 = 1_000_000;
         /// Concurrent pinned path, receipt and scan descriptors across every signer purpose.
         pub const SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES: u32 = 1_024;
         /// Maximum number of manifests pinned before the node applies back-pressure.
@@ -2093,11 +2093,15 @@ pub mod sorafs {
             pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 120;
             /// Durable callback row and local queued/reserved cleanup ticket ceiling.
             pub const ADMISSION_MAX_PENDING: u32 = 65_536;
-            /// Maximum active token quota windows admitted by the external gateway owner.
+            /// Maximum active token quota windows admitted by native consensus.
             pub const ADMISSION_MAX_TRACKED_TOKENS: u32 = 65_536;
             /// Maximum ordered callback rows replayed by one reconciliation tick.
             pub const ADMISSION_RECONCILE_MAX_ITEMS: u32 = 256;
-            /// Maximum lifetime of one external concurrency lease.
+            /// Absolute native gateway admission and callback/Serving operation budget.
+            pub const ADMISSION_OPERATION_TIMEOUT_MS: u64 = 30_000;
+            /// Supervised native callback reconciliation cadence in milliseconds.
+            pub const ADMISSION_RECONCILE_INTERVAL_MS: u64 = 1_000;
+            /// Maximum lifetime of one consensus-owned concurrency lease.
             pub const ADMISSION_LEASE_TTL_MS: u64 = 120_000;
         }
     }
@@ -3300,6 +3304,7 @@ pub mod torii {
             "torii_gateway".to_string(),
             "chunk_range_fetch".to_string(),
             "potr_mldsa".to_string(),
+            "registered_account_read".to_string(),
         ]
     }
 }

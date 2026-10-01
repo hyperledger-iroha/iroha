@@ -121,6 +121,8 @@ pub struct TestChainConfig {
     pub genesis_parameters: Vec<Parameter>,
     /// Consensus mode carried by the signed genesis and used for execution.
     pub consensus_mode: SumeragiConsensusMode,
+    /// Root ownership bound into the original signed genesis (never a runtime override).
+    pub root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     /// Creation time of the first genesis transaction in milliseconds.
     pub genesis_time_ms: u64,
     /// Original execution configuration, fixed before signed genesis policies are derived.
@@ -163,6 +165,7 @@ impl TestChainConfig {
             genesis_instructions: Vec::new(),
             genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
+            root_scope: iroha_data_model::block::consensus::SumeragiRootScope::Global,
             genesis_time_ms,
             pipeline: iroha_config::parameters::actual::Pipeline::default(),
             nexus: None,
@@ -270,6 +273,9 @@ pub enum TestChainError {
     /// The genesis could not be built.
     #[error("genesis: {0}")]
     Genesis(String),
+    /// Original signed genesis execution failed before its commitments could be prepared.
+    #[error("original native genesis execution: {0}")]
+    OriginalGenesisExecution(#[source] Box<crate::block::BlockValidationError>),
     /// Genesis did not apply (for example, one of its instructions failed).
     #[error(transparent)]
     Startup(#[from] startup::StartupError),
@@ -318,6 +324,7 @@ impl CertifiedTestChain {
             genesis_instructions,
             genesis_parameters,
             consensus_mode,
+            root_scope,
             genesis_time_ms,
             pipeline,
             nexus,
@@ -362,6 +369,7 @@ impl CertifiedTestChain {
             genesis_instructions,
             genesis_parameters,
             consensus_mode,
+            root_scope,
             genesis_time_ms,
         ) {
             Ok(genesis) => genesis,
@@ -1463,9 +1471,27 @@ impl CertifiedTestChain {
             FeePaymentIntent::authority(Vec::new(), None),
         );
         builder.set_creation_time(Duration::from_millis(created_ms));
-        builder
-            .with_instructions(instructions)
-            .sign(key.private_key())
+        let mut builder = builder.with_instructions(instructions);
+        let view = self.state.view();
+        if let Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+            dataspace_id,
+            ..
+        }) = super::lanes::routing::committed_root_scope(view.world())
+        {
+            let draft = builder.clone().sign(key.private_key());
+            let quote = crate::executor::quote_nexus_fee_admission_draft(
+                view.world(),
+                view.nexus(),
+                view.pipeline(),
+                draft.payload(),
+                created_ms,
+                self.height() + 1,
+                Some(dataspace_id),
+            )
+            .expect("private fixture work pays its original signed fee policy");
+            builder = builder.with_fee_payment_intent(quote.recommended_intent);
+        }
+        builder.sign(key.private_key())
     }
 
     /// Sign actual nonempty fixture work using the account seeded by this chain's genesis.
@@ -1743,24 +1769,13 @@ pub(super) fn prepare_configured_genesis(
                     drop((valid, overlay));
                     Ok(None)
                 }
-                Err((rejected, error)) => match *error {
+                Err((_, error)) => match *error {
                     crate::block::BlockValidationError::GenesisPolicyMismatch {
                         actual_execution,
                         actual_nexus,
                         ..
                     } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
-                    error => {
-                        let failures = rejected
-                            .execution_outputs()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, output)| output.result().is_err())
-                            .map(|(index, output)| (index, output.result()))
-                            .collect::<Vec<_>>();
-                        Err(format!(
-                            "original native genesis execution: {error}; failed outputs: {failures:?}"
-                        ))
-                    }
+                    error => Err(Box::new(error)),
                 },
             }
         };
@@ -1768,7 +1783,7 @@ pub(super) fn prepare_configured_genesis(
             Ok(policies) => policies,
             Err(error) => {
                 return Err(StartFailure {
-                    error: TestChainError::Genesis(error),
+                    error: TestChainError::OriginalGenesisExecution(error),
                     state: Arc::new(state),
                 });
             }
@@ -1827,6 +1842,7 @@ pub(crate) fn signed_genesis_fixture(
         instructions,
         genesis_policy::npos_genesis_parameters(npos),
         mode.into(),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         genesis_time_ms,
     )
     .map(|(block, _)| block)
@@ -1840,6 +1856,7 @@ fn build_genesis(
     instructions: Vec<InstructionBox>,
     parameters: Vec<Parameter>,
     consensus_mode: SumeragiConsensusMode,
+    root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     genesis_time_ms: u64,
 ) -> Result<(SignedBlock, iroha_genesis::RawGenesisTransaction), String> {
     let entries = validators
@@ -1853,10 +1870,12 @@ fn build_genesis(
             power: 1,
         })
         .collect::<Vec<_>>();
+    let mut context = SumeragiGenesisContextParameters::recommended();
+    context.root_scope = root_scope;
     let builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
         .with_block_cadence_ms(NonZeroU64::new(1).expect("non-zero"))
         .set_topology(entries)
-        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(context)
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
         );
@@ -2269,6 +2288,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             SumeragiConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             10_000,
         )
         .unwrap();

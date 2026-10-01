@@ -2,7 +2,6 @@
 
 /// AMX two-phase commit on the global chain (`specs/sumeragi.md` §11).
 pub mod amx;
-pub mod private_dataspace;
 /// Native source-complete Pasta Commit attestations.
 pub mod attestation;
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
@@ -45,6 +44,9 @@ pub mod node;
 /// Nonempty block payloads and the leader's proposal builder.
 pub mod payload;
 pub(crate) mod penalties;
+pub mod private_dataspace;
+/// Body-free owner-private root registration and native certificate exports.
+pub mod private_dataspace_export;
 /// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
 pub mod records;
 pub mod schedule;

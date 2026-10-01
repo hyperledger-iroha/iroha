@@ -13,8 +13,18 @@ pub const MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES: usize = 128 * 1024;
 /// the parent using an independently selected genesis/checkpoint, then call [`Self::verify`].
 /// This receipt describes ownership and the child cursor at its parent height, not a fresh lease
 /// observation. It contains no private child body, genesis, artifact or execution write set.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema,
-    crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::private_dataspace::PrivateDataspaceRecordProof")]
 #[norito(deny_unknown_fields)]
 pub struct PrivateDataspaceRecordProof {
@@ -36,19 +46,33 @@ impl PrivateDataspaceRecordProof {
     /// # Errors
     /// Rejects noncanonical wire bytes, excessive allocations or malformed record structure.
     pub fn decode(bytes: &[u8]) -> Result<Self, PrivateDataspaceAnchorError> {
-        require(bytes.len() <= MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES, "record proof exceeds wire bound")?;
-        let proof: Self = norito::decode_canonical_with_limits(bytes,
-            part_limits(MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES)).map_err(failure)?;
+        require(
+            bytes.len() <= MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES,
+            "record proof exceeds wire bound",
+        )?;
+        let proof: Self = norito::decode_canonical_with_limits(
+            bytes,
+            part_limits(MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES),
+        )
+        .map_err(failure)?;
         proof.validate_structure()?;
         Ok(proof)
     }
 
     fn validate_structure(&self) -> Result<(), PrivateDataspaceAnchorError> {
         self.record.validate()?;
-        require(self.parent_height > 1 && self.parent_result != [0; 32], "record proof requires certified non-genesis parent execution")?;
-        require(self.record.anchor.registration().parent_scope()?.0 == self.parent_network_id,
-            "record proof names another parent network")?;
-        require(self.inclusion.siblings.len() <= 256, "record proof exceeds path bound")
+        require(
+            self.parent_height > 1 && self.parent_result != [0; 32],
+            "record proof requires certified non-genesis parent execution",
+        )?;
+        require(
+            self.record.anchor.registration().parent_scope()?.0 == self.parent_network_id,
+            "record proof names another parent network",
+        )?;
+        require(
+            self.inclusion.siblings.len() <= 256,
+            "record proof exceeds path bound",
+        )
     }
 
     /// Project a record from its original archived write set. This does not authenticate parent finality.
@@ -62,10 +86,19 @@ impl PrivateDataspaceRecordProof {
         writes: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
         record: PrivateDataspaceRecord,
     ) -> Result<Self, PrivateDataspaceAnchorError> {
-        let (inclusion, value) = AmxWriteProofV1::from_writes(writes, &record.witness_key()).map_err(failure)?;
-        require(value == norito::encode_canonical(&record).map_err(failure)?,
-            "record differs from the archived final write")?;
-        let proof = Self { parent_network_id, parent_height, parent_result, record, inclusion };
+        let (inclusion, value) =
+            AmxWriteProofV1::from_writes(writes, &record.witness_key()).map_err(failure)?;
+        require(
+            value == norito::encode_canonical(&record).map_err(failure)?,
+            "record differs from the archived final write",
+        )?;
+        let proof = Self {
+            parent_network_id,
+            parent_height,
+            parent_result,
+            record,
+            inclusion,
+        };
         proof.validate_structure()?;
         Ok(proof)
     }
@@ -77,15 +110,31 @@ impl PrivateDataspaceRecordProof {
     ///
     /// # Errors
     /// Rejects another dataspace, network, height, result or ordinary-write inclusion root.
-    pub fn verify(&self, expected_dataspace: DataSpaceId, parent: &VerifiedSumeragiBlock) -> Result<(), PrivateDataspaceAnchorError> {
+    pub fn verify(
+        &self,
+        expected_dataspace: DataSpaceId,
+        parent: &VerifiedSumeragiBlock,
+    ) -> Result<(), PrivateDataspaceAnchorError> {
         self.validate_structure()?;
-        require(self.record.dataspace_id == expected_dataspace, "record proof is for another dataspace")?;
-        require(self.parent_network_id == parent.commitment().schedule.current.network_id
-            && self.parent_height == parent.height() && self.parent_result == parent.result().0,
-            "record proof differs from independently authenticated parent execution")?;
+        require(
+            self.record.dataspace_id == expected_dataspace,
+            "record proof is for another dataspace",
+        )?;
+        require(
+            self.parent_network_id == parent.commitment().schedule.current.network_id
+                && self.parent_height == parent.height()
+                && self.parent_result == parent.result().0,
+            "record proof differs from independently authenticated parent execution",
+        )?;
         let value = norito::encode_canonical(&self.record).map_err(failure)?;
-        let root = self.inclusion.root(&self.record.witness_key(), &value).map_err(failure)?;
-        require(root == parent.execution().ordinary_writes_root, "record is not included in certified parent writes")
+        let root = self
+            .inclusion
+            .root(&self.record.witness_key(), &value)
+            .map_err(failure)?;
+        require(
+            root == parent.execution().ordinary_writes_root,
+            "record is not included in certified parent writes",
+        )
     }
 }
 

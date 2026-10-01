@@ -7,7 +7,15 @@ use std::{
     path::Path,
 };
 
-fn fixture(root: &Path, name: &str) -> (ManagedStore, PrivateDirectory, PreparedLocalnet) {
+#[path = "attachment_installed_tests.rs"]
+mod attachment_installed;
+#[path = "installed_tests.rs"]
+mod installed;
+
+pub(super) fn fixture(
+    root: &Path,
+    name: &str,
+) -> (ManagedStore, PrivateDirectory, PreparedLocalnet) {
     let store = ManagedStore::open(root).unwrap();
     let networks = PrivateDirectory::open(root.join("networks")).unwrap();
     let directory = networks.create_child(name).unwrap();
@@ -49,12 +57,13 @@ fn fixture(root: &Path, name: &str) -> (ManagedStore, PrivateDirectory, Prepared
         .unwrap();
     let pin = store::pin_binary(&directory.path().join("fixture-executable")).unwrap();
     let retained = RetainedLocalnet {
+        root_kind: RootKind::Global,
         prepared: prepared.clone(),
         launcher: pin.clone(),
         daemon: pin,
         startup_timeout_ms: 30000,
     };
-    directory
+    bundle
         .write_atomic(
             MANIFEST,
             &encode(&retained).unwrap(),
@@ -85,6 +94,154 @@ fn names_cannot_escape_the_context_root() {
         validate_name(name).unwrap();
     }
     assert!(validate_name(&"x".repeat(49)).is_err());
+}
+
+#[test]
+fn retained_root_kind_is_mandatory_and_private_identity_cannot_replace_global() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, _) = fixture(&temporary.path().join("managed"), "local");
+    let bytes = encode(&generation::read(&directory).unwrap()).unwrap();
+    let mut value: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    value.as_object_mut().unwrap().remove("root_kind");
+    assert!(decode::<RetainedLocalnet>(&norito::json::to_vec(&value).unwrap()).is_err());
+    let spec = private_spec();
+    let binary = directory.path().join("fixture-executable");
+    let request = LocalnetRequest::new(binary.clone(), binary);
+    let error = store.up_private_root(&request, &spec).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("different immutable root identity")
+    );
+    assert!(!directory.path().join(WORKER).exists());
+    assert_eq!(
+        encode(&generation::read(&directory).unwrap()).unwrap(),
+        bytes
+    );
+}
+
+pub(super) fn private_spec() -> crate::localnet::PrivateRootSpec {
+    use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
+    let alias = "privateapp";
+    let name_hash = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)
+        .unwrap()
+        .name_hash();
+    crate::localnet::PrivateRootSpec {
+        parent_network_id:
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .unwrap(),
+        dataspace_id: iroha_model_base::topology::DataSpaceId::from_hash(&name_hash),
+        dataspace_alias: alias.into(),
+    }
+}
+
+#[test]
+fn incomplete_managed_preparation_never_creates_a_replacement_generation() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
+    let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
+    let directory = networks.create_child("private").unwrap();
+    let generation = directory.create_child("generation").unwrap();
+    generation
+        .write_atomic(
+            "original-owner.key",
+            b"retained owner custody",
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    directory
+        .write_atomic(
+            "not-executable",
+            b"not a native worker",
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    let binary = directory.path().join("not-executable");
+    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    request.name = "private".into();
+    assert!(store.up_private_root(&request, &private_spec()).is_err());
+    assert_eq!(
+        &*generation.read("original-owner.key", MAX_METADATA).unwrap(),
+        b"retained owner custody"
+    );
+    assert!(
+        !directory
+            .path()
+            .join(generation::DIRECTORY)
+            .join(MANIFEST)
+            .exists()
+    );
+    let generations = std::fs::read_dir(directory.path())
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
+        .count();
+    assert_eq!(generations, 1);
+}
+
+#[test]
+fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spawn_failure() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(&temporary.path().join("managed")).unwrap();
+    directory
+        .write_atomic(
+            "not-executable",
+            b"not a native worker",
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    let binary = directory.path().join("not-executable");
+    let store = ManagedStore::open(directory.path()).unwrap();
+    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    request.name = "private".into();
+    request.startup_timeout = Duration::from_secs(120);
+    let spec = private_spec();
+    let error = store.up_private_root(&request, &spec).unwrap_err();
+    assert!(
+        matches!(error, Error::Io(_)),
+        "expected native spawn failure after genuine preparation: {error}"
+    );
+    let prepared = store
+        .prepared("private")
+        .expect("genuine private preparation retained before spawn");
+    assert_eq!(prepared.context.dataspace_id, spec.dataspace_id.as_u64());
+    assert!(
+        prepared
+            .context
+            .load_client_config()
+            .unwrap()
+            .api_token
+            .is_some()
+    );
+    let original_config =
+        iroha_fs::read_private(&prepared.context.client_config, MAX_METADATA).unwrap();
+    assert!(
+        store
+            .up(&request)
+            .unwrap_err()
+            .to_string()
+            .contains("different immutable root identity")
+    );
+    assert!(store.up_retained(&request).is_err());
+    assert_eq!(store.prepared("private").unwrap(), prepared);
+    assert_eq!(
+        &*iroha_fs::read_private(&prepared.context.client_config, MAX_METADATA).unwrap(),
+        &*original_config
+    );
+    let mut foreign = spec;
+    foreign.parent_network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"different parent")),
+    );
+    assert!(
+        store
+            .up_private_root(&request, &foreign)
+            .unwrap_err()
+            .to_string()
+            .contains("different immutable root identity")
+    );
 }
 
 #[test]
@@ -136,7 +293,13 @@ fn unreadable_worker_with_held_lock_is_not_reported_stopped_or_reset() {
     let _owned = store::acquire(&directory, "runtime.lock", "local").unwrap();
     assert!(matches!(store.status("local"), Err(Error::Busy(_))));
     assert!(matches!(store.reset("local"), Err(Error::Busy(_))));
-    assert!(directory.path().join(MANIFEST).exists());
+    assert!(
+        directory
+            .path()
+            .join(generation::DIRECTORY)
+            .join(MANIFEST)
+            .exists()
+    );
 }
 
 #[test]
@@ -187,6 +350,94 @@ fn live_foreground_start_is_distinguished_from_a_crashed_handoff() {
     assert_eq!(store.status("local").unwrap().phase, ManagedPhase::Failed);
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_identity() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let token = "d".repeat(64);
+    directory
+        .write_atomic(
+            WORKER,
+            &encode(&WorkerRecord {
+                token: token.clone(),
+            })
+            .unwrap(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    let listener = transport::Listener::bind(&directory).unwrap();
+    let failed = ManagedStatus {
+        context: prepared.context.clone(),
+        phase: ManagedPhase::Failed,
+        running_peers: 0,
+        failure: Some("startup readiness deadline expired while confirming the complete four-validator peer mesh".into()),
+    };
+    let mut late = failed.clone();
+    late.phase = ManagedPhase::Ready;
+    late.running_peers = 4;
+    late.failure = None;
+    let mut foreign = failed.clone();
+    foreign.context.network_id.push('x');
+    let expected = failed.clone();
+    let late_observation = late.clone();
+    let server = std::thread::spawn(move || {
+        for reply in [failed, late, foreign] {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(mut connection) = listener.accept().unwrap() {
+                    let request = connection.receive().unwrap();
+                    assert_eq!(request.token, token);
+                    assert_eq!(request.action, "startup_expired");
+                    connection.reply(&reply).unwrap();
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+    let timeout = Duration::from_secs(30);
+    let expired_start = std::time::Instant::now() - Duration::from_secs(31);
+    // This first call must perform no control exchange: a late idempotent observation
+    // neither selects nor stops a network that was already ready when `up` began.
+    assert!(matches!(
+        store::observe_startup_status(
+            &directory,
+            &prepared.context,
+            late_observation.clone(),
+            expired_start,
+            timeout,
+            true,
+        ),
+        Err(Error::Timeout(value)) if value == timeout
+    ));
+    // The same late proof during this invocation's actual startup must cancel that
+    // attempt, preserving its closed failure phase rather than returning late Ready.
+    assert_eq!(
+        store::observe_startup_status(
+            &directory,
+            &prepared.context,
+            late_observation,
+            expired_start,
+            timeout,
+            false,
+        )
+        .unwrap(),
+        expected
+    );
+    assert!(matches!(
+        store::expire_startup(&directory, &prepared.context, timeout),
+        Err(Error::Timeout(value)) if value == timeout
+    ));
+    assert!(matches!(
+        store::expire_startup(&directory, &prepared.context, timeout),
+        Err(Error::Invalid(_))
+    ));
+    server.join().unwrap();
+}
+
 #[test]
 fn reset_deletes_only_a_stopped_named_context_and_preserves_selection_failure() {
     let _resources = super::native_test_guard();
@@ -196,9 +447,21 @@ fn reset_deletes_only_a_stopped_named_context_and_preserves_selection_failure() 
     let (_, other, _) = fixture(&root, "other");
     store.select("local").unwrap();
     store.reset("local").unwrap();
-    assert!(!directory.path().join(MANIFEST).exists());
+    assert!(
+        !directory
+            .path()
+            .join(generation::DIRECTORY)
+            .join(MANIFEST)
+            .exists()
+    );
     assert!(directory.path().join("operation.lock").exists());
-    assert!(other.path().join(MANIFEST).exists());
+    assert!(
+        other
+            .path()
+            .join(generation::DIRECTORY)
+            .join(MANIFEST)
+            .exists()
+    );
     assert!(
         matches!(store.context(None), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
     );
@@ -221,28 +484,42 @@ fn prepared_bundle_rejects_remote_endpoints_missing_peers_and_path_escape() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let (_, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
-    store::validate_prepared("local", directory.path(), &prepared).unwrap();
+    store::validate_prepared("local", directory.path(), &prepared, &RootKind::Global).unwrap();
     let mut changed = prepared.clone();
     changed.peers.pop();
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     let mut changed = prepared.clone();
     changed.context.dataspace_id = 2;
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     changed.context.dataspace_id = 0;
     changed.context.dataspace_alias = "foreign".into();
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     let mut changed = prepared.clone();
     changed.peers[0].torii_url = "https://taira.sora.org/".into();
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     let mut changed = prepared.clone();
     changed.peers[0].config_path = temporary.path().join("foreign.toml");
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     let mut changed = prepared.clone();
     changed.peers[0].config_path = directory.path().join("generation/../generation/peer0.toml");
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
     let mut changed = prepared;
     changed.peers[0].log_name = "../outside.log".into();
-    assert!(store::validate_prepared("local", directory.path(), &changed).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &changed, &RootKind::Global).is_err()
+    );
 }
 
 #[test]
@@ -301,5 +578,7 @@ fn symlinked_generation_config_is_rejected() {
     let path = &prepared.peers[0].config_path;
     std::fs::remove_file(path).unwrap();
     symlink(&prepared.peers[1].config_path, path).unwrap();
-    assert!(store::validate_prepared("local", directory.path(), &prepared).is_err());
+    assert!(
+        store::validate_prepared("local", directory.path(), &prepared, &RootKind::Global).is_err()
+    );
 }

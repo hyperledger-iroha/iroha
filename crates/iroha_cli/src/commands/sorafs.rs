@@ -11761,6 +11761,7 @@ fn capability_type_label(cap: CapabilityType) -> &'static str {
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::PotrMlDsa => "potr_mldsa",
+        CapabilityType::RegisteredAccountRead => "registered_account_read",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }

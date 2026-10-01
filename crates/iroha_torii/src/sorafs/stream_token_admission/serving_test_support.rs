@@ -24,11 +24,20 @@ impl ServingAdmissionFixture {
         &self,
         provider: Arc<dyn StreamTokenGatewayAdmissionProviderV1>,
     ) -> Arc<StreamTokenAdmissionCaptureV1> {
+        self.capture_with_provider_timeout(provider, Duration::from_secs(60))
+    }
+    /// Configure the real operation bound for queue-expiry tests without replacing the clock.
+    pub(crate) fn capture_with_provider_timeout(
+        &self,
+        provider: Arc<dyn StreamTokenGatewayAdmissionProviderV1>,
+        operation_timeout: Duration,
+    ) -> Arc<StreamTokenAdmissionCaptureV1> {
         Arc::new(
             StreamTokenAdmissionCaptureV1::try_new(
                 HANDLE,
                 qualification(),
                 8,
+                operation_timeout,
                 provider,
                 self.reputation.clone(),
             )
@@ -77,7 +86,13 @@ fn signer_authority_exclusion_retains_material_without_quota_lease_or_reputation
         norito::decode_canonical::<StreamTokenGatewayAdmissionRequestV1>(&bytes).unwrap(),
         request
     );
-    let record = fixture.capture.admit(&request).unwrap();
+    let record = fixture
+        .capture
+        .admit(
+            &request,
+            crate::sorafs::stream_token_admission::tests::test_deadline(),
+        )
+        .unwrap();
     record.validate_shape(qualification()).unwrap();
     let bytes = norito::encode_canonical(&record).unwrap();
     assert_eq!(

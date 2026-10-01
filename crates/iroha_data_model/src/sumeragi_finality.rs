@@ -19,7 +19,8 @@ pub use schedule::{
 };
 mod epoch_graph;
 pub use epoch_graph::{
-    ConsensusSchedule, ScheduleOutcome, ScheduledConfig, ScheduledSlot, core_epoch,
+    ConsensusSchedule, EpochValidationScope, ScheduleOutcome, ScheduledConfig, ScheduledSlot,
+    core_epoch,
 };
 mod beacon;
 pub use beacon::{
@@ -577,6 +578,18 @@ impl SumeragiFinalityVerifier {
     #[must_use]
     pub fn instance(&self) -> Hash32 {
         self.instance
+    }
+    /// Immutable root ownership from the original independently selected signed genesis.
+    ///
+    /// Parent-network services must require [`crate::block::consensus::SumeragiRootScope::Global`]
+    /// explicitly; a valid private-root certificate does not grant global parent authority.
+    /// # Errors
+    /// The retained signed genesis no longer contains valid canonical consensus metadata.
+    pub fn root_scope(&self) -> Result<crate::block::consensus::SumeragiRootScope, FinalityError> {
+        Ok(signed_genesis_consensus_metadata(&self.genesis)
+            .map_err(malformed)?
+            .sumeragi_context
+            .root_scope)
     }
     /// Admit exactly the next proof into the authenticated contiguous prefix.
     ///

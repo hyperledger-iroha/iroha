@@ -35,7 +35,7 @@ struct BasicAuth {
 /// Generate per-client CLI configs from a base client.toml.
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Base client config to copy `chain`, `network_id`, `torii_url`, `api_token`, and `basic_auth` from.
+    /// Base client config to copy the chain, exact network identity, Torii URL, and credentials from.
     #[arg(long, value_name = "PATH")]
     base_config: PathBuf,
     /// Output directory for generated client configs (default: <base-config-dir>/clients).
@@ -126,12 +126,30 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("base config is missing `chain`"))?
         .to_owned();
-    let network_id = value
-        .get("network_id")
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| eyre!("base config is missing `network_id`"))?
-        .parse::<NetworkId>()
-        .wrap_err("base config `network_id` is not an exact genesis hash")?;
+    let network_id = match value.get("network_id") {
+        Some(toml::Value::String(value)) => Some(
+            value
+                .parse::<NetworkId>()
+                .map_err(|_| eyre!("base config `network_id` is not an exact genesis hash"))?,
+        ),
+        Some(_) => return Err(eyre!("base config `network_id` must be a TOML string")),
+        None => None,
+    };
+    let network_id_file = match value.get("network_id_file") {
+        Some(toml::Value::String(value)) if !value.is_empty() => {
+            Some(path.parent().unwrap_or_else(|| Path::new(".")).join(value))
+        }
+        Some(_) => {
+            return Err(eyre!(
+                "base config `network_id_file` must be a nonempty path string"
+            ));
+        }
+        None => None,
+    };
+    let network_id =
+        iroha::config::resolve_network_identity(network_id, network_id_file.as_deref()).map_err(
+            |_| eyre!("base config requires exactly one valid canonical network identity source"),
+        )?;
     let torii_url = value
         .get("torii_url")
         .and_then(toml::Value::as_str)
@@ -427,6 +445,46 @@ web_login = "demo"
         assert_eq!(auth.web_login, "demo");
         assert_eq!(auth.password.as_str(), "secret");
     }
+    #[cfg(unix)]
+    #[test]
+    fn load_base_config_resolves_file_identity_from_the_base_directory() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("client.toml");
+        write_base_config(&path);
+        let original = fs::read_to_string(&path).unwrap();
+        let expected = load_base_config(&path).unwrap().network_id;
+        let identity_path = temp.path().join("genesis.expected_hash");
+        fs::write(&identity_path, format!("{expected}\n")).unwrap();
+        let file_backed = original.replace(
+            &format!("network_id = \"{expected}\""),
+            "network_id_file = \"genesis.expected_hash\"",
+        );
+        fs::write(&path, &file_backed).unwrap();
+        let resolved = load_base_config(&path).unwrap();
+        assert_eq!(resolved.network_id, expected);
+        assert_eq!(
+            resolved.api_token.as_deref().map(String::as_str),
+            Some("owner-listener-token")
+        );
+
+        fs::write(&path, format!("network_id = \"{expected}\"\n{file_backed}")).unwrap();
+        assert!(
+            load_base_config(&path).is_err(),
+            "two identity sources are forbidden"
+        );
+        fs::write(&path, &file_backed).unwrap();
+        fs::write(&identity_path, format!("{expected}\r\n")).unwrap();
+        assert!(
+            load_base_config(&path).is_err(),
+            "identity records remain canonical"
+        );
+        fs::remove_file(&identity_path).unwrap();
+        assert!(
+            load_base_config(&path).is_err(),
+            "a missing identity cannot be inferred"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn load_base_config_preserves_optional_token_and_rejects_wrong_type_without_exposure() {

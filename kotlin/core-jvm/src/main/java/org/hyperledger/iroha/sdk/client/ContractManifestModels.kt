@@ -7,6 +7,7 @@ import java.util.Base64
 import java.util.Collections
 import java.util.LinkedHashMap
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
 /** Branded Kotodama V1 entrypoint categories carried by contract manifests. */
 enum class ContractEntrypointKind {
@@ -267,6 +268,8 @@ class ContractManifestRecord(
     @JvmField val manifest: ContractManifest,
     @JvmField val codeHashHex: String?,
     @JvmField val abiHashHex: String?,
+    /** Optional complete artifact bytes in canonical base64, verified against the artifact ID. */
+    @JvmField val codeBytes: String?,
 ) {
     init {
         require(codeHashHex == artifactId.codeHashHex && codeHashHex == manifest.codeHashHex) {
@@ -274,6 +277,18 @@ class ContractManifestRecord(
         }
         require(abiHashHex == manifest.abiHashHex) {
             "record ABI hash must equal the manifest"
+        }
+        if (codeBytes != null) {
+            val maximum = 16 * 1024 * 1024
+            require(codeBytes.length <= ((maximum + 2) / 3) * 4) { "code_bytes exceeds the artifact limit" }
+            val bytes = Base64.getDecoder().decode(codeBytes)
+            require(bytes.isNotEmpty() && bytes.size <= maximum && Base64.getEncoder().encodeToString(bytes) == codeBytes) {
+                "code_bytes must be bounded canonical base64"
+            }
+            val digest = IrohaHash.prehash("iroha:ivm:contract-artifact:v1\u0000".toByteArray(StandardCharsets.UTF_8) + bytes)
+            require(digest.joinToString("") { "%02x".format(it.toInt() and 0xff) } == artifactId.codeHashHex) {
+                "code_bytes must match the complete artifact hash"
+            }
         }
     }
 }
@@ -460,7 +475,7 @@ object ContractManifestJsonParser {
     @JvmStatic
     fun parseRecord(payload: ByteArray): ContractManifestRecord {
         val root = objectValue(parse(payload, "contract manifest response"), "contract manifest response")
-        exactKeys(root, setOf("network_id", "artifact_id", "manifest", "code_hash", "abi_hash"), "contract manifest response")
+        exactKeys(root, setOf("network_id", "artifact_id", "manifest", "code_hash", "abi_hash", "code_bytes"), "contract manifest response")
         val networkId = try {
             NetworkId.parse(exactString(required(root, "network_id", "contract manifest response"), "network_id"))
         } catch (error: IllegalArgumentException) {
@@ -492,7 +507,12 @@ object ContractManifestJsonParser {
         check(codeHash == artifactId.codeHashHex) {
             "contract manifest response artifact_id must exactly match manifest.code_hash"
         }
-        return ContractManifestRecord(networkId, artifactId, manifest, codeHash, abiHash)
+        val codeBytes = root["code_bytes"]?.let { exactString(it, "contract manifest response.code_bytes") }
+        return try {
+            ContractManifestRecord(networkId, artifactId, manifest, codeHash, abiHash, codeBytes)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("contract manifest response contains invalid code_bytes", error)
+        }
     }
 
     /** Parse and validate one full Rust `ContractManifest` object. */

@@ -39,7 +39,13 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
             world.tx_sequences.insert(BOB_ID.clone(), 11);
             let removed = Hash::new(b"removed contract");
             let inserted = Hash::new(b"inserted contract");
-            world.contract_code.insert(removed, vec![0xA1]);
+            world.contract_code.insert(
+                iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    removed,
+                ),
+                vec![0xA1],
+            );
             let account_values: Vec<_> = world
                 .accounts
                 .view()
@@ -65,8 +71,19 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
 
             let mut block = world.block();
             block.tx_sequences.insert(ALICE_ID.clone(), 9);
-            block.contract_code.remove(removed);
-            block.contract_code.insert(inserted, vec![0xB2, 0xB3]);
+            block
+                .contract_code
+                .remove(iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    removed,
+                ));
+            block.contract_code.insert(
+                iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    inserted,
+                ),
+                vec![0xB2, 0xB3],
+            );
             let delta = block.tiered_snapshot_payload();
             let actual_keys: BTreeSet<_> = TieredSnapshotDiff::from(&delta)
                 .entries()
@@ -75,8 +92,18 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
                 .collect();
             let expected_keys: BTreeSet<_> = [
                 TieredKeyHandle::TxSequence(ALICE_ID.clone()),
-                TieredKeyHandle::ContractCode(removed),
-                TieredKeyHandle::ContractCode(inserted),
+                TieredKeyHandle::ContractCode(
+                    iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        removed,
+                    ),
+                ),
+                TieredKeyHandle::ContractCode(
+                    iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        inserted,
+                    ),
+                ),
             ]
             .iter()
             .map(ToString::to_string)
@@ -85,7 +112,13 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
             // Captured values must survive later mutation and overlay discard;
             // the background snapshot worker has no live World authority.
             block.tx_sequences.insert(ALICE_ID.clone(), 999);
-            block.contract_code.insert(inserted, vec![0xCC]);
+            block.contract_code.insert(
+                iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    inserted,
+                ),
+                vec![0xCC],
+            );
             drop(block);
             backend
                 .record_world_snapshot_with_payload(&delta)
@@ -98,8 +131,26 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
             ]);
             assert_cold_values(&backend, expected);
             assert_eq!(world.tx_sequences.view().get(&ALICE_ID), Some(&7));
-            assert!(world.contract_code.view().get(&removed).is_some());
-            assert!(world.contract_code.view().get(&inserted).is_none());
+            assert!(
+                world
+                    .contract_code
+                    .view()
+                    .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        removed
+                    ))
+                    .is_some()
+            );
+            assert!(
+                world
+                    .contract_code
+                    .view()
+                    .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        inserted
+                    ))
+                    .is_none()
+            );
         })
         .expect("spawn with the ordinary stack budget")
         .join()

@@ -241,22 +241,6 @@ const typedArraySet = Object.getOwnPropertyDescriptor(
   "set",
 ).value;
 const Uint8ArrayIntrinsic = Uint8Array;
-const dataViewBufferGetter = Object.getOwnPropertyDescriptor(
-  DataView.prototype,
-  "buffer",
-).get;
-const dataViewByteOffsetGetter = Object.getOwnPropertyDescriptor(
-  DataView.prototype,
-  "byteOffset",
-).get;
-const dataViewByteLengthGetter = Object.getOwnPropertyDescriptor(
-  DataView.prototype,
-  "byteLength",
-).get;
-const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
-  ArrayBuffer.prototype,
-  "byteLength",
-).get;
 const sharedArrayBufferByteLengthGetter =
   typeof SharedArrayBuffer === "undefined"
     ? null
@@ -19139,19 +19123,6 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   }
 }
 
-function normalizeAuthorityCredentials(source, context) {
-  const record = ensureRecord(source, context);
-  const authority = ToriiClient._normalizeAccountId(
-    record.authority,
-    `${context}.authority`,
-  );
-  const privateKey = resolveAuthorityPrivateKey(record, context);
-  return {
-    authority,
-    private_key: privateKey,
-  };
-}
-
 function rejectPrivateKeyFields(record, context) {
   rejectVerifyingKeyPrivateKeyFields(record, context);
 }
@@ -19165,53 +19136,6 @@ function normalizeSecretFreeAuthority(source, context) {
       `${context}.authority`,
     ),
   };
-}
-
-function resolveAuthorityPrivateKey(record, context) {
-  const direct = pickOverride(record, "private_key", "privateKey");
-  if (direct !== undefined && direct !== null) {
-    if (typeof direct === JS_TYPE_STRING) {
-      return requireNonEmptyString(direct, `${context}.privateKey`);
-    }
-    return formatAuthorityPrivateKeyBytes(direct, record, context);
-  }
-  const multihash = pickOverride(
-    record,
-    "private_key_multihash",
-    "privateKeyMultihash",
-  );
-  if (multihash !== undefined && multihash !== null) {
-    return requireNonEmptyString(multihash, `${context}.privateKeyMultihash`);
-  }
-  const hexInput = pickOverride(record, "private_key_hex", "privateKeyHex");
-  if (hexInput !== undefined && hexInput !== null) {
-    return formatAuthorityPrivateKeyHex(hexInput, record, context, "privateKeyHex");
-  }
-  const bytesInput = pickOverride(
-    record,
-    "private_key_bytes",
-    "privateKeyBytes",
-  );
-  if (bytesInput !== undefined && bytesInput !== null) {
-    return formatAuthorityPrivateKeyBytes(bytesInput, record, context);
-  }
-  rejectType(`${context}.privateKey is required`);
-}
-
-function formatAuthorityPrivateKeyBytes(value, record, context) {
-  const hex = normalizeHex32String(value, `${context}.privateKeyBytes`);
-  return formatAuthorityPrivateKeyHex(hex, record, context, "privateKeyBytes");
-}
-
-function formatAuthorityPrivateKeyHex(value, record, context, label) {
-  const hex = normalizeHex32String(value, `${context}.${label}`);
-  const algorithm =
-    record.private_key_algorithm ?? record.privateKeyAlgorithm ?? "ed25519";
-  const normalizedAlgorithm = requireNonEmptyString(
-    algorithm,
-    `${context}.private_key_algorithm`,
-  );
-  return `${normalizedAlgorithm}:${hex}`;
 }
 
 function requireCanonicalKotodamaIdentifier(value, context, options) {
@@ -22371,9 +22295,16 @@ function normalizeContractManifestResponse(payload, requested, networkId) {
     rejectType("contractManifest.abi_hash does not match manifest.abi_hash");
   }
   if (codeHash !== requested.code_hash) rejectType("contract manifest artifact hash differs from requested artifact");
-  if (record.code_bytes !== undefined && (!Number.isSafeInteger(record.code_bytes) || record.code_bytes < 0 || record.code_bytes > IVM_ARTIFACT_MAX_BYTES)) rejectType("contract manifest response.code_bytes must be a bounded artifact byte count");
+  let inlineCode;
+  if (record.code_bytes !== undefined) {
+    inlineCode = normalizeIvmArtifactBase64String(record.code_bytes, "contract manifest response.code_bytes");
+    if (computeIvmArtifactHashes(Buffer.from(inlineCode, "base64")).codeHashHex !== requested.code_hash) {
+      rejectType("contract manifest inline bytes hash differs from requested artifact");
+    }
+  }
   return {
     ...identity,
+    ...(inlineCode === undefined ? {} : { code_bytes: inlineCode }),
     manifest,
     code_hash: codeHash,
     abi_hash: abiHash,
@@ -22403,7 +22334,7 @@ function normalizeContractCodeBytesResponse(payload, requested, networkId) {
 
 function contractArtifactDataspace(value, context) {
   if (typeof value === "number" && !Number.isSafeInteger(value)) rejectType(`${context} must be an exact u64`);
-  if (!((typeof value === "number" && value >= 0) || typeof value === "bigint" || (typeof value === "string" && /^(0|[1-9][0-9]*)$/u.test(value)))) rejectType(`${context} must be a canonical u64`);
+  if (!((typeof value === "number" && value >= 0) || typeof value === "bigint" || (typeof value === "string" && value.length <= 20 && /^(0|[1-9][0-9]*)$/u.test(value)))) rejectType(`${context} must be a canonical u64`);
   const integer = BigInt(value);
   if (integer < 0n || integer > 0xffff_ffff_ffff_ffffn) rejectType(`${context} must fit u64`);
   return integer.toString();
@@ -22471,17 +22402,6 @@ function normalizeBoundedCanonicalBase64String(
   }
   return value;
 }
-
-function isGenuineSharedArrayBuffer(value) {
-  if (sharedArrayBufferByteLengthGetter === null) return false;
-  try {
-    sharedArrayBufferByteLengthGetter.call(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 
 function hasExactStandardBase64Shape(value) {
   if (value.length === 0 || value.length % 4 !== 0) return false;

@@ -186,17 +186,23 @@ impl BuiltArtifact {
 
 /// A finalized deployment and its retained, owner-private recovery directory.
 pub struct DeploymentRun {
-    /// Global Applied evidence and authenticated artifact/alias readback.
+    /// Selected-root Applied evidence and authenticated artifact/alias readback; parent anchoring is separate.
     pub receipt: DeploymentReceipt,
     /// Exact journal used for this operation.
     pub journal: PathBuf,
 }
+
+/// Lazy exact registry configuration and archive policy supplied by the environment owner.
+pub type BuildRegistryResolver =
+    dyn Fn() -> Result<Option<(Config, PreparedProductionSorafsArchiveTransportV1)>> + Send + Sync;
 
 /// Shared native runtime for Kagami, Mochi and other callers with an explicit network context.
 pub struct DeploymentRuntime {
     config: Config,
     journal_root: PathBuf,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
+    build_registry: Option<Config>,
+    registry_resolver: Option<std::sync::Arc<BuildRegistryResolver>>,
 }
 impl DeploymentRuntime {
     /// Retain immutable context without reading files, loading keys or contacting the network.
@@ -206,6 +212,8 @@ impl DeploymentRuntime {
             config,
             journal_root,
             archive_transport: None,
+            build_registry: None,
+            registry_resolver: None,
         }
     }
 
@@ -216,7 +224,40 @@ impl DeploymentRuntime {
         mut self,
         transport: PreparedProductionSorafsArchiveTransportV1,
     ) -> Self {
+        self.build_registry = Some(self.config.clone());
+        self.registry_resolver = None;
         self.archive_transport = Some(transport);
+        self
+    }
+
+    /// Bind package resolution/downloads to an independently selected build registry.
+    /// The deployment signer and compiler address policy remain the selected target context.
+    /// # Errors
+    /// Refuses transport and registry configuration belonging to different networks.
+    pub fn with_build_registry(
+        mut self,
+        registry: Config,
+        transport: PreparedProductionSorafsArchiveTransportV1,
+    ) -> Result<Self> {
+        if registry.network_id != transport.network_id() {
+            bail!("build registry transport belongs to another network");
+        }
+        self.build_registry = Some(registry);
+        self.registry_resolver = None;
+        self.archive_transport = Some(transport);
+        Ok(self)
+    }
+
+    /// Resolve an authenticated registry only if the package needs external dependencies.
+    /// Source, bytecode and purely local package graphs never call the resolver.
+    #[must_use]
+    pub fn with_build_registry_resolver(
+        mut self,
+        resolver: std::sync::Arc<BuildRegistryResolver>,
+    ) -> Self {
+        self.build_registry = None;
+        self.archive_transport = None;
+        self.registry_resolver = Some(resolver);
         self
     }
 
@@ -258,6 +299,8 @@ impl DeploymentRuntime {
                 locked,
             } => crate::command::build_runtime_package(
                 &self.config,
+                self.build_registry.as_ref(),
+                self.registry_resolver.as_deref(),
                 manifest,
                 package.as_deref(),
                 contract.as_deref(),
@@ -708,7 +751,10 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             temp.path().join("Musubi.networks.toml"),
             "invalid unused network binding",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"))
+            .with_build_registry_resolver(std::sync::Arc::new(|| {
+                panic!("local package must not resolve a parent registry")
+            }));
         let input = |locked| ContractInput::Package {
             manifest: manifest.clone(),
             package: None,
@@ -721,6 +767,35 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         assert_eq!(runtime.build(&input(true))?.bytes(), artifact.bytes());
         assert!(temp.path().join("Musubi.lock").is_file());
         assert!(!temp.path().join("journals").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn absent_registry_refuses_external_dependencies_before_http() -> Result<()> {
+        let temp = TempDir::new()?;
+        fs::write(temp.path().join("contract.ko"), SOURCE)?;
+        let manifest = temp.path().join("Musubi.toml");
+        fs::write(
+            &manifest,
+            "manifest-version = 1\n[package]\nnamespace = \"demo\"\nname = \"coffee\"\nversion = \"0.1.0\"\nedition = \"1\"\nabi-version = 1\n[[contract]]\nname = \"coffee\"\npath = \"contract.ko\"\n[dependencies]\ndependency = { package = \"deps.sora/dependency\", version = \"^1.0.0\" }\n",
+        )?;
+        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let error = runtime
+            .build(&ContractInput::Package {
+                manifest,
+                package: None,
+                contract: None,
+                locked: false,
+            })
+            .err()
+            .expect("external dependency requires an authenticated registry");
+        assert!(
+            error
+                .to_string()
+                .contains("no authenticated build registry"),
+            "{error:#}"
+        );
+        assert!(!temp.path().join("Musubi.lock").exists());
         Ok(())
     }
 

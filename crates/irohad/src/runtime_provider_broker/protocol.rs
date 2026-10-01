@@ -992,14 +992,6 @@ impl ProviderBindingWireV1 {
                 },
             ),
             stream_token_signer_binding: binding.stream_token_signer_binding().cloned(),
-            stream_token_gateway_admission_qualification: binding
-                .stream_token_gateway_admission_qualification(),
-            stream_token_gateway_admission_max_pending: binding
-                .stream_token_gateway_admission_max_pending(),
-            stream_token_gateway_admission_max_tracked_tokens: binding
-                .stream_token_gateway_admission_max_tracked_tokens(),
-            stream_token_gateway_admission_reconcile_max_items: binding
-                .stream_token_gateway_admission_reconcile_max_items(),
             appeal_finance_signer_binding: binding.appeal_finance_signer_binding().map(|signer| {
                 AppealFinanceSignerBindingWireV1 {
                     authority: signer.authority.clone(),
@@ -1223,8 +1215,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         _ => return Err(BrokerError::BindingMismatch),
     }
     let stream_token = binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
-    let stream_token_gateway_admission =
-        binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
     if binding.handle.is_empty()
         || binding.handle.len() > MAX_PROVIDER_HANDLE_BYTES_V1
         || binding.handle.as_bytes().contains(&0)
@@ -1287,18 +1277,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         binding.slot == IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive.wire_id();
     let potr_signer = binding.slot == IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id()
         || binding.slot == IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id();
-    let has_stream_token_gateway_metadata = binding
-        .stream_token_gateway_admission_qualification
-        .is_some()
-        || binding.stream_token_gateway_admission_max_pending.is_some()
-        || binding
-            .stream_token_gateway_admission_max_tracked_tokens
-            .is_some()
-        || binding
-            .stream_token_gateway_admission_reconcile_max_items
-            .is_some();
     let has_new_role_metadata = binding.stream_token_signer_binding.is_some()
-        || has_stream_token_gateway_metadata
         || binding.appeal_finance_signer_binding.is_some()
         || binding.appeal_finance_checkpoint_binding.is_some()
         || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1312,33 +1291,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || signer_backend.custody().runtime_handle != binding.handle
             || Some(signer_backend.custody().key_revision) != binding.revision
             || Some(signer_backend.custody().policy_digest) != binding.policy_digest
-            || binding.appeal_finance_signer_binding.is_some()
-            || binding.appeal_finance_checkpoint_binding.is_some()
-            || binding.appeal_finance_checkpoint_max_bytes.is_some()
-            || binding.pop_credential_runtime_binding.is_some()
-            || binding.por_replay_archive_binding.is_some()
-            || binding.por_replay_archive_proof_limits.is_some()
-            || binding.potr_runtime_binding.is_some()
-            || has_stream_token_gateway_metadata
-        {
-            return Err(BrokerError::BindingMismatch);
-        }
-    } else if stream_token_gateway_admission {
-        let qualification =
-            required_binding_value!(binding, stream_token_gateway_admission_qualification);
-        qualification
-            .validate()
-            .map_err(|_| BrokerError::BindingMismatch)?;
-        if binding.revision != Some(qualification.revision)
-            || binding.policy_digest != Some(qualification.policy_digest)
-            || binding.stream_token_gateway_admission_max_pending != Some(qualification.max_pending)
-            || binding.stream_token_gateway_admission_max_tracked_tokens
-                != Some(qualification.max_tracked_tokens)
-            || !matches!(
-                binding.stream_token_gateway_admission_reconcile_max_items,
-                Some(1..=iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1)
-            )
-            || binding.stream_token_signer_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1365,7 +1317,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || binding.por_replay_archive_binding.is_some()
             || binding.por_replay_archive_proof_limits.is_some()
             || binding.potr_runtime_binding.is_some()
-            || has_stream_token_gateway_metadata
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1384,7 +1335,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || binding.por_replay_archive_binding.is_some()
             || binding.por_replay_archive_proof_limits.is_some()
             || binding.potr_runtime_binding.is_some()
-            || has_stream_token_gateway_metadata
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1412,7 +1362,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || binding.por_replay_archive_binding.is_some()
             || binding.por_replay_archive_proof_limits.is_some()
             || binding.potr_runtime_binding.is_some()
-            || has_stream_token_gateway_metadata
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1445,7 +1394,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
             || binding.pop_credential_runtime_binding.is_some()
             || binding.potr_runtime_binding.is_some()
-            || has_stream_token_gateway_metadata
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1460,7 +1408,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || binding.pop_credential_runtime_binding.is_some()
             || binding.por_replay_archive_binding.is_some()
             || binding.por_replay_archive_proof_limits.is_some()
-            || has_stream_token_gateway_metadata
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1599,7 +1546,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         return Err(BrokerError::BindingMismatch);
     }
     if stream_token
-        || stream_token_gateway_admission
         || appeal_signer
         || appeal_checkpoint
         || pop_registry
@@ -2099,7 +2045,7 @@ fn decode_bootle_lantern_issue_request(
         iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
     ),
     BrokerError,
-> {
+>{
     let request = decode_canonical::<BootleLanternIssueRequestWireV1>(
         payload,
         MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
@@ -2954,20 +2900,6 @@ const fn transparency_leader_lease_provider_error(
         sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Ambiguous => BrokerError::Ambiguous,
     }
 }
-const fn stream_token_gateway_provider_error(
-    error: iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
-) -> BrokerError {
-    use iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 as Error;
-    match error {
-        Error::Unavailable | Error::ReputationCallback => BrokerError::Unavailable,
-        Error::InvalidRequest | Error::Rejected | Error::SubstitutedOutcome => {
-            BrokerError::Rejected
-        }
-        Error::BindingMismatch | Error::StaleOrRevoked => BrokerError::StaleOrRevoked,
-        Error::Conflict => BrokerError::Conflict,
-        Error::Ambiguous => BrokerError::Ambiguous,
-    }
-}
 const fn fenced_privacy_publish_error(
     error: sorafs_node::FencedTransparencyPublishErrorV1,
 ) -> BrokerError {
@@ -3421,7 +3353,7 @@ define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protoco
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationRetentionLoadRequestWireV1"; ReputationRetentionLoadRequestWireV1 { network_id: NetworkId, });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationRetentionCompareAndSwapRequestWireV1"; ReputationRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationJournalSupportsAuthorityRequestWireV1"; ReputationJournalSupportsAuthorityRequestWireV1 { authority: iroha_data_model::account::AccountId, });
-define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationJournalTransactionRequestWireV1"; ReputationJournalTransactionRequestWireV1 { sequence: u64, network_id: iroha_data_model::NetworkId, authority: iroha_data_model::account::AccountId, event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1, source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1, attempt: u32, idempotency_key: [u8; 32], instruction_kind: u8, canonical_instruction: Vec<u8>, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationJournalTransactionRequestWireV1"; ReputationJournalTransactionRequestWireV1 { sequence: u64, network_id: iroha_data_model::NetworkId, authority: iroha_data_model::account::AccountId, event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1, source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1, attempt: u32, idempotency_key: [u8; 32], canonical_instruction: Vec<u8>, });
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::ReputationJournalTransactionSubmitResultWireV1"; ReputationJournalTransactionSubmitResultWireV1 { outcome: u8, receipt: [u8; 32], });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationThresholdSigningRequestWireV1"; ReputationThresholdSigningRequestWireV1 { sequence: u64, material_digest: [u8; 32], idempotency_key: [u8; 32], material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1, });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ReputationGovernanceDagPublicationRequestWireV1"; ReputationGovernanceDagPublicationRequestWireV1 { sequence: u64, material_digest: [u8; 32], signed_result_digest: [u8; 32], idempotency_key: [u8; 32], canonical_signed_result: Vec<u8>, });

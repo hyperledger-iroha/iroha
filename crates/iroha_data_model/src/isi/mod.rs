@@ -379,6 +379,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenAuthority);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenGateway);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
@@ -1874,6 +1875,7 @@ pub mod nexus;
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
 pub mod privacy;
+pub mod private_dataspace;
 /// Atomic private cross-dataspace settlement carrier instructions.
 pub mod private_settlement;
 /// Generic RAM-LFE program-policy instructions.
@@ -1909,7 +1911,6 @@ pub mod space_directory;
 pub mod staking;
 /// AMX two-phase-commit instructions of the global chain.
 pub mod sumeragi_amx;
-pub mod private_dataspace;
 /// Asset, account, and value transfer instructions.
 pub mod transfer;
 mod transparent;
@@ -2784,15 +2785,15 @@ pub mod prelude {
             IssueReplicationOrder, MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
-            MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,
-            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
-            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
-            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
-            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            MutateSorafsStreamTokenCustody, MutateSorafsStreamTokenGateway,
+            MutateSorafsTopologyAuthority, PublishSorafsPopRevocationList,
+            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
+            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsModerationJurorEligibility,
+            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
+            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
+            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,

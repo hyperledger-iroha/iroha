@@ -1550,14 +1550,25 @@ fn load_selected_workspace(
 /// Build a package using only the caller's retained runtime identity and optional storage policy.
 pub(crate) fn build_runtime_package(
     config: &iroha::config::Config,
+    registry_config: Option<&iroha::config::Config>,
+    registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
     manifest: &Path,
     package: Option<&str>,
     contract: Option<&str>,
     locked: bool,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
-    build::build_runtime_package(config, manifest, package, contract, locked, archive_transport)
-        .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
+    build::build_runtime_package(
+        config,
+        registry_config,
+        registry_resolver,
+        manifest,
+        package,
+        contract,
+        locked,
+        archive_transport,
+    )
+    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
 }
 #[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {
@@ -2060,9 +2071,10 @@ fn ensure_graph_archives(
                 .as_ref()
                 .ok_or_else(|| {
                     Diagnostic::new(
-                        ErrorCode::OfflineMiss,
-                        "authenticated archive-fetch configuration is unavailable offline",
+                        ErrorCode::Registry,
+                        "the selected environment has no authenticated archive-download policy for this uncached dependency",
                     )
+                    .with_help("the environment must provide an admitted registry and provider download capability; retry after that capability is provisioned")
                 })?
                 .as_ref()
                 .map_err(|error| archive_transport_diagnostic(*error))?;

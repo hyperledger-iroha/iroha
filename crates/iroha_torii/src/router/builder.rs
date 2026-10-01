@@ -443,6 +443,8 @@ impl LayerableAuthentication for UnauthenticatedRoute {}
 /// invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandlerAuthentication {
+    /// An actual owner listener token and immutable private-root scope are verified before export.
+    PrivateRootOwnerToken,
     /// Canonical account request authentication performed by the handler.
     ///
     /// These handlers bind the request body and route to an on-ledger account,
@@ -478,6 +480,7 @@ pub(crate) enum HandlerAuthentication {
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
+            Self::PrivateRootOwnerToken => AuthenticationPolicy::PrivateRootOwnerToken,
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
             Self::OptionalCanonicalAccountSignature => {
                 AuthenticationPolicy::OptionalCanonicalAccountSignature

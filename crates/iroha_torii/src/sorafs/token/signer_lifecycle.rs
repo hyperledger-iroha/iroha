@@ -21,6 +21,7 @@ use sorafs_manifest::{
             verify_stream_token_signer_current_evidence_v1, verify_stream_token_signer_evidence_v1,
         },
     },
+    token::STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -213,7 +214,8 @@ impl SignerDriverV1 {
             || latest - observed_at > self.pins.observer_trust().max_state_age_ms
             || token_window.is_some_and(|(issued, expires)| {
                 latest >= expires
-                    || issued > (earliest / 1_000).saturating_add(super::MAX_TOKEN_FUTURE_SKEW_SECS)
+                    || issued
+                        > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)
             })
         {
             return Err(evidence_error());

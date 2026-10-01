@@ -426,8 +426,9 @@ inputs = [
   "crates/**",
   "vendor/**",
 ]
-# The generator resolves the exact transitive local-package closure from present
-# indexed or nonignored-untracked Cargo manifests. The platform-independent
+# The generator starts at the koto owner, crates/kotodama_toolchain, and resolves
+# its transitive local build-package closure from present indexed or nonignored-
+# untracked Cargo manifests. The platform-independent
 # fixture binds every present build input by path+bytes without depending on its
 # tracked state, so committing the same overlay does not stale the fixture.
 # Index-only deletions and tracked/untracked classifications are authenticated in

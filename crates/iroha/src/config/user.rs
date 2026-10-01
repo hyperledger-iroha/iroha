@@ -170,7 +170,7 @@ fn resolve_account_private_key(
         }
     }
 }
-fn resolve_network_id_source(
+pub(super) fn resolve_network_id_source(
     inline: Option<NetworkId>,
     file: Option<WithOrigin<PathBuf>>,
     emitter: &mut Emitter<ParseError>,

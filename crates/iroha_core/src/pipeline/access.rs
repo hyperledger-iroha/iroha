@@ -4745,7 +4745,7 @@ seiyaku DynamicAccessCounter {
         let mut world = World::default();
         world.contract_code.insert(owned, program);
         let state = State::new(
-            world,
+            crate::pipeline::overlay::test_support::with_global_root(world),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );

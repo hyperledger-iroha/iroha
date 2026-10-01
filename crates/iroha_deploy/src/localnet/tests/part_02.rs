@@ -1288,6 +1288,18 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
         })
         .collect::<Vec<_>>();
     assert!(operator_mint_permissions.is_empty());
+    let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
+        .expect("read executed permissioned genesis");
+    assert!(signed.network_entrypoint_count() > 0);
+    signed
+        .validate_output_merkle_cache()
+        .expect("generated genesis retains its complete execution outputs");
+    assert!(
+        signed
+            .output_results()
+            .all(|result| result.as_ref().is_ok()),
+        "faucet funding must execute successfully in the real generated genesis"
+    );
     for peer_index in 0..opts.peers.get() {
         let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
             .expect("read generated permissioned peer config");
@@ -1323,6 +1335,32 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
             .expect("native faucet admission");
         assert_eq!(faucet.authority, operator.account_id);
         assert_eq!(faucet.signer.public_key(), &operator.public_key);
+        let fee_definition = faucet
+            .asset_definition_id
+            .parse::<AssetDefinitionId>()
+            .expect("configured canonical faucet asset definition");
+        assert_eq!(fee_definition, localnet_xor_asset_definition_id());
+        let faucet_asset = AssetId::new(fee_definition, faucet.authority.clone());
+        let minted = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination() == &faucet_asset => {
+                        Some(mint.object().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(
+            minted,
+            vec![
+                Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE),
+            ],
+            "Permissioned faucet must receive its explicit Global allocation once"
+        );
+        assert!(Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE) > faucet.amount);
     }
 }
 #[test]

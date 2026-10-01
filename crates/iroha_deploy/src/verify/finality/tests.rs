@@ -1644,6 +1644,7 @@ fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
         bytes: MAX_ADVANCE_BYTES,
     };
     let mut verifier = chain.verifier();
+    assert!(!verifier.promote_verified_progress());
     let checkpoint = verifier.checkpoint().clone();
     let member = &chain.epoch(8).keys[0];
     // Every member's tip lies beyond one three-proof observation budget. Each observation keeps
@@ -1675,8 +1676,110 @@ fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
         .unwrap();
     assert_eq!((report.verified(), verifier.checkpoint().height()), (4, 8));
     assert!(verifier.pending.is_none());
+    assert!(!verifier.promote_verified_progress());
     // Each successor was fetched once across the observations; H8 came from the members.
     assert_eq!(*source.proof_calls.borrow(), [2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn durable_parent_observation_retains_bounded_certified_progress_but_never_readiness() {
+    use crate::bootstrap::{
+        BootstrapError, NetworkRelease, ParentFinalityStore, ReleaseCheckpointStore, ReleaseTrust,
+        SignedNetworkCheckpoint,
+    };
+
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let checkpoint = chain.verifier_at(2).checkpoint().clone();
+    let signer = KeyPair::from_seed(vec![0xD7; 32], Algorithm::Ed25519);
+    let release = NetworkRelease {
+        network_name: "bounded-progress".into(),
+        serial: 1,
+        generation: 1,
+        network_id: checkpoint.network_id(),
+        chain_id: checkpoint.chain_id().into(),
+        issued_at_ms: 1_000,
+        expires_at_ms: 10_000,
+        torii_roots: vec!["https://torii.example/".into()],
+        account_chain_discriminant: 753,
+        native_world_schema: Hash::new(b"independently qualified fixture World schema"),
+        peers: checkpoint
+            .tip()
+            .committee
+            .iter()
+            .map(|validator| crate::bootstrap::ReleasePeer {
+                node_id: iroha_model_base::peer::PeerId::new(validator.public_key.clone()),
+                torii_root: "https://torii.example/".into(),
+            })
+            .collect(),
+        faucet: None,
+        build_registry: None,
+        checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
+        checkpoint_height: checkpoint.height(),
+        checkpoint_block_hash: checkpoint.block_hash().into(),
+    };
+    let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, signer.private_key())
+        .unwrap()
+        .encode_canonical()
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let release_store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
+    let bootstrap = release_store
+        .authenticate(
+            &ReleaseTrust::new("bounded-progress".into(), signer.public_key().clone(), 1).unwrap(),
+            &bytes,
+            2_000,
+        )
+        .unwrap();
+    let path = directory.path().join("runtime");
+    let mut runtime = ParentFinalityStore::open(&path, &bootstrap).unwrap();
+    let page = || Budget {
+        proofs: 2,
+        bytes: MAX_ADVANCE_BYTES,
+    };
+    for reached in [4, 6] {
+        let before = std::fs::read(path.join("verified.nrt")).unwrap();
+        let result = runtime
+            .observe_for_testing(|next| next.observe_with_budget(&source, &CHALLENGE, &mut page()));
+        assert!(
+            matches!(
+                result,
+                Err(BootstrapError::Finality(FinalityError::CatchingUp {
+                    verified,
+                    claimed: 8,
+                })) if verified == reached
+            ),
+            "{result:?}"
+        );
+        assert_eq!(runtime.verifier().checkpoint().height(), reached);
+        assert_eq!(runtime.verifier().verified_tip().unwrap().height(), reached);
+        let retained = std::fs::read(path.join("verified.nrt")).unwrap();
+        assert_ne!(retained, before);
+        drop(runtime);
+        runtime = ParentFinalityStore::open(&path, &bootstrap).unwrap();
+        assert_eq!(runtime.verifier().checkpoint().height(), reached);
+        // A restart and a certificate-only prefix cannot replace live challenged quorum.
+        let mut offline = Source::new(&chain);
+        offline.faults.extend(chain.epoch(8).keys.iter().map(peer));
+        assert!(matches!(
+            runtime.observe(&offline, &CHALLENGE),
+            Err(BootstrapError::Finality(
+                FinalityError::InsufficientAttestations(_)
+            ))
+        ));
+        assert_eq!(runtime.verifier().checkpoint().height(), reached);
+        assert_eq!(std::fs::read(path.join("verified.nrt")).unwrap(), retained);
+    }
+    let quorum = runtime
+        .observe_for_testing(|next| next.observe_with_budget(&source, &CHALLENGE, &mut page()))
+        .unwrap();
+    assert_eq!(
+        (quorum.verified(), quorum.required, quorum.height.get()),
+        (4, 3, 8)
+    );
+    assert_eq!(runtime.verifier().checkpoint().height(), 8);
+    // The incomplete pages survive each reopen; no previously certified successor is fetched again.
+    assert_eq!(*source.proof_calls.borrow(), [3, 4, 5, 6, 7]);
 }
 
 #[test]
@@ -1868,4 +1971,69 @@ fn budget_exhaustion_on_one_claim_does_not_abort_the_observation() {
             }
         }
     }
+}
+
+#[test]
+fn observations_reject_incomplete_transport_batches_before_advancing() {
+    struct ShortBatch<'a>(Source<'a>);
+    impl FinalitySource for ShortBatch<'_> {
+        type Error = std::io::Error;
+        fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error> {
+            self.0.finality_proof(height)
+        }
+        fn latest_attestation(
+            &self,
+            peer: &PeerId,
+            challenge: &[u8; 32],
+        ) -> Result<SumeragiFinalityAttestation, Self::Error> {
+            self.0.latest_attestation(peer, challenge)
+        }
+        fn latest_attestations(
+            &self,
+            peers: &[PeerId],
+            challenge: &[u8; 32],
+        ) -> Vec<Result<SumeragiFinalityAttestation, Self::Error>> {
+            let mut reads = self.0.latest_attestations(peers, challenge);
+            reads.pop();
+            reads
+        }
+    }
+    let chain = Chain::constant(4, 3);
+    let mut verifier = chain.verifier_at(2);
+    let before = verifier.checkpoint().clone();
+    assert!(matches!(
+        verifier.observe(&ShortBatch(Source::new(&chain)), &CHALLENGE),
+        Err(FinalityError::ResourceLimit(
+            "attestation batch cardinality"
+        ))
+    ));
+    assert_eq!(verifier.checkpoint(), &before);
+}
+
+#[test]
+fn verified_tip_is_exactly_the_independently_retained_certified_execution() {
+    let chain = Chain::constant(4, 3);
+    let mut verifier = chain.verifier_at(2);
+    let previous = verifier.verified_tip().unwrap();
+    assert_eq!(previous.height(), 2);
+    assert_eq!(
+        previous.commitment().schedule.current.network_id,
+        chain.anchor.network_id
+    );
+    verifier
+        .advance(&Source::new(&chain), chain.proof(3))
+        .unwrap();
+    let next = verifier.verified_tip().unwrap();
+    assert_eq!(next.height(), 3);
+    assert_ne!(next.commitment(), previous.commitment());
+    let restored = FinalityVerifier::from_checkpoint(
+        verifier.checkpoint().clone(),
+        chain.anchor.network_id,
+        CHAIN,
+    )
+    .unwrap();
+    assert_eq!(
+        restored.verified_tip().unwrap().commitment(),
+        next.commitment()
+    );
 }

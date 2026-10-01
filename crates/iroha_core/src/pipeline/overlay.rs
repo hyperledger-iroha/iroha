@@ -3618,10 +3618,10 @@ pub(super) mod test_support {
         world
     }
 
-    /// Prepare execution against an explicit block time, retaining the large
-    /// staged world on the heap while the overlay runs.
+    /// Prepare post-genesis execution against explicit committed root metadata,
+    /// retaining the large staged world on the heap while the overlay runs.
     pub(super) fn execution_block(state: &State) -> Box<crate::state::StateBlock<'_>> {
-        Box::new(state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)))
+        Box::new(state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)))
     }
 
     /// Seed a complete active lifecycle fixture, including its canonical subject and owner.
@@ -4258,7 +4258,7 @@ mod tests_overlay_manifest {
         let summary = cache
             .summarize_program_with_hash(code_hash, &[])
             .expect("warm summary lookup without artifact bytes");
-        enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata)
+        enforce_pre_execution_policy(nonzero!(4_u64), &summary.metadata)
             .expect("prepared metadata remains within the live cycle ceiling");
         let warm_stats = cache.stats();
         assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
@@ -5190,6 +5190,21 @@ seiyaku GuardedOverlay {
             world
                 .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
                 .expect("bind guarded contract alias");
+            // The contract executes queued metadata writes as its own subject. The
+            // ordinary account permission is independent of entrypoint admission.
+            let mut contract_permissions = Permissions::new();
+            assert!(contract_permissions.insert(Permission::from(
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: authority.clone(),
+                },
+            )));
+            // The queued revocation executes as the contract subject. Give that subject
+            // the exact permission it may revoke so the negative control reaches the
+            // subsequent caller-authorization recheck instead of failing issuer policy.
+            assert!(contract_permissions.insert(entrypoint_permission.clone()));
+            world
+                .account_permissions_mut_for_testing()
+                .insert(contract_address.subject_id(), contract_permissions);
             if authorized {
                 let mut permissions = Permissions::new();
                 assert!(permissions.insert(entrypoint_permission.clone()));
@@ -5757,6 +5772,11 @@ seiyaku GuardedOverlayRebound {
                 assert!(root_contract_permissions.insert(child_entrypoint_permission.clone()));
             }
             let mut child_contract_permissions = Permissions::new();
+            assert!(child_contract_permissions.insert(Permission::from(
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: root_contract_subject.clone(),
+                },
+            )));
             assert!(child_contract_permissions.insert(Permission::from(
                 iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
             )));

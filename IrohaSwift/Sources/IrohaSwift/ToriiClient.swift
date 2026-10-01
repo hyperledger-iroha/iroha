@@ -13734,6 +13734,8 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
     public let manifest: ToriiContractManifest
     public let codeHash: String?
     public let abiHash: String?
+    /// Optional complete artifact bytes, retained in canonical base64 after digest validation.
+    public let codeBytes: String?
 
     private enum CodingKeys: String, CodingKey {
         case networkId = "network_id"
@@ -13751,13 +13753,6 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
             context: "contract manifest response"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard !container.contains(.codeBytes) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .codeBytes,
-                in: container,
-                debugDescription: "contract manifest responses must not inline code_bytes"
-            )
-        }
         networkId = try container.decode(NetworkId.self, forKey: .networkId)
         artifactId = try container.decode(ContractArtifactId.self, forKey: .artifactId)
         manifest = try container.decode(ToriiContractManifest.self, forKey: .manifest)
@@ -13797,7 +13792,20 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
         }
         codeHash = manifest.codeHash
         abiHash = manifest.abiHash
+        codeBytes = try container.decodeIfPresent(String.self, forKey: .codeBytes)
+        if let codeBytes, !validContractArtifactBytes(codeBytes, artifactId: artifactId) {
+            throw DecodingError.dataCorruptedError(forKey: .codeBytes, in: container,
+                debugDescription: "code_bytes must be bounded canonical base64 matching the complete artifact hash.")
+        }
     }
+}
+
+private func validContractArtifactBytes(_ encoded: String, artifactId: ContractArtifactId) -> Bool {
+    let maximum = 16 * 1_024 * 1_024
+    guard encoded.utf8.count <= ((maximum + 2) / 3) * 4,
+          let bytes = Data(base64Encoded: encoded), !bytes.isEmpty,
+          bytes.count <= maximum, bytes.base64EncodedString() == encoded else { return false }
+    return IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased() == artifactId.codeHashHex
 }
 
 /// Authenticated, bounded complete artifact bytes with exact network and dataspace identity.
@@ -13819,11 +13827,7 @@ public struct ToriiContractCodeBytes: Decodable, Sendable {
         networkId = try container.decode(NetworkId.self, forKey: .networkId)
         artifactId = try container.decode(ContractArtifactId.self, forKey: .artifactId)
         let encoded = try container.decode(String.self, forKey: .codeB64)
-        let maximum = 16 * 1_024 * 1_024
-        guard encoded.utf8.count <= ((maximum + 2) / 3) * 4,
-              let bytes = Data(base64Encoded: encoded), !bytes.isEmpty,
-              bytes.count <= maximum, bytes.base64EncodedString() == encoded,
-              IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased() == artifactId.codeHashHex else {
+        guard validContractArtifactBytes(encoded, artifactId: artifactId) else {
             throw DecodingError.dataCorruptedError(forKey: .codeB64, in: container,
                 debugDescription: "Contract bytes must be bounded canonical base64 matching the complete artifact hash.")
         }

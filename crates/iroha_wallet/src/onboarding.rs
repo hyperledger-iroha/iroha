@@ -80,6 +80,7 @@ pub struct FaucetRequest {
 /// Shared account bootstrap lifecycle; no CLI, custody or presentation dependency.
 pub struct OnboardingService {
     config: Config,
+    deadline: Option<Instant>,
 }
 impl OnboardingService {
     /// Bind one native wallet identity and safe public endpoint.
@@ -88,7 +89,23 @@ impl OnboardingService {
     /// Rejects endpoint credentials or a mismatched native signer.
     pub fn new(config: Config) -> Result<Self> {
         validate_config(&config)?;
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            deadline: None,
+        })
+    }
+    /// Retain one absolute I/O budget across preparation, proof-of-work and exact recovery.
+    /// Applying another deadline can only shorten this context's remaining budget.
+    ///
+    /// # Errors
+    /// The requested deadline has elapsed.
+    pub fn with_deadline(mut self, deadline: Instant) -> Result<Self> {
+        let deadline = self.deadline.map_or(deadline, |held| held.min(deadline));
+        if deadline <= Instant::now() {
+            eyre::bail!("account bootstrap deadline elapsed");
+        }
+        self.deadline = Some(deadline);
+        Ok(self)
     }
     /// Verify a trusted receipt and privately retain its exact prepared transaction without submitting.
     /// The borrowed runtime token is never retained in operation evidence.
@@ -103,7 +120,14 @@ impl OnboardingService {
         journal: &Path,
     ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        prepare_onboarding(&self.config, request, token, options, journal)
+        prepare_onboarding(
+            &self.config,
+            request,
+            token,
+            options,
+            journal,
+            operation_deadline(options.timeout_secs, self.deadline)?,
+        )
     }
     /// Solve the bounded native puzzle and persist a trusted faucet-signed envelope before submission.
     ///
@@ -116,7 +140,13 @@ impl OnboardingService {
         journal: &Path,
     ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        prepare_faucet(&self.config, request, options, journal)
+        prepare_faucet(
+            &self.config,
+            request,
+            options,
+            journal,
+            operation_deadline(options.timeout_secs, self.deadline)?,
+        )
     }
     /// Submit a saved onboarding envelope at most once, then wait within the configured timeout.
     /// The runtime token is borrowed and no waiting or recovery step repeats the submission.
@@ -153,16 +183,85 @@ impl OnboardingService {
     pub fn resume_faucet(&self, journal: &Path, timeout_secs: u64) -> Result<OperationReport> {
         self.run(journal, "faucet", false, None, timeout_secs)
     }
+    /// Verify saved faucet bytes against the independently selected issuer, allowance and fee intent.
+    /// No HTTP request or dispatch occurs; expired signed bytes remain valid recovery evidence.
+    ///
+    /// # Errors
+    /// Unsafe custody or a different original request, wallet identity or signed envelope.
+    pub fn verify_faucet_journal(&self, journal: &Path, request: &FaucetRequest) -> Result<()> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal)?;
+        let operation: OperationJournalV1 = journal.read_operation()?;
+        operation.verify_faucet_request(request)?;
+        operation.verify(&self.config, "faucet")?;
+        Ok(())
+    }
+    /// Submit at most once while holding the journal lock and binding its original trusted request.
+    ///
+    /// # Errors
+    /// Changed request/configuration, unsafe journal or failed authenticated observation.
+    pub fn submit_faucet_with_request(
+        &self,
+        journal: &Path,
+        request: &FaucetRequest,
+        timeout_secs: u64,
+    ) -> Result<OperationReport> {
+        self.run_faucet_with_request(journal, request, timeout_secs, true)
+    }
+    /// Reconcile only the saved faucet transaction, requiring the exact original trusted request.
+    ///
+    /// # Errors
+    /// Changed request/configuration, unsafe journal or failed authenticated observation.
+    pub fn resume_faucet_with_request(
+        &self,
+        journal: &Path,
+        request: &FaucetRequest,
+        timeout_secs: u64,
+    ) -> Result<OperationReport> {
+        self.run_faucet_with_request(journal, request, timeout_secs, false)
+    }
+    fn run_faucet_with_request(
+        &self,
+        journal: &Path,
+        request: &FaucetRequest,
+        timeout_secs: u64,
+        submit: bool,
+    ) -> Result<OperationReport> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        run_saved_operation(
+            &self.config,
+            journal,
+            timeout_secs,
+            operation_deadline(timeout_secs, self.deadline)?,
+            SavedAction {
+                kind: "faucet",
+                submit,
+                token: None,
+                expected_faucet: Some(request),
+            },
+        )
+    }
     fn run(
         &self,
         journal: &Path,
-        kind: &str,
+        kind: &'static str,
         submit: bool,
         token: Option<&str>,
         timeout_secs: u64,
     ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        run_saved_operation(&self.config, journal, timeout_secs, kind, submit, token)
+        run_saved_operation(
+            &self.config,
+            journal,
+            timeout_secs,
+            operation_deadline(timeout_secs, self.deadline)?,
+            SavedAction {
+                kind,
+                submit,
+                token,
+                expected_faucet: None,
+            },
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -215,6 +314,7 @@ enum OnboardingResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct FaucetV1 {
+    requested_fee: FeePaymentIntent,
     issuer: AccountId,
     asset_definition: AssetDefinitionId,
     amount: Quantity,
@@ -266,14 +366,28 @@ pub fn validate_request_id(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-fn operation_client(config: &Config, timeout_secs: u64) -> Result<IrohaClient> {
+fn operation_deadline(timeout_secs: u64, held: Option<Instant>) -> Result<Instant> {
     if !(1..=300).contains(&timeout_secs) {
         eyre::bail!("request timeout must be between 1 and 300 seconds");
     }
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(timeout_secs))
+        .ok_or_else(|| eyre!("account bootstrap deadline overflow"))?;
+    let deadline = held.map_or(deadline, |held| held.min(deadline));
+    if deadline <= Instant::now() {
+        eyre::bail!("account bootstrap deadline elapsed");
+    }
+    Ok(deadline)
+}
+
+fn operation_client(config: &Config, timeout_secs: u64, deadline: Instant) -> Result<IrohaClient> {
+    let deadline = operation_deadline(timeout_secs, Some(deadline))?;
     let mut config = config.clone();
     config.torii_request_timeout =
         Duration::from_secs(timeout_secs).min(config.torii_request_timeout);
-    Ok(IrohaClient::builder(config).build()?)
+    Ok(IrohaClient::builder(config)
+        .build()?
+        .with_request_deadline(deadline))
 }
 
 fn prepare_onboarding(
@@ -282,6 +396,7 @@ fn prepare_onboarding(
     token: &str,
     options: &PreparationOptions,
     path: &Path,
+    io_deadline: Instant,
 ) -> Result<OperationReport> {
     let issuer = args.issuer.clone();
     if issuer.try_signatory().is_none() {
@@ -295,8 +410,7 @@ fn prepare_onboarding(
     let requested_fee = args.fee_payment.clone();
     requested_fee.validate()?;
     let (request_id, deadline) = options.identity(current_unix_ms()?)?;
-    let journal = Journal::create(path)?;
-    let client = operation_client(config, options.timeout_secs)?;
+    let client = operation_client(config, options.timeout_secs, io_deadline)?;
     let receipt = client.plan_account_onboarding(&request, token)?;
     verify_trusted_issuer(&receipt, &issuer)?;
     let binding = PreparedOperationBindingV1::onboarding(
@@ -332,7 +446,10 @@ fn prepare_onboarding(
         })),
     );
     let transaction = operation.verify(config, "onboarding")?;
-    journal.write_operation(&operation)?;
+    // Planning and preparation do not dispatch a transaction. Establish durable operation
+    // custody only once the verified envelope exists, so an offline preparation can retry
+    // without leaving an empty journal that could be mistaken for submitted work.
+    let journal = Journal::create_prepared(path, &operation)?;
     report(
         &journal,
         &operation,
@@ -350,6 +467,7 @@ fn prepare_faucet(
     args: &FaucetRequest,
     options: &PreparationOptions,
     path: &Path,
+    io_deadline: Instant,
 ) -> Result<OperationReport> {
     let issuer = args.issuer.clone();
     let asset_definition = args.asset_definition.clone();
@@ -359,9 +477,8 @@ fn prepare_faucet(
     let requested_fee = args.fee_payment.clone();
     requested_fee.validate()?;
     let (request_id, expires_at) = options.identity(current_unix_ms()?)?;
-    let journal = Journal::create(path)?;
-    let client = operation_client(config, options.timeout_secs)?;
-    let deadline = observation_deadline(options.timeout_secs, expires_at)?;
+    let client = operation_client(config, options.timeout_secs, io_deadline)?;
+    let deadline = observation_deadline(options.timeout_secs, expires_at)?.min(io_deadline);
     let claim = solve_account_faucet_claim(
         config.torii_api_url.as_str(),
         &config.account,
@@ -377,6 +494,7 @@ fn prepare_faucet(
         binding,
         prepared.fee_payment.clone(),
         OperationV1::Faucet(Box::new(FaucetV1 {
+            requested_fee,
             issuer,
             asset_definition,
             amount,
@@ -385,7 +503,7 @@ fn prepare_faucet(
         })),
     );
     operation.verify(config, "faucet")?;
-    journal.write_operation(&operation)?;
+    let journal = Journal::create_prepared(path, &operation)?;
     report(&journal, &operation, "Prepared", None)
 }
 
@@ -419,6 +537,19 @@ fn verify_trusted_issuer(
 }
 
 impl OperationJournalV1 {
+    fn verify_faucet_request(&self, request: &FaucetRequest) -> Result<()> {
+        let OperationV1::Faucet(faucet) = &self.operation else {
+            eyre::bail!("saved operation is not a faucet claim");
+        };
+        if faucet.issuer != request.issuer
+            || faucet.asset_definition != request.asset_definition
+            || faucet.amount != request.amount
+            || faucet.requested_fee != request.fee_payment
+        {
+            eyre::bail!("saved faucet differs from the exact trusted request");
+        }
+        crate::operations::verify_fee_intent_limits(&request.fee_payment, &self.fee_payment)
+    }
     fn kind(&self) -> &'static str {
         match self.operation {
             OperationV1::Onboarding(_) => "onboarding",
@@ -473,6 +604,10 @@ impl OperationJournalV1 {
                 }
             }
             OperationV1::Faucet(operation) => {
+                crate::operations::verify_fee_intent_limits(
+                    &operation.requested_fee,
+                    &self.fee_payment,
+                )?;
                 if operation.claim.account_id != self.account_id
                     || operation.prepared.fee_payment != self.fee_payment
                 {
@@ -492,23 +627,32 @@ impl OperationJournalV1 {
     }
 }
 
+struct SavedAction<'a> {
+    kind: &'static str,
+    submit: bool,
+    token: Option<&'a str>,
+    expected_faucet: Option<&'a FaucetRequest>,
+}
+
 fn run_saved_operation(
     config: &Config,
     path: &Path,
     timeout_secs: u64,
-    expected_kind: &str,
-    submit: bool,
-    token: Option<&str>,
+    deadline: Instant,
+    action: SavedAction<'_>,
 ) -> Result<OperationReport> {
     let journal = Journal::open(path)?;
     let operation: OperationJournalV1 = journal.read_operation()?;
-    let transaction = operation.verify(config, expected_kind)?;
-    let client = operation_client(config, timeout_secs)?;
+    if let Some(request) = action.expected_faucet {
+        operation.verify_faucet_request(request)?;
+    }
+    let transaction = operation.verify(config, action.kind)?;
+    let client = operation_client(config, timeout_secs, deadline)?;
     let mut before = observe(&client, &operation, transaction.as_ref())?;
     if before.status == "Absent" && journal.submission_recorded(&operation)? {
         before.status = "Pending";
     }
-    if !submit || before.status != "Absent" {
+    if !action.submit || before.status != "Absent" {
         return report(
             &journal,
             &operation,
@@ -527,8 +671,9 @@ fn run_saved_operation(
     let _submission = match &operation.operation {
         OperationV1::Onboarding(onboarding) => match &onboarding.response {
             OnboardingResponseV1::Prepared(prepared) => {
-                let token =
-                    token.ok_or_else(|| eyre!("onboarding submission requires a private token"))?;
+                let token = action
+                    .token
+                    .ok_or_else(|| eyre!("onboarding submission requires a private token"))?;
                 client.submit_prepared_account_onboarding_transaction(
                     &onboarding.request,
                     prepared,
@@ -551,7 +696,9 @@ fn run_saved_operation(
         &operation,
         transaction.as_ref(),
         iroha::client::TransactionWaitOptions {
-            timeout: Duration::from_secs(timeout_secs).min(config.transaction_status_timeout),
+            timeout: Duration::from_secs(timeout_secs)
+                .min(config.transaction_status_timeout)
+                .min(deadline.saturating_duration_since(Instant::now())),
             ..Default::default()
         },
     );

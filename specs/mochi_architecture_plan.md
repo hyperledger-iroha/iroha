@@ -27,6 +27,15 @@ Native filesystem custody is owned by `iroha_fs`; process ownership and IPC by
 metadata. The installed matching binaries are required for lifecycle actions;
 startup performs no build or dependency download.
 
-Owner-private remote dataspace execution and parent-root publication are tracked
-in [the shared implementation goals](kagami_mochi_devex_goals.md). The current
-managed desktop localnet must not be presented as remote private attachment.
+The private-dataspace action selects an independently installed network profile
+and delegates provisioning and outbound parent publication to the same managed
+worker as Kagami. Local readiness, pending parent work and independently verified
+historical parent receipts have separate display states. The desktop neither
+chooses a trust key from a response nor writes parent wallets or journals itself.
+Contract package resolution requests the authenticated parent registry lazily;
+local source and complete cached package graphs require no parent request.
+
+An official Taira profile, native platform qualification and whole-network privacy
+and latency checks remain outstanding in
+[the shared implementation goals](kagami_mochi_devex_goals.md). Implemented desktop
+actions do not establish those release results.

@@ -1016,6 +1016,14 @@ including `transparent` and `untagged`, are rejected rather than ignored.
 Tuple newtypes therefore keep the ordinary tuple layout; changing that layout
 requires a deliberately specified and tested wire-format change.
 
+Named enum fields honor `#[norito(json = "module")]` and
+`#[norito(with = "module")]` in both `JsonDeserialize` and explicit `FastJson`
+derives, matching their serializers. A helper-owned field does not require its
+type to implement the default JSON trait. Missing, duplicate and trailing-field
+checks still apply to the enclosing enum, as does unknown-field rejection when
+`deny_unknown_fields` is selected. Helper selection does not change binary
+layouts or schema identities.
+
 ## Compression Selection and Validation
 
 The header `Compression` byte identifies the payload encoding:

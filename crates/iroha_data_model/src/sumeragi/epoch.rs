@@ -90,6 +90,8 @@ impl ValidatorEpochContextV1 {
     /// # Errors
     /// Rejects identity, ordering, key, proof, geometry, seed, and epoch-bound mismatches.
     pub fn validate(&self) -> Result<(), String> {
+        #[cfg(test)]
+        validation_counts::note();
         self.da_layout
             .validate()
             .map_err(|error| error.to_string())?;
@@ -145,6 +147,11 @@ impl ValidatorEpochContextV1 {
     pub fn validate_successor(&self, previous: &Self) -> Result<(), String> {
         self.validate()?;
         previous.validate()?;
+        self.validate_successor_relationship(previous)
+    }
+    // Pure relationships shared by fully checked epoch owners. Every caller must first
+    // validate both exact contexts; this helper carries no source or finality authority.
+    fn validate_successor_relationship(&self, previous: &Self) -> Result<(), String> {
         self.authorization
             .validate_successor(&previous.authorization)
             .map_err(|error| error.to_string())?;
@@ -203,16 +210,26 @@ impl ValidatorEpochBoundaryV1 {
     /// # Errors
     /// Rejects early/late boundaries, substituted parent, noncontiguous authority or preparation.
     pub fn validate_against(&self, current: &ValidatorEpochContextV1) -> Result<(), String> {
-        current.validate()?;
+        self.validate_against_with_context_validation(current, &mut |context| context.context_id())
+    }
+    // The callback must validate the full exact body and derive its canonical identity.
+    // Only the model-owned bounded workspace supplies a reused successful validation.
+    pub(crate) fn validate_against_with_context_validation(
+        &self,
+        current: &ValidatorEpochContextV1,
+        validate: &mut impl FnMut(&ValidatorEpochContextV1) -> Result<[u8; 32], String>,
+    ) -> Result<(), String> {
+        let current_id = validate(current)?;
         if self.version != 1
             || self.height != current.authorization.last_height
-            || self.predecessor_context_id != current.context_id()?
+            || self.predecessor_context_id != current_id
             || self.selection_anchor.as_ref() == &[0; 32]
             || current.mode != ConsensusMode::Npos
         {
             return Err("native boundary differs from its exact current epoch".into());
         }
-        self.next.validate_successor(current)?;
+        validate(&self.next)?;
+        self.next.validate_successor_relationship(current)?;
         if let Some(preparation) = &self.preparation {
             preparation.validate_against_preparing_authorization(&self.next.authorization)?;
             if preparation.selection_epoch != current.authorization.epoch
@@ -296,3 +313,16 @@ pub fn validator_seat_rank(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod validation_counts {
+    std::thread_local! {
+        static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    pub(super) fn note() {
+        CALLS.with(|calls| calls.set(calls.get() + 1));
+    }
+    pub(crate) fn calls() -> usize {
+        CALLS.with(std::cell::Cell::get)
+    }
+}

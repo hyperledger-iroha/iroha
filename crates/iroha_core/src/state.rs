@@ -1452,6 +1452,7 @@ mod world_commit;
 )]
 mod world_journals;
 pub(crate) mod world_projection;
+pub use world_projection::world_state_accumulator::ProviderAdmissionSnapshotOriginalsV1;
 
 /// Exercise actual World capture while retaining journals through a test observation.
 #[cfg(test)]
@@ -2902,9 +2903,9 @@ pub enum LaneLifecycleError {
     /// Relay worker requires asynchronous lane-relay-burn fee settlement.
     #[error("nexus.relay_worker.enabled requires lane-relay-burn fee settlement")]
     RelayWorkerFeeConfig,
-    /// Nexus fee asset selector must be the exact canonical XOR asset or exact XOR alias.
+    /// Nexus fee selector must be canonical; execution pins its identity to the signed root policy.
     #[error(
-        "invalid nexus.fees.fee_asset_id; expected exact XOR canonical asset definition id or exact xor#universal alias"
+        "invalid nexus.fees.fee_asset_id; expected a canonical asset definition id or exact xor#universal alias"
     )]
     NexusFeeAssetIdInvalid,
     /// Nexus fee sink account literal must be non-empty.
@@ -3987,7 +3988,8 @@ pub struct WorldData {
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4662,7 +4664,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6335,7 +6338,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellTransaction<'block, 'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces: CellTransaction<
+        'block,
+        'world,
+        iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+    >,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -8856,7 +8863,8 @@ pub struct WorldView<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -13954,6 +13962,14 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// One-use ordinal of a directly signed role-11 instruction, absent for nested effects.
     pub(crate) current_direct_stream_token_instruction_index: Option<u32>,
+    /// One-use ordinal of an exact directly signed gateway ISI, absent for nested effects.
+    pub(crate) current_direct_stream_token_gateway_instruction_index: Option<u32>,
+    /// One-use complete sole external append payload; absent for nested or substituted execution.
+    pub(crate) current_direct_stream_token_reputation_payload:
+        Option<iroha_data_model::transaction::TransactionPayload>,
+    /// One-use exact signed recorder-policy source; genuine genesis has separate opaque custody.
+    pub(crate) current_direct_reputation_policy_origin:
+        Option<iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1>,
     /// One-use marker set only for the exact directly signed genesis admission initializer.
     pub(crate) current_direct_sorafs_admission_initialization: bool,
     /// One-use source of a sole directly signed role-15 Reserve/Complete instruction.
@@ -30449,6 +30465,11 @@ impl State {
     pub(crate) fn consensus_publication_lease(&self) -> PublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
+    /// Exclude committed publication only for the gateway's final synchronous capture handoff.
+    /// Native proof/Kura reads, network waits and callback reconciliation must precede this lease.
+    pub(crate) fn stream_token_gateway_publication_lease(&self) -> PublicationGuard<'_> {
+        self.state_commit_lock.lock()
+    }
     #[inline]
     fn note_view_generation_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
@@ -32126,7 +32147,7 @@ impl State {
             &previous_nexus.dataspace_catalog,
             &dataspace_aliases,
         )?;
-        if !nexus_fee_asset_selector_is_xor(&nexus.fees.fee_asset_id) {
+        if !nexus_fee_asset_selector_is_canonical(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
         if let Some(params) = self.world.view().sumeragi_npos_parameters() {
@@ -34196,7 +34217,7 @@ fn ensure_autoscale_managed_created_heights_not_future(
     }
     Ok(())
 }
-fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
+fn nexus_fee_asset_selector_is_canonical(value: &str) -> bool {
     value.trim() == value
         && (AssetDefinitionId::parse_address_literal(value).is_ok() || value == "xor#universal")
 }
@@ -37279,6 +37300,9 @@ impl<'state> StateBlock<'state> {
             private_settlement_carrier_binding: None,
             current_entrypoint_index: None,
             current_direct_stream_token_instruction_index: None,
+            current_direct_stream_token_gateway_instruction_index: None,
+            current_direct_stream_token_reputation_payload: None,
+            current_direct_reputation_policy_origin: None,
             current_direct_final_promotion_operation_origin: None,
             current_direct_sorafs_admission_initialization: false,
             rwa_generated_id_ordinal: 0,
@@ -42474,7 +42498,11 @@ impl StateTransaction<'_, '_> {
                     } else {
                         crate::smartcontracts::code::with_code_bytes(
                             self,
-                            &ContractArtifactId::for_address(&identity.contract_address, identity.code_hash).map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                            &ContractArtifactId::for_address(
+                                &identity.contract_address,
+                                identity.code_hash,
+                            )
+                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },
