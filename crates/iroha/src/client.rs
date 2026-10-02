@@ -5,11 +5,12 @@ mod ordinary_native;
 #[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
 pub use ordinary_native::{
     KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeAccountCustodyV1,
-    KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1, KagemushaNativeCurrentWalletReadV1,
-    KagemushaNativeEnrollmentRequestContextV1, KagemushaNativeInstalledRuntimeAuthorityV1,
-    KagemushaNativePreparedEnrollmentRequestV1, KagemushaOrdinaryNativeArtifactResolverV1,
-    KagemushaOrdinaryNativeCurrentWalletOriginalV1, KagemushaOrdinaryNativeInventoryV1,
-    KagemushaOrdinaryNativeNodeTargetV1, KagemushaOrdinaryNativeOriginalDescriptorV1,
+    KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1,
+    KagemushaNativeCurrentWalletReadV1, KagemushaNativeEnrollmentRequestContextV1,
+    KagemushaNativeInstalledRuntimeAuthorityV1, KagemushaNativePreparedEnrollmentRequestV1,
+    KagemushaOrdinaryNativeArtifactResolverV1, KagemushaOrdinaryNativeCurrentWalletOriginalV1,
+    KagemushaOrdinaryNativeInventoryV1, KagemushaOrdinaryNativeNodeTargetV1,
+    KagemushaOrdinaryNativeOriginalDescriptorV1,
     assemble_kagemusha_ordinary_native_clock_selection_v1,
     assemble_kagemusha_ordinary_native_inventory_v1,
 };

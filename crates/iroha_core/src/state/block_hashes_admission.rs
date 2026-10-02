@@ -53,7 +53,7 @@ pub enum StateBlockStartError<E: std::fmt::Debug> {
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
     Membership(#[from] storage_transactions::MembershipAdmissionError),
-    /// Source-route backing could not be funded before acquiring State or applying effects.
+    /// Original source-route backing or a pre-effect routing read could not complete locally.
     #[error(transparent)]
     ExecutionDeferred(crate::execution_attempt::ExecutionDeferred),
     /// The caller's original pristine/after-start failure.
@@ -72,6 +72,18 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
     }
 }
 
+/// Fixed local categories retained by the JSON execution-root decoder.
+/// JSON exposes these categories without the binary decoder's numeric counters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RootScopeDecodeRefusal {
+    /// The inherited decode scope refused allocation or structural work.
+    #[error("execution-root metadata decode budget refused")]
+    Budget,
+    /// The physical allocator refused the decoder's requested storage.
+    #[error("execution-root metadata allocation refused")]
+    Allocator,
+}
+
 /// Local State storage or protocol decoder refusal; never a verdict on consensus data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateStorageAdmissionError {
@@ -81,6 +93,9 @@ pub enum StateStorageAdmissionError {
     /// The original decoder scope or allocator refused while executing an AMX instruction.
     #[error("local AMX decoder resource refusal: {0}")]
     AmxDecode(norito::core::DecodeResourceError),
+    /// The original execution-root metadata decoder refused before instruction authority existed.
+    #[error(transparent)]
+    RootScopeDecode(RootScopeDecodeRefusal),
 }
 
 impl StateStorageAdmissionError {
@@ -88,7 +103,7 @@ impl StateStorageAdmissionError {
     pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::World(error) => error.release_wait(),
-            Self::AmxDecode(_) => None,
+            Self::AmxDecode(_) | Self::RootScopeDecode(_) => None,
         }
     }
 }

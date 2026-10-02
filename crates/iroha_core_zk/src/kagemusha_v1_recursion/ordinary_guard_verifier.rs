@@ -88,8 +88,6 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
     approval: DigestV1,
     subject: DigestV1,
     provider: DigestV1,
-    eq_history: History,
-    ep_history: History,
     original: Vec<u8>,
 }
 impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
@@ -107,12 +105,6 @@ impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
     }
     pub(crate) fn provider_policy_root(&self) -> DigestV1 {
         self.provider
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        &self.eq_history
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        &self.ep_history
     }
     pub(crate) fn original(&self) -> &[u8] {
         &self.original
@@ -166,12 +158,6 @@ impl KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     }
     pub(crate) fn provider_policy_root(&self) -> DigestV1 {
         self.verified.provider_policy_root()
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        self.verified.eq_history()
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        self.verified.ep_history()
     }
     pub(crate) fn original(&self) -> &[u8] {
         self.verified.original()
@@ -281,8 +267,6 @@ fn verify_selected_original(
         approval: expected[2],
         subject: expected[3],
         provider: expected[4],
-        eq_history: wire.eq_history,
-        ep_history: wire.ep_history,
         original: paired_guard.to_vec(),
     })
 }

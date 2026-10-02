@@ -1862,7 +1862,7 @@ mod tests {
                 h,
             ),
         };
-        let out = <_ as crate::smartcontracts::ValidSingularQuery>::execute(&q, &state.view())?;
+        let out = <_ as crate::smartcontracts::ValidSingularQuery<_>>::execute(&q, &state.view())?;
         assert_eq!(out, manifest);
         Ok(())
     }

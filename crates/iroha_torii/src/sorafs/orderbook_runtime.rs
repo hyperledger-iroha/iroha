@@ -215,7 +215,10 @@ fn classify_orderbook_transaction_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             OrderbookTransactionSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::Expired => OrderbookTransactionSubmissionDispositionV1::Rejected,
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_) => {
+            OrderbookTransactionSubmissionDispositionV1::Rejected
+        }
         _ => OrderbookTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
@@ -1873,6 +1876,34 @@ mod tests {
                 occurred_at_unix_ms: block_height.saturating_mul(1_000),
             },
         }
+    }
+    #[test]
+    fn queue_domain_mismatch_is_permanent_orderbook_runtime_rejection() {
+        assert_eq!(
+            classify_orderbook_transaction_submission(
+                &iroha_core::queue::Error::TransactionDomainMismatch(
+                    iroha_data_model::isi::error::Mismatch {
+                        expected: iroha_data_model::transaction::TransactionDomain::Network(
+                            iroha_data_model::NetworkId::from_genesis_hash(
+                                iroha_crypto::HashOf::from_untyped_unchecked(
+                                    iroha_crypto::Hash::prehashed([0xD2; 32])
+                                )
+                            )
+                        ),
+                        actual: iroha_data_model::transaction::TransactionDomain::Genesis,
+                    },
+                )
+            ),
+            OrderbookTransactionSubmissionDispositionV1::Rejected
+        );
+        assert_eq!(
+            classify_orderbook_transaction_submission(&iroha_core::queue::Error::Full),
+            OrderbookTransactionSubmissionDispositionV1::DefinitelyNotSubmitted
+        );
+        assert_eq!(
+            classify_orderbook_transaction_submission(&iroha_core::queue::Error::IsInQueue),
+            OrderbookTransactionSubmissionDispositionV1::Submitted
+        );
     }
     #[test]
     fn orderbook_supervision_uses_storage_or_generation_activation() {

@@ -3111,7 +3111,13 @@ impl StateBlock<'_> {
             }
         }
         let physical = policy_route
-            .for_signed(tx, state_transaction, routing_decision)?
+            .for_signed(tx, state_transaction, routing_decision)
+            .map_err(|error| match error {
+                ExecutionAttemptError::Rejected(error) => error,
+                ExecutionAttemptError::Deferred(reason) => TransactionRejectionReason::Validation(
+                    state_transaction.defer_execution(reason),
+                ),
+            })?
             .decision();
         state_transaction.current_lane_id = Some(routing_decision.lane_id);
         state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
@@ -3125,7 +3131,17 @@ impl StateBlock<'_> {
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
         let validation_fee_credit =
-            crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
+            match crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction) {
+                Ok(credit) => credit,
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error)) => {
+                    return Err(error);
+                }
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
+                    return Err(TransactionRejectionReason::Validation(
+                        state_transaction.defer_execution(reason),
+                    ));
+                }
+            };
         if genesis.is_none() {
             enforce_fraud_policy(
                 &state_transaction.fraud_monitoring,
@@ -3212,6 +3228,9 @@ impl StateBlock<'_> {
                 })?;
                 let record =
                     code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .map_err(|error| {
+                            error.map_rejection(TransactionRejectionReason::Validation)
+                        })?
                         .ok_or_else(|| {
                             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
                                 format!(
@@ -5262,7 +5281,8 @@ pub fn execute_component_transaction_for_testing(
     overlay.current_lane_id = Some(route.lane_id);
     overlay.current_dataspace_id = Some(route.dataspace_id);
     overlay.world.current_dataspace_id = Some(route.dataspace_id);
-    let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
+    let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route)
+        .expect("completed original physical policy capture");
     match StateBlock::execute_accepted_transaction_in_overlay(
         accepted,
         &mut overlay,
@@ -6652,7 +6672,8 @@ pub mod tests {
         let native =
             crate::queue::RoutingDecision::new(TestLaneId::new(1), TestDataSpaceId::UNIVERSAL);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(&tx));
-        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native);
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
+            .expect("completed original physical policy capture");
         assert_not_permitted_contains(
             StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
                 .map(|_| ()),
@@ -6687,7 +6708,8 @@ pub mod tests {
         let native =
             crate::queue::RoutingDecision::new(TestLaneId::new(1), TestDataSpaceId::new(7));
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(&tx));
-        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native);
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native)
+            .expect("completed original physical policy capture");
         assert_not_permitted_contains(
             StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
                 .map(|_| ()),
@@ -10222,7 +10244,7 @@ pub mod tests {
         state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         assert_eq!(
-            crate::executor::root_scope::captured_artifact_id(&state_tx, code_hash)
+            crate::executor::root_scope::captured_artifact_id(&mut state_tx, code_hash)
                 .expect("fixture captures the exact committed artifact dataspace"),
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 DataSpaceId::UNIVERSAL,
@@ -12795,7 +12817,8 @@ pub mod tests {
             overlay.world.current_dataspace_id = Some(explicit_route.dataspace_id);
             overlay.nexus.autoscale.enabled = false;
             let captured =
-                CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, explicit_route);
+                CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, explicit_route)
+                    .expect("completed original physical policy capture");
             overlay.nexus.autoscale.enabled = true;
             StateBlock::execute_accepted_transaction_in_overlay(
                 accepted,
@@ -13082,7 +13105,8 @@ pub mod tests {
         ));
         let route =
             crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
-        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route)
+            .expect("completed original physical policy capture");
         let result = StateBlock::execute_accepted_transaction_in_overlay(
             accepted,
             &mut overlay,

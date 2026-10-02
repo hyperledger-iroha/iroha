@@ -52,6 +52,293 @@ fn successful_claim_fee_exemption_uses_exact_account_identity() {
         &other_authority
     ));
 }
+
+fn original_claim_fee_payload(
+    authority: AccountId,
+    asset: AssetDefinitionId,
+    recipient_literal: String,
+    recipient: AccountId,
+) -> TransactionPayload {
+    let mut payload = TransactionBuilder::new(
+        executor_test_network_id(b"original-claim-fee"),
+        authority,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(1_u32, AssetId::new(asset, recipient))])
+    .into_payload()
+    .unwrap();
+    payload.metadata.insert(
+        SORA_V2_CLAIM_TX_HASH_METADATA_KEY.parse().unwrap(),
+        Json::new("ab".repeat(32)),
+    );
+    payload.metadata.insert(
+        SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY.parse().unwrap(),
+        Json::new(recipient_literal),
+    );
+    payload
+}
+
+#[test]
+fn original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let (world, authority, _, _, _) = sns_permission_original_world();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(2_u32);
+    let pipeline = Pipeline::default();
+    let asset = AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id).unwrap();
+    let payload = original_claim_fee_payload(
+        authority.clone(),
+        asset,
+        authority.to_string(),
+        authority.clone(),
+    );
+    nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .insert(authority);
+    let original = payload.clone();
+    let quote = || {
+        quote_nexus_fee_admission_draft(
+            &world.view(),
+            &nexus,
+            &pipeline,
+            &payload,
+            50,
+            2,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+    };
+    assert!(quote().unwrap().quote.charges.is_empty());
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+        || quote().unwrap_err(),
+    );
+    assert!(
+        matches!(error, ExecutionAttemptError::Deferred(ref reason)
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+        "original claim metadata refusal became a completed fee verdict: {error:?}"
+    );
+    assert_eq!(payload, original);
+    assert!(quote().unwrap().quote.charges.is_empty());
+}
+
+#[test]
+fn original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let (world, authority, recipient, record_key, record_bytes) = sns_permission_original_world();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .insert(authority.clone());
+    let asset = AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id).unwrap();
+    let payload =
+        original_claim_fee_payload(authority, asset, "customer@fi.universal".into(), recipient);
+    let original = payload.clone();
+    let pipeline = Pipeline::default();
+    let quote = || {
+        quote_nexus_fee_admission_draft(
+            &world.view(),
+            &nexus,
+            &pipeline,
+            &payload,
+            50,
+            2,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+    };
+    assert!(quote().unwrap().quote.charges.is_empty());
+    // Measure the actual two original metadata reads, then give the quote exactly that
+    // budget. Both metadata strings must succeed before the authoritative SNS decoder refuses.
+    let prefix_fits = |limit| {
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32),
+            || {
+                metadata_string(&payload.metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY).and_then(
+                    |hash| {
+                        metadata_string(&payload.metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
+                            .map(|recipient| hash.is_some() && recipient.is_some())
+                    },
+                )
+            },
+        )
+    };
+    let (mut lower, mut upper) = (0, 65_536);
+    assert_eq!(prefix_fits(upper), Ok(true));
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        if prefix_fits(middle) == Ok(true) {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    assert_eq!(prefix_fits(lower), Ok(true));
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, lower, 32),
+        || quote().unwrap_err(),
+    );
+    assert!(
+        matches!(error, ExecutionAttemptError::Deferred(ref reason)
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+        "original SNS read refusal became a completed fee verdict: {error:?}"
+    );
+    assert_eq!(
+        world.smart_contract_state.view().get(&record_key),
+        Some(&record_bytes)
+    );
+    assert_eq!(payload, original);
+    assert!(quote().unwrap().quote.charges.is_empty());
+}
+
+#[test]
+fn claim_metadata_absence_malformed_and_empty_values_remain_completed() {
+    let mut metadata = Metadata::default();
+    assert_eq!(metadata_string(&metadata, "claim").unwrap(), None);
+    for raw in [Json::new(7_u32), Json::new(" \n\t "), Json::new(false)] {
+        metadata.insert("claim".parse().unwrap(), raw);
+        assert_eq!(metadata_string(&metadata, "claim").unwrap(), None);
+    }
+    metadata.insert("claim".parse().unwrap(), Json::new("  exact original  "));
+    assert_eq!(
+        metadata_string(&metadata, "claim").unwrap(),
+        Some("exact original".into())
+    );
+}
+
+#[test]
+fn original_claim_fee_admission_latches_refusal_before_debit_and_publication() {
+    let authority = ALICE_ID.clone();
+    let fee_asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .unwrap();
+    let mut world = World::with_assets(
+        [],
+        [Account::new(authority.clone()).build(&authority)],
+        [AssetDefinition::numeric(
+            fee_asset.clone(),
+            "network XOR",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority)],
+        [Asset::new(
+            AssetId::new(fee_asset.clone(), authority.clone()),
+            Quantity::from(100_u32),
+        )],
+        [],
+    );
+    seed_test_asset_supply(&mut world, &fee_asset);
+    let state = state_after_genesis(world);
+    let mut payload = original_claim_fee_payload(
+        authority.clone(),
+        fee_asset.clone(),
+        authority.to_string(),
+        authority.clone(),
+    );
+    payload.domain = iroha_data_model::transaction::TransactionDomain::Network(state.network_id);
+    let transaction = TransactionBuilder::from_payload(payload)
+        .unwrap()
+        .sign(ALICE_KEYPAIR.private_key());
+    let mut block = state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        Some(state.view().latest_block_hash().unwrap()),
+        None,
+        50,
+        0,
+    ));
+    block
+        .nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .insert(authority.clone());
+    let payer = AssetId::new(fee_asset, authority.clone());
+    let marker = DomainId::try_new("refused_claim", "universal").unwrap();
+    {
+        let mut attempt = block.transaction();
+        assert!(!is_initial_genesis_context(&attempt));
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || validate_transaction_fee_admission(&mut attempt, &transaction).unwrap_err(),
+        );
+        assert!(matches!(error, ValidationFail::InternalError(_)));
+        assert_eq!(
+            attempt.execution_deferral().unwrap().reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert_eq!(
+            attempt.world.assets().get(&payer).unwrap().as_ref(),
+            &Quantity::from(100_u32)
+        );
+        // Even an erroneous later apply must abandon semantic writes under the sticky refusal.
+        attempt.world.domains.insert(
+            marker.clone(),
+            Domain::new(marker.clone()).build(&authority),
+        );
+        attempt.apply();
+    }
+    assert!(block.world.domains.get(&marker).is_none());
+    assert_eq!(
+        block.world.assets().get(&payer).unwrap().as_ref(),
+        &Quantity::from(100_u32)
+    );
+    let mut retry = block.transaction();
+    validate_transaction_fee_admission(&mut retry, &transaction).unwrap();
+    assert!(retry.execution_deferral().is_none());
+    assert_eq!(
+        retry.world.assets().get(&payer).unwrap().as_ref(),
+        &Quantity::from(100_u32)
+    );
+}
+
+#[test]
+fn original_network_xor_pin_refusal_defers_quote_and_retries_same_parameter() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let (world, nexus, pipeline, payload) = multi_component_fee_quote_fixture();
+    let parameter_id = iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id();
+    let original = world
+        .view()
+        .parameters()
+        .custom()
+        .get(&parameter_id)
+        .unwrap()
+        .payload()
+        .clone();
+    let quote = || {
+        quote_nexus_fee_admission_draft(
+            &world.view(),
+            &nexus,
+            &pipeline,
+            &payload,
+            50,
+            2,
+            Some(DataSpaceId::UNIVERSAL),
+        )
+    };
+    let expected = quote().unwrap();
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+        || quote().unwrap_err(),
+    );
+    assert!(
+        matches!(refused, ExecutionAttemptError::Deferred(ref reason)
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+        "{refused:?}"
+    );
+    assert_eq!(
+        world
+            .view()
+            .parameters()
+            .custom()
+            .get(&parameter_id)
+            .unwrap()
+            .payload(),
+        &original
+    );
+    assert_eq!(quote().unwrap(), expected);
+}
+
 #[test]
 fn fee_quote_discovers_pipeline_gas_and_matches_strict_signed_payload_quote() {
     let (world, nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();

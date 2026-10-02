@@ -226,8 +226,8 @@ fn initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permissio
     let header = initial_soracloud_header(&state, 2);
     assert_eq!(header.prev_block_hash(), Some(parent));
     let mut block = state.block(header);
-    let transaction = block.transaction();
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+    let mut transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok());
     require_soracloud_permission(&ALICE_ID, &transaction)?;
     assert_eq!(
         transaction
@@ -255,9 +255,9 @@ fn initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permissio
     drop(block);
     let component = state_with_soracloud_permission(&kura)?;
     let mut block = component.block(initial_soracloud_header(&component, 2));
-    let transaction = block.transaction();
+    let mut transaction = block.transaction();
     require_soracloud_permission(&ALICE_ID, &transaction)?;
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_err());
     Ok(())
 }
 

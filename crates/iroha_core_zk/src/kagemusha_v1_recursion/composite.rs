@@ -988,30 +988,59 @@ pub(super) fn build_recursive_state_pair_impl_v1(
         .as_slice()
         .try_into()
         .map_err(|_| "MintFold authorization Ep history has wrong width".to_owned())?;
-    let expected_eq = mint_authorization_public_instances_v1::<Fp>(
-        &authorization.statement,
-        proof.guard_ep_credential_audit,
-        proof.eq_deferred_audit,
-        proof.ep_deferred_audit,
-        eq_authorization_history,
-    )?;
-    let expected_ep = mint_authorization_public_instances_v1::<Fq>(
-        &authorization.statement,
-        proof.guard_ep_credential_audit,
-        proof.eq_deferred_audit,
-        proof.ep_deferred_audit,
-        ep_authorization_history,
-    )?;
-    if witness.eq_mint_authorization_instances != [expected_eq]
-        || witness.ep_mint_authorization_instances != [expected_ep]
-        || witness.eq_mint_authorization_proof != proof.eq_proof
-        || witness.ep_mint_authorization_proof != proof.ep_proof
-        || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
-        || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
-    {
-        return Err(
-            "MintFold authorization witness is detached from the exact authorization".to_owned(),
-        );
+    if witness.ordinary_selection.is_some() {
+        if witness.state.operation == KagemushaOperationV1::MintFold {
+            return Err("ordinary MintFold requires the distinct finalized-source/credit-opening State consumer".into());
+        }
+        if witness.eq_mint_authorization_protocol.num_instance
+            != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+            || witness.ep_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+        {
+            return Err("ordinary State requires explicit MintAuthorization113 protocols".into());
+        }
+        super::ordinary_state_mint_consumer::require_inactive_column(
+            witness.eq_mint_authorization_instances,
+            eq_authorization_history,
+        )?;
+        super::ordinary_state_mint_consumer::require_inactive_column(
+            witness.ep_mint_authorization_instances,
+            ep_authorization_history,
+        )?;
+        if witness.eq_mint_authorization_proof != proof.eq_proof
+            || witness.ep_mint_authorization_proof != proof.ep_proof
+            || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+            || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+        {
+            return Err("ordinary inactive Mint113 exact parser originals differ".into());
+        }
+    } else {
+        let expected_eq = mint_authorization_public_instances_v1::<Fp>(
+            &authorization.statement,
+            proof.guard_ep_credential_audit,
+            proof.eq_deferred_audit,
+            proof.ep_deferred_audit,
+            eq_authorization_history,
+        )?;
+        let expected_ep = mint_authorization_public_instances_v1::<Fq>(
+            &authorization.statement,
+            proof.guard_ep_credential_audit,
+            proof.eq_deferred_audit,
+            proof.ep_deferred_audit,
+            ep_authorization_history,
+        )?;
+        if witness.eq_mint_authorization_instances != [expected_eq]
+            || witness.ep_mint_authorization_instances != [expected_ep]
+            || witness.eq_mint_authorization_proof != proof.eq_proof
+            || witness.ep_mint_authorization_proof != proof.ep_proof
+            || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+            || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+        {
+            return Err(
+                "MintFold authorization witness is detached from the exact authorization"
+                    .to_owned(),
+            );
+        }
     }
     witness.guard_relation.validate()?;
     let eq_history = witness
@@ -2248,11 +2277,14 @@ where
         return Err("Kagemusha GuardBundle verifier emitted no equations".to_owned());
     }
 
-    if witness.mint_authorization_protocol.num_instance
-        != [MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+    let authorization_width = if ordinary_data.is_some() {
+        super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1
+    } else {
+        MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+    };
+    if witness.mint_authorization_protocol.num_instance != [authorization_width]
         || witness.mint_authorization_instances.len() != 1
-        || witness.mint_authorization_instances[0].len()
-            != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        || witness.mint_authorization_instances[0].len() != authorization_width
     {
         return Err("Kagemusha mint-authorization proof has wrong public shape".to_owned());
     }
@@ -2279,32 +2311,47 @@ where
     let authorization_column = authorization_instances
         .first()
         .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
-    constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
-    let recipient_credential_preimage = witness
-        .mint_fold_opening
-        .map(|opening| opening.recipient_credential().canonical_id_preimage_bytes())
-        .transpose()
-        .map_err(|error| format!("invalid MintFold recipient credential preimage: {error}"))?;
-    {
-        let chip = loader.ecc_chip();
-        let mut loader_ctx = loader.ctx_mut();
-        let authorization_cells = authorization_column
+    if ordinary_data.is_some() {
+        let range = loader.ecc_chip().range();
+        let mut context = loader.ctx_mut();
+        let cells = authorization_column
             .iter()
-            .map(|value| *value.assigned())
+            .map(|v| *v.assigned())
             .collect::<Vec<_>>();
-        constrain_mint_fold_recipient_opening_v1(
-            loader_ctx.main(),
-            chip.range(),
-            &mut sha_jobs,
-            &authorization_cells,
-            assigned_state.successor.lane_id,
-            assigned_state.replay_credit_id,
-            recipient_credential_preimage.as_deref(),
-            witness
-                .mint_fold_opening
-                .map(|opening| opening.credit_opening()),
+        super::ordinary_state_mint_consumer::constrain_inactive_column(
+            context.main(),
+            range,
+            &cells,
             mint,
         )?;
+    } else {
+        constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
+        let recipient_credential_preimage = witness
+            .mint_fold_opening
+            .map(|opening| opening.recipient_credential().canonical_id_preimage_bytes())
+            .transpose()
+            .map_err(|error| format!("invalid MintFold recipient credential preimage: {error}"))?;
+        {
+            let chip = loader.ecc_chip();
+            let mut loader_ctx = loader.ctx_mut();
+            let authorization_cells = authorization_column
+                .iter()
+                .map(|value| *value.assigned())
+                .collect::<Vec<_>>();
+            constrain_mint_fold_recipient_opening_v1(
+                loader_ctx.main(),
+                chip.range(),
+                &mut sha_jobs,
+                &authorization_cells,
+                assigned_state.successor.lane_id,
+                assigned_state.replay_credit_id,
+                recipient_credential_preimage.as_deref(),
+                witness
+                    .mint_fold_opening
+                    .map(|opening| opening.credit_opening()),
+                mint,
+            )?;
+        }
     }
     let authorization_current = verify_ordinary_proof_with_canonical_bytes_v1(
         &loader,
@@ -2314,18 +2361,25 @@ where
         witness.mint_authorization_proof,
     )
     .map_err(|error| format!("failed to verify mint authorization: {error:?}"))?;
-    constrain_mint_authorization_statement_digest_v1(
-        &loader,
-        &mut sha_jobs,
-        authorization_column,
-        &witness.mint_authorization.statement,
-        mint,
-    )?;
+    if ordinary_data.is_none() {
+        constrain_mint_authorization_statement_digest_v1(
+            &loader,
+            &mut sha_jobs,
+            authorization_column,
+            &witness.mint_authorization.statement,
+            mint,
+        )?;
+    }
     let authorization_history =
         load_native_accumulator(&loader, witness.mint_authorization_history)
             .map_err(|error| format!("failed to load mint-authorization history: {error:?}"))?;
+    let authorization_history_start = if ordinary_data.is_some() {
+        super::ordinary_mint_public::ORDINARY_MINT_PUBLIC_PREFIX_V1
+    } else {
+        mint_authorization_public_instance::HISTORY_START
+    };
     let authorization_history_cells = authorization_column
-        .get(mint_authorization_public_instance::HISTORY_START..)
+        .get(authorization_history_start..)
         .ok_or_else(|| "Kagemusha mint-authorization history is absent".to_owned())?
         .iter()
         .map(|value| *value.assigned())
@@ -2399,20 +2453,22 @@ where
         witness.mint_proof,
     )
     .map_err(|error| format!("failed to verify finalized-mint proof: {error:?}"))?;
-    constrain_exact_mint_envelope_v1(
-        &loader,
-        &mut sha_jobs,
-        &assigned_state,
-        &public,
-        authorization_column,
-        mint_column,
-        &authorization_current.canonical_bytes,
-        &mint_current.canonical_bytes,
-        witness.mint_authorization,
-        witness.mint_credit,
-        parity,
-        mint,
-    )?;
+    if ordinary_data.is_none() {
+        constrain_exact_mint_envelope_v1(
+            &loader,
+            &mut sha_jobs,
+            &assigned_state,
+            &public,
+            authorization_column,
+            mint_column,
+            &authorization_current.canonical_bytes,
+            &mint_current.canonical_bytes,
+            witness.mint_authorization,
+            witness.mint_credit,
+            parity,
+            mint,
+        )?;
+    }
     let mint_history = load_native_accumulator(&loader, witness.mint_history)
         .map_err(|error| format!("failed to load finalized-mint history: {error:?}"))?;
     let mint_history_cells = mint_column

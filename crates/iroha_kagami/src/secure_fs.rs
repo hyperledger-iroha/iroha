@@ -1230,7 +1230,7 @@ pub fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
 /// timestamps with nanoseconds. Other platforms fall back to the portable
 /// type, length and modification-time subset.
 #[cfg(unix)]
-pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+pub fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -1254,7 +1254,7 @@ pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Meta
 }
 /// Whether two metadata snapshots name the same filesystem object.
 #[cfg(unix)]
-pub(crate) fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+pub fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
@@ -1274,7 +1274,7 @@ pub(crate) fn same_file_identity(_left: &std::fs::Metadata, _right: &std::fs::Me
 }
 /// Whether two snapshots describe the same unchanged single-link regular input file.
 #[cfg(unix)]
-pub(crate) fn same_single_link_input_snapshot(
+pub fn same_single_link_input_snapshot(
     left: &std::fs::Metadata,
     right: &std::fs::Metadata,
 ) -> bool {

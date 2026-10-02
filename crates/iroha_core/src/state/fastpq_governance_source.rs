@@ -183,7 +183,7 @@ impl StateTransaction<'_, '_> {
         referendum: &str,
         owner: &AccountId,
         custody: &GovernanceLockCustody,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         let current = self.world.parameters.get().block();
         // Both this block's frozen profile and the installed next-block profile
         // must cover new obligations created during genesis.
@@ -203,7 +203,7 @@ impl StateTransaction<'_, '_> {
         &self,
         old: &AccountId,
         new: &AccountId,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         let current = self.world.parameters.get().block();
         for profile in [self.fastpq_source_policy.0, current.fastpq_source()] {
             validate_retained(
@@ -214,6 +214,51 @@ impl StateTransaction<'_, '_> {
             )?;
         }
         Ok(())
+    }
+}
+
+impl super::World {
+    /// Validate both retained cuts before startup/restore can publish derived owners.
+    pub(super) fn validate_retained_mandatory_sources(
+        &self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+        {
+            let parameters = self.parameters.view();
+            let locks = self.governance_locks.view();
+            validate_retained(
+                parameters.get().block().fastpq_source(),
+                locks.iter(),
+                None,
+                None,
+            )?;
+        }
+        {
+            let parameters = self.parameters.block_and_revert();
+            let locks = self.governance_locks.block_and_revert();
+            validate_retained(
+                parameters.get().block().fastpq_source(),
+                locks.iter(),
+                None,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl StateTransaction<'_, '_> {
+    pub(crate) fn mandatory_source_instruction_error(
+        &mut self,
+        error: crate::execution_attempt::ExecutionAttemptError<String>,
+    ) -> iroha_data_model::isi::error::InstructionExecutionError {
+        let message = match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                let _ = self.defer_execution(reason);
+                "local mandatory source admission did not complete".into()
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(message) => message,
+        };
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message.into())
     }
 }
 

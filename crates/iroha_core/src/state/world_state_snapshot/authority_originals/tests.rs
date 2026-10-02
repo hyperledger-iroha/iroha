@@ -16,7 +16,6 @@ use iroha_data_model::{
     sns::NameRecordV1,
 };
 use iroha_model_base::{domain::DomainId, metadata::Metadata};
-use norito::codec::Encode as _;
 use std::{cell::Cell, collections::BTreeSet};
 
 fn owner(seed: u8) -> AccountId {

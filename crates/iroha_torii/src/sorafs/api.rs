@@ -14473,7 +14473,10 @@ fn classify_local_appeal_finance_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             AppealFinanceSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::Expired => AppealFinanceSubmissionDispositionV1::Rejected,
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_) => {
+            AppealFinanceSubmissionDispositionV1::Rejected
+        }
         _ => AppealFinanceSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
@@ -15955,7 +15958,10 @@ fn classify_local_proof_outcome_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             ProofOutcomeSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::Expired => ProofOutcomeSubmissionDispositionV1::Rejected,
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_) => {
+            ProofOutcomeSubmissionDispositionV1::Rejected
+        }
         _ => ProofOutcomeSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
@@ -16535,7 +16541,10 @@ fn classify_local_repair_transaction_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             RepairTransactionSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::Expired => RepairTransactionSubmissionDispositionV1::Rejected,
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_) => {
+            RepairTransactionSubmissionDispositionV1::Rejected
+        }
         _ => RepairTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
@@ -41722,5 +41731,62 @@ mod advert_tests {
             signature: council_signature.to_bytes().to_vec(),
         });
         ProviderFixture { advert, envelope }
+    }
+}
+
+#[cfg(test)]
+mod queue_domain_submission_tests {
+    use super::*;
+
+    #[test]
+    fn queue_domain_mismatch_is_permanent_for_all_signed_api_submitters() {
+        let error = iroha_core::queue::Error::TransactionDomainMismatch(
+            iroha_data_model::isi::error::Mismatch {
+                expected: iroha_data_model::transaction::TransactionDomain::Network(
+                    iroha_data_model::NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0xD2; 32]),
+                        ),
+                    ),
+                ),
+                actual: iroha_data_model::transaction::TransactionDomain::Genesis,
+            },
+        );
+        assert_eq!(
+            classify_local_appeal_finance_submission(&error),
+            AppealFinanceSubmissionDispositionV1::Rejected
+        );
+        assert_eq!(
+            classify_local_appeal_finance_submission(&iroha_core::queue::Error::Full),
+            AppealFinanceSubmissionDispositionV1::DefinitelyNotSubmitted
+        );
+        assert_eq!(
+            classify_local_appeal_finance_submission(&iroha_core::queue::Error::IsInQueue),
+            AppealFinanceSubmissionDispositionV1::Submitted
+        );
+        assert_eq!(
+            classify_local_proof_outcome_submission(&error),
+            ProofOutcomeSubmissionDispositionV1::Rejected
+        );
+        assert_eq!(
+            classify_local_proof_outcome_submission(&iroha_core::queue::Error::Full),
+            ProofOutcomeSubmissionDispositionV1::DefinitelyNotSubmitted
+        );
+        assert_eq!(
+            classify_local_proof_outcome_submission(&iroha_core::queue::Error::IsInQueue),
+            ProofOutcomeSubmissionDispositionV1::Submitted
+        );
+        assert_eq!(
+            classify_local_repair_transaction_submission(&error),
+            RepairTransactionSubmissionDispositionV1::Rejected
+        );
+        assert_eq!(
+            classify_local_repair_transaction_submission(&iroha_core::queue::Error::Full),
+            RepairTransactionSubmissionDispositionV1::DefinitelyNotSubmitted
+        );
+        assert_eq!(
+            classify_local_repair_transaction_submission(&iroha_core::queue::Error::IsInQueue),
+            RepairTransactionSubmissionDispositionV1::Submitted
+        );
     }
 }

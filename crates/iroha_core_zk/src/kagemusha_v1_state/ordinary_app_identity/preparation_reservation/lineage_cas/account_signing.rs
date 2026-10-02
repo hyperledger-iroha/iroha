@@ -54,7 +54,8 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         expected: &KagemushaOrdinaryLineageAnchorV1,
     ) -> Result<Option<[u8; 32]>> {
         self.recheck_historical(financial)?;
-        let operation = KagemushaOrdinaryLineageRequestOperationV1::Anchor(Box::new(expected.clone()));
+        let operation =
+            KagemushaOrdinaryLineageRequestOperationV1::Anchor(Box::new(expected.clone()));
         let mut found = None;
         for (key, value) in &self.acknowledged {
             if value.request.operation == operation {
@@ -102,7 +103,10 @@ impl KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_> {
     /// # Errors
     /// Refuses custody, canonical encoding or a changed invocation.
     pub fn account_signing_message(&self) -> Result<Vec<u8>> {
-        let message = self.request()?.account_signing_message().map_err(|_| Rejected)?;
+        let message = self
+            .request()?
+            .account_signing_message()
+            .map_err(|_| Rejected)?;
         self.recheck()?;
         Ok(message)
     }

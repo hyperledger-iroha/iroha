@@ -279,6 +279,33 @@ pub mod codec {
         let payload_len = counting.bytes_written();
         Ok(payload_len)
     }
+    /// Verify that a value emits exactly the supplied fixed V1 bare payload.
+    ///
+    /// The comparison borrows the original bytes and streams serialization over
+    /// them without allocating another output buffer. It uses the same fixed
+    /// layout as [`Encode::encode`] and preserves the surrounding encode context.
+    /// Custom serializers remain responsible for any allocations they perform.
+    ///
+    /// # Errors
+    /// Returns [`Error::NonCanonicalEncoding`] for changed bytes, an overrun, or
+    /// an unconsumed suffix. Serializer errors are preserved when no byte mismatch
+    /// occurred.
+    pub fn verify_exact_payload<T: SerializePayload>(
+        value: &T,
+        expected: &[u8],
+    ) -> Result<(), Error> {
+        let _context = core::EncodeContextGuard::enter();
+        let mut exact = core::ExactSliceWriter::new(expected);
+        let result = encode_adaptive_into(value, &mut exact);
+        if exact.mismatched() {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        result?;
+        if !exact.is_complete() {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        Ok(())
+    }
     #[cfg(test)]
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
@@ -378,6 +405,54 @@ pub mod codec {
         #[test]
         fn huge_length_hint_is_capped_before_reservation() {
             assert_eq!(HugeHint(9).encode(), vec![9]);
+        }
+        #[test]
+        fn exact_bare_payload_verifier_checks_every_byte_and_complete_length() {
+            let value = (42_u32, vec!["first".to_owned(), "second".to_owned()]);
+            let original = value.encode();
+            super::verify_exact_payload(&value, &original).unwrap();
+            let mut changed = original.clone();
+            *changed.last_mut().unwrap() ^= 1;
+            assert!(matches!(
+                super::verify_exact_payload(&value, &changed),
+                Err(crate::Error::NonCanonicalEncoding)
+            ));
+            assert!(matches!(
+                super::verify_exact_payload(&value, &original[..original.len() - 1]),
+                Err(crate::Error::NonCanonicalEncoding)
+            ));
+            let mut extended = original.clone();
+            extended.push(0);
+            assert!(matches!(
+                super::verify_exact_payload(&value, &extended),
+                Err(crate::Error::NonCanonicalEncoding)
+            ));
+            super::verify_exact_payload(&(), &[]).unwrap();
+        }
+        #[test]
+        fn exact_bare_payload_verifier_preserves_ambient_flags_and_encode_context() {
+            let value = vec![1_u8, 2, 3];
+            let original = value.encode();
+            let alternate =
+                crate::core::default_encode_flags() ^ crate::core::header_flags::COMPACT_LEN;
+            let _flags = crate::core::DecodeFlagsGuard::enter(alternate);
+            let _context = crate::core::EncodeContextGuard::enter();
+            crate::core::note_compact_len_emitted();
+            super::verify_exact_payload(&value, &original).unwrap();
+            assert_eq!(crate::core::effective_decode_flags(), Some(alternate));
+            assert!(crate::core::compact_len_used());
+            assert!(super::verify_exact_payload(&value, &[]).is_err());
+            assert_eq!(crate::core::effective_decode_flags(), Some(alternate));
+            assert!(crate::core::compact_len_used());
+        }
+        #[test]
+        fn exact_bare_payload_verifier_preserves_original_serializer_errors() {
+            let error = super::verify_exact_payload(&AlwaysFails, b"remaining")
+                .expect_err("serializer failure is not an observed byte mismatch");
+            assert!(matches!(
+                error,
+                crate::Error::Message(message) if message == "intentional serializer failure"
+            ));
         }
         #[test]
         fn adaptive_writer_propagates_serializer_errors() {

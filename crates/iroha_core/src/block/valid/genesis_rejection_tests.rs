@@ -5,7 +5,7 @@ use crate::{
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
     sumeragi::{
         network_topology::Topology,
         test_chain::{TestChainConfig, fixture_validators, signed_genesis_fixture},

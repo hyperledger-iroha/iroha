@@ -44,7 +44,8 @@ pub use bundle_admission::{
 };
 
 pub(crate) use bundle_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
 };
 
 const CELLS: usize = RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT;

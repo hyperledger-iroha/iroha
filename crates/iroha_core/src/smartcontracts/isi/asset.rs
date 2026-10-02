@@ -2851,6 +2851,19 @@ pub mod isi {
                 authorization,
             })
         }
+        fn transcript_identity(
+            &self,
+            state: &StateTransaction<'_, '_>,
+        ) -> Result<iroha_crypto::Hash, Error> {
+            self.authorization.resolve_transcript_identity(
+                state,
+                &[(
+                    self.plan.source_id.clone(),
+                    self.plan.destination_id.clone(),
+                    self.plan.amount.clone(),
+                )],
+            )
+        }
         /// Apply the prepared movement, transcript and canonical events as one consumed action.
         fn apply(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
             self.apply_with_observability(state_transaction, true)
@@ -2867,14 +2880,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
             record_observability: bool,
         ) -> Result<(), Error> {
-            let bindings = vec![(
-                self.plan.source_id.clone(),
-                self.plan.destination_id.clone(),
-                self.plan.amount.clone(),
-            )];
-            let transcript_identity = self
-                .authorization
-                .resolve_transcript_identity(state_transaction, &bindings)?;
+            let transcript_identity = self.transcript_identity(state_transaction)?;
             let applied = if record_observability {
                 // The precheck owns the exact full-quantity delta. Finish transcript and
                 // source-context preparation before the main movement writes balances;
@@ -7530,6 +7536,9 @@ pub mod isi {
         let record =
             crate::sns::get_name_record_by_selector(&state_transaction.world, &selector, now_ms)
                 .map_err(|error| {
+                    if error.deferral().is_some() {
+                        return error.retain_in_instruction(state_transaction);
+                    }
                     InstructionExecutionError::InvariantViolation(
                         format!("verified SNS renewal record is no longer valid: {error}").into(),
                     )
@@ -7542,6 +7551,9 @@ pub mod isi {
             now_ms,
         )
         .map_err(|error| {
+            if error.deferral().is_some() {
+                return error.retain_in_instruction(state_transaction);
+            }
             InstructionExecutionError::InvariantViolation(
                 format!("verified SNS renewal quote is no longer valid: {error}").into(),
             )
@@ -7581,7 +7593,7 @@ pub mod isi {
         )?;
         state_transaction
             .authorize_sns_native_source(permit, identity)
-            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+            .map_err(|error| error.retain_in_instruction(state_transaction))?;
         // A free quote or payment to the same canonical balance renews the lease
         // without inventing a numeric movement, transcript or unapplied source E.
         if amount.is_zero() || source_id == destination_id {

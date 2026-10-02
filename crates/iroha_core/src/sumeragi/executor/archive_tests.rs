@@ -212,6 +212,7 @@ fn context(
 fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> {
     Worker {
         payload_build: None,
+        routing_refusal: None,
         context,
         state: &context.state,
         applied: context.applied,
@@ -741,9 +742,7 @@ fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case() 
     }
     let node = crate::sumeragi::node::prepare(crate::sumeragi::node::PrepareInputs {
         state: Arc::clone(&restarted.state),
-        kura: Arc::clone(&restarted.kura),
         events: tokio::sync::broadcast::channel(1024).0,
-        chain_id: restarted.state.chain_id_ref().to_string(),
         genesis: None,
         genesis_account: chain.genesis_account().clone(),
         consensus_mode: ConsensusMode::Permissioned,

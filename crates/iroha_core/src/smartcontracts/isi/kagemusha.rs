@@ -941,7 +941,6 @@ mod release_lifecycle_tests {
             kagemusha_liability_pool_id_v1,
         },
         nexus::AxtAssetIncarnationV1,
-        sumeragi_finality::SumeragiFinalityProof,
     };
     use iroha_model_base::domain::DomainId;
 

@@ -377,6 +377,7 @@ fn active_policy_exempts_only_private_parliament_control_transactions() {
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert!(
         active_policy(&state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("active policy lookup succeeds")
             .is_some(),
         "fixture must exercise active-policy admission"
@@ -397,6 +398,7 @@ fn active_policy_exempts_only_private_parliament_control_transactions() {
     assert!(is_validation_fee_control_plane_transaction(&control_only));
     assert_eq!(
         enforce_validation_fee_admission(&control_only, &state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("private Parliament control transactions remain live"),
         None
     );
@@ -415,6 +417,7 @@ fn active_policy_exempts_only_private_parliament_control_transactions() {
         "plaintext ballots are ordinary fee-subject transactions"
     );
     enforce_validation_fee_admission(&ballot_only, &state_tx)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("plaintext ballots must not bypass active-policy admission");
 }
 #[test]
@@ -489,6 +492,7 @@ fn restored_effective_payout_policy_requires_its_exact_runtime_binding() {
 
     let error =
         validate_persisted_policy_registry_runtime_v1(&state_tx, policy.effective_from_height)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("an effective payout policy cannot restore without its contract runtime");
     assert!(
         error.contains("requires treasury")
@@ -526,6 +530,7 @@ fn restored_future_payout_policy_does_not_require_runtime_before_effective_heigh
     install_policy_registry_fixture(&registry, &mut state_tx);
 
     validate_persisted_policy_registry_runtime_v1(&state_tx, restored_height)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("a future payout policy must not require its runtime before its effective height");
 }
 #[test]
@@ -970,6 +975,7 @@ fn enacted_initial_policy_remains_inactive_until_delayed_effective_height() {
     install_policy_registry_fixture(&registry, &mut state_tx);
     assert!(
         active_policy(&state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("future initial policy is valid")
             .is_none(),
         "the mandatory 120,960-block activation delay must not halt pre-activation writes"
@@ -981,7 +987,7 @@ fn active_policy_lookup_rejects_the_exact_expiry_height() {
     let deployer_key = key_pair(55);
     let deployer = AccountId::new(deployer_key.public_key().clone());
     let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
+        component_fee_world(validation_fee_payout_world(&deployer)),
         crate::kura::Kura::blank_kura_for_testing(),
         crate::query::store::LiveQueryStore::start_test(),
         "generic-testnet".parse().expect("chain id"),
@@ -1001,6 +1007,7 @@ fn active_policy_lookup_rejects_the_exact_expiry_height() {
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert_eq!(policy.expires_after_height, Some(expiry_height));
     let error = active_policy(&state_tx)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("the exclusive expiry height must reject fee admission");
     assert!(
         matches!(
@@ -2280,7 +2287,12 @@ fn active_policy_admits_privacy_control_effects_without_granting_authority() {
     let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
-    assert!(active_policy(&state_tx).expect("active policy").is_some());
+    assert!(
+        active_policy(&state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .expect("active policy")
+            .is_some()
+    );
     let original = *state_tx.world.privacy_consensus_policy.get();
     let mut next_limits = original.current_limits;
     next_limits.max_actions_per_block -= 1;
@@ -2332,6 +2344,7 @@ fn active_policy_admits_privacy_control_effects_without_granting_authority() {
         assert!(!is_validation_fee_control_plane_transaction(&transaction));
         assert!(
             enforce_validation_fee_admission(&transaction, &state_tx)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect("audited privacy controls remain fee-admissible")
                 .is_none()
         );
@@ -2347,6 +2360,7 @@ fn active_policy_admits_privacy_control_effects_without_granting_authority() {
     let combined = tx(55, instructions, Metadata::default());
     assert!(
         enforce_validation_fee_admission(&combined, &state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("all three neutral instructions compose without a synthetic fee transfer")
             .is_none()
     );
@@ -2402,7 +2416,12 @@ fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
     let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
-    assert!(active_policy(&state_tx).expect("active policy").is_some());
+    assert!(
+        active_policy(&state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .expect("active policy")
+            .is_some()
+    );
     let compiled = crate::privacy_profiles::compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     )
@@ -2469,6 +2488,7 @@ fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
     assert_eq!(enforce_policy(&transaction, &policy), Err(expected.clone()));
     assert!(!is_validation_fee_control_plane_transaction(&transaction));
     let rejection = enforce_validation_fee_admission(&transaction, &state_tx)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("native authority cannot override DS-capable fee rejection");
     assert_eq!(
         rejection,
@@ -2505,6 +2525,7 @@ fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
         };
         assert_eq!(enforce_policy(&transaction, &policy), Err(expected.clone()));
         let rejection = enforce_validation_fee_admission(&transaction, &state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("unreviewed effects must fail under the actual active policy");
         assert_eq!(
             rejection,

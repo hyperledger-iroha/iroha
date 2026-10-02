@@ -1550,7 +1550,7 @@ fn credential_original_layout<T: Encode + norito::NoritoSchema>(
     if subject_offset != subject_bytes.len() {
         return Err("ordinary credential subject trailing fields".into());
     }
-    if &frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
+    if frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
         != subject.version.to_le_bytes()
     {
         return Err("ordinary credential version scalar encoder differs".into());

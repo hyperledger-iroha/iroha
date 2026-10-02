@@ -256,11 +256,13 @@ NATIVE_CORE_TEST_OWNERS = (
         'canonical_but_invalid_author_signature_never_becomes_available_custody',
         'stored_result_decode_refusal_retains_original_decoded_owners_and_retries',
         'malformed_result_preimage_remains_terminal_storage_corruption',
+        'stored_certificate_allocator_refusal_keeps_original_read_and_retries',
     )),
     ('native committed read custody', 'sumeragi/block_store/committed_read.rs', 'sumeragi/block_store/committed_read_tests.rs', 'tests', 'sumeragi::block_store::committed_read::tests', (
         'committed_read_returns_original_qc_backing_after_projection_refusal_and_retry',
         'body_only_read_releases_original_qc_witness_before_returning_ready',
         'committed_result_decode_refusal_keeps_original_read_slot_and_retries',
+        'committed_certificate_allocator_refusal_retains_original_slot_and_retries',
     )),
  )
 

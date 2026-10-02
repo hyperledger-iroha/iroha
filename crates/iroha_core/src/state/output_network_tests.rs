@@ -218,7 +218,8 @@ fn output_fixture_retains_original_genesis_and_successor_source() {
         0,
     ));
     assert!(
-        crate::executor::root_scope::execution_root_scope(&unprepared_block.transaction()).is_err()
+        crate::executor::root_scope::execution_root_scope(&mut unprepared_block.transaction())
+            .is_err()
     );
     drop(unprepared_block);
     let state = fixture(65_536, Some(1024));
@@ -242,7 +243,7 @@ fn output_fixture_retains_original_genesis_and_successor_source() {
     assert_eq!(source.header().prev_block_hash(), Some(parent));
     assert!(source.header().creation_time() > output_fixture_input_time(&state));
     let (mut block, _recording) = recorded_network_block(&state, &source);
-    assert!(crate::executor::root_scope::execution_root_scope(&block.transaction()).is_ok());
+    assert!(crate::executor::root_scope::execution_root_scope(&mut block.transaction()).is_ok());
     drop(block);
     drop(_recording);
     assert_eq!(state.view().latest_block_hash(), Some(parent));

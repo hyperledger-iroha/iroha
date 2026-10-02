@@ -82,3 +82,49 @@ fn executed_genesis_rejects_an_extra_voting_registration() {
     }
     assert!(validate_executed_genesis(&world.view(), &context).is_err());
 }
+
+#[test]
+fn executed_genesis_fee_scope_decode_refusal_defers_and_retries_same_authority() {
+    let signed = crate::sumeragi::epoch::tests::genesis_fixture(
+        SumeragiConsensusMode::Permissioned,
+        10,
+        false,
+    );
+    let context = crate::sumeragi::epoch::genesis_epoch(&signed).unwrap();
+    let world = registered_world(&context);
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || validate_executed_genesis(&world.view(), &context).unwrap_err(),
+    );
+    assert!(matches!(
+        refused,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+    ));
+    validate_executed_genesis(&world.view(), &context).unwrap();
+}
+
+#[test]
+fn boundary_capture_attempts_retain_capacity_release_and_deterministic_errors() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::sumeragi::epoch_election::BoundaryCaptureError;
+    let budget = iroha_allocation::AllocationBudget::new(8);
+    let occupied = budget.try_reserve_bytes(8).unwrap();
+    let refusal = budget.try_reserve_bytes(1).unwrap_err();
+    let error = boundary_capture_attempt_error(BoundaryCaptureError::Admission(refusal.clone()));
+    let ExecutionAttemptError::Deferred(owner) = error else {
+        panic!("local capacity cannot reject a schedule");
+    };
+    assert_eq!(owner.allocation_refusal(), Some(&refusal));
+    drop(occupied);
+    assert!(budget.try_reserve_bytes(1).is_ok());
+    assert!(matches!(
+        boundary_capture_attempt_error(BoundaryCaptureError::Allocator { requested_bytes: 9 }),
+        ExecutionAttemptError::Deferred(owner)
+            if owner.reason() == ivm::error::ExecutionDeferral::AllocationUnavailable
+    ));
+    assert!(matches!(
+        boundary_capture_attempt_error(BoundaryCaptureError::Invalid("bad authority".into())),
+        ExecutionAttemptError::Rejected(ScheduleError::Epoch(message))
+            if message == "bad authority"
+    ));
+}

@@ -1433,7 +1433,6 @@ mod tests {
         state
     }
     fn authenticated_trigger_header(state: &State) -> BlockHeader {
-        use crate::state::StateReadOnly as _;
         BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             state.view().latest_block_hash(),
@@ -1444,7 +1443,6 @@ mod tests {
     }
     #[test]
     fn by_call_fixture_requires_an_original_applied_root_before_dispatch() {
-        use crate::state::StateReadOnly as _;
         let state = authenticated_trigger_state();
         assert_eq!(state.committed_height(), 1);
         assert_eq!(state.kura().blocks_count(), 1);
@@ -1456,8 +1454,8 @@ mod tests {
         let header = authenticated_trigger_header(&state);
         assert_eq!(header.prev_block_hash(), Some(parent));
         let mut block = state.block(header);
-        let transaction = block.transaction_for_callback_testing();
-        assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+        let mut transaction = block.transaction_for_callback_testing();
+        assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok());
         drop(transaction);
         drop(block);
         let component = State::new(
@@ -1466,8 +1464,8 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let mut block = component.block(authenticated_trigger_header(&component));
-        let transaction = block.transaction_for_callback_testing();
-        assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+        let mut transaction = block.transaction_for_callback_testing();
+        assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_err());
     }
     fn assert_smart_contract_error_contains(error: &Error, expected: &str) {
         let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = error else {

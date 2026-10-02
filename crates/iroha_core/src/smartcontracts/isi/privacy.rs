@@ -5986,7 +5986,7 @@ mod tests {
             zk_ams_runtime_fixture_for_test,
         },
         query::store::LiveQueryStore,
-        state::{State, StateReadOnly, World},
+        state::{State, World},
     };
     use core::num::NonZeroU64;
     use iroha_crypto::{Hash, HashOf};
@@ -6085,7 +6085,7 @@ mod tests {
         let mut block = state.block(activation_execution_header(&state));
         let mut transaction = block.transaction();
         assert!(
-            crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+            crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
             "governance matrix requires the authenticated ordinary execution root"
         );
         grant_governance(&mut transaction);
@@ -6151,7 +6151,7 @@ mod tests {
         {
             let mut transaction = block.transaction();
             assert!(
-                crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+                crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
                 "governance matrix requires the authenticated ordinary execution root"
             );
             let error = crate::executor::Executor::Initial

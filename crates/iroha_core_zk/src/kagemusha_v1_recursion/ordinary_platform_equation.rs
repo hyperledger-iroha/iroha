@@ -107,6 +107,7 @@ pub(super) fn constrain_original_android_signed_message_stream_v1<F: KagemushaPo
     Ok(original)
 }
 
+#[cfg(test)]
 pub(super) fn constrain_original_android_approval_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -254,6 +255,7 @@ pub(super) fn constrain_original_apple_signed_message_stream_v1<F: KagemushaPose
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn constrain_original_apple_approval_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

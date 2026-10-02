@@ -58,7 +58,7 @@ internal object KagemushaSelectionFrameV1 {
     private const val BEFORE = 428
     private const val AFTER = 444
 
-    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+    private fun requireShape(frame: ByteArray, allowEnrollment: Boolean) {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -79,11 +79,15 @@ internal object KagemushaSelectionFrameV1 {
             frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
         ) { "Core S has a zero policy or hardware generation" }
         val operation = frame[OPERATION].toInt() and 0xff
-        require(operation in 1..5) { "Core S has an invalid monetary operation" }
+        require(operation in (if (allowEnrollment) 0..5 else 1..5)) { "Core S has an invalid monetary operation" }
         val outgoing = operation == 2 || operation == 4
         require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
             frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
         ) { "Core S has the wrong outgoing commitment shape" }
+    }
+
+    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+        requireShape(frame, allowEnrollment = false)
         require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
             frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
             frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)

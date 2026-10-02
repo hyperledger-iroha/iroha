@@ -217,17 +217,13 @@ macro_rules! initial_permissioned_soracloud_state {
         let $kura = Kura::blank_kura_for_testing();
         let $state = state_with_initial_soracloud_permission(&$kura)?;
     };
-    ($kura:ident, mut $state:ident) => {
-        let $kura = Kura::blank_kura_for_testing();
-        let mut $state = state_with_initial_soracloud_permission(&$kura)?;
-    };
 }
 macro_rules! initial_soracloud_transaction_at_height {
     ($state:ident, $header:ident, $state_block:ident, $stx:ident, $height:expr) => {
         let $header = initial_soracloud_header(&$state, $height);
         let mut $state_block = $state.block($header);
         let mut $stx = $state_block.transaction();
-        assert!(crate::executor::root_scope::execution_root_scope(&$stx).is_ok());
+        assert!(crate::executor::root_scope::execution_root_scope(&mut $stx).is_ok());
         set_current_transaction_hash(
             &mut $stx,
             concat!(file!(), ":", line!(), ":", stringify!($stx)).as_bytes(),
@@ -240,10 +236,6 @@ macro_rules! initial_soracloud_transaction {
     };
 }
 macro_rules! initial_permissioned_soracloud_transaction {
-    ($kura:ident, $state:ident, $header:ident, $state_block:ident, $stx:ident) => {
-        initial_permissioned_soracloud_state!($kura, $state);
-        initial_soracloud_transaction!($state, $header, $state_block, $stx);
-    };
     ($kura:ident, $state:ident, $state_block:ident, $stx:ident) => {
         initial_permissioned_soracloud_state!($kura, $state);
         initial_soracloud_transaction!($state, block_header, $state_block, $stx);

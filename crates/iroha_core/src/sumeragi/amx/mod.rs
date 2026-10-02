@@ -2,7 +2,8 @@
 //!
 //! The global chain `G` keeps its AMX state in the World cell `sumeragi_amx`
 //! ([`iroha_data_model::sumeragi_amx::SumeragiAmxState`]) and changes it only through the pure, deterministic transitions of that
-//! state:
+//! state. The executor requires the authenticated global root for all four coordinator
+//! instructions, including genesis; a private dataspace bootstrap cannot install this role:
 //!
 //! - `RegisterAmxDataspaceV1` registers a participant dataspace with a foreign-committee tracker
 //!   anchored at an authenticated epoch context of its consensus instance (in genesis, or by an
@@ -33,8 +34,9 @@
 //! Inherited decoder limits remain typed local refusals through anchors, records and certified
 //! proofs. An executing instruction retains that refusal outside its canonical result, including
 //! when contract code catches the inner error; a refused attempt cannot publish World effects.
-//! The node does not host a dataspace instance with its own state yet (lane
-//! instances share `G`'s state, `specs/sumeragi_lanes.md` §0). TODO(S6): hosting one needs
+//! The node driver can run independent signed dataspace roots, but the daemon does not yet
+//! supervise their participant State owners (lane instances still share `G`'s State,
+//! `specs/sumeragi_lanes.md` §0). TODO(S6): hosting a native AMX participant needs
 //! (1) a per-dataspace World with an `AmxParticipantStateV1` cell anchored at `G`'s genesis
 //! context, (2) native `PrepareAmx`/`SettleAmx`/`RelayGlobalHandoff` instructions of that
 //! instance that call `prepare`/`settle`/`handoff` and record the returned `Prepared` record into

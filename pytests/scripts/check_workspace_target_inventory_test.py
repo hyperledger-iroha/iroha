@@ -472,6 +472,23 @@ def test_runtime_libraries_do_not_capture_executable_source_revisions() -> None:
             assert 'option_env!("IROHA_GIT_COMMIT_HASH")' not in text, source
 
 
+def test_beacon_bootstrap_requires_explicit_developer_artifact_selection() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    owner = ("iroha_test_network", "taira_beacon_bootstrap")
+    package = next(row for row in metadata["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == owner[1])
+    manifest = tomllib.loads((ROOT / "crates/iroha_test_network/Cargo.toml").read_text())
+    declared = next(row for row in manifest["bin"] if row["name"] == owner[1])
+    assert declared["path"] == "src/bin/taira_beacon_bootstrap.rs"
+    assert declared["required-features"] == target["required-features"] == ["dev-tools"]
+    assert "dev-tools" not in manifest["features"]["default"]
+    assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
+    modified = copy.deepcopy(metadata)
+    package = next(row for row in modified["packages"] if row["name"] == owner[0])
+    next(row for row in package["targets"] if row["name"] == owner[1])["required-features"] = []
+    assert any("non-shipping binaries enabled by default" in error and repr(owner) in error
+               for error in TARGET_INVENTORY.check_metadata(modified))
 ORDINARY_NATIVE_TOOL_CASES = (
     (
         "iroha",

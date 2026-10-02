@@ -36,6 +36,9 @@ use sha2::{Digest as _, Sha256};
     deny_unknown_fields
 )]
 #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1")]
+// Small fixed-size Copy selectors intentionally retain all four Receive digests inline.
+// This bounded canonical model avoids an allocation solely to equalize enum variants.
+#[allow(variant_size_differences)]
 pub enum KagemushaOrdinaryIncomingSourceSelectionV1 {
     /// Complete unsigned ordinary TopUpRequest after the actual app approval/proof and AEAD.
     /// The later Core pre-debit decision/signature and debit/finality are excluded from this SHA.

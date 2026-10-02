@@ -17,23 +17,39 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.require_current_financial_control()?;
         let financial = self.publication.cash_financial();
         let current = self.control.loan(financial).map_err(material)?;
-        let request_original = self.lineage_cas.pending_request_original(financial, &current)
-            .map_err(material)?.canonical_bytes().map_err(material)?;
-        if self.lineage_cas.retained_account_signature(financial, &current).map_err(material)?.is_none() {
-            self.lineage_cas.fence_account_signing(financial, &current).map_err(material)?;
+        let request_original = self
+            .lineage_cas
+            .pending_request_original(financial, &current)
+            .map_err(material)?
+            .canonical_bytes()
+            .map_err(material)?;
+        if self
+            .lineage_cas
+            .retained_account_signature(financial, &current)
+            .map_err(material)?
+            .is_none()
+        {
+            self.lineage_cas
+                .fence_account_signing(financial, &current)
+                .map_err(material)?;
             let signature = {
-                let original = self.lineage_cas.account_signing_original(financial, current)
+                let original = self
+                    .lineage_cas
+                    .account_signing_original(financial, current)
                     .map_err(material)?;
                 let signature = sign(&original)?;
                 original.recheck().map_err(material)?;
                 signature
             };
             let current = self.control.loan(financial).map_err(material)?;
-            self.lineage_cas.capture_account_signature(financial, &current, signature)
+            self.lineage_cas
+                .capture_account_signature(financial, &current, signature)
                 .map_err(material)?;
         }
         let current = self.control.loan(financial).map_err(material)?;
-        let (actual, signature) = self.lineage_cas.signed_request_originals(financial, &current)
+        let (actual, signature) = self
+            .lineage_cas
+            .signed_request_originals(financial, &current)
             .map_err(material)?;
         if actual != request_original {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
@@ -55,10 +71,22 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.require_current_financial_control()?;
         let financial = self.publication.cash_financial();
         let current = self.control.loan(financial).map_err(material)?;
-        let operation = self.lineage_cas.pending_request_original(financial, &current)
-            .map_err(material)?.operation.clone();
-        let request_sha256 = self.lineage_cas.accept_result(financial, &current,
-            signed_original, data_record_original, authority_original).map_err(material)?;
+        let operation = self
+            .lineage_cas
+            .pending_request_original(financial, &current)
+            .map_err(material)?
+            .operation
+            .clone();
+        let request_sha256 = self
+            .lineage_cas
+            .accept_result(
+                financial,
+                &current,
+                signed_original,
+                data_record_original,
+                authority_original,
+            )
+            .map_err(material)?;
         if let KagemushaOrdinaryLineageRequestOperationV1::Anchor(anchor) = operation {
             if anchor.as_ref() != &self.initial_lineage_anchor {
                 self.recovery_failed = true;
@@ -86,40 +114,71 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             return Ok(Some(key));
         }
         let financial = self.publication.cash_financial();
-        let Some(key) = self.lineage_cas.acknowledged_anchor_request(financial, &self.initial_lineage_anchor)
-            .map_err(material)? else { return Ok(None); };
+        let Some(key) = self
+            .lineage_cas
+            .acknowledged_anchor_request(financial, &self.initial_lineage_anchor)
+            .map_err(material)?
+        else {
+            return Ok(None);
+        };
         let current = self.control.loan(financial).map_err(material)?;
-        self.lineage_cas.anchor_receipt(key, financial, &self.initial_lineage_anchor)
-            .map_err(material)?.recheck_for_effect(financial, &current).map_err(material)?;
-        self.persist(&Record::LineageAnchorAcknowledged { request_original_sha256: key })?;
+        self.lineage_cas
+            .anchor_receipt(key, financial, &self.initial_lineage_anchor)
+            .map_err(material)?
+            .recheck_for_effect(financial, &current)
+            .map_err(material)?;
+        self.persist(&Record::LineageAnchorAcknowledged {
+            request_original_sha256: key,
+        })?;
         self.anchor_request_sha256 = Some(key);
         self.require_initial_lineage_anchor_current()?;
         Ok(Some(key))
     }
 
-    pub(super) fn recheck_initial_lineage_anchor_historical(&self) -> Result<(), KagemushaStateErrorV1> {
+    pub(super) fn recheck_initial_lineage_anchor_historical(
+        &self,
+    ) -> Result<(), KagemushaStateErrorV1> {
         if let Some(key) = self.anchor_request_sha256 {
             let financial = self.publication.cash_financial();
-            self.lineage_cas.anchor_receipt(key, financial, &self.initial_lineage_anchor)
-                .map_err(material)?.recheck_historical(financial).map_err(material)?;
+            self.lineage_cas
+                .anchor_receipt(key, financial, &self.initial_lineage_anchor)
+                .map_err(material)?
+                .recheck_historical(financial)
+                .map_err(material)?;
         }
         Ok(())
     }
-    pub(super) fn require_initial_lineage_anchor_current(&self) -> Result<(), KagemushaStateErrorV1> {
-        let key = self.anchor_request_sha256.ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+    pub(super) fn require_initial_lineage_anchor_current(
+        &self,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let key = self
+            .anchor_request_sha256
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
         let financial = self.publication.cash_financial();
         let current = self.control.loan(financial).map_err(material)?;
-        self.lineage_cas.anchor_receipt(key, financial, &self.initial_lineage_anchor)
-            .map_err(material)?.recheck_for_effect(financial, &current).map_err(material)
+        self.lineage_cas
+            .anchor_receipt(key, financial, &self.initial_lineage_anchor)
+            .map_err(material)?
+            .recheck_for_effect(financial, &current)
+            .map_err(material)
     }
-    pub(super) fn replay_lineage_anchor_acknowledgment(&mut self, key: DigestV1)
-        -> Result<(), KagemushaStateErrorV1> {
-        if self.anchor_request_sha256.is_some() || self.pending.is_some() || key == [0; 32] {
+    pub(super) fn replay_lineage_anchor_acknowledgment(
+        &mut self,
+        key: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if self.anchor_request_sha256.is_some()
+            || self.pending.is_some()
+            || self.pending_mint.is_some()
+            || key == [0; 32]
+        {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let financial = self.publication.cash_financial();
-        self.lineage_cas.anchor_receipt(key, financial, &self.initial_lineage_anchor)
-            .map_err(material)?.recheck_historical(financial).map_err(material)?;
+        self.lineage_cas
+            .anchor_receipt(key, financial, &self.initial_lineage_anchor)
+            .map_err(material)?
+            .recheck_historical(financial)
+            .map_err(material)?;
         self.anchor_request_sha256 = Some(key);
         Ok(())
     }

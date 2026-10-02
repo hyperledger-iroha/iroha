@@ -409,7 +409,7 @@ fn privacy_instruction_identity_at_v1(
     instruction: &InstructionBox,
     index: usize,
 ) -> color_eyre::Result<(PrivacyProtocolIdV1, &'static str)> {
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         Ok((
             privacy_activation_at_v1(instruction, index)?.protocol_id,
             RegisterPrivacyProtocolActivationV1::WIRE_ID,

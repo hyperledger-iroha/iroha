@@ -83,6 +83,12 @@ mod ordinary_mint_public;
 mod ordinary_mint_request_budget;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod ordinary_mint_verifier;
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+mod ordinary_state_mint_consumer;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub(crate) use ordinary_cash_candidate_verifier::{
     KagemushaAuthenticatedOrdinaryCashCandidateV1, verify_ordinary_cash_candidate_v1,
@@ -247,26 +253,6 @@ mod ordinary_issuer_equation;
         feature = "kagemusha-real-proof-harness"
     )
 ))]
-mod ordinary_terminal_subject_binding;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
-pub(crate) use ordinary_guard_data_binding::{
-    KagemushaOrdinaryGuardDataBindingV1, constrain_ordinary_guard_data_binding_v1,
-};
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_platform_equation;
 #[cfg(all(
     feature = "zk-halo2-ipa",
@@ -277,6 +263,15 @@ mod ordinary_platform_equation;
     )
 ))]
 mod ordinary_platform_union;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
+))]
+mod ordinary_terminal_subject_binding;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
 // live Claim/Terminal fold before any partial-MSM shard can authorize value.
@@ -461,11 +456,15 @@ pub use generation::{
     prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
     prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
 };
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-real-proof-harness")
+))]
+pub use guard_bundle::KagemushaPlatformCredentialRelationCircuitV1;
 pub(crate) use guard_bundle::device_authority_commitment_v1;
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
-    KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,
-    KagemushaPlatformCredentialStatementV1,
+    KagemushaPlatformCredentialRelationWitnessV1, KagemushaPlatformCredentialStatementV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use guard_verifier::KagemushaAuthenticatedGuardBundleVerifierV1;
@@ -2833,5 +2832,6 @@ const _: () = {
 };
 
 pub(crate) use ordinary_lineage_proof_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
 };

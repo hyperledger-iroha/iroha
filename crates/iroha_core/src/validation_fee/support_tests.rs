@@ -467,7 +467,7 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
         [fee_definition, successor_fee_definition, xor_definition],
     )
 }
-fn register_bound_payout_time_trigger(
+pub(crate) fn register_bound_payout_time_trigger(
     state_tx: &mut StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     expected_code_hash: Hash,
@@ -512,6 +512,19 @@ pub(crate) struct BoundPayoutRuntimeFixture {
     runtime: crate::executor::ContractRuntimeExecutionContext,
     trigger_id: iroha_data_model::trigger::TriggerId,
 }
+// Explicit structural root for component fee-admission fixtures. This grants no
+// authenticated genesis, original execution receipt, or finality capability.
+fn component_fee_world(world: crate::state::World) -> crate::state::World {
+    let mut parameters = world.parameters.block();
+    assert!(!parameters.custom().contains_key(
+        &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id(),
+    ));
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
+    world
+}
 pub(crate) fn with_validation_fee_payout_state_at_height(
     height: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
@@ -519,7 +532,7 @@ pub(crate) fn with_validation_fee_payout_state_at_height(
     let deployer_key = key_pair(55);
     let deployer = AccountId::new(deployer_key.public_key().clone());
     let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
+        component_fee_world(validation_fee_payout_world(&deployer)),
         crate::kura::Kura::blank_kura_for_testing(),
         crate::query::store::LiveQueryStore::start_test(),
         "generic-testnet".parse().expect("chain id"),

@@ -61,10 +61,10 @@ impl Drop for SingularOutputLimitGuard {
         ACTIVE_RETAINED_BUILDER_BYTES.set(self.previous_retained_builder_bytes);
     }
 }
-pub(super) fn execute_with_limits<T>(
+pub(super) fn execute_with_limits<T, E: From<Error>>(
     limits: Option<SingularQueryOutputLimits>,
-    execute: impl FnOnce() -> Result<T, Error>,
-) -> Result<T, Error>
+    execute: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E>
 where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
@@ -75,7 +75,7 @@ where
     let _guard = SingularOutputLimitGuard::enter(limits);
     let output = execute()?;
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    bounded_roundtrip_owned(output, limits)
+    bounded_roundtrip_owned(output, limits).map_err(Into::into)
 }
 /// Own one borrowed producer value without invoking an unmetered deep clone.
 ///
@@ -1116,7 +1116,7 @@ mod tests {
         OWNED_SOURCE_DROPPED.set(false);
         let limits = SingularQueryOutputLimits::new(1_024, 1_024);
         let decoded = execute_with_limits(Some(limits), || {
-            Ok(DropBeforeDecodeProbe {
+            Ok::<_, Error>(DropBeforeDecodeProbe {
                 source: true,
                 marker: 7,
                 allocation: vec![0; 256],

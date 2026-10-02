@@ -49,9 +49,7 @@ pub(crate) fn build_failure(error: BuildError, status_committed_height: u64) -> 
         BuildError::HeightOverflow
         | BuildError::InvalidSigner
         | BuildError::ClockUnavailable
-        | BuildError::Signing(_) => {
-            Reason::InternalFailure
-        }
+        | BuildError::Signing(_) => Reason::InternalFailure,
     }
 }
 

@@ -377,7 +377,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .terminal
             .as_ref()
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if terminal.pending.is_some() {
+        if terminal.pending.is_some() || self.pending_mint.is_some() {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         // W1 selects a separately acknowledged actual FI original after slow W2 proving.

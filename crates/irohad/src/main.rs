@@ -2890,9 +2890,7 @@ impl Iroha {
             let prepared =
                 iroha_core::sumeragi::node::prepare(iroha_core::sumeragi::node::PrepareInputs {
                     state: Arc::clone(&state),
-                    kura: Arc::clone(&kura),
                     events: events_sender.clone(),
-                    chain_id: config.common.chain.to_string(),
                     genesis: genesis.as_ref().map(|genesis| genesis.0.clone()),
                     genesis_account: AccountId::new(effective_genesis_public_key.clone()),
                     consensus_mode: signed_consensus_mode,
@@ -3696,7 +3694,6 @@ impl Iroha {
                             observer: Arc::new(iroha_core::sumeragi::node::LogObserver),
                             driver: iroha_core::sumeragi::driver::DriverConfig::default(),
                         },
-                        &network,
                         network.subscriber_queue_cap().get(),
                     )
                     .map_err(|error| {

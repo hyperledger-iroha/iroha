@@ -716,8 +716,8 @@ pub enum CatalogValidationErrorKind {
     /// Account admission lacks a canonical account, manifest, signed-body, or
     /// authenticated streaming boundary.
     AuthenticatedAccountRequiresAuthentication,
-    /// Dataspace-selected admission lacks optional canonical account authentication.
-    DataspaceVisibleRequiresOptionalAuthentication,
+    /// Dataspace-selected admission lacks optional or required canonical account authentication.
+    DataspaceVisibleRequiresAccountAuthentication,
     /// Non-ledger principal admission lacks a protocol handshake or private-root owner token.
     AuthenticatedProtocolPrincipalRequiresAuthentication,
     /// Validator/roster admission lacks a peer or operator identity boundary.
@@ -916,11 +916,15 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             });
         }
         if route.admission == AdmissionPolicy::DataspaceVisible
-            && route.authentication != AuthenticationPolicy::OptionalCanonicalAccountSignature
+            && !matches!(
+                route.authentication,
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+                    | AuthenticationPolicy::CanonicalAccountSignature
+            )
         {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
-                kind: CatalogValidationErrorKind::DataspaceVisibleRequiresOptionalAuthentication,
+                kind: CatalogValidationErrorKind::DataspaceVisibleRequiresAccountAuthentication,
             });
         }
         if route.admission == AdmissionPolicy::AuthenticatedProtocolPrincipal
@@ -1354,7 +1358,8 @@ pub mod aliases {
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
-        dataspace_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
+        dataspace_lookup("aliases.resolve_index", "/v1/aliases/resolve-index")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// List aliases bound to an account.
     pub const BY_ACCOUNT: RouteDescriptor =
         dataspace_lookup("aliases.by_account", "/v1/aliases/by-account");

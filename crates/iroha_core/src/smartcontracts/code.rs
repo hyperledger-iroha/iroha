@@ -4,6 +4,7 @@
 //! manifests, storing bytecode, and binding contract instances. Read APIs query the authenticated
 //! world-state view so callers never rely on process-local caches. This replaces the historical
 //! process-global map and ensures every node observes the same registry contents.
+use crate::execution_attempt::ExecutionAttemptError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use crate::smartcontracts::Execute;
 use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
@@ -768,34 +769,43 @@ pub fn activate_instance(
     Ok(())
 }
 /// Fetch the manifest stored for `artifact_id`, if any.
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_manifest(
     state: &impl StateReadOnly,
     artifact_id: &ContractArtifactId,
-) -> Option<ContractManifest> {
-    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
-        .ok()?;
-    state.world().contract_manifests().get(artifact_id).cloned()
+) -> Result<Option<ContractManifest>, ExecutionAttemptError<ValidationFail>> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)?;
+    Ok(state.world().contract_manifests().get(artifact_id).cloned())
 }
 /// Fetch the stored bytecode for `artifact_id`, if any.
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_code_bytes(
     state: &impl StateReadOnly,
     artifact_id: &ContractArtifactId,
-) -> Option<Vec<u8>> {
-    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
-        .ok()?;
-    state.world().contract_code().get(artifact_id).cloned()
+) -> Result<Option<Vec<u8>>, ExecutionAttemptError<ValidationFail>> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)?;
+    Ok(state.world().contract_code().get(artifact_id).cloned())
 }
 /// Retrieve a combined record (manifest + optional bytecode) for `artifact_id`.
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_record(
     state: &impl StateReadOnly,
     artifact_id: &ContractArtifactId,
-) -> Option<ContractCodeRecord> {
-    let manifest = fetch_manifest(state, artifact_id)?;
-    let code_bytes = fetch_code_bytes(state, artifact_id);
-    Some(ContractCodeRecord {
+) -> Result<Option<ContractCodeRecord>, ExecutionAttemptError<ValidationFail>> {
+    let Some(manifest) = fetch_manifest(state, artifact_id)? else {
+        return Ok(None);
+    };
+    let code_bytes = fetch_code_bytes(state, artifact_id)?;
+    Ok(Some(ContractCodeRecord {
         manifest,
         code_bytes,
-    })
+    }))
 }
 /// Batched contract lookup combining manifest, bytecode, and optional binding lookup.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -838,14 +848,16 @@ pub struct BoundContractIdentity {
     pub code_hash: Hash,
 }
 /// Fetch manifest, code bytes, and instance binding in a single pass.
-#[must_use]
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_artifacts(
     state: &impl StateReadOnly,
     artifact_id: &ContractArtifactId,
     binding: Option<&ContractAddress>,
-) -> ContractArtifacts {
-    let manifest = fetch_manifest(state, artifact_id);
-    let code_bytes = fetch_code_bytes(state, artifact_id);
+) -> Result<ContractArtifacts, ExecutionAttemptError<ValidationFail>> {
+    let manifest = fetch_manifest(state, artifact_id)?;
+    let code_bytes = fetch_code_bytes(state, artifact_id)?;
     let bound_code_hash = binding
         .filter(|address| address.dataspace_id().ok() == Some(artifact_id.dataspace_id))
         .and_then(|contract_address| {
@@ -855,26 +867,33 @@ pub fn fetch_artifacts(
                 .get(contract_address)
                 .copied()
         });
-    ContractArtifacts {
+    Ok(ContractArtifacts {
         manifest,
         code_bytes,
         bound_code_hash,
-    }
+    })
 }
 /// Return the code hash bound to `contract_address`, if any.
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_instance_binding(
     state: &impl StateReadOnly,
     contract_address: &ContractAddress,
-) -> Option<Hash> {
-    let hash = state
+) -> Result<Option<Hash>, ExecutionAttemptError<ValidationFail>> {
+    let Some(hash) = state
         .world()
         .contract_instances()
         .get(contract_address)
-        .copied()?;
-    let artifact_id = ContractArtifactId::for_address(contract_address, hash).ok()?;
-    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)
-        .ok()?;
-    Some(hash)
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let Ok(artifact_id) = ContractArtifactId::for_address(contract_address, hash) else {
+        return Ok(None);
+    };
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)?;
+    Ok(Some(hash))
 }
 /// Resolve the consensus-persisted runtime authority for an active contract instance.
 #[must_use]
@@ -913,16 +932,19 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     Some(&binding.subject)
 }
 /// Resolve a bound instance without cloning its manifest or bytecode.
-#[must_use]
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_bound_contract_identity(
     state: &impl StateReadOnly,
     contract_address: &ContractAddress,
-) -> Option<BoundContractIdentity> {
-    let code_hash = fetch_instance_binding(state, contract_address)?;
-    let artifact_id = ContractArtifactId::for_address(contract_address, code_hash).ok()?;
-    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)
-        .ok()?;
-    fetch_bound_contract_subject(state, contract_address)?;
+) -> Result<Option<BoundContractIdentity>, ExecutionAttemptError<ValidationFail>> {
+    let Some(code_hash) = fetch_instance_binding(state, contract_address)? else {
+        return Ok(None);
+    };
+    if fetch_bound_contract_subject(state, contract_address).is_none() {
+        return Ok(None);
+    }
     let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
@@ -934,44 +956,59 @@ pub fn fetch_bound_contract_identity(
     if let Some(alias) = contract_alias.as_ref()
         && state.world().contract_aliases().get(alias) != Some(contract_address)
     {
-        return None;
+        return Ok(None);
     }
-    Some(BoundContractIdentity {
+    Ok(Some(BoundContractIdentity {
         contract_address: contract_address.clone(),
         contract_alias,
         contract_alias_binding,
         code_hash,
-    })
+    }))
 }
 /// Borrow stored bytecode only for the duration of `use_bytes`.
 ///
 /// This lets content-addressed cache misses prepare directly from world state
 /// without first cloning the complete deployable image.
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn with_code_bytes<T>(
     state: &impl StateReadOnly,
     artifact_id: &ContractArtifactId,
     use_bytes: impl FnOnce(&[u8]) -> T,
-) -> Option<T> {
-    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
-        .ok()?;
-    state
+) -> Result<Option<T>, ExecutionAttemptError<ValidationFail>> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)?;
+    Ok(state
         .world()
         .contract_code()
         .get(artifact_id)
-        .map(|bytes| use_bytes(bytes.as_ref()))
+        .map(|bytes| use_bytes(bytes.as_ref())))
 }
 /// Resolve the fully bound contract instance record for `contract_address`.
-#[must_use]
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_bound_contract_record(
     state: &impl StateReadOnly,
     contract_address: &ContractAddress,
-) -> Option<BoundContractRecord> {
-    let code_hash = fetch_instance_binding(state, contract_address)?;
-    let contract_subject =
-        borrow_bound_contract_subject_from_world(state.world(), contract_address)?;
-    let artifact_id = ContractArtifactId::for_address(contract_address, code_hash).ok()?;
-    let manifest = fetch_manifest(state, &artifact_id)?;
-    let code_bytes = fetch_code_bytes(state, &artifact_id)?;
+) -> Result<Option<BoundContractRecord>, ExecutionAttemptError<ValidationFail>> {
+    let Some(code_hash) = fetch_instance_binding(state, contract_address)? else {
+        return Ok(None);
+    };
+    let Some(contract_subject) =
+        borrow_bound_contract_subject_from_world(state.world(), contract_address)
+    else {
+        return Ok(None);
+    };
+    let Ok(artifact_id) = ContractArtifactId::for_address(contract_address, code_hash) else {
+        return Ok(None);
+    };
+    let Some(manifest) = fetch_manifest(state, &artifact_id)? else {
+        return Ok(None);
+    };
+    let Some(code_bytes) = fetch_code_bytes(state, &artifact_id)? else {
+        return Ok(None);
+    };
     let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
@@ -983,9 +1020,9 @@ pub fn fetch_bound_contract_record(
     if let Some(alias) = contract_alias.as_ref()
         && state.world().contract_aliases().get(alias) != Some(contract_address)
     {
-        return None;
+        return Ok(None);
     }
-    Some(BoundContractRecord {
+    Ok(Some(BoundContractRecord {
         contract_address: contract_address.clone(),
         contract_subject: contract_subject.clone(),
         contract_alias,
@@ -993,36 +1030,42 @@ pub fn fetch_bound_contract_record(
         code_hash,
         manifest,
         code_bytes,
-    })
+    }))
 }
 /// Resolve the fully bound contract instance record for a deterministic contract subject.
-#[must_use]
+///
+/// # Errors
+/// Returns a scope rejection or the original local decode refusal without treating it as absence.
 pub fn fetch_bound_contract_record_by_subject(
     state: &impl StateReadOnly,
     contract_subject: &AccountId,
-) -> Option<BoundContractRecord> {
-    let contract_address = state
+) -> Result<Option<BoundContractRecord>, ExecutionAttemptError<ValidationFail>> {
+    let Some(contract_address) = state
         .world()
         .contract_subject_addresses()
-        .get(contract_subject)?;
-    state.world().contract_instances().get(contract_address)?;
+        .get(contract_subject)
+    else {
+        return Ok(None);
+    };
     fetch_bound_contract_record(state, contract_address)
 }
 /// Snapshot all deployed contract instance records keyed by deterministic contract subject.
-#[must_use]
+///
+/// # Errors
+/// Returns the original incomplete read when immutable scope cannot be decoded locally.
+/// No partially built snapshot is returned on refusal.
 pub fn snapshot_bound_contract_records_by_subject(
     state: &impl StateReadOnly,
-) -> BTreeMap<AccountId, BoundContractRecord> {
-    state
-        .world()
-        .contract_instances()
-        .iter()
-        .filter_map(|(contract_address, _)| {
-            fetch_bound_contract_record(state, contract_address)
-                .map(|record| (record.contract_subject.clone(), record))
-        })
-        .collect()
+) -> Result<BTreeMap<AccountId, BoundContractRecord>, ExecutionAttemptError<ValidationFail>> {
+    let mut records = BTreeMap::new();
+    for (contract_address, _) in state.world().contract_instances().iter() {
+        if let Some(record) = fetch_bound_contract_record(state, contract_address)? {
+            records.insert(record.contract_subject.clone(), record);
+        }
+    }
+    Ok(records)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1267,12 +1310,38 @@ mod tests {
                 .contract_manifests
                 .insert(artifact, manifest.clone());
         }
-        assert_eq!(fetch_code_bytes(&transaction, &owned), Some(bytes));
-        assert_eq!(fetch_manifest(&transaction, &owned), Some(manifest));
-        assert!(fetch_code_bytes(&transaction, &foreign).is_none());
-        assert!(fetch_manifest(&transaction, &foreign).is_none());
-        assert!(with_code_bytes(&transaction, &foreign, <[u8]>::len).is_none());
-        assert!(fetch_record(&transaction, &foreign).is_none());
+        assert_eq!(
+            fetch_code_bytes(&transaction, &owned).expect("registry read completes"),
+            Some(bytes)
+        );
+        assert_eq!(
+            fetch_manifest(&transaction, &owned).expect("registry read completes"),
+            Some(manifest)
+        );
+        assert!(matches!(
+            fetch_code_bytes(&transaction, &foreign),
+            Err(ExecutionAttemptError::Rejected(
+                ValidationFail::NotPermitted(_)
+            ))
+        ));
+        assert!(matches!(
+            fetch_manifest(&transaction, &foreign),
+            Err(ExecutionAttemptError::Rejected(
+                ValidationFail::NotPermitted(_)
+            ))
+        ));
+        assert!(matches!(
+            with_code_bytes(&transaction, &foreign, <[u8]>::len),
+            Err(ExecutionAttemptError::Rejected(
+                ValidationFail::NotPermitted(_)
+            ))
+        ));
+        assert!(matches!(
+            fetch_record(&transaction, &foreign),
+            Err(ExecutionAttemptError::Rejected(
+                ValidationFail::NotPermitted(_)
+            ))
+        ));
     }
     #[test]
     fn registry_roundtrip_manifest_and_code() {
@@ -1324,13 +1393,16 @@ mod tests {
             .expect("bind contract alias");
         assert_eq!(
             fetch_bound_contract_identity(&stx, &contract_address)
+                .expect("registry read completes")
                 .expect("consistent alias binding is callable")
                 .contract_alias,
             Some(alias.clone())
         );
         stx.world.contract_aliases.remove(alias.clone());
         assert!(
-            fetch_bound_contract_identity(&stx, &contract_address).is_none(),
+            fetch_bound_contract_identity(&stx, &contract_address)
+                .expect("registry read completes")
+                .is_none(),
             "a forward-only alias binding must fail closed before contract execution"
         );
         stx.world
@@ -1350,6 +1422,7 @@ mod tests {
                 code_hash,
             ),
         )
+        .expect("registry read completes")
         .expect("manifest stored");
         assert_eq!(got_manifest, manifest);
         // Bytecode fetch
@@ -1360,6 +1433,7 @@ mod tests {
                 code_hash,
             ),
         )
+        .expect("registry read completes")
         .expect("code stored");
         assert_eq!(got_code, code);
         // Combined record fetch
@@ -1370,13 +1444,17 @@ mod tests {
                 code_hash,
             ),
         )
+        .expect("registry read completes")
         .expect("record exists");
         assert_eq!(record.manifest, manifest);
         assert_eq!(record.code_bytes.as_deref(), Some(code.as_slice()));
         // Instance binding fetch
-        let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
+        let bound = fetch_instance_binding(&view, &contract_address)
+            .expect("registry read completes")
+            .expect("binding exists");
         assert_eq!(bound, code_hash);
         let identity = fetch_bound_contract_identity(&view, &contract_address)
+            .expect("registry read completes")
             .expect("lightweight binding exists");
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
@@ -1386,6 +1464,7 @@ mod tests {
         let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
             (bytes.as_ptr(), bytes.to_vec())
         })
+        .expect("registry read completes")
         .expect("borrow stored bytes");
         assert_eq!(borrowed.1, code);
         let stored_ptr = view
@@ -1453,7 +1532,9 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit block");
         let view = state.view();
-        let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
+        let bound = fetch_instance_binding(&view, &contract_address)
+            .expect("registry read completes")
+            .expect("binding exists");
         assert_eq!(bound, code_hash);
     }
     #[test]
@@ -2204,7 +2285,11 @@ seiyaku LifecycleAba {
             .bind_inactive_contract_subject_for_testing(address.clone(), authority.clone());
         activate_instance(&authority, address.clone(), 1, code_hash, &mut transaction)
             .expect("activate contract");
-        assert!(fetch_bound_contract_record(&transaction, &address).is_some());
+        assert!(
+            fetch_bound_contract_record(&transaction, &address)
+                .expect("registry read completes")
+                .is_some()
+        );
 
         let subject = address.subject_id();
         assert!(transaction.world.accounts.remove(subject.clone()).is_some());
@@ -2216,11 +2301,15 @@ seiyaku LifecycleAba {
             "active subject lookup must fail closed"
         );
         assert!(
-            fetch_bound_contract_identity(&transaction, &address).is_none(),
+            fetch_bound_contract_identity(&transaction, &address)
+                .expect("registry read completes")
+                .is_none(),
             "active identity lookup must fail closed"
         );
         assert!(
-            fetch_bound_contract_record(&transaction, &address).is_none(),
+            fetch_bound_contract_record(&transaction, &address)
+                .expect("registry read completes")
+                .is_none(),
             "active record lookup must fail closed"
         );
     }

@@ -12,37 +12,28 @@ fn validate_alias_for_asset_definition(
     })
 }
 fn dataspace_id_for_alias_segment(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     dataspace_alias: &str,
-) -> Option<DataSpaceId> {
-    crate::sns::active_dataspace_id_by_alias(
+) -> Result<Option<DataSpaceId>, InstructionExecutionError> {
+    match crate::sns::resolve_active_dataspace_id_by_alias(
         &state_transaction.world,
         &state_transaction.nexus.dataspace_catalog,
         dataspace_alias,
         state_transaction.block_unix_timestamp_ms(),
-    )
-    .or_else(|| {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            Some(DataSpaceId::UNIVERSAL)
-        } else {
-            state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_alias(dataspace_alias)
-                .map(|entry| entry.id)
-        }
-    })
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(crate::sns::SnsError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error.retain_in_instruction(state_transaction)),
+    }
 }
 fn asset_definition_home_dataspace(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinition,
-) -> Option<DataSpaceId> {
-    definition
-        .owning_domain()
-        .as_ref()
-        .map_or(Some(DataSpaceId::UNIVERSAL), |domain| {
-            dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
-        })
+) -> Result<Option<DataSpaceId>, InstructionExecutionError> {
+    match definition.owning_domain() {
+        Some(domain) => dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref()),
+        None => Ok(Some(DataSpaceId::UNIVERSAL)),
+    }
 }
 fn dataspace_is_public_or_universal(
     state_transaction: &StateTransaction<'_, '_>,
@@ -59,13 +50,13 @@ fn dataspace_is_public_or_universal(
             })
 }
 fn ensure_global_asset_definition_home_is_public_or_universal(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<(), InstructionExecutionError> {
     if definition.balance_scope_policy() != AssetBalancePolicy::Global {
         return Ok(());
     }
-    let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
+    let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)?
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!(
@@ -88,11 +79,11 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
     Ok(())
 }
 fn ensure_global_asset_definition_registered_on_authoritative_route(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<(), InstructionExecutionError> {
     ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
-    let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
+    let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)?
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!(

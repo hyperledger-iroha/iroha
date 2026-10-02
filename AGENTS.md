@@ -218,11 +218,12 @@ Note: First release policy
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.
-- For a disposable four-validator Taira deployment, use
+- For an optional disposable four-validator Taira guest-workload rehearsal, use
   `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
-  use its `check` and `down` subcommands for inspection and teardown. Guest
-  workload qualification is mandatory; request `--full-doctor` only when the
-  broader public product-route surface is also under test.
+  use its `check` and `down` subcommands for inspection and teardown. These
+  rehearsals and their qualification verdicts are engineering diagnostics, never
+  signing or deployment prerequisites for Taira or production. Request
+  `--full-doctor` only when the broader public product-route surface is under test.
 - For public Taira diagnostics use the same-revision compiled
   `iroha taira doctor`. The public-reset coordinator owns signed canary
   execution. Its low-level `iroha taira write-canary` child accepts exactly one

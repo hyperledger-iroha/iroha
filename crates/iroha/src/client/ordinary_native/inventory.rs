@@ -545,7 +545,9 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
         request: &iroha_data_model::kagemusha::KagemushaOrdinaryLineageRequestV1,
     ) -> Result<()> {
         self.recheck()?;
-        request.canonical_bytes().map_err(|_| eyre!("Native lineage request shape rejected"))?;
+        request
+            .canonical_bytes()
+            .map_err(|_| eyre!("Native lineage request shape rejected"))?;
         let owner = &request.operation.lineage().owner;
         let mut lane = sha2::Sha256::new();
         lane.update(b"iroha:kagemusha:v1:ordinary-native-wallet-lane\0");
@@ -1184,12 +1186,15 @@ mod codec_tests {
         };
         assert_exact_frame(&value, "iroha::client::KagemushaOrdinaryNativeInventoryV1");
         // A complete canonical data shape cannot issue an installed clock selection.
-        assert!(assemble_kagemusha_ordinary_native_clock_selection_v1(
-            Path::new("offered-relative-root"), &value,
-        ).is_err());
+        assert!(
+            assemble_kagemusha_ordinary_native_clock_selection_v1(
+                Path::new("offered-relative-root"),
+                &value,
+            )
+            .is_err()
+        );
         let empty = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         assert!(assemble_kagemusha_ordinary_native_clock_selection_v1(&empty, &value).is_err());
-
     }
 
     #[test]

@@ -251,7 +251,7 @@ impl StateTransaction<'_, '_> {
     /// # Errors
     /// Rejects post-genesis capacity replacement, malformed profiles and above-cap Time counts.
     pub(crate) fn validate_execution_output_parameter(
-        &self,
+        &mut self,
         parameter: &Parameter,
     ) -> Result<(), InstructionExecutionError> {
         let current = self.world.parameters.get().block();

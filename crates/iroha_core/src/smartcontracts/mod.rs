@@ -45,12 +45,14 @@ pub trait ValidQuery: iroha_data_model::query::Query {
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail>;
 }
 /// This trait defines how an Iroha Singular query is executed.
-pub trait ValidSingularQuery: iroha_data_model::query::SingularQuery {
+pub trait ValidSingularQuery<E = QueryExecutionFail>:
+    iroha_data_model::query::SingularQuery
+{
     /// Execute a query on a read-only state.
     ///
-    /// Returns Ok(QueryResult) if succeeded and Err(String) if failed.
+    /// Return the result or its concrete deterministic/local attempt error.
     ///
     /// # Errors
     /// Concrete to each implementer
-    fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Self::Output, QueryExecutionFail>;
+    fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Self::Output, E>;
 }

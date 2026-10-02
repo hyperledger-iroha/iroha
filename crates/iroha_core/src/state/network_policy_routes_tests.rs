@@ -355,7 +355,9 @@ fn physical_dataspace_mismatch_is_a_transaction_refusal_not_a_carrier_failure() 
         let tx = block.transaction();
         assert!(matches!(
             token.for_signed(signed, &tx, native),
-            Err(TransactionRejectionReason::Validation(_))
+            Err(ExecutionAttemptError::Rejected(
+                TransactionRejectionReason::Validation(_)
+            ))
         ));
     });
 }
@@ -400,14 +402,20 @@ fn original_source_hash_order_and_carrier_are_required() {
         // Original owner capture is write-once even with the same valid source.
         let mut owner = block.network_policy_routes.take().unwrap();
         let retained_rows = owner.rows.as_slice().len();
-        owner.fill_from_preblock(block, &source);
+        owner
+            .fill_from_preblock(block, &source)
+            .expect("completed capture attempt");
         assert_eq!(
             owner.validate_carrier(&source),
             Err("physical policy capture is not repeatable")
         );
         assert!(owner.get(&source, 0).is_err());
-        owner.fill_from_preblock(block, &foreign);
-        owner.fill_from_preblock(block, &source);
+        owner
+            .fill_from_preblock(block, &foreign)
+            .expect("completed capture attempt");
+        owner
+            .fill_from_preblock(block, &source)
+            .expect("completed capture attempt");
         assert_eq!(
             owner.validate_carrier(&source),
             Err("physical policy capture is not repeatable")
@@ -726,7 +734,9 @@ fn ordinary_capture_requires_immutable_metadata_even_with_valid_lane_policy() {
         *block.world.parameters.get_mut() = parameters;
         let budget = AllocationBudget::new(1024 * 1024);
         let mut owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
-        owner.fill_from_preblock(block, &source);
+        owner
+            .fill_from_preblock(block, &source)
+            .expect("completed capture attempt");
         assert_eq!(
             owner.validate_carrier(&source),
             Err("Network source has no immutable root scope")
@@ -767,7 +777,7 @@ fn genesis_instruction_capability_requires_both_signed_route_and_exact_authentic
         );
         tx.genesis_execution_scope = Some(capability);
         assert_eq!(
-            crate::executor::root_scope::execution_root_scope(&tx).unwrap(),
+            crate::executor::root_scope::execution_root_scope(&mut tx).unwrap(),
             SumeragiRootScope::Global
         );
         let log: iroha_data_model::isi::InstructionBox = Log::new(
@@ -779,7 +789,7 @@ fn genesis_instruction_capability_requires_both_signed_route_and_exact_authentic
             .execute_instruction(&mut tx, &ALICE_ID, log)
             .unwrap();
         tx.current_entrypoint_index = Some(1);
-        assert!(crate::executor::root_scope::execution_root_scope(&tx).is_err());
+        assert!(crate::executor::root_scope::execution_root_scope(&mut tx).is_err());
         assert!(
             route
                 .genesis_execution_scope(signed, &tx, Some(&original))
@@ -789,6 +799,121 @@ fn genesis_instruction_capability_requires_both_signed_route_and_exact_authentic
         tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"substituted genesis input",
         )));
-        assert!(crate::executor::root_scope::execution_root_scope(&tx).is_err());
+        assert!(crate::executor::root_scope::execution_root_scope(&mut tx).is_err());
     });
+}
+
+/// Observe the original root decoder's cumulative allocation without adding a production preflight.
+fn original_routing_root_allocation(state: &StateBlock<'_>) -> usize {
+    const CEILING: usize = 1 << 20;
+    norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, CEILING, 32),
+        || {
+            assert_eq!(
+                crate::sumeragi::lanes::routing::read_committed_root_scope(&state.world).unwrap(),
+                Some(SumeragiRootScope::Global)
+            );
+            let norito::Error::TotalAllocationExceeded { attempted, limit } =
+                norito::core::reserve_decode_allocation(CEILING + 1).unwrap_err()
+            else {
+                panic!("original root allocation observation changed");
+            };
+            assert_eq!(limit, CEILING as u64);
+            usize::try_from(attempted).unwrap() - CEILING - 1
+        },
+    )
+}
+
+fn original_routing_capture_refusal(allocation: Option<usize>) {
+    let state = state();
+    let source = carrier(vec![input(&state, "retry exact native routing carrier")]);
+    before_effects(&state, &source, false, |block| {
+        let root_id = iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id();
+        let policy_id = SumeragiLanePolicy::parameter_id();
+        let root_bytes = block
+            .world
+            .parameters()
+            .custom()
+            .get(&root_id)
+            .unwrap()
+            .payload()
+            .get()
+            .to_owned();
+        let policy_bytes = block
+            .world
+            .parameters()
+            .custom()
+            .get(&policy_id)
+            .unwrap()
+            .payload()
+            .get()
+            .to_owned();
+        let limit = allocation.unwrap_or_else(|| original_routing_root_allocation(block));
+        let budget = AllocationBudget::new(1 << 20);
+        let mut owner = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
+        let result = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32),
+            || owner.fill_from_preblock(block, &source),
+        );
+        let reason = result
+            .expect_err("unfinished original routing read cannot produce a completed physical row");
+        assert_eq!(
+            reason.reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert!(owner.rows.as_slice().is_empty());
+        assert!(
+            owner.invalid_context.is_none(),
+            "local pressure cannot become invalid source context"
+        );
+        assert_eq!(
+            block
+                .world
+                .parameters()
+                .custom()
+                .get(&root_id)
+                .unwrap()
+                .payload()
+                .get(),
+            &root_bytes
+        );
+        assert_eq!(
+            block
+                .world
+                .parameters()
+                .custom()
+                .get(&policy_id)
+                .unwrap()
+                .payload()
+                .get(),
+            &policy_bytes
+        );
+        let snapshot_refusal = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32),
+            || crate::sumeragi::lanes::routing::RoutingSnapshot::of(block).unwrap_err(),
+        );
+        assert_eq!(snapshot_refusal, reason);
+        drop(owner);
+        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(block).unwrap();
+        assert_eq!(snapshot.policy().unwrap().fixed[0].lane, LaneId::new(1));
+        let mut retry = CapturedNetworkPolicyRoutes::reserve(&source, &budget).unwrap();
+        retry.fill_from_preblock(block, &source).unwrap();
+        assert!(retry.validate_carrier(&source).is_ok());
+        let (native, route) = retry.get(&source, 0).unwrap();
+        assert_eq!(
+            native,
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(route.physical().unwrap().decision().lane_id, LaneId::new(0));
+    });
+}
+
+#[test]
+fn original_root_scope_read_refusal_does_not_publish_invalid_native_context() {
+    original_routing_capture_refusal(Some(0));
+}
+
+#[test]
+fn original_lane_policy_read_refusal_after_root_keeps_exact_capture_retryable() {
+    original_routing_capture_refusal(None);
 }

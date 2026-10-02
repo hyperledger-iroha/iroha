@@ -267,7 +267,7 @@ mod root_scope_tests {
     use super::*;
     use crate::{
         query::store::LiveQueryStore,
-        state::{State, StateReadOnly as _, World},
+        state::{State, World},
         sumeragi::lanes::routing::test_support,
     };
     use iroha_crypto::{Hash, HashOf};

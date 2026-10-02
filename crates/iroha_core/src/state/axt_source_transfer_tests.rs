@@ -102,7 +102,7 @@ fn source_state(fixture: &CommittedNetworkProofFixture) -> Arc<State> {
 
 #[test]
 fn duplicate_transfer_leg_identity_is_rejected_before_any_finalized_source_mutation() {
-    use crate::{smartcontracts::Execute as _, state::StateReadOnly as _};
+    use crate::smartcontracts::Execute as _;
     use iroha_data_model::{
         asset::id::AssetId,
         block::BlockHeader,

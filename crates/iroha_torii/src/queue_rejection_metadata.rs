@@ -1,10 +1,13 @@
 impl Error {
     fn status_code_for_queue_error(err: &queue::Error) -> StatusCode {
         match err {
+            queue::Error::Deferred(_) => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Full
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
-            queue::Error::Expired => StatusCode::BAD_REQUEST,
+            queue::Error::Expired | queue::Error::TransactionDomainMismatch(_) => {
+                StatusCode::BAD_REQUEST
+            }
             queue::Error::KagemushaV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnsupportedTransactionAdmission { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
@@ -26,7 +29,15 @@ impl Error {
     }
     fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {
         match err {
+            queue::Error::Deferred(_) => (
+                "admission_deferred",
+                "local admission capacity is unavailable; retry the same signed transaction",
+            ),
             queue::Error::Full => ("queue_full", "transaction queue is at capacity"),
+            queue::Error::TransactionDomainMismatch(_) => (
+                "transaction_rejected",
+                "signed transaction domain differs from committed admission state",
+            ),
             queue::Error::LatencySaturated => (
                 "queue_latency_saturated",
                 "transaction queue latency budget is saturated",
@@ -110,7 +121,8 @@ impl Error {
         let retry_after_seconds = match err {
             queue::Error::Full
             | queue::Error::LatencySaturated
-            | queue::Error::MaximumTransactionsPerUser => Some(1),
+            | queue::Error::MaximumTransactionsPerUser
+            | queue::Error::Deferred(_) => Some(1),
             _ => None,
         };
         let (reject_code, _detail) = queue_rejection_metadata(err);
@@ -125,7 +137,7 @@ impl Error {
             _ => None,
         };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
-            reject_code: Some(reject_code.to_owned()),
+            reject_code: (!matches!(err, queue::Error::Deferred(_))).then(|| reject_code.to_owned()),
             queue: backpressure.map(|backpressure| {
                 let saturated = backpressure.is_saturated();
                 QueueErrorSnapshot {
@@ -147,6 +159,10 @@ impl Error {
 }
 fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
     match err {
+        queue::Error::Deferred(_) => (
+            "PRTRY:ADMISSION_DEFERRED",
+            "local admission capacity is unavailable; retry the same signed transaction".to_owned(),
+        ),
         queue::Error::Full => (
             "PRTRY:QUEUE_FULL",
             "transaction queue is at capacity".to_owned(),
@@ -160,6 +176,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
+        queue::Error::TransactionDomainMismatch(mismatch) => (
+            "transaction_rejected",
+            format!("signed transaction domain differs from committed admission state: {mismatch}"),
+        ),
         queue::Error::KagemushaV1OperationCarrierRejected { reason } => (
             "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
             format!("KAGEMUSHA V1 operation carrier failed canonical admission: {reason}"),

@@ -52,8 +52,11 @@ pub enum LaneStep {
 }
 
 /// Why a lane step failed; local allocation refusal is retryable, semantic failures are invalid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum LaneStepError {
+    /// Original committed policy decoding did not finish locally.
+    #[error("lane policy deferred: {0}")]
+    Deferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// A merge names a lane the state no longer has.
     #[error("merged lane {0} has no record")]
     MissingLane(LaneId),
@@ -100,7 +103,7 @@ impl StateBlock<'_> {
 pub fn advance(block: &mut StateBlock<'_>, input: &LaneStepInput) -> Result<(), LaneStepError> {
     let height = block._curr_block.height().get();
     let time_ms = u64::try_from(block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
-    let policy = lane_policy(&block.world);
+    let policy = lane_policy(&block.world)?;
     let network = *block.network_id();
     let budget = block.pipeline_ivm_prepared_cache.execution_budget();
     let mut state =

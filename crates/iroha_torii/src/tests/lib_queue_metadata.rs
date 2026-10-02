@@ -59,6 +59,23 @@ mod tests_queue_metadata {
         }
     }
     #[test]
+    fn local_fee_admission_refusal_reports_capacity_without_a_rejection_code() {
+        let budget = iroha_allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let original = budget.try_reserve_bytes(1).unwrap_err();
+        let error = queue::Error::Deferred(original.clone().into());
+        assert_eq!(Error::status_code_for_queue_error(&error), StatusCode::TOO_MANY_REQUESTS);
+        let envelope = Error::queue_error_envelope(&error, None);
+        assert_eq!(envelope.code, "admission_deferred");
+        let details = envelope.details.unwrap();
+        assert_eq!(details.retry_after_seconds, Some(1));
+        assert!(details.reject_code.is_none());
+        assert!(details.fee.is_none());
+        let queue::Error::Deferred(owner) = error else { unreachable!() };
+        assert_eq!(owner.allocation_refusal(), Some(&original));
+        drop(occupied);
+    }
+    #[test]
     fn unsupported_current_queue_admission_has_permanent_canonical_error() {
         let error = queue::Error::UnsupportedTransactionAdmission {
             reason: "current consensus does not support multi-route transaction admission"
@@ -79,6 +96,42 @@ mod tests_queue_metadata {
         let envelope = Error::queue_error_envelope(&error, None);
         assert_eq!(envelope.code, "unsupported_transaction_admission");
         assert!(envelope.details.unwrap().retry_after_seconds.is_none());
+    }
+    #[test]
+    fn queue_domain_mismatch_is_permanent_and_matches_stateless_rejection_category() {
+        use iroha_data_model::{isi::error::Mismatch, transaction::TransactionDomain};
+        let expected = TransactionDomain::Network(iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::new(b"queue expected network")),
+        ));
+        for actual in [
+            TransactionDomain::Genesis,
+            TransactionDomain::Network(iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::from_untyped_unchecked(Hash::new(b"queue foreign network")),
+            )),
+        ] {
+            let mismatch = Mismatch { expected, actual };
+            let stateless =
+                iroha_core::tx::AcceptTransactionFail::TransactionDomainMismatch(mismatch.clone());
+            let error = queue::Error::TransactionDomainMismatch(mismatch);
+            assert_eq!(
+                Error::status_code_for_queue_error(&error),
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                queue_rejection_metadata(&error).0,
+                accept_transaction_metadata(&stateless).0
+            );
+            let envelope = Error::queue_error_envelope(&error, None);
+            assert_eq!(envelope.code, "transaction_rejected");
+            assert!(envelope.details.unwrap().retry_after_seconds.is_none());
+            let response = Error::PushIntoQueue {
+                source: Box::new(error),
+                backpressure: queue::BackpressureState::default(),
+            }
+            .into_response();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(!response.headers().contains_key("retry-after"));
+        }
     }
     #[test]
     fn kagemusha_v1_queue_conflict_has_stable_code_and_status() {

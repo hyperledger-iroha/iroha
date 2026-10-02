@@ -541,7 +541,10 @@ fn active_dataspace_id_rejects_conflicting_static_and_dynamic_mappings() {
             .contains(ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
         "unexpected error: {error}"
     );
-    assert!(active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50).is_none());
+    assert_eq!(
+        active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50),
+        Err(error)
+    );
 }
 #[test]
 fn active_dataspace_id_accepts_matching_static_and_dynamic_mappings() {
@@ -685,7 +688,7 @@ fn active_dataspace_id_derives_from_dynamic_sns_alias() {
         .insert(record_storage_key(&selector), record.encode());
     let view = world.view();
     assert_eq!(
-        active_dataspace_id_by_alias(&view, &catalog, "alpha", 50),
+        active_dataspace_id_by_alias(&view, &catalog, "alpha", 50).expect("valid active mapping"),
         Some(expected_id)
     );
     let metadata = active_dataspace_metadata_by_alias(&view, &catalog, "alpha", 50)
@@ -765,7 +768,8 @@ fn active_dataspace_id_returns_none_for_unregistered_dynamic_alias() {
     let catalog = dataspace_catalog();
     let world = World::default();
     assert_eq!(
-        active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50),
+        active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 50)
+            .expect("completed absent mapping"),
         None
     );
     assert_eq!(
@@ -783,7 +787,8 @@ fn active_dataspace_id_ignores_expired_dynamic_alias() {
     let (selector, record) = dataspace_record("alpha", &owner, 10, 20, 30);
     let world = world_with_dataspace_record(&selector, &record);
     assert_eq!(
-        active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 10),
+        active_dataspace_id_by_alias(&world.view(), &catalog, "alpha", 10)
+            .expect("completed absent mapping"),
         None
     );
     assert_eq!(
@@ -803,7 +808,8 @@ fn active_dataspace_id_ignores_frozen_or_tombstoned_dynamic_alias() {
     });
     let frozen_world = world_with_dataspace_record(&frozen_selector, &frozen_record);
     assert_eq!(
-        active_dataspace_id_by_alias(&frozen_world.view(), &catalog, "frozen-alpha", 50),
+        active_dataspace_id_by_alias(&frozen_world.view(), &catalog, "frozen-alpha", 50)
+            .expect("completed absent mapping"),
         None
     );
     let (tombstoned_selector, mut tombstoned_record) =
@@ -813,7 +819,8 @@ fn active_dataspace_id_ignores_frozen_or_tombstoned_dynamic_alias() {
     });
     let tombstoned_world = world_with_dataspace_record(&tombstoned_selector, &tombstoned_record);
     assert_eq!(
-        active_dataspace_id_by_alias(&tombstoned_world.view(), &catalog, "retired-alpha", 50),
+        active_dataspace_id_by_alias(&tombstoned_world.view(), &catalog, "retired-alpha", 50)
+            .expect("completed absent mapping"),
         None
     );
 }

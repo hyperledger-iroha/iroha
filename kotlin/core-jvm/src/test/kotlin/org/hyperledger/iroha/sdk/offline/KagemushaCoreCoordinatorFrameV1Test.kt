@@ -294,6 +294,32 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
             selection, appAttestOriginal(11), KagemushaCoreCoordinatorFrameV1.u32(4),
             ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
+        // The wallet's u128 index may be far beyond the unrelated signed u32 hardware counter.
+        val wideIndex = request.map { it.copyOf() }.toMutableList()
+        wideIndex[2][443] = 1
+        wideIndex[2][459] = 1
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, wideIndex)
+        val financialOverflow = request.map { it.copyOf() }.toMutableList()
+        financialOverflow[2].fill(0xff.toByte(), 428, 444)
+        financialOverflow[2].fill(0, 444, 460)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, financialOverflow)
+        }
+        val skippedIndex = request.map { it.copyOf() }.toMutableList()
+        skippedIndex[2][444] = 72
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, skippedIndex)
+        }
+        val enrollment = request.map { it.copyOf() }.toMutableList()
+        enrollment[2][331] = 0
+        enrollment[2].fill(0, 364, 396)
+        enrollment[2].fill(0, 396, 428)
+        enrollment[2].fill(0, 428, 460)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        enrollment[2][428] = 1
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        }
         val encoded = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, request)
         val response = listOf(request[0], MessageDigest.getInstance("SHA-256").digest(request[1]),
             MessageDigest.getInstance("SHA-256").digest(request[2]),
@@ -301,6 +327,31 @@ class KagemushaCoreCoordinatorFrameV1Test {
             KagemushaCoreCoordinatorFrameV1.u32(11), request[5], request[6])
         val reply = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, response)
         KagemushaCoreCoordinatorFrameV1.decodeResponse(method, encoded, reply)
+        val derivedCounter = response.map { it.copyOf() }.toMutableList()
+        derivedCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(5)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, derivedCounter)
+        }
+        val assertion = appAttestOriginal(11)
+        val unknownKey = assertion.copyOf().also { it[2] = 'x'.code.toByte() }
+        val noncanonicalMap = byteArrayOf(0xb8.toByte(), 2) + assertion.copyOfRange(1, assertion.size)
+        val indefiniteMap = assertion.copyOf().also { it[0] = 0xbf.toByte() }
+        val duplicateKey = byteArrayOf(0xa2.toByte()) + assertion.copyOfRange(1, 58) + assertion.copyOfRange(1, 58)
+        val malformedUtf8 = assertion.copyOf().also { it[2] = 0xff.toByte() }
+        val wrongAuthenticatorType = assertion.copyOf().also { it[19] = 0x78 }
+        val noncanonicalAuthenticatorLength = assertion.copyOfRange(0, 19) +
+            byteArrayOf(0x59, 0, 37) + assertion.copyOfRange(21, assertion.size)
+        for (malformed in listOf(byteArrayOf(0xa2.toByte(), 1, 2), assertion + byteArrayOf(0),
+                assertion.copyOf(assertion.size - 1), unknownKey, noncanonicalMap, indefiniteMap, duplicateKey,
+                malformedUtf8, wrongAuthenticatorType, noncanonicalAuthenticatorLength,
+                appAttestOriginal(4), appAttestOriginal(3))) {
+            val invalid = request.map { it.copyOf() }.toMutableList()
+            invalid[3] = malformed
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, invalid)
+            }
+        }
+
         for (offset in listOf(57, 331, 428, 444)) {
             val changed = request.map { it.copyOf() }.toMutableList()
             changed[2][offset] = (changed[2][offset].toInt() xor 1).toByte()

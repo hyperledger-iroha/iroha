@@ -197,6 +197,21 @@ fn actual_sns_time_sweep_retains_one_native_purpose_and_exact_payment() {
         .finalize_sns_owned_sources_for_testing(&source)
         .unwrap();
     let entries = block.fastpq_source_inventory().unwrap().unwrap().entries();
+    let expected_tx_set_hash: [u8; 32] =
+        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+            source.external_entrypoints_slice().iter(),
+        )
+        .unwrap()
+        .into();
+    assert_eq!(
+        block
+            .fastpq_source_inventory()
+            .unwrap()
+            .unwrap()
+            .tx_set_hash(),
+        expected_tx_set_hash,
+        "native inventory retains its actual ordered canonical transaction-wire commitment"
+    );
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].execution_kind,
@@ -360,6 +375,16 @@ fn native_record_binding_rejects_scope_revision_config_and_key_substitution() {
         )
         .unwrap(),
     };
+    permit().authenticate_source_record(&transaction).unwrap();
+    let deferred = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || {
+            permit()
+                .authenticate_source_record(&transaction)
+                .unwrap_err()
+        },
+    );
+    assert!(matches!(deferred, SnsError::Deferred(_)));
     permit().authenticate_source_record(&transaction).unwrap();
     assert!(
         permit().authenticate(&transaction).is_err(),

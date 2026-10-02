@@ -33,6 +33,7 @@ pub(super) struct MainTerminalLinkPlanV1 {
 
 impl MainTerminalLinkPlanV1 {
     /// Conservative public stack/heap charge retained during all MAIN device phases.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + 64
@@ -459,7 +460,7 @@ impl MainTerminalLinkPlanV1 {
                     return Err(ZkX509StarkErrorV1::ProofTooLarge);
                 }
                 if replay[0].iter().any(|value| !value.is_canonical()) {
-                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                    return Err(ZkX509StarkErrorV1::NonCanonicalField);
                 }
                 for (target, value) in difference.iter_mut().zip(replay[0].iter()) {
                     *target = if subtract {

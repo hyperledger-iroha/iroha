@@ -6,11 +6,8 @@
 //! and a descriptor-held native logical journal; an OEM response cannot substitute for either.
 
 use super::*;
-pub(crate) use crate::kagemusha_v1_recursion::{
-    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
-};
+#[cfg(feature = "kagemusha-production-prover")]
+pub(crate) use crate::kagemusha_v1_recursion::verify_ordinary_bootstrap_guard_v1;
 use iroha_data_model::kagemusha::{
     KagemushaVerifiedOrdinaryAppCredentialV1,
     KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
@@ -27,8 +24,11 @@ pub use cash_owner::KagemushaNativeOrdinaryCashOwnerV1;
 pub(crate) use cash_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 
 #[path = "authenticated_ordinary_logical_journal.rs"]

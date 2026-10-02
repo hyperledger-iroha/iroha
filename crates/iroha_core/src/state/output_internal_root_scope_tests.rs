@@ -68,7 +68,7 @@ fn internal_capture_binds_both_namespaces_to_the_complete_committed_root() {
         assert_eq!(tx.current_dataspace_id, Some(expected));
         assert_eq!(tx.world.current_dataspace_id, Some(expected));
         let hash = Hash::new(b"internal-program");
-        let artifact = root_scope::captured_artifact_id(&tx, hash).unwrap();
+        let artifact = root_scope::captured_artifact_id(&mut tx, hash).unwrap();
         assert_eq!(artifact.dataspace_id, expected);
         assert_eq!(artifact.code_hash, hash);
         let generic = crate::smartcontracts::ivm::validate_generic_execution_context(
@@ -95,14 +95,14 @@ fn internal_private_capture_keeps_foreign_contracts_and_namespace_substitution_c
     ] {
         let address = ContractAddress::derive(&tx.network_id, &ALICE_ID, 0, target).unwrap();
         assert_eq!(
-            root_scope::ensure_contract_scope(&tx, &address).is_ok(),
+            root_scope::ensure_contract_scope(&mut tx, &address).is_ok(),
             allowed
         );
     }
     tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-    assert!(root_scope::captured_artifact_id(&tx, Hash::new(b"program")).is_err());
+    assert!(root_scope::captured_artifact_id(&mut tx, Hash::new(b"program")).is_err());
     tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-    assert!(root_scope::captured_artifact_id(&tx, Hash::new(b"program")).is_err());
+    assert!(root_scope::captured_artifact_id(&mut tx, Hash::new(b"program")).is_err());
 }
 
 #[test]

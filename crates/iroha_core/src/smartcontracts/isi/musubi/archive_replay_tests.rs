@@ -490,7 +490,7 @@ fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_r
     let mut block = initial_executor_archive_block(&state);
     let mut transaction = block.transaction();
     assert!(
-        crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+        crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
         "authenticated archive cases require the ordinary signed-genesis root"
     );
     crate::executor::Executor::Initial
@@ -562,7 +562,7 @@ fn initial_executor_musubi_archive_registration_keeps_native_authority_and_polic
         let mut block = initial_executor_archive_block(&state);
         let mut transaction = block.transaction();
         assert!(
-            crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+            crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
             "every native archive refusal must reach its handler through an authentic root"
         );
         let mut authority = publisher;

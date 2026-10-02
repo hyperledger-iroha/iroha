@@ -130,7 +130,7 @@ impl CheckpointInputs {
                     &self.deployment.expected_asset_incarnation,
                     "asset incarnation",
                 )?,
-                asset_scale: self.deployment.expected_asset_scale,
+                asset_scale: self.deployment.asset_scale,
                 liability_pool_id: parse_lower_sha256(
                     &self.deployment.expected_liability_pool_id,
                     "liability pool",

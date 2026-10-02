@@ -77,7 +77,12 @@ fn read_only_frame_inspection_retains_original_funding_across_refusal() {
     )
     .unwrap();
     for _ in 0..2 {
-        assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        let error = read.poll().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(
+            error.get_ref().is_none(),
+            "lane refusal must not allocate a diagnostic"
+        );
         assert_eq!(budget.reserved_bytes(), length);
     }
     budget.set_limit_bytes(1 << 25);

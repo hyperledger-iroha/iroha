@@ -482,7 +482,7 @@ fn native_noncanonical_points_claims_scales_and_accumulator_refuse_both_sides() 
         !cfg!(debug_assertions),
         "from_base deliberately asserts canonicality in debug builds"
     );
-    let invalid = E::from_base(F(u64::MAX));
+    let invalid = E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
     assert!(!invalid.is_canonical());
     assert!(MainNativeDeepPointsV1::new_v1(5, invalid).is_err());
     let points = MainNativeDeepPointsV1::new_v1(5, extension(331)).unwrap();

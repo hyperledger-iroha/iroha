@@ -14,8 +14,8 @@ use iroha_config::{
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::Sm2PublicKey;
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, MerkleTree, PolicyCommitment, PublicKey, RamLfeBackend,
-    RamLfeVerificationMode, Signature, bls_normal_pop_prove,
+    Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, RamLfeBackend, RamLfeVerificationMode,
+    Signature,
 };
 use iroha_data_model::account::AccountDetails;
 use iroha_data_model::isi::verifying_keys;
@@ -33,11 +33,8 @@ use iroha_data_model::soracloud::{
     SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1,
 };
 use iroha_data_model::{
-    block::{
-        BlockExecutionContextBundle, BlockHeader, SignedBlock,
-        consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
-    },
-    consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
+    block::{BlockHeader, SignedBlock},
+    consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::{
         commitment::{
             DaCommitmentBundle, DaCommitmentLocation, DaCommitmentRecord, DaProofScheme,
@@ -66,12 +63,12 @@ use iroha_data_model::{
         AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtFastpqBinding,
         AxtFinalizedSpendAnchorV1, AxtHandleBudgetKey, AxtHandleBudgetRecord,
         AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtProofEnvelope, AxtSourceSuccessReceiptV1, AxtSourceTransferOccurrenceV1,
-        AxtSpendNonceV1, DataSpaceCatalog, DataSpaceMetadata, GroupBinding, HandleBudget,
-        HandleSubject, LaneCatalog, LaneConfig, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
-        LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
-        PublicLaneRewardClaimStateV1, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneUnbonding, RemoteSpendIntent, SpendOp,
+        AxtSourceSuccessReceiptV1, AxtSourceTransferOccurrenceV1, AxtSpendNonceV1,
+        DataSpaceCatalog, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject,
+        LaneCatalog, LaneConfig, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
+        LaneStorageProfile, LaneVisibility, ManifestVersion, PublicLaneRewardClaimStateV1,
+        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
+        SpendOp,
     },
     proof::{ProofId, ProofRecord, ProofStatus},
     query::{
@@ -492,21 +489,6 @@ macro_rules! public_lane {
     };
 }
 
-macro_rules! seed_elastic_lane {
-    ($state:ident, $lane:ident) => {
-        $state
-            .apply_lane_lifecycle_with_options(
-                &iroha_data_model::nexus::LaneLifecyclePlan {
-                    additions: vec![$lane],
-                    retire: Vec::new(),
-                },
-                false,
-                true,
-            )
-            .expect("seed internally managed elastic lane");
-    };
-}
-
 macro_rules! activated_manifest_record {
     ($record:ident, $uaid:ident, $dataspace:ident) => {
         let_row! { manifest = AssetPermissionManifest { version: ManifestVersion::default(), uaid: $uaid, dataspace: $dataspace, issued_ms: 0, activation_epoch: 1, expiry_epoch: None, entries: Vec::new(), } };
@@ -590,35 +572,9 @@ fn fixture_static_storage_identity(
     }
 }
 
-macro_rules! autoscale_storage_paths {
-    ($temp_dir:ident $store_root:ident $cold_root:ident $kura:ident $query_handle:ident $state:ident $catalog:ident $config:ident $snapshot:ident) => {
-        autoscale_storage_fixture!(
-            $temp_dir,
-            $store_root,
-            $cold_root,
-            $kura,
-            $query_handle,
-            $state
-        );
-        install_default_autoscale_test_nexus(&mut $state, "apply autoscale test nexus config");
-        seed_governed_autoscale_committee_for_test(&$state, 4);
-        *$state.tiered_backend.lock() =
-            TieredStateBackend::new(true, 0, 0, 0, Some($cold_root.clone()), None, 1, 0);
-        let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
-        let_row! { $catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane]) .expect("autoscale updated catalog") };
-        let $config = RuntimeLaneConfig::from_catalog(&$catalog);
-        let elastic_entry = $config.entry(LaneId::new(1)).expect("elastic lane entry");
-        let $snapshot = $cold_root.join("lanes").join(&elastic_entry.kura_segment);
-    };
-}
-
 macro_rules! pipeline_trigger_transaction {
     ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
         let $state = blank_state();
-        pipeline_trigger_transaction!(@from_state $state, $block, $state_block, $stx);
-    };
-    (mut $state:ident, $block:ident, $state_block:ident, $stx:ident) => {
-        let mut $state = blank_state();
         pipeline_trigger_transaction!(@from_state $state, $block, $state_block, $stx);
     };
     (@from_state $state:ident, $block:ident, $state_block:ident, $stx:ident) => {
@@ -633,20 +589,6 @@ macro_rules! pipeline_trigger_transaction {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut $stx)
             .unwrap();
-    };
-}
-macro_rules! assert_lane_ids {
-    ($nexus:expr, $expected:expr $(, $message:expr)? $(,)?) => {
-        assert_eq!(
-            $nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .map(|lane| lane.id)
-                .collect::<Vec<_>>(),
-            $expected
-            $(, $message)?
-        );
     };
 }
 macro_rules! tiered_state_config {
@@ -665,26 +607,6 @@ macro_rules! tiered_state_config {
         }
     };
 }
-macro_rules! assert_same_lane_da_geometry {
-    ($initial_config:ident, $policy_config:ident, $policy_lane_id:ident) => {
-        assert_eq!(
-            $initial_config.shard_id($policy_lane_id),
-            $policy_config.shard_id($policy_lane_id),
-            "test setup must keep the lane on the same DA shard"
-        );
-        assert_eq!(
-            $initial_config
-                .entry($policy_lane_id)
-                .expect("initial lane exists")
-                .proof_scheme,
-            $policy_config
-                .entry($policy_lane_id)
-                .expect("policy lane exists")
-                .proof_scheme,
-            "test setup must not rely on a proof-scheme mismatch to hide stale records"
-        );
-    };
-}
 macro_rules! insert_space_directory_manifest {
     ($world:ident, $uaid:ident, $record:ident, $set:ident) => {
         let mut $set = SpaceDirectoryManifestSet::default();
@@ -692,14 +614,6 @@ macro_rules! insert_space_directory_manifest {
         $world
             .space_directory_manifests_mut_for_testing()
             .insert($uaid, $set);
-    };
-}
-macro_rules! stage_autoscale_transition {
-    ($first:ident, $second:ident, $state:ident, $kura:ident, $state_block:ident) => {
-        let $first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-        let $second = autoscale_signed_block_with_committed_fragments(Some(&$first), 200, 0);
-        store_committed_autoscale_history_block_for_test(&$state, &$kura, &$first);
-        let mut $state_block = $state.block($second.header());
     };
 }
 fn test_da_pin_intent(
@@ -5195,10 +5109,6 @@ macro_rules! autoscale_storage_fixture {
         let $kura = strict_kura_for_testing($store_root.clone(), &initial_config);
         let $query = LiveQueryStore::start_test();
     };
-    ($temp_dir:ident, $store_root:ident, $cold_root:ident, $kura:ident, $query:ident, $state:ident) => {
-        autoscale_storage_fixture!($temp_dir, $store_root, $cold_root, $kura, $query);
-        let mut $state = autoscale_storage_state_for_testing(Arc::clone(&$kura), $query);
-    };
 }
 fn authenticated_kura_for_testing(
     store_root: std::path::PathBuf,
@@ -5926,7 +5836,7 @@ state_test! { sync trigger_args_from_asset_event_falls_back_to_event_domain_with
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     let_row! { event = data_pre::DataEvent::asset( data_pre::AssetEvent::Added(data_pre::AssetChanged { asset: asset_id, amount: Quantity::from(1_u32), }), Some(asset_domain), ) };
-    let args = stx.trigger_args_from_data_event(&event);
+    let args = stx.trigger_args_from_data_event(&event).expect("completed trigger arguments");
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
     let obj = payload.as_object().expect("trigger args object");
     assert_eq!(
@@ -5952,7 +5862,7 @@ state_test! { sync trigger_args_preserve_asset_amounts_beyond_i64_as_canonical_s
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let stx = state_block.transaction();
-    let args = stx.trigger_args_from_data_event(&event);
+    let args = stx.trigger_args_from_data_event(&event).expect("completed trigger arguments");
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
     let object = payload.as_object().expect("trigger args object");
     assert_eq!(object.get("kind"), Some(&norito::json!("asset_change")));
@@ -5978,7 +5888,7 @@ state_test! { sync trigger_args_from_asset_transfer_bind_both_participants
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let stx = state_block.transaction();
-    let args = stx.trigger_args_from_data_event(&event);
+    let args = stx.trigger_args_from_data_event(&event).expect("completed trigger arguments");
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
     let object = payload.as_object().expect("trigger args object");
     assert_eq!(object.get("kind"), Some(&norito::json!("asset_transfer")));
@@ -6037,7 +5947,7 @@ state_test! { sync trigger_args_from_asset_event_use_account_label_domain_when_s
     let mut state_block = state.block(block.as_ref().header());
     let stx = state_block.transaction();
     let_row! { event = data_pre::DataEvent::asset( data_pre::AssetEvent::Added(data_pre::AssetChanged { asset: asset_id, amount: Quantity::from(1_u32), }), Some(asset_domain), ) };
-    let args = stx.trigger_args_from_data_event(&event);
+    let args = stx.trigger_args_from_data_event(&event).expect("completed trigger arguments");
     let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
     let obj = payload.as_object().expect("trigger args object");
     assert_eq!(
@@ -6052,6 +5962,37 @@ state_test! { sync trigger_args_from_asset_event_use_account_label_domain_when_s
         obj.get("asset_definition_id"),
         Some(&norito::json!(asset_definition.to_string()))
     );
+}
+state_test! { sync trigger_args_preserve_sns_refusal_before_host_publication_and_retry_original_alias
+    let domain = DomainId::try_new("centralbank", "universal").unwrap();
+    let (subject, _) = gen_account_in("sns-refusal");
+    let label = alias_in_domain(&domain, "admin1".parse().unwrap());
+    let asset_definition = AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    let asset_id = AssetId::new(asset_definition, subject.clone());
+    let mut world = World::with([Domain::new(domain.clone()).build(&ALICE_ID)], [Account::new(subject.clone()).build(&ALICE_ID)], []);
+    seed_active_account_alias_binding(&mut world, &subject, &label);
+    let selector = crate::sns::selector_for_account_alias(&label, &DataSpaceCatalog::default()).unwrap();
+    let key = crate::sns::record_storage_key(&selector);
+    let original = world.smart_contract_state.view().get(&key).unwrap().clone();
+    let state = State::new_for_testing(world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
+    let source = new_dummy_block_with_payload(|_| {});
+    let mut block = state.block(source.as_ref().header());
+    let event = data_pre::DataEvent::asset(data_pre::AssetEvent::Added(data_pre::AssetChanged { asset: asset_id, amount: Quantity::one() }), Some(domain));
+    {
+        let mut tx = block.transaction();
+        let error = norito::with_decode_limits_scope(norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX), || tx.trigger_args_from_data_event(&event).unwrap_err());
+        assert!(matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)), "{error}");
+        let _ = tx.attempt_error_to_validation_fail(error);
+        assert!(tx.execution_deferral().is_some());
+        assert_eq!(tx.world.smart_contract_state.get(&key), Some(&original));
+    }
+    let mut retry = block.transaction();
+    let args = retry.trigger_args_from_data_event(&event).unwrap();
+    let payload: norito::json::Value = args.try_into_any().unwrap();
+    assert_eq!(payload.as_object().unwrap().get("account_domain"), Some(&norito::json!("centralbank.universal")));
+    assert!(retry.execution_deferral().is_none());
+    retry.world.smart_contract_state.insert(key, vec![0xff]);
+    assert!(matches!(retry.trigger_args_from_data_event(&event), Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))));
 }
 state_test! { sync has_committed_entrypoint_reads_transactions_index
     let state = blank_test_state();
@@ -17567,7 +17508,7 @@ state_test! { sync state_publish_query_projection_checkpoint_uses_current_index_
         crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 0),
     ).expect("original indexed native genesis");
     let state = chain.state();
-    let kura = chain.kura();
+    let _kura = chain.kura();
     let committed = chain.genesis();
     let_row! { checkpoint = state.publish_query_projection_checkpoint( 1_714_001_111, vec![ crate::query::projection_checkpoint::QueryProjectionCheckpointShard { resource: crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts, partition_id: 2, asset_definition_id: None, manifest_digest: BlobDigest::new([0x41; 32]), storage_ticket: StorageTicketId::new([0x42; 32]), blob_hash: BlobDigest::new([0x43; 32]), }, ], ) };
     assert_eq!(
@@ -17590,7 +17531,7 @@ state_test! { sync state_publish_query_projection_checkpoint_from_archives_build
         crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 0),
     ).expect("original indexed native genesis");
     let state = chain.state();
-    let kura = chain.kura();
+    let _kura = chain.kura();
     let committed = chain.genesis();
     let_row! { archive = crate::query::projection_shard::QueryProjectionShardArchive::from_index_status( state.query_index_status_snapshot(), 1_714_002_222, crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders, 7, Some("pkr#paynet".to_string()), 2, b"rows".to_vec(), ) };
     let_row! { expected_blob_hash = archive .build_da_payload() .expect("build payload") .payload_hash };
@@ -17626,8 +17567,8 @@ state_test! { sync state_plan_query_projection_checkpoint_from_archives_rejects_
         crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 0),
     ).expect("original indexed native genesis");
     let state = chain.state();
-    let kura = chain.kura();
-    let committed = chain.genesis();
+    let _kura = chain.kura();
+    let _committed = chain.genesis();
     let status = state.query_index_status_snapshot();
     let_row! { archive = crate::query::projection_shard::QueryProjectionShardArchive::from_index_status( status, 1_714_002_222, crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts, 7, None, 2, b"rows".to_vec(), ) };
     let_row! { err = state .plan_query_projection_checkpoint_from_archives( 1_714_002_222, vec![ crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new( archive.clone(), BlobDigest::new([0x61; 32]), StorageTicketId::new([0x62; 32]), ), crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new( archive, BlobDigest::new([0x63; 32]), StorageTicketId::new([0x64; 32]), ), ], ) .expect_err("duplicate shards must fail") };
@@ -17648,7 +17589,7 @@ fn state_publish_query_projection_checkpoint_from_archives_rejects_mismatched_sn
     )
     .expect("original indexed native genesis");
     let state = chain.state();
-    let kura = chain.kura();
+    let _kura = chain.kura();
     let committed = chain.genesis();
     let_row! { archive = crate::query::projection_shard::QueryProjectionShardArchive::from_index_status( crate::query::index_status::QueryIndexStatus { indexed_height: committed.header().height().get() + 1, indexed_block_hash: Some(iroha_crypto::HashOf::from_untyped_unchecked( iroha_crypto::Hash::new([0x71; iroha_crypto::Hash::LENGTH]), )), }, 1_714_002_333, crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts, 9, None, 2, b"rows".to_vec(), ) };
     let_row! { err = state .publish_query_projection_checkpoint_from_archives( 1_714_002_333, vec![( archive, BlobDigest::new([0x72; 32]), StorageTicketId::new([0x73; 32]), )], ) .expect_err("mismatched snapshot must fail") };
@@ -20348,7 +20289,7 @@ state_test! { result time_trigger_failure_retains_declared_projection_in_its_typ
     state_block.commit_world_overlay_for_testing()?;
     let state = authenticate_trigger_fixture(state);
     let source = trigger_component_block(&state, 2);
-    let (mut state_block, _recording, outputs, _) =
+    let (mut _state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, source.as_ref());
     assert_eq!(outputs.len(), 1);
     let iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) = &outputs[0] else { panic!("scheduled source must own Time output") };
@@ -20394,7 +20335,7 @@ state_test! { result time_trigger_cannot_synthesize_governance_ballot
     state_block.commit_world_overlay_for_testing()?;
     let state = authenticate_trigger_fixture(state);
     let source = trigger_component_block(&state, 2);
-    let (mut state_block, _recording, outputs, _) =
+    let (mut _state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, source.as_ref());
     assert_eq!(outputs.len(), 1);
     let error = outputs[0].result().as_ref().expect_err("trigger-carried governance ballot must fail closed");
@@ -20431,7 +20372,7 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent.hash()), None, 1_001, 0);
     let source = iroha_data_model::block::builder::BlockBuilder::new(header)
         .build_with_signature(0, ALICE_KEYPAIR.private_key());
-    let (mut state_block, _recording, outputs, _) =
+    let (state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, &source);
     assert_eq!(outputs.len(), 1);
     assert!(outputs[0].result().is_ok(), "{:?}", outputs[0].result());
@@ -28242,9 +28183,7 @@ state_test! { sync execute_called_trigger_respects_executor_validation
     }
 }
 state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
-    use crate::{block::BlockBuilder, tx::AcceptedTransaction};
     use iroha_test_samples::ALICE_KEYPAIR;
-    use std::borrow::Cow;
     // Seed the world with a domain and ALICE account to author the trigger.
     let_row! { domain: Domain = Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID) };
     let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);

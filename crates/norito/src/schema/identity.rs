@@ -42,6 +42,9 @@ pub trait NoritoSchema {
     }
 
     /// Return a declared literal frame identity without allocating, when available.
+    ///
+    /// This must equal `frame_name()` byte for byte. A literal nominal name
+    /// does not grant authority to replace a separately declared root projection.
     fn static_frame_name() -> Option<&'static str> {
         None
     }

@@ -23,6 +23,9 @@ pub(super) fn record_error(error: LaneRecordError) -> io::Error {
         LaneRecordError::Bytes(error) if error.is_local_refusal() => io::ErrorKind::WouldBlock,
         _ => io::ErrorKind::InvalidData,
     };
+    if kind == io::ErrorKind::WouldBlock {
+        return kind.into();
+    }
     io::Error::new(kind, error)
 }
 
@@ -192,9 +195,7 @@ impl RestoreFrame {
                         self.state = RestoreState::Reading(read);
                         return Err(match result {
                             Ok(RecordPoll::Absent) => invalid("committed lane frame disappeared"),
-                            Ok(RecordPoll::Pending(e)) => {
-                                io::Error::new(io::ErrorKind::WouldBlock, e)
-                            }
+                            Ok(RecordPoll::Pending(_)) => io::ErrorKind::WouldBlock.into(),
                             Err(BodyReadError::Io(e)) => e,
                             Err(e) => invalid(e.to_string()),
                             Ok(RecordPoll::Ready(_)) => unreachable!(),
@@ -231,14 +232,12 @@ impl RestoreFrame {
                     match restoration.complete(budget, &*self.crypto) {
                         Ok(body) => return Ok(PreparedLaneWrite::new(body, qc)),
                         Err((restoration, error)) => {
-                            let kind = if error.is_local_refusal() {
-                                io::ErrorKind::WouldBlock
-                            } else {
-                                io::ErrorKind::InvalidData
-                            };
                             self.state = RestoreState::Restoring(restoration, qc);
+                            if error.is_local_refusal() {
+                                return Err(io::ErrorKind::WouldBlock.into());
+                            }
                             return Err(io::Error::new(
-                                kind,
+                                io::ErrorKind::InvalidData,
                                 format!("lane availability restoration: {error:?}"),
                             ));
                         }

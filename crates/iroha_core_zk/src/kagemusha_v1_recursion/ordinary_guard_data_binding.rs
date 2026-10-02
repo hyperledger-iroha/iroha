@@ -61,7 +61,7 @@ pub(crate) struct KagemushaOrdinaryGuardDataBindingV1<F: KagemushaPoseidonFieldV
 /// Reconstruct exact model originals and join every scope/key/financial field to assigned State.
 /// The canonical original byte layouts are model-owned, including the mandatory issuer carrier.
 /// No field supplied here is a capability; consuming the release-pinned helper is mandatory.
-pub(crate) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonFieldV1>(
+pub(super) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     guard: &KagemushaAssignedGuardBundleV1<F>,

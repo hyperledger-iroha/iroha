@@ -319,10 +319,12 @@ fn fixture_with_effects(
         let accepted =
             crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(&signed));
         let view = state.view();
-        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view);
+        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view)
+            .expect("completed original routing snapshot");
         let native = snapshot
             .inputs(view.world())
             .execution_route(&accepted, header.height().get())
+            .expect("completed original routing read")
             .expect("fixture input has its exact committed native route");
         contexts.push(ExternalExecutionContext::new(
             accepted.hash_as_entrypoint(),

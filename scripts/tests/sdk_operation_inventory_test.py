@@ -25,6 +25,10 @@ def test_inventory_is_exact_and_preserves_every_explicit_operation(generated: by
     assert ids == sorted(set(ids))
     assert all(row["method"] not in {"HEAD", "OPTIONS"} for row in rows)
     operations = {row["route_id"]: row for row in rows}
+    assert operations["aliases.resolve_index"]["authentication"] == "canonical_account_signature"
+    assert operations["aliases.resolve_index"]["admission"] == "dataspace_visible"
+    for exact_mapping in ("aliases.resolve", "aliases.by_account"):
+        assert operations[exact_mapping]["authentication"] == "optional_canonical_account_signature"
     submission = operations["pipeline.transaction.submit"]
     assert (submission["method"], submission["authentication"], submission["admission"]) == (
         "POST", "canonical_signed_body", "authenticated_account",

@@ -166,21 +166,21 @@ impl LaneTransactions for QueueLaneTransactions {
         height: u64,
         max_bytes: usize,
         skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
-    ) -> Vec<SignedTransaction> {
+    ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
         let view = self.state.view();
         let Some(pending) = self
             .queue
             .bounded_pending_snapshot(&view, crate::sumeragi::payload::MAX_QUEUE_SCAN)
         else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        let routing = RoutingSnapshot::of(&view);
+        let routing = RoutingSnapshot::of(&view)?;
         let inputs = routing.inputs(view.world());
         let mut selected = Vec::new();
         let mut bytes = 0usize;
         for transaction in pending {
             if skip.contains(&transaction.hash_as_entrypoint())
-                || inputs.route(&transaction, height) != Some(self.lane)
+                || inputs.route(&transaction, height)? != Some(self.lane)
             {
                 continue;
             }
@@ -191,7 +191,7 @@ impl LaneTransactions for QueueLaneTransactions {
             bytes = next;
             selected.push(AsRef::<SignedTransaction>::as_ref(&transaction).clone());
         }
-        selected
+        Ok(selected)
     }
 }
 

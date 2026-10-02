@@ -3,6 +3,7 @@
 use super::*;
 use iroha_crypto::Algorithm;
 use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+use std::os::unix::fs::PermissionsExt as _;
 
 fn fixture() -> (
     tempfile::TempDir,
@@ -16,7 +17,6 @@ fn fixture() -> (
         .prefix(".mobile-bootstrap-")
         .tempdir_in(parent)
         .unwrap();
-    use std::os::unix::fs::PermissionsExt as _;
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut keys: Vec<_> = [31, 32, 33]
         .into_iter()
@@ -55,7 +55,7 @@ fn fixture() -> (
             expected_release_id: hex::encode(checkpoint.release_id),
             expected_asset_identity_digest: hex::encode(checkpoint.scope.asset_identity_digest),
             expected_asset_incarnation: hex::encode(checkpoint.scope.asset_incarnation),
-            expected_asset_scale: checkpoint.scope.asset_scale,
+            asset_scale: checkpoint.scope.asset_scale,
             expected_liability_pool_id: hex::encode(checkpoint.scope.liability_pool_id),
         },
         expected_release_attestation_digest: hex::encode(checkpoint.release_attestation_digest),
@@ -181,7 +181,7 @@ fn mobile_bootstrap_exact_operator_pins_reject_each_changed_subject_field() {
             1 => changed.deployment.expected_release_id = "12".repeat(32),
             2 => changed.deployment.expected_asset_identity_digest = "13".repeat(32),
             3 => changed.deployment.expected_asset_incarnation = "14".repeat(32),
-            4 => changed.deployment.expected_asset_scale += 1,
+            4 => changed.deployment.asset_scale += 1,
             5 => changed.deployment.expected_liability_pool_id = "15".repeat(32),
             6 => changed.expected_release_attestation_digest = "16".repeat(32),
             7 => {
@@ -268,7 +268,7 @@ fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_s
 }
 
 #[test]
-fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_four_files() {
+fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_artifacts() {
     use iroha_data_model::testing::kagemusha_release::KagemushaExperimentalReleaseFixtureV1;
 
     let (directory, _keys, _policy, seed, input) = fixture();
@@ -328,7 +328,7 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_fo
                 expected_release_id: hex::encode(authenticated.release_id()),
                 expected_asset_identity_digest: hex::encode(scope.asset_identity_digest),
                 expected_asset_incarnation: hex::encode(scope.asset_incarnation),
-                expected_asset_scale: scope.asset_scale,
+                asset_scale: scope.asset_scale,
                 expected_liability_pool_id: hex::encode(scope.liability_pool_id),
             },
         },

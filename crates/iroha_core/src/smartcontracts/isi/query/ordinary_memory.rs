@@ -982,6 +982,13 @@ define_singular_source_admission! {
     FindExecutionProofVerificationById: ProvenBounded,
     FindNftSaleOfferById: ProvenBounded,
 }
+fn sns_server_source_error(error: crate::sns::SnsError) -> Error {
+    match error.into_attempt_error(|error| Error::Conversion(error.to_string())) {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_) => Error::CapacityLimit,
+    }
+}
+
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
 /// The capability match is deliberately exhaustive. A new singular query must
@@ -1145,8 +1152,13 @@ pub(super) fn preflight_server_singular_source_materialization(
             }
             if let Some(labels) = labels {
                 for label in labels {
-                    if let Ok(selector) =
-                        crate::sns::active_account_alias_selector(world, catalog, label, now_ms)
+                    let selector = match crate::sns::active_account_alias_selector(
+                        world, catalog, label, now_ms,
+                    ) {
+                        Ok(selector) => selector,
+                        Err(crate::sns::SnsError::NotFound(_)) => continue,
+                        Err(error) => return Err(sns_server_source_error(error)),
+                    };
                     {
                         let record_bytes = sns_record_source_bytes(world, &selector)?
                             .checked_mul(2)
@@ -1432,7 +1444,7 @@ pub(super) fn preflight_server_singular_source_materialization(
             ) {
                 Ok(alias) => Some(alias),
                 Err(crate::sns::SnsError::NotFound(_)) => None,
-                Err(error) => return Err(Error::Conversion(error.to_string())),
+                Err(error) => return Err(sns_server_source_error(error)),
             };
             if let Some(alias) = alias {
                 let selector = crate::sns::selector_for_dataspace_alias(&alias)
@@ -1440,7 +1452,7 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge_fixed(sns_record_source_bytes(world, &selector)?, &mut remaining)?;
                 if let Some(owner) =
                     crate::sns::active_dataspace_owner_by_alias(world, &alias, now_ms)
-                        .map_err(|error| Error::Conversion(error.to_string()))?
+                        .map_err(sns_server_source_error)?
                 {
                     charge(&owner, &mut remaining)?;
                 }

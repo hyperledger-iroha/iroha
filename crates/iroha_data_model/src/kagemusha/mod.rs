@@ -53,3 +53,7 @@ pub use self::{
 /// Torii extracts the label following this prefix as a stable machine-readable
 /// error code.
 pub const KAGEMUSHA_V1_REJECTION_REASON_PREFIX: &str = "kagemusha_v1_reason::";
+
+/// Distinct nonmonetary first-device hardware evidence family.
+pub mod kagemusha_hardware_evidence_bootstrap_v1;
+pub use kagemusha_hardware_evidence_bootstrap_v1::*;

@@ -545,6 +545,7 @@ pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
 /// consume them in the same verifier-fixed role order.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
     pub(crate) node: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -4210,6 +4211,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAir
 /// MAIN uses the local relation and private joined endpoint quotients instead.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4280,6 +4282,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirField
 /// Complete standalone DER constraints including its explicit public endpoints.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],

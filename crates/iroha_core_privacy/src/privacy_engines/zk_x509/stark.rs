@@ -22,7 +22,7 @@
 mod main_aggregate;
 #[cfg(test)]
 use super::der_stark::{
-    ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
+    ZK_X509_DER_STARK_BUS_LANES_V1, ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
     evaluate_zk_x509_der_stark_residues_v1, zk_x509_der_stark_terminal_claims_v1,
 };
 #[cfg(test)]
@@ -69,12 +69,11 @@ use super::{
         FIX_LAST_ACTIVE as DER_FIX_LAST_ACTIVE, FIX_LAST_AGGREGATE, FIX_LAST_COMPARATOR,
         FIX_LAST_PARSER, FIX_PADDING, FIX_PARSER, FIX_PARSER_CONTINUE,
         ZK_X509_DER_STARK_AUX_WIDTH_V1, ZK_X509_DER_STARK_BASE_WIDTH_V1,
-        ZK_X509_DER_STARK_BUS_LANES_V1, ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1,
-        ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1, ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1,
-        ZK_X509_DER_STARK_FIXED_WIDTH_V1, ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1,
-        ZK_X509_DER_STARK_TRACE_LOG2_V1, ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkErrorV1,
-        ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkShapeV1,
-        derive_zk_x509_der_stark_public_terminals_v1,
+        ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1, ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1,
+        ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1, ZK_X509_DER_STARK_FIXED_WIDTH_V1,
+        ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1, ZK_X509_DER_STARK_TRACE_LOG2_V1,
+        ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkErrorV1, ZkX509DerStarkPublicTerminalsV1,
+        ZkX509DerStarkShapeV1, derive_zk_x509_der_stark_public_terminals_v1,
     },
     engine::construct_zk_x509_compiled_profile_v1,
     fixed_algebraic::{ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1},

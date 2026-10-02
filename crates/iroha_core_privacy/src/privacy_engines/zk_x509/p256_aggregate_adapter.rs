@@ -11,6 +11,8 @@
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::ZkX509MainTraceAssemblyV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_cross_trace_bus::evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::ClearingVecV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
@@ -60,7 +62,6 @@ use super::{
         P256CrossTraceBoundaryFixedV1, P256CrossTraceBusErrorV1, P256CrossTraceChallengesV1,
         P256CrossTraceEndpointV1, P256CrossTraceEventFixedV1, P256CrossTraceSinkFixedV1,
         P256CrossTraceTagV1, P256CrossTraceWriterAuxRowV1, P256CrossTraceWriterSourceFixedV1,
-        evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1,
         evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1,
     },
     p256_ecdsa_air::P256EcdsaRoleV1,
@@ -878,6 +879,7 @@ fn arithmetic_copy_terminal_v1<A: PolynomialAirFieldV1>(
 }
 /// Verifier-owned role of one external cross-product source segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) enum P256CrossTraceTerminalRoleV1 {
     /// Value-bus writer multiplicities.
     ValueWriter,
@@ -892,6 +894,7 @@ pub(crate) enum P256CrossTraceTerminalRoleV1 {
 }
 /// One explicit, transcript-bound source-segment terminal claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceTerminalClaimV1 {
     /// Registration-owned segment role.
     pub(crate) role: P256CrossTraceTerminalRoleV1,
@@ -902,6 +905,7 @@ pub(crate) struct P256CrossTraceTerminalClaimV1 {
 }
 /// Explicit transcript-bound claims for the three non-cross product buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256BusTerminalClaimsV1 {
     /// Value-bus execution permutation terminal.
     pub(crate) value_execution: [F; P256_VALUE_BUS_LANES_V1],
@@ -925,6 +929,7 @@ pub(crate) struct P256BusTerminalClaimsV1 {
 pub(crate) const P256_TERMINAL_CLAIMS_TRANSCRIPT_LABEL_V1: &[u8] =
     b"zk-x509-p256-terminal-claims-v1";
 /// Exact source role order for one ECDSA statement role.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_cross_trace_terminal_roles_v1(
     role: P256EcdsaRoleV1,
 ) -> &'static [P256CrossTraceTerminalRoleV1] {
@@ -946,11 +951,13 @@ pub(crate) fn p256_cross_trace_terminal_roles_v1(
         P256EcdsaRoleV1::WalletOwnership => &WALLET,
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_claim_fields_are_canonical_v1(fields: impl IntoIterator<Item = F>) -> bool {
     fields
         .into_iter()
         .all(|field| F::canonical(field.0).is_some())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_p256_cross_trace_terminal_claims_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -975,6 +982,7 @@ fn validate_p256_cross_trace_terminal_claims_v1(
 ///
 /// Private product validation checks this chain before constructing a bound native source.
 /// Registered private MAIN endpoint columns bind each product to its source trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -1003,6 +1011,7 @@ pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     Ok(residues)
 }
 /// Host-side equality residues for value, arithmetic-copy, and scalar buses.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
     claims: P256BusTerminalClaimsV1,
 ) -> Result<[F; 4 * P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {

@@ -685,7 +685,7 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
     let previous = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
         header.set_height(nonzero!(1_u64));
     });
-    let previous: SignedBlock = previous.into();
+    let _previous: SignedBlock = previous.into();
     let previous = state.view().latest_block().expect("original genesis");
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
@@ -1923,7 +1923,7 @@ fn invalid_fee_asset_is_rejected_before_runtime_or_balance_mutation() {
         .expect("nexus fee test lock");
     crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
-    let (payer_id, payer_keypair) = gen_account_in("wonderland");
+    let (payer_id, _payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -2044,8 +2044,8 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         [payer_asset, sink_asset],
         [],
     );
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query_handle = LiveQueryStore::start_test();
+    let _kura = Arc::new(Kura::blank_kura_for_testing());
+    let _query_handle = LiveQueryStore::start_test();
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();

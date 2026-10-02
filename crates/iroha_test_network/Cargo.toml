@@ -9,6 +9,7 @@ license.workspace = true
 
 [features]
 default = []
+# Explicit developer-only artifact selection; native protocol behavior is unchanged.
 dev-tools = []
 
 [[bin]]

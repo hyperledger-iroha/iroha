@@ -117,6 +117,7 @@ fn expired_event_uses_the_authoritative_full_plan() {
     let mut queue = Queue::test_with_router_for_routes(
         Config {
             transaction_time_to_live: Duration::from_millis(10),
+            expired_cull_interval: Duration::ZERO,
             ..config_factory()
         },
         &time_source,

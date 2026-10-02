@@ -340,7 +340,7 @@ pub mod isi {
         }
     }
     pub(crate) fn resolve_contract_alias_components(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), InstructionExecutionError> {
         let label_name = alias.name_segment().parse::<Name>().map_err(|_| {
@@ -362,7 +362,7 @@ pub mod isi {
             })
             .transpose()?;
         let dataspace =
-            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?
                 .ok_or_else(|| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -377,14 +377,16 @@ pub mod isi {
         Ok((label_name, domain, dataspace))
     }
     pub(crate) fn ensure_authority_can_manage_contract_alias(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
         let (label, domain, dataspace) =
             resolve_contract_alias_components(state_transaction, alias)?;
         let account_alias = AccountAlias::new_in_dataspace(label, domain, dataspace);
-        if authority_can_manage_account_alias(&state_transaction.world, authority, &account_alias) {
+        if authority_can_manage_account_alias(&state_transaction.world, authority, &account_alias)
+            .map_err(|error| error.retain_in_instruction(state_transaction))?
+        {
             return Ok(());
         }
         Err(InstructionExecutionError::InvariantViolation(
@@ -392,7 +394,7 @@ pub mod isi {
         ))
     }
     fn ensure_authority_can_manage_stale_contract_alias(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         contract_address: &ContractAddress,
         alias: &ContractAlias,
@@ -416,7 +418,9 @@ pub mod isi {
             authority,
             dataspace,
             domain.as_ref(),
-        ) {
+        )
+        .map_err(|error| error.retain_in_instruction(state_transaction))?
+        {
             return Ok(());
         }
         Err(InstructionExecutionError::InvariantViolation(
@@ -444,25 +448,16 @@ pub mod isi {
         })
     }
     pub(crate) fn ensure_account_alias_namespace_available_for_contract_alias(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
         resolve_contract_alias_components(state_transaction, alias)?;
         let selector = account_alias_selector_for_contract_alias(alias)?;
-        let storage_key = crate::sns::record_storage_key(&selector);
-        let Some(bytes) = state_transaction
-            .world
-            .smart_contract_state
-            .get(&storage_key)
+        let Some(record) = crate::sns::record_by_selector(&state_transaction.world, &selector)
+            .map_err(|error| error.retain_in_instruction(state_transaction))?
         else {
             return Ok(());
         };
-        let mut slice = bytes.as_slice();
-        let record = NameRecordV1::decode(&mut slice).map_err(|err| {
-            InstructionExecutionError::InvariantViolation(
-                format!("failed to decode account alias SNS record: {err}").into(),
-            )
-        })?;
         let status =
             crate::sns::effective_status(&record, state_transaction.block_unix_timestamp_ms());
         if matches!(
@@ -496,13 +491,13 @@ pub mod isi {
         Ok(())
     }
     fn validate_asset_definition_alias_route(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         alias: Option<&AssetDefinitionAlias>,
     ) -> Result<(), InstructionExecutionError> {
         let Some(alias) = alias else {
             return Ok(());
         };
-        if dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment()).is_none() {
+        if dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "asset definition alias `{alias}` references an unknown or inactive dataspace"
@@ -528,7 +523,7 @@ pub mod isi {
         Ok(())
     }
     fn ensure_authority_can_manage_asset_definition_alias(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         asset_definition_id: &AssetDefinitionId,
         alias: &AssetDefinitionAlias,
@@ -539,7 +534,7 @@ pub mod isi {
             return Ok(());
         }
         let dataspace =
-            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?
                 .ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
                 format!(
@@ -565,7 +560,9 @@ pub mod isi {
             alias,
             dataspace,
             domain.as_ref(),
-        ) {
+        )
+        .map_err(|error| error.retain_in_instruction(state_transaction))?
+        {
             return Ok(());
         }
         Err(InstructionExecutionError::InvariantViolation(
@@ -1150,7 +1147,9 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                if !authority_can_manage_account_alias(&state_transaction.world, authority, label) {
+                if !authority_can_manage_account_alias(&state_transaction.world, authority, label)
+                    .map_err(|error| error.retain_in_instruction(state_transaction))?
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "authority is not permitted to register this account label"
                             .to_owned()
@@ -3023,14 +3022,16 @@ pub mod isi {
                     .world
                     .contract_alias_bindings()
                     .get(&contract_address)
+                    .cloned()
                 {
-                    if ensure_authority_can_manage_contract_alias(
+                    if let Err(error) = ensure_authority_can_manage_contract_alias(
                         state_transaction,
                         authority,
                         &binding.alias,
-                    )
-                    .is_err()
-                    {
+                    ) {
+                        if state_transaction.execution_deferral().is_some() {
+                            return Err(error.into());
+                        }
                         ensure_authority_can_manage_stale_contract_alias(
                             state_transaction,
                             authority,

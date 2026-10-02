@@ -800,13 +800,28 @@ pub mod isi {
             None => Ok(contract_address),
         }
     }
+    fn contract_attempt_instruction_error(
+        state: &mut StateTransaction<'_, '_>,
+        error: crate::execution_attempt::ExecutionAttemptError<Error>,
+    ) -> Error {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                let _ = state.defer_execution(reason);
+                InstructionExecutionError::InvariantViolation(
+                    "local contract read did not complete".into(),
+                )
+            }
+        }
+    }
     fn resolve_trigger_callback_contract(
         state_transaction: &StateTransaction<'_, '_>,
         namespace: Option<&str>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code_hash: Hash,
         code_bytes: &[u8],
-    ) -> Result<TriggerCallbackContract, Error> {
+    ) -> Result<TriggerCallbackContract, crate::execution_attempt::ExecutionAttemptError<Error>>
+    {
         let Some(namespace) = namespace else {
             return Ok(TriggerCallbackContract {
                 contract_address: contract_address.clone(),
@@ -820,12 +835,17 @@ pub mod isi {
         let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
             state_transaction,
             &target_address,
-        ) else {
+        )
+        .map_err(|error| {
+            error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
+        })?
+        else {
             return Err(invalid_smart_contract_parameter(format!(
                 "cross-contract trigger callback namespace `{}` resolved to inactive contract `{}`",
                 namespace.trim(),
                 target_address
-            )));
+            ))
+            .into());
         };
         Ok(TriggerCallbackContract {
             contract_address: record.contract_address,
@@ -877,7 +897,8 @@ pub mod isi {
                     contract_address,
                     code_hash,
                     code_bytes,
-                )?;
+                )
+                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
                 let code_hash_string = callback_contract.code_hash.to_string();
                 let trigger_id_string = descriptor.id.to_string();
                 let mut metadata = descriptor.metadata.clone();
@@ -3857,7 +3878,8 @@ pub mod isi {
             // Resolve the selector against protected governance state at proposal
             // time as well as enactment time. The proposal carries no caller-made
             // authorization evidence.
-            let _ = enacted_validation_fee_payout_lifecycle(&payload, state_transaction)?;
+            let _ = enacted_validation_fee_payout_lifecycle(&payload, state_transaction)
+                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             let kind = ProposalKind::ValidationFeePolicy(payload.clone());
             let id = kind.fingerprint();
             let now = state_transaction._curr_block.height().get();
@@ -4843,7 +4865,7 @@ pub mod isi {
                     state_transaction
                         .validate_fastpq_governance_lock(&rid, &owner, &custody)
                         .map_err(|error| {
-                            InstructionExecutionError::InvariantViolation(error.into())
+                            state_transaction.mandatory_source_instruction_error(error)
                         })?;
                     let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
@@ -5296,7 +5318,7 @@ pub mod isi {
         };
         state_transaction
             .validate_fastpq_governance_lock(&rid, authority, &custody)
-            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+            .map_err(|error| state_transaction.mandatory_source_instruction_error(error))?;
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
@@ -5783,12 +5805,16 @@ pub mod isi {
     fn enacted_validation_fee_payout_lifecycle(
         payload: &ValidationFeePolicyProposal,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Option<ValidationFeePayoutLifecycleReferenceV1>, Error> {
+    ) -> Result<
+        Option<ValidationFeePayoutLifecycleReferenceV1>,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
         let Some(payout_binding) = payload.policy.treasury_payout_binding.as_ref() else {
             if payload.payout_lifecycle_proposal_id.is_some() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "validation-fee policy without a payout binding references a lifecycle".into(),
-                ));
+                )
+                .into());
             }
             return Ok(None);
         };
@@ -5810,7 +5836,8 @@ pub mod isi {
         if lifecycle.status != crate::state::GovernanceProposalStatus::Enacted {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle must be enacted before policy enactment".into(),
-            ));
+            )
+            .into());
         }
         let (certificate, lifecycle_enacted_at_height) = parliament_certificate_for_proposal_v1(
             lifecycle_id,
@@ -5829,7 +5856,8 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle does not authorize the exact policy binding"
                     .into(),
-            ));
+            )
+            .into());
         }
         validate_validation_fee_payout_lifecycle_runtime(payout_binding, state_transaction)?;
         let derived_lifecycle_seal =
@@ -5844,7 +5872,8 @@ pub mod isi {
         if derived_lifecycle_seal == [0; 32] {
             return Err(InstructionExecutionError::InvariantViolation(
                 "enacted validation-fee payout lifecycle derives an invalid zero seal".into(),
-            ));
+            )
+            .into());
         }
         let parliament_authorization = validation_fee_parliament_authorization(
             lifecycle_id,
@@ -5896,7 +5925,8 @@ pub mod isi {
             certificate,
             enacted_at_height,
         )?;
-        let payout_lifecycle = enacted_validation_fee_payout_lifecycle(payload, state_transaction)?;
+        let payout_lifecycle = enacted_validation_fee_payout_lifecycle(payload, state_transaction)
+            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             payload.policy.clone(),
             parliament_authorization,
@@ -6712,7 +6742,9 @@ pub mod isi {
         validate_installed: F,
     ) -> Result<(), Error>
     where
-        F: FnOnce(&StateTransaction<'_, '_>) -> Result<(), Error>,
+        F: FnOnce(
+            &StateTransaction<'_, '_>,
+        ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>>,
     {
         for (permission, _, permission_label) in &permissions {
             require_absent_validation_fee_runtime_permission(
@@ -6733,7 +6765,7 @@ pub mod isi {
                     .remove_account_permission(required_holder, permission);
                 state_transaction.invalidate_permission_cache_for_account(required_holder);
             }
-            return Err(error);
+            return Err(contract_attempt_instruction_error(state_transaction, error));
         }
         for (permission, required_holder, _) in permissions {
             state_transaction
@@ -6822,7 +6854,7 @@ pub mod isi {
     fn validate_validation_fee_payout_lifecycle_runtime(
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         validate_validation_fee_payout_lifecycle_runtime_with_effect(
             binding,
             state_transaction,
@@ -6832,7 +6864,7 @@ pub mod isi {
     fn validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         validate_validation_fee_payout_lifecycle_runtime_with_effect(
             binding,
             state_transaction,
@@ -6843,8 +6875,11 @@ pub mod isi {
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
         require_derived_permissions: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         let record = fetch_bound_contract_record(state_transaction, &binding.contract_address)
+            .map_err(|error| {
+                error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
+            })?
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     "validation-fee payout lifecycle requires an active immutable contract".into(),
@@ -6858,7 +6893,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle contract code or subject differs from its typed binding"
                     .into(),
-            ));
+            ).into());
         }
         let entrypoints = record.manifest.entrypoints.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -6880,14 +6915,15 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires one argument-free autonomous entrypoint protected by exact contract-selector authorization"
                     .into(),
-            ));
+            ).into());
         }
         if entrypoints.iter().any(|entrypoint| {
             entrypoint.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
         }) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle contract must not expose kaizen/改善".into(),
-            ));
+            )
+            .into());
         }
         let active_code_hash = state_transaction
             .world
@@ -6930,7 +6966,8 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires exactly one scheduled Time trigger"
                     .into(),
-            ));
+            )
+            .into());
         }
         let (trigger_id, action) = matching_triggers[0];
         if action.authority() != &binding.treasury_account_id
@@ -6942,7 +6979,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle trigger must be enabled, indefinite, and retry-free"
                     .into(),
-            ));
+            ).into());
         }
         let account_permission_exists =
             state_transaction
@@ -6962,7 +6999,8 @@ pub mod isi {
         if account_permission_exists || role_permission_exists {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle trigger permissions must not be delegated".into(),
-            ));
+            )
+            .into());
         }
         let pool_contract_address = state_transaction
             .world
@@ -6976,6 +7014,9 @@ pub mod isi {
                 )
             })?;
         let pool_record = fetch_bound_contract_record(state_transaction, &pool_contract_address)
+            .map_err(|error| {
+                error.map_rejection(|error| invalid_smart_contract_parameter(error.to_string()))
+            })?
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     "validation-fee payout lifecycle requires an active pool contract".into(),
@@ -6987,7 +7028,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle pool contract subject differs from the bound vault"
                     .into(),
-            ));
+            ).into());
         }
         let pool_entrypoints = pool_record.manifest.entrypoints.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -7009,7 +7050,7 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires one exact protected public pool swap selector"
                     .into(),
-            ));
+            ).into());
         }
         for (permission, required_holder, permission_label) in
             validation_fee_runtime_permissions(binding, &pool_contract_address)
@@ -8585,14 +8626,19 @@ pub mod isi {
         subject_id: [u8; 32],
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<GovernanceExpectedHeadV1, Error> {
-        if validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+    ) -> Result<GovernanceExpectedHeadV1, crate::execution_attempt::ExecutionAttemptError<Error>>
+    {
+        match validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
             binding,
             state_transaction,
-        )
-        .is_ok()
-        {
-            return Ok(parliament_absent_head_v1(subject_id));
+        ) {
+            Ok(()) => return Ok(parliament_absent_head_v1(subject_id)),
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    reason,
+                ));
+            }
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_)) => {}
         }
 
         // Attempt creation separately requires the strict vacant-runtime preflight. Therefore
@@ -8606,7 +8652,7 @@ pub mod isi {
         let mut head_root = [0_u8; 32];
         BlakeVariableOutput::finalize_variable(hasher, &mut head_root)
             .expect("the Parliament blocked-head output has the configured length");
-        parliament_present_head_root_v1(subject_id, 1, head_root)
+        parliament_present_head_root_v1(subject_id, 1, head_root).map_err(Into::into)
     }
 
     fn validate_kagemusha_policy_proposal_v1(
@@ -8709,13 +8755,14 @@ pub mod isi {
     fn parliament_expected_head_v1(
         proposal: &ProposalKind,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<GovernanceExpectedHeadV1, Error> {
+    ) -> Result<GovernanceExpectedHeadV1, crate::execution_attempt::ExecutionAttemptError<Error>>
+    {
         let subject_id = proposal.governed_subject_id_v1().map_err(|error| {
             InstructionExecutionError::InvariantViolation(
                 format!("failed to derive the governed Parliament subject: {error}").into(),
             )
         })?;
-        match proposal {
+        let head = match proposal {
             ProposalKind::DeployContract(payload) => parliament_contract_lifecycle_head_v1(
                 subject_id,
                 &payload.contract_address,
@@ -8770,7 +8817,8 @@ pub mod isi {
                         |(revision, bytes)| {
                             parliament_present_head_v1(subject_id, revision, &bytes)
                         },
-                    );
+                    )
+                    .map_err(Into::into);
                 }
                 let provider_id = payload.action.provider_id().ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
@@ -8905,13 +8953,14 @@ pub mod isi {
                     )
             }
             ProposalKind::ValidationFeePayoutLifecycle(payload) => {
-                parliament_validation_fee_payout_observed_head_v1(
+                return parliament_validation_fee_payout_observed_head_v1(
                     subject_id,
                     &payload.payout_binding,
                     state_transaction,
-                )
+                );
             }
-        }
+        };
+        head.map_err(Into::into)
     }
 
     fn apply_parliament_proposal_effect_v1(
@@ -9074,7 +9123,8 @@ pub mod isi {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &payload.payout_binding,
                     state_transaction,
-                )?;
+                )
+                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
                 let _ = validation_fee_parliament_authorization(
                     proposal_id,
                     proposal,
@@ -9210,7 +9260,10 @@ pub mod isi {
     pub(crate) fn execute_due_parliament_certificate_v1(
         governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<DueParliamentCertificateExecutionV1, Error> {
+    ) -> Result<
+        DueParliamentCertificateExecutionV1,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
         let (mut attempt, proposal_id, proposal, certificate) =
             exact_due_parliament_certificate_context_v1(governance_attempt_id, state_transaction)?;
         let current_height = state_transaction.block_height();
@@ -9281,6 +9334,11 @@ pub mod isi {
             }
             Ok(())
         })();
+        if let Some(reason) = state_transaction.execution_deferral() {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                reason,
+            ));
+        }
         if effect_result.is_err() {
             return Ok(DueParliamentCertificateExecutionV1::EffectFailed {
                 failure_root:
@@ -9323,7 +9381,7 @@ pub mod isi {
         governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
         expected_failure_root: [u8; 32],
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         let (mut attempt, proposal_id, proposal, certificate) =
             exact_due_parliament_certificate_context_v1(governance_attempt_id, state_transaction)?;
         let current_height = state_transaction.block_height();
@@ -9332,7 +9390,8 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "Parliament compare-and-set head changed between isolated failure transactions"
                     .into(),
-            ));
+            )
+            .into());
         }
         let failure_root = attempt
             .mark_execution_failed(governance_attempt_id, current_height)
@@ -9340,7 +9399,8 @@ pub mod isi {
         if failure_root != expected_failure_root {
             return Err(InstructionExecutionError::InvariantViolation(
                 "Parliament execution failure root changed across atomic rollback".into(),
-            ));
+            )
+            .into());
         }
         state_transaction
             .world
@@ -9566,7 +9626,8 @@ pub mod isi {
                 validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &payload.payout_binding,
                     state_transaction,
-                )?;
+                )
+                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             }
             if let ProposalKind::SccpRouteGovernance(payload) = &self.proposal {
                 crate::smartcontracts::isi::sccp::governance::preflight_attempt(
@@ -9588,7 +9649,8 @@ pub mod isi {
             }
             let (risk_tier, required_bodies) = parliament_attempt_policy_v1(&self.proposal);
             let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
-            let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)?;
+            let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)
+                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
             let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
                 self.canonical_attempt(risk_tier),
                 randomness_redraws_before_attempt,
@@ -14912,8 +14974,12 @@ pub mod isi {
             Ok(())
         }
     }
-    impl ValidSingularQuery
-        for iroha_data_model::query::smart_contract::prelude::FindContractManifestByArtifactId
+    impl
+        ValidSingularQuery<
+            crate::execution_attempt::ExecutionAttemptError<
+                iroha_data_model::query::error::QueryExecutionFail,
+            >,
+        > for iroha_data_model::query::smart_contract::prelude::FindContractManifestByArtifactId
     {
         #[metrics(+"find_contract_manifest_by_artifact_id")]
         fn execute(
@@ -14921,14 +14987,20 @@ pub mod isi {
             state_ro: &impl StateReadOnly,
         ) -> Result<
             iroha_data_model::smart_contract::manifest::ContractManifest,
-            iroha_data_model::query::error::QueryExecutionFail,
+            crate::execution_attempt::ExecutionAttemptError<
+                iroha_data_model::query::error::QueryExecutionFail,
+            >,
         > {
             crate::executor::root_scope::ensure_committed_artifact_scope(
                 state_ro.world(),
                 &self.artifact_id,
             )
             .map_err(|error| {
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string())
+                error.map_rejection(|error| {
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        error.to_string(),
+                    )
+                })
             })?;
             state_ro
                 .world()
@@ -14936,6 +15008,7 @@ pub mod isi {
                 .get(&self.artifact_id)
                 .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)
                 .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
+                .map_err(Into::into)
         }
     }
     /// Collect consensus key identifiers bound to a public key.
@@ -22516,8 +22589,8 @@ pub mod isi {
                 "the ordinary fixture clock follows its actual signed parent"
             );
             let mut block = state.block(header);
-            let stx = block.transaction_for_callback_testing();
-            assert!(crate::executor::root_scope::execution_root_scope(&stx).is_ok());
+            let mut stx = block.transaction_for_callback_testing();
+            assert!(crate::executor::root_scope::execution_root_scope(&mut stx).is_ok());
             drop(stx);
             let component = blank_test_state();
             let mut block = component.block(first_test_block_header());
@@ -22701,28 +22774,12 @@ pub mod isi {
             };
         }
         macro_rules! assert_contains {
-            (!$value:expr, $needle:expr $(,)?) => { assert!(!$value.contains($needle)) };
             (!$value:expr, $needle:expr, $($message:tt)+) => {
                 assert!(!$value.contains($needle), $($message)+)
             };
             ($value:expr, $needle:expr $(,)?) => { assert!($value.contains($needle)) };
             ($value:expr, $needle:expr, $($message:tt)+) => {
                 assert!($value.contains($needle), $($message)+)
-            };
-        }
-        macro_rules! proof_verification_fixture {
-            ($state:ident, $block:ident) => {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let $state = State::new(World::default(), kura, query_handle);
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut $block = $state.block(header);
             };
         }
         macro_rules! state_transaction {

@@ -212,6 +212,11 @@ fn core_queries_return_typed_handles_and_specialists_remain_norito() {
     }
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let mut parameters = world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let state = State::new_for_testing(world, kura, query);
     let contract_address = install_contract(
         &state,

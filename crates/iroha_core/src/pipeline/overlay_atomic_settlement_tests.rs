@@ -1,7 +1,7 @@
 //! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
 
 use super::*;
-use crate::state::{State, StateBlock, StateReadOnly, World};
+use crate::state::{State, StateBlock, World};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,

@@ -764,11 +764,27 @@ impl SortableQueryOutput for AssetEscrowRecord {
         bounded_bare_encoded_len(&self.id, limit)
     }
 }
+type QueryAttemptError = crate::execution_attempt::ExecutionAttemptError<Error>;
+
+// Transport projection is used only after leaving consensus execution.
+pub(crate) fn query_transport_error(error: QueryAttemptError) -> Error {
+    match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_) => Error::GasBudgetExceeded,
+    }
+}
+
 trait ExecuteSingularQuery {
-    fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error>;
+    fn execute(
+        self,
+        state: &impl StateReadOnly,
+    ) -> Result<SingularQueryOutputBox, QueryAttemptError>;
 }
 impl ExecuteSingularQuery for SingularQueryBox {
-    fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error> {
+    fn execute(
+        self,
+        state: &impl StateReadOnly,
+    ) -> Result<SingularQueryOutputBox, QueryAttemptError> {
         /// Route each uniform singular query to its own `execute` implementation.
         macro_rules! dispatch_uniform {
             ($query:expr; $($variant:ident),+ $(,)?) => {
@@ -778,10 +794,10 @@ impl ExecuteSingularQuery for SingularQueryBox {
                     // admission boundary, fail closed instead of interpreting bytes
                     // from the generic smart-contract state namespace.
                     SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(q) => Err(
-                        Error::Find(FindError::SorafsCitizenBond(q.serial_commitment)),
+                        Error::Find(FindError::SorafsCitizenBond(q.serial_commitment)).into(),
                     ),
                     SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
-                        Err(Error::Find(FindError::SorafsCitizenBondSnapshot))
+                        Err(Error::Find(FindError::SorafsCitizenBondSnapshot).into())
                     }
                     $(SingularQueryBox::$variant(q) => {
                         Ok(SingularQueryOutputBox::from(q.execute(state)?))
@@ -3993,7 +4009,10 @@ mod tests {
                 .expect("the bounded lane admits the fail-closed dispatcher"),
                 0,
             );
-            assert_eq!(query.execute(&view), Err(Error::Find(expected)));
+            assert_eq!(
+                query.execute(&view),
+                Err(QueryAttemptError::Rejected(Error::Find(expected)))
+            );
         }
     }
     #[test]
@@ -4025,7 +4044,10 @@ mod tests {
                 Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
             )
             .expect_err("the unregistered alias remains absent after bounded resolution");
-        assert!(matches!(error, Error::NotFound));
+        assert!(matches!(
+            error,
+            QueryAttemptError::Rejected(Error::NotFound)
+        ));
     }
     #[test]
     fn server_singular_preflight_charges_synthesized_account_and_asset_shapes() {
@@ -7279,22 +7301,16 @@ mod tests {
     fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        assert_eq!(
-            fixture.store.blocks[0].network_entrypoint_count(),
-            3,
-            "the original genesis owns its topology, consensus, and crypto metadata batches"
-        );
-        assert_eq!(
-            fixture
-                .store
-                .blocks
-                .iter()
-                .skip(1)
-                .map(|block| block.network_entrypoint_count())
-                .sum::<usize>(),
-            32,
-            "sixteen original successors each own two Network inputs"
-        );
+        // The signed genesis carries three original Network transactions; the sixteen
+        // successors each carry two. Empty-genesis accounting would omit real work.
+        assert_eq!(fixture.store.blocks.len(), 17);
+        assert_eq!(fixture.store.blocks[0].network_entrypoint_count(), 3);
+        assert_eq!(fixture.store.blocks[0].execution_outputs().len(), 3);
+        for block in &fixture.store.blocks[1..] {
+            assert_eq!(block.network_entrypoint_count(), 2);
+            assert_eq!(block.execution_outputs().len(), 2);
+        }
+        let original_work_units = 3 + 16 * 2;
         let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7309,23 +7325,32 @@ mod tests {
             QueryLimits::default().with_count_mode(QueryCountMode::Exact),
         )
         .expect("validate exact transaction query");
-        let rejected = ValidQueryRequest::validate_for_client_parts(
-            find_transactions_request(params),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default().with_count_mode(QueryCountMode::Exact),
-        )
-        .expect("validate exact transaction query")
-        .execute_ephemeral_with_stats(
-            &query_handle,
-            &state_view,
-            &ALICE_ID,
-            Some(QueryExecutionBudget::from_weighted_limit(34, 1, 0)),
-        )
-        .expect_err("all 35 original Network work units must be charged");
-        assert_eq!(rejected, Error::GasBudgetExceeded);
+        for refused_units in [32, original_work_units - 1] {
+            let rejected = ValidQueryRequest::validate_for_client_parts(
+                find_transactions_request(params.clone()),
+                &ALICE_ID,
+                &state_view,
+                QueryLimits::default().with_count_mode(QueryCountMode::Exact),
+            )
+            .expect("validate exact transaction query")
+            .execute_ephemeral_with_stats(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Some(QueryExecutionBudget::from_weighted_limit(
+                    refused_units,
+                    1,
+                    0,
+                )),
+            )
+            .expect_err("every original genesis and successor work unit must be charged");
+            assert_eq!(
+                rejected,
+                QueryAttemptError::Rejected(Error::GasBudgetExceeded)
+            );
+        }
         state_view.kura().reset_canonical_query_reads_for_test();
-        let item_budget = QueryExecutionBudget::from_weighted_limit(35, 1, 0);
+        let item_budget = QueryExecutionBudget::from_weighted_limit(original_work_units, 1, 0);
         let (QueryResponse::Iterable(output), stats) = validated
             .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(item_budget))
             .expect("execute exact transaction query")
@@ -7337,11 +7362,11 @@ mod tests {
         assert_eq!(remaining_items, Some(32));
         assert!(has_more);
         assert!(cursor.is_none());
-        assert_eq!(stats.processed_items(), 35);
+        assert_eq!(stats.processed_items(), original_work_units);
         assert_eq!(
             state_view.kura().canonical_query_reads_for_test().0,
             17,
-            "exact query reads every canonical body, including all three original genesis inputs"
+            "exact query reads every canonical body, including all three signed genesis inputs"
         );
     }
     #[test]
@@ -7373,7 +7398,7 @@ mod tests {
                     Some(item_budget),
                 )
                 .expect_err("exact full-history scan must exceed a one-item budget");
-            assert_eq!(err, Error::GasBudgetExceeded);
+            assert_eq!(err, QueryAttemptError::Rejected(Error::GasBudgetExceeded));
         }
     }
     #[test]
@@ -7425,7 +7450,7 @@ mod tests {
                     Some(item_budget),
                 )
                 .expect_err("eager carrier projection must be precharged before proof work");
-            assert_eq!(err, Error::GasBudgetExceeded);
+            assert_eq!(err, QueryAttemptError::Rejected(Error::GasBudgetExceeded));
             assert_eq!(
                 crate::smartcontracts::isi::tx::canonical_network_projection_calls_for_test(),
                 0,
@@ -7633,10 +7658,23 @@ mod tests {
         assert_eq!(collected.len(), 5);
         let mut cursor = first.continue_cursor;
         let mut expected_remaining = 30_u64;
+        // Each five-row continuation authenticates from H17 to the carrier of its
+        // fifth returned row. The final page includes all three signed genesis rows.
+        let mut page_minimum_heights = [13, 10, 8, 5, 3, 1].into_iter();
+        let mut expected_body_reads = 17;
+        let mut expected_body_bytes = fixture.store.wire_bytes(1..=17);
         while let Some(current) = cursor {
             let next = query_handle
                 .handle_iter_continue(current, &ALICE_ID)
                 .expect("continue exact transaction query");
+            let minimum_height = page_minimum_heights.next().expect("six continuation pages");
+            expected_body_reads += 18 - minimum_height;
+            expected_body_bytes += fixture.store.wire_bytes(minimum_height..=17);
+            assert_eq!(
+                state_view.kura().canonical_query_reads_for_test(),
+                (expected_body_reads, expected_body_bytes),
+                "continuation retains the complete original-tip ancestry cost"
+            );
             let page = transactions_from_batch(next.batch);
             assert_eq!(page.len(), 5);
             expected_remaining = expected_remaining
@@ -7645,6 +7683,7 @@ mod tests {
             collected.extend(page);
             cursor = next.continue_cursor;
         }
+        assert!(page_minimum_heights.next().is_none());
         assert_eq!(collected, expected);
         assert_eq!(expected_remaining, 0);
         let (body_reads, body_bytes) = state_view.kura().canonical_query_reads_for_test();
@@ -7652,16 +7691,7 @@ mod tests {
             body_reads, 85,
             "each continuation pays for the original tip ancestry before its page carriers"
         );
-        assert_eq!(
-            body_bytes,
-            fixture.store.wire_bytes(1..=17)
-                + fixture.store.wire_bytes(13..=17)
-                + fixture.store.wire_bytes(10..=17)
-                + fixture.store.wire_bytes(8..=17)
-                + fixture.store.wire_bytes(5..=17)
-                + fixture.store.wire_bytes(3..=17)
-                + fixture.store.wire_bytes(1..=17)
-        );
+        assert_eq!(body_bytes, expected_body_bytes);
     }
     #[test]
     fn find_transactions_sorted_prefix_matches_deterministic_full_order_across_pages() {

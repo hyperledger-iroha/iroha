@@ -62,6 +62,11 @@ impl OrdinaryIssuerTableV1 {
         // An OEM-only release has no selectable ordinary row. It cannot admit ordinary money.
         Ok(Self { slots })
     }
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     pub(super) fn selected(&self, profile: DigestV1) -> Result<usize, String> {
         if profile == [0; 32] {
             return Err("ordinary issuer profile is absent".into());

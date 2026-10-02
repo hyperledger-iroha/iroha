@@ -377,27 +377,51 @@ impl KagemushaNativeAccountCustodyV1 {
     ) -> Result<[u8; 64]> {
         self.recheck()?;
         inventory.require_account_transport(&self.account)?;
-        original.recheck().map_err(|_| eyre!("Native lineage invocation custody rejected"))?;
-        let request = original.request().map_err(|_| eyre!("Native lineage original request rejected"))?.clone();
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native lineage invocation custody rejected"))?;
+        let request = original
+            .request()
+            .map_err(|_| eyre!("Native lineage original request rejected"))?
+            .clone();
         inventory.require_lineage_request(&request)?;
         ensure!(
-            original.installed_policy_original().map_err(|_| eyre!("Native lineage purpose custody rejected"))?
+            original
+                .installed_policy_original()
+                .map_err(|_| eyre!("Native lineage purpose custody rejected"))?
                 == inventory.lineage_policy_original()?.as_slice()
                 && request.operation.lineage().owner.account_id == *self.current.wallet()
-                && &request.operation.lineage().owner.runtime.network_id == self.account.network_id(),
+                && &request.operation.lineage().owner.runtime.network_id
+                    == self.account.network_id(),
             "Native lineage invocation changed exact installed purpose/W/network"
         );
-        let message = original.account_signing_message().map_err(|_| eyre!("Native lineage message custody rejected"))?;
-        ensure!(message == request.account_signing_message().map_err(|_| eyre!("Native lineage message rejected"))?,
-            "Native lineage invocation message changed");
+        let message = original
+            .account_signing_message()
+            .map_err(|_| eyre!("Native lineage message custody rejected"))?;
+        ensure!(
+            message
+                == request
+                    .account_signing_message()
+                    .map_err(|_| eyre!("Native lineage message rejected"))?,
+            "Native lineage invocation message changed"
+        );
         self.recheck()?;
-        original.recheck().map_err(|_| eyre!("Native lineage invocation expired before signing"))?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native lineage invocation expired before signing"))?;
         let signature: [u8; 64] = iroha_crypto::Signature::try_new(
-            self.account.context.key_pair.private_key(), &message,
-        )?.payload().try_into().map_err(|_| eyre!("Native lineage Ed64 shape rejected"))?;
-        request.verify_account_signature(&iroha_crypto::Signature::from_bytes(&signature))
+            self.account.context.key_pair.private_key(),
+            &message,
+        )?
+        .payload()
+        .try_into()
+        .map_err(|_| eyre!("Native lineage Ed64 shape rejected"))?;
+        request
+            .verify_account_signature(&iroha_crypto::Signature::from_bytes(&signature))
             .map_err(|_| eyre!("Native lineage signature differs from exact account controller"))?;
-        original.recheck().map_err(|_| eyre!("Native lineage custody changed after signing"))?;
+        original
+            .recheck()
+            .map_err(|_| eyre!("Native lineage custody changed after signing"))?;
         inventory.require_lineage_request(&request)?;
         self.recheck()?;
         Ok(signature)

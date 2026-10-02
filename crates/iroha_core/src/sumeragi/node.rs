@@ -41,7 +41,7 @@ use super::{
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
-    net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress, subscribe},
+    net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress},
     records::{FileRecordStore, FreshKeyAssertion, install},
     schedule,
     startup::{self, GENESIS_HEIGHT, GenesisTip, StartupError},
@@ -51,10 +51,12 @@ use crate::sumeragi::metrics::{InstanceMetrics, MetricsInstance};
 
 use crate::{
     EventsSender, IrohaNetwork,
-    kura::Kura,
     queue::Queue,
     state::{State, StateReadOnly, WorldReadOnly},
 };
+
+#[cfg(test)]
+use crate::kura::Kura;
 
 /// Where the instance keeps its files, and the operator's startup choices.
 #[derive(Clone, Debug)]
@@ -75,16 +77,12 @@ pub struct NodeConfig {
     pub retired_keys: Vec<iroha_crypto::PublicKey>,
 }
 
-/// What [`prepare`] needs: the state to rebuild and where its blocks are.
+/// What [`prepare`] needs: the original State owns its store, pool and configured chain identity.
 pub struct PrepareInputs {
-    /// The node's state (empty: it is rebuilt from genesis and Kura).
+    /// The node's state (empty: it is rebuilt from genesis and its original Kura).
     pub state: Arc<State>,
-    /// Kura.
-    pub kura: Arc<Kura>,
     /// Pipeline and state events.
     pub events: EventsSender,
-    /// The chain id.
-    pub chain_id: String,
     /// The signed genesis block of a fresh chain (ignored when Kura already holds genesis).
     pub genesis: Option<SignedBlock>,
     /// The genesis account.
@@ -119,8 +117,6 @@ pub struct StartInputs<N> {
 pub struct NodeInputs<N> {
     /// The node's state (empty before genesis).
     pub state: Arc<State>,
-    /// Kura.
-    pub kura: Arc<Kura>,
     /// The transaction queue.
     pub queue: Arc<Queue>,
     /// Pipeline and state events.
@@ -129,8 +125,6 @@ pub struct NodeInputs<N> {
     pub net: Arc<N>,
     /// The node's consensus key pair (BLS normal).
     pub key_pair: KeyPair,
-    /// The chain id.
-    pub chain_id: String,
     /// The signed genesis block of a fresh chain (ignored when Kura already holds genesis).
     pub genesis: Option<SignedBlock>,
     /// The genesis account.
@@ -420,12 +414,10 @@ pub enum NodeError {
 pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, NodeError> {
     let NodeInputs {
         state,
-        kura,
         queue,
         events,
         net,
         key_pair,
-        chain_id,
         genesis,
         genesis_account,
         consensus_mode,
@@ -437,9 +429,7 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
     } = inputs;
     prepare(PrepareInputs {
         state,
-        kura,
         events,
-        chain_id,
         genesis,
         genesis_account,
         consensus_mode,
@@ -490,13 +480,18 @@ impl core::fmt::Debug for Prepared {
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     let PrepareInputs {
         state,
-        kura,
         events,
-        chain_id,
         genesis,
         genesis_account,
         consensus_mode,
     } = inputs;
+    // Storage and configured consensus identity have one original owner. Accepting either
+    // independently can publish genesis into State while routing replay to a foreign store.
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC21")))]
+    let kura = state.kura_handle();
+    #[cfg(all(test, sumeragi_core_mutation = "HC21"))]
+    let kura = Kura::blank_kura_for_testing();
+    let chain_id = state.chain_id_ref().to_string();
     // Local snapshot signatures authenticate exports, not full-World execution. Native R
     // commits the complete World state (Appendix E, E51), but restoring a snapshot against it
     // is not implemented (TODO(S9)); Strict startup therefore rebuilds original State from the
@@ -917,9 +912,10 @@ impl Prepared {
         })
     }
 
-    /// [`Prepared::start`] over the node's P2P `network`: the transport is [`P2pNet`], and
-    /// inbound frames reach the driver through a [`SumeragiIngress`] fed by the driver's own
-    /// FIFOs, each holding up to `fifo_capacity` messages.
+    /// [`Prepared::start`] over the actor retained by `inputs.net`. Inbound frames reach
+    /// the driver through a [`SumeragiIngress`] fed by that same actor's three FIFOs,
+    /// each holding up to `fifo_capacity` messages. Subscription refusal precedes driver
+    /// construction and key-record installation.
     ///
     /// # Errors
     /// See [`NodeError`]; the subscription or the ingress thread failing is
@@ -927,10 +923,11 @@ impl Prepared {
     pub fn start_on_network(
         self,
         inputs: StartInputs<P2pNet<IrohaNetwork>>,
-        network: &IrohaNetwork,
         fifo_capacity: usize,
     ) -> Result<NetworkedNode, NodeError> {
-        let subscription = subscribe(network, fifo_capacity)
+        let subscription = inputs
+            .net
+            .subscribe(fifo_capacity)
             .map_err(|error| NodeError::Driver(error.to_string()))?;
         let node = self.start(inputs)?;
         let ingress = Arc::clone(&node.ingress);
@@ -1147,6 +1144,12 @@ pub(crate) fn startup_nonce() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[path = "dataspace_roots.rs"]
+    mod dataspace_roots;
+    #[path = "p2p_owner_tests.rs"]
+    mod p2p_owner_tests;
+    #[path = "root_owner_tests.rs"]
+    mod root_owner_tests;
     #[test]
     fn configuration_fingerprint_binds_effective_runtime_settings() {
         use super::{DriverConfig, SumeragiLocalOverrides, configuration_fingerprint};
@@ -1584,7 +1587,6 @@ mod tests {
                 ));
                 let node = start(NodeInputs {
                     state: Arc::clone(&state),
-                    kura: Arc::clone(&disk.kura),
                     queue: Arc::clone(&queue),
                     events: tokio::sync::broadcast::channel(1024).0,
                     net: Arc::new(MemNet {
@@ -1598,7 +1600,6 @@ mod tests {
                         zeroize::Zeroizing::new([0xA0 + index as u8; 32]),
                         index as u32,
                     ).unwrap())),
-                    chain_id: chain.chain_id.to_string(),
                     genesis: Some(chain.genesis.clone()),
                     genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                     consensus_mode: ConsensusMode::Permissioned,
@@ -2078,6 +2079,7 @@ mod tests {
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
         let autoscale = crate::sumeragi::lanes::lane_policy(validators[0].state.view().world())
+            .expect("completed original routing metadata read")
             .expect("the signed lane policy")
             .autoscale
             .expect("the signed autoscale policy");
@@ -2321,9 +2323,7 @@ mod tests {
             let state = empty_state(&chain.chain_id, &chain.genesis, &disks[0].kura);
             let result = prepare(PrepareInputs {
                 state: Arc::clone(&state),
-                kura: Arc::clone(&disks[0].kura),
                 events: tokio::sync::broadcast::channel(16).0,
-                chain_id: chain.chain_id.to_string(),
                 genesis: Some(chain.genesis.clone()),
                 genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                 consensus_mode: ConsensusMode::Permissioned,

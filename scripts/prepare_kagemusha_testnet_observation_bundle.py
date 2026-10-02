@@ -24,6 +24,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from verify_kagemusha_v1_release_evidence import ARTIFACT_ROLES
+
 
 HEX32 = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONTROL_BYTES = 128 * 1024 * 1024
@@ -127,11 +129,11 @@ def verify_report(report: Any, args: argparse.Namespace) -> list[tuple[str, int]
     ):
         raise BundleError("native artifact byte length is invalid")
     rows = report.get("artifacts")
-    if not isinstance(rows, list) or len(rows) != 54:
-        raise BundleError("Kagami report lacks the exact 54 release artifacts")
+    if not isinstance(rows, list) or len(rows) != len(ARTIFACT_ROLES):
+        raise BundleError(f"Kagami report lacks the exact {len(ARTIFACT_ROLES)} release artifacts")
     result: list[tuple[str, int]] = []
-    for row in rows:
-        if not isinstance(row, dict):
+    for row, expected_role in zip(rows, ARTIFACT_ROLES):
+        if not isinstance(row, dict) or row.get("role") != expected_role:
             raise BundleError("Kagami artifact row is malformed")
         digest = digest_arg(row.get("sha256"), "artifact SHA-256")
         size = row.get("byte_len")

@@ -45,7 +45,7 @@ fn native_capture(lane_count: u32) -> BTreeMap<String, Vec<u8>> {
     assert_eq!(roster.len(), 4);
     let mut consumer = SumeragiFinalityVerifier::new(
         selected.block(),
-        &fixture.manifest.chain_id().to_string(),
+        fixture.manifest.chain_id().as_ref(),
         roster,
     )
     .unwrap();

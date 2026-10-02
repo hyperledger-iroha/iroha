@@ -45,10 +45,10 @@ fn active_owner(
     state: &StateTransaction<'_, '_>,
     alias: &str,
     dataspace: DataSpaceId,
-) -> Result<(AccountId, u64), Error> {
+) -> Result<(AccountId, u64), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let selector = crate::sns::selector_for_dataspace_alias(alias).map_err(invalid)?;
     if selector.normalized_label() != alias {
-        return Err(invalid("dataspace alias must be canonical"));
+        return Err(invalid("dataspace alias must be canonical").into());
     }
     let now = state.block_unix_timestamp_ms();
     let resolved = crate::sns::resolve_active_dataspace_id_by_alias(
@@ -57,18 +57,18 @@ fn active_owner(
         alias,
         now,
     )
-    .map_err(invalid)?;
+    .map_err(|error| error.into_attempt_error(invalid))?;
     if resolved != dataspace
         || dataspace == DataSpaceId::UNIVERSAL
         || DataSpaceId::from_hash(&selector.name_hash()) != dataspace
     {
-        return Err(invalid(
-            "active alias differs from registered private dataspace",
-        ));
+        return Err(invalid("active alias differs from registered private dataspace").into());
     }
-    crate::sns::active_dataspace_owner_and_generation_by_alias(&state.world, alias, now)
-        .map_err(invalid)?
-        .ok_or_else(|| invalid("dataspace alias has no active owner"))
+    Ok(
+        crate::sns::active_dataspace_owner_and_generation_by_alias(&state.world, alias, now)
+            .map_err(|error| error.into_attempt_error(invalid))?
+            .ok_or_else(|| invalid("dataspace alias has no active owner"))?,
+    )
 }
 
 /// Reject physical parent execution policies that would claim an already external private root.
@@ -155,7 +155,13 @@ impl Execute for RegisterPrivateDataspace {
                 ));
             }
         }
-        let (owner, generation) = active_owner(state, &self.alias, dataspace_id)?;
+        let (owner, generation) =
+            active_owner(state, &self.alias, dataspace_id).map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    crate::sns::SnsError::Deferred(reason).retain_in_instruction(state)
+                }
+            })?;
         if &owner != authority || generation != self.expected_ownership_generation {
             return Err(invalid(
                 "authority or expected SNS ownership generation does not match",
@@ -209,7 +215,13 @@ impl Execute for AnchorPrivateDataspace {
                 "registered child belongs to another parent network",
             ));
         }
-        let (owner, generation) = active_owner(state, &record.alias, self.dataspace_id)?;
+        let (owner, generation) =
+            active_owner(state, &record.alias, self.dataspace_id).map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    crate::sns::SnsError::Deferred(reason).retain_in_instruction(state)
+                }
+            })?;
         state
             .world
             .private_dataspaces

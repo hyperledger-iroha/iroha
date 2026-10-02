@@ -45,6 +45,9 @@ pub enum PayloadError {
     /// Its public error preserves the category but does not carry the nested limit fields.
     #[error("payload decoding was refused by local resources")]
     DecodeResource,
+    /// Original committed routing could not be read with the local resources.
+    #[error("payload routing deferred: {0}")]
+    RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
@@ -134,12 +137,12 @@ fn build_at(
     let view = state.view();
     let npos = view.world().sumeragi_npos_parameters().is_some();
     let confidential = compute_confidential_feature_digest(view.world(), view.zk(), height);
-    let routing = super::lanes::routing::RoutingSnapshot::of(&view);
+    let routing = super::lanes::routing::RoutingSnapshot::of(&view)?;
     let inputs = routing.inputs(view.world());
     let contexts = transactions
         .iter()
         .map(|tx| {
-            let route = inputs.execution_route(tx, height).ok_or_else(|| {
+            let route = inputs.execution_route(tx, height)?.ok_or_else(|| {
                 PayloadError::NotCanonical("committed execution route is unavailable".into())
             })?;
             Ok(iroha_data_model::block::ExternalExecutionContext::new(
@@ -253,7 +256,7 @@ pub fn select(
     queue: &std::sync::Arc<Queue>,
     max_bytes: usize,
     reserved: usize,
-) -> Vec<AcceptedTransaction<'static>> {
+) -> Result<Vec<AcceptedTransaction<'static>>, crate::execution_attempt::ExecutionDeferred> {
     let view = state.view();
     let block_parameters = view.world().parameters().block();
     // The next block executes under the FASTPQ source policy frozen at its start (the
@@ -267,11 +270,11 @@ pub fn select(
         .min(fastpq_inputs)
         .saturating_sub(reserved);
     let Some(pending) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     // The global chain sequences lane 0; transactions routed to a lane reach it through that
     // lane's merged blocks (`specs/sumeragi_lanes.md` §5).
-    let routing = super::lanes::routing::RoutingSnapshot::of(&view);
+    let routing = super::lanes::routing::RoutingSnapshot::of(&view)?;
     let height = u64::try_from(view.height())
         .unwrap_or(u64::MAX)
         .saturating_add(1);
@@ -298,7 +301,7 @@ pub fn select(
         if selected.len() >= max_transactions {
             break;
         }
-        let Some(lane) = inputs.route(&transaction, height) else {
+        let Some(lane) = inputs.route(&transaction, height)? else {
             continue;
         };
         if routing.has_lanes()
@@ -315,7 +318,7 @@ pub fn select(
         bytes = next;
         selected.push(transaction);
     }
-    selected
+    Ok(selected)
 }
 
 #[cfg(test)]

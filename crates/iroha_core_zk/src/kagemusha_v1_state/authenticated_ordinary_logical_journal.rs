@@ -244,15 +244,6 @@ impl KagemushaAuthenticatedOrdinaryApprovalV1<'_> {
         ).map_err(material)
     }
 
-    pub(crate) fn retained_enrollment(
-        &self,
-    ) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {
-        &self.journal.enrollment
-    }
-
-    pub(crate) fn retained_release(&self) -> &Arc<KagemushaAuthenticatedReleaseV1> {
-        &self.journal.release
-    }
     /// The exact periodic lease admitted with this original approval; later refreshes cannot
     /// substitute proof witness bytes or renew this signature's original expiry.
     pub(crate) fn original_approval_integrity_lease(
@@ -267,7 +258,7 @@ impl KagemushaAuthenticatedOrdinaryApprovalV1<'_> {
     }
 
     /// The independent floor held before this exact original assertion was admitted.
-    pub(crate) fn previous_app_attest_counter_floor(&self) -> Option<u32> {
+    pub fn previous_app_attest_counter_floor(&self) -> Option<u32> {
         self.journal
             .pending
             .as_ref()

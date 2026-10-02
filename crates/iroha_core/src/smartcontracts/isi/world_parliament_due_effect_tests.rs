@@ -1098,4 +1098,121 @@ fn parliament_sorafs_admission_council_enacts_only_the_exact_certified_effect() 
     assert_exact_due_parliament_effect_enacted(&execution, &fixture);
 }
 
+#[test]
+fn parliament_terminal_effect_failure_retains_atomic_rollback_and_exact_outcome() {
+    use iroha_data_model::isi::sorafs::{
+        EstablishSorafsProviderOwnerV1, SorafsProviderGovernanceActionV1,
+    };
+    let state = blank_test_state();
+    let block =
+        new_dummy_block_at_height(NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).unwrap());
+    let mut state_block = state.block(block.as_ref().header());
+    let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xE8; 32]);
+    let fixture = {
+        let mut seed = state_block.transaction();
+        assert!(
+            seed.world.account(&ALICE_ID).is_err(),
+            "the certified target account is absent"
+        );
+        let fixture = seed_due_parliament_certificate(
+            &mut seed,
+            ProposalKind::SorafsProviderGovernance(SorafsProviderGovernanceProposal {
+                action: Box::new(SorafsProviderGovernanceActionV1::Establish(
+                    EstablishSorafsProviderOwnerV1 {
+                        provider_id,
+                        owner: ALICE_ID.clone(),
+                    },
+                )),
+            }),
+        );
+        seed.apply();
+        fixture
+    };
+    let failure_root = {
+        let mut execution = state_block.transaction();
+        let result =
+            execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
+                .expect("missing target account is a completed effect failure, not local refusal");
+        let DueParliamentCertificateExecutionV1::EffectFailed { failure_root } = result else {
+            panic!("an absent account cannot receive the certified provider ownership: {result:?}");
+        };
+        assert!(execution.execution_deferral().is_none());
+        assert!(execution.world.provider_owners.get(&provider_id).is_none());
+        assert_eq!(
+            execution
+                .world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .unwrap()
+                .attempt()
+                .status,
+            GovernanceAttemptStatusV1::Certified
+        );
+        // Drop exactly the failed original transaction before installing its terminal outcome.
+        failure_root
+    };
+    assert!(
+        state_block
+            .world
+            .provider_owners
+            .get(&provider_id)
+            .is_none()
+    );
+    let mut failure = state_block.transaction();
+    record_due_parliament_execution_failure_v1(
+        fixture.governance_attempt_id,
+        failure_root,
+        &mut failure,
+    )
+    .expect("record the exact deterministic failure after rollback");
+    assert!(failure.execution_deferral().is_none());
+    assert_eq!(
+        failure
+            .world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .unwrap()
+            .status,
+        crate::state::GovernanceProposalStatus::ExecutionFailed
+    );
+    assert_eq!(
+        failure
+            .world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .unwrap()
+            .attempt()
+            .status,
+        GovernanceAttemptStatusV1::ExecutionFailed
+    );
+    assert_automatic_parliament_execution_event(
+        &failure,
+        &fixture,
+        gov::ParliamentAutomaticExecutionOutcomeV1::ExecutionFailed(
+            gov::ParliamentAutomaticExecutionFailedV1 {
+                effect_preimage_hash: fixture.certificate.effect_preimage_hash,
+                failure_root,
+            },
+        ),
+    );
+    assert!(failure.world.provider_owners.get(&provider_id).is_none());
+    failure.apply();
+    assert!(
+        state_block
+            .world
+            .provider_owners
+            .get(&provider_id)
+            .is_none()
+    );
+    assert_eq!(
+        state_block
+            .world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .unwrap()
+            .status,
+        crate::state::GovernanceProposalStatus::ExecutionFailed
+    );
+}
+
 include!("world_kagemusha_runtime_authority_tests.rs");

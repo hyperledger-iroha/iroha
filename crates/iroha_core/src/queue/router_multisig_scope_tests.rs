@@ -196,11 +196,10 @@ fn account_scope_directory_scope_matches_destination_account_permission_route() 
             BTreeSet::from([DomainId::try_new("hbl", "paynet").expect("domain id")]),
         )])
     );
-    assert!(account_matches_alias_scope(
-        "hbl.paynet",
-        &holder_id,
-        &state_view
-    ));
+    assert!(
+        account_matches_alias_scope("hbl.paynet", &holder_id, &state_view)
+            .expect("completed original account scope")
+    );
     assert_eq!(
         router
             .try_route_with_view(&tx, &state_view)

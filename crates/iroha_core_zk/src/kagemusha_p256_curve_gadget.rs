@@ -13,7 +13,6 @@ use halo2_base::{
     AssignedValue, Context,
     QuantumCell::Constant,
     gates::GateInstructions as _,
-    gates::RangeInstructions as _,
     utils::{BigPrimeField, CurveAffineExt as _, modulus, power_of_two},
 };
 use halo2_ecc::{
@@ -24,11 +23,16 @@ use halo2_ecc::{
 use halo2_proofs::halo2curves::{
     CurveAffine as _,
     ff::Field as _,
-    ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
 };
 
-use super::pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1};
+use super::pasta_sha256::PastaSha256ByteV1;
+#[cfg(test)]
+use super::pasta_sha256::{PastaSha256BitV1, PastaSha256JobsV1};
+#[cfg(test)]
+use halo2_base::gates::RangeInstructions as _;
+#[cfg(test)]
+use halo2_proofs::halo2curves::ff::PrimeField;
 
 #[path = "app_attest_der_gadget.rs"]
 pub(crate) mod app_attest_der_gadget;
@@ -74,6 +78,7 @@ pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
 ///
 /// Input validation is repeated here so a future caller cannot accidentally
 /// use an unchecked or identity point with `divide_unsafe`.
+#[cfg(test)]
 pub(crate) fn double_p256_affine_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -130,6 +135,7 @@ pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
 /// This uses the actual P-256 `a = -3` doubling numerator. Denominators are
 /// masked to one in inactive cases before division, so no exceptional case
 /// reaches an undefined nonnative-field division.
+#[cfg(test)]
 pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -505,6 +511,7 @@ pub(crate) fn assert_p256_ecdsa_digest<
 }
 
 /// Convert eight copy-bound SHA-256 words to their canonical big-endian bytes.
+#[cfg(test)]
 fn sha256_words_to_be_bytes<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -546,6 +553,7 @@ fn sha256_words_to_be_bytes<F: BigPrimeField>(
 /// parse or authorize those extensions, so no production monetary profile may
 /// rely on it until a qualified extension relation is recursively bound.
 /// See <https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server>.
+#[cfg(test)]
 pub(crate) fn queue_apple_assertion_digest<F, const S_LEN: usize, const AUTH_LEN: usize>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -581,6 +589,7 @@ where
 /// must bind the complete wrapper to the native reserved operation and its same
 /// financial subject, normalized Guard, original credential and independent counter.
 /// The three SHA jobs must be synthesized before any proof can be admitted.
+#[cfg(test)]
 pub(crate) fn queue_apple_app_operation_approval_digest<F, const AUTH_LEN: usize>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -619,60 +628,7 @@ where
     )
 }
 
-/// Verify the original Apple assertion equation over the native approval wrapper.
-///
-/// The caller must derive the P-256 scalars from the same original DER/CBOR,
-/// bind the wrapper and credential to the actual native operation, and realize
-/// all queued SHA jobs. Production signatures require the complete 256-bit
-/// window. This equation alone grants no financial authority or native lease.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn assert_apple_app_operation_approval_ecdsa<F, const N: usize>(
-    base_chip: &FpChip<'_, F, P256Base>,
-    ctx: &mut Context<F>,
-    jobs: &mut PastaSha256JobsV1<F>,
-    wrapper: &[AssignedValue<F>; iroha_data_model::kagemusha::KagemushaAppOperationApprovalSigningLayoutV1::TOTAL_BYTES],
-    authenticator_data: &[AssignedValue<F>; 37],
-    governed_rp_id_hash: &[AssignedValue<F>; 32],
-    retained_counter_floor: AssignedValue<F>,
-    accepted_counter: AssignedValue<F>,
-    signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
-    enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
-    enrolled_public_key_sec1: &[AssignedValue<F>; 65],
-    r: &ProperCrtUint<F>,
-    s: &ProperCrtUint<F>,
-    z: &ProperCrtUint<F>,
-    digest_reduction_quotient: AssignedValue<F>,
-) -> Result<(), String>
-where
-    F: BigPrimeField + PrimeField + From<u64>,
-{
-    let digest = queue_apple_app_operation_approval_digest(
-        base_chip,
-        ctx,
-        jobs,
-        wrapper,
-        authenticator_data,
-        governed_rp_id_hash,
-        retained_counter_floor,
-        accepted_counter,
-    )?;
-    // Apple's original DER may be high-S. Both original r,s must be preserved
-    // through the canonical parser; do not normalize or reinterpret an assertion.
-    assert_p256_ecdsa_digest::<F, N, false>(
-        base_chip,
-        ctx,
-        signature_public_key,
-        enrolled_public_key,
-        enrolled_public_key_sec1,
-        r,
-        s,
-        z,
-        &digest,
-        digest_reduction_quotient,
-    );
-    Ok(())
-}
-
+#[cfg(test)]
 fn queue_apple_framed_message_digest<F, const S_LEN: usize, const AUTH_LEN: usize>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -773,6 +729,7 @@ where
 /// to retained native assertion state. Financial logical indexes bind separately
 /// to the recursive transition. The SHA jobs must be realized with
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
+#[cfg(test)]
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
     const S_LEN: usize,

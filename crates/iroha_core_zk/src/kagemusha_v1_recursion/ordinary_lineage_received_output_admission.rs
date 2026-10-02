@@ -5,6 +5,7 @@ use super::*;
 use crate::kagemusha_v1_state::{
     KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 use iroha_data_model::kagemusha::{
     KagemushaHardwarePlatformClassV1, KagemushaOrdinaryAppCredentialV1,
@@ -84,8 +85,96 @@ pub(crate) fn verify_ordinary_received_cash_output_v1(
     outgoing_original: &[u8],
     admission_clock: &KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
 ) -> Result<KagemushaVerifiedOrdinaryReceivedCashOutputV1> {
+    verify_received_cash_output_with_custody(
+        verifier,
+        assertion,
+        &ReceiverProofCustody::Current(receiver),
+        outgoing_original,
+        admission_clock,
+    )
+}
+
+/// Re-admit immutable received proof operands from the same actual historical Main request.
+/// This admits cryptography only; it cannot create a current FI loan or incoming State effect.
+pub(crate) fn readmit_historical_ordinary_received_cash_output_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    assertion: &KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1<'_>,
+    receiver: &KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'_>,
+    outgoing_original: &[u8],
+    admission_clock: &KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+) -> Result<KagemushaVerifiedOrdinaryReceivedCashOutputV1> {
+    verify_received_cash_output_with_custody(
+        verifier,
+        assertion,
+        &ReceiverProofCustody::Historical(receiver),
+        outgoing_original,
+        admission_clock,
+    )
+}
+
+// Both variants contain genuine Native loans, never decoded data or a caller verifier hook.
+enum ReceiverProofCustody<'loan, 'owner> {
+    Current(&'loan KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'owner>),
+    Historical(&'loan KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'owner>),
+}
+impl ReceiverProofCustody<'_, '_> {
+    fn recheck_proof_custody(
+        &self,
+    ) -> std::result::Result<(), crate::kagemusha_v1_state::KagemushaStateErrorV1> {
+        match self {
+            Self::Current(c) => c.recheck_current_custody(),
+            Self::Historical(c) => c.recheck_historical_custody(),
+        }
+    }
+    fn request_original(
+        &self,
+    ) -> std::result::Result<&[u8], crate::kagemusha_v1_state::KagemushaStateErrorV1> {
+        match self {
+            Self::Current(c) => c.request_original(),
+            Self::Historical(c) => c.request_original(),
+        }
+    }
+    fn enrollment(
+        &self,
+    ) -> std::result::Result<
+        &iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        crate::kagemusha_v1_state::KagemushaStateErrorV1,
+    > {
+        match self {
+            Self::Current(c) => c.enrollment(),
+            Self::Historical(c) => c.enrollment(),
+        }
+    }
+    fn previous_app_attest_counter(
+        &self,
+    ) -> std::result::Result<Option<u32>, crate::kagemusha_v1_state::KagemushaStateErrorV1> {
+        match self {
+            Self::Current(c) => c.previous_app_attest_counter(),
+            Self::Historical(c) => c.previous_app_attest_counter(),
+        }
+    }
+    fn financial_owner(
+        &self,
+    ) -> std::result::Result<
+        &crate::kagemusha_v1_state::KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        crate::kagemusha_v1_state::KagemushaStateErrorV1,
+    > {
+        match self {
+            Self::Current(c) => c.financial_owner(),
+            Self::Historical(c) => c.financial_owner(),
+        }
+    }
+}
+
+fn verify_received_cash_output_with_custody(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    assertion: &KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1<'_>,
+    receiver: &ReceiverProofCustody<'_, '_>,
+    outgoing_original: &[u8],
+    admission_clock: &KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+) -> Result<KagemushaVerifiedOrdinaryReceivedCashOutputV1> {
     receiver
-        .recheck_current_custody()
+        .recheck_proof_custody()
         .map_err(|e| e.to_string())?;
     let financial = receiver.financial_owner().map_err(|e| e.to_string())?;
     assertion
@@ -364,7 +453,7 @@ pub(crate) fn verify_ordinary_received_cash_output_v1(
         .recheck_historical(financial)
         .map_err(|e| e.to_string())?;
     receiver
-        .recheck_current_custody()
+        .recheck_proof_custody()
         .map_err(|e| e.to_string())?;
     Ok(KagemushaVerifiedOrdinaryReceivedCashOutputV1 {
         request: request.clone(),

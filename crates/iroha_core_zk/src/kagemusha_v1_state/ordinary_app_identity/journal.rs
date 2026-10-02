@@ -1049,7 +1049,10 @@ mod tests {
         assert!(validate_android_platform_original(&extra).is_err());
         assert!(validate_android_platform_original(&archive[..archive.len() - 1]).is_err());
         let invalid = android_original(vec![vec![1]; 9]);
-        assert!(validate_android_platform_original(&norito::encode_canonical(&invalid).unwrap()).is_err());
+        assert!(
+            validate_android_platform_original(&norito::encode_canonical(&invalid).unwrap())
+                .is_err()
+        );
     }
 
     fn android_original(chain: Vec<Vec<u8>>) -> KagemushaPlatformAttestationOriginalV1 {
@@ -1096,7 +1099,9 @@ mod tests {
     #[test]
     fn ordinary_c_android_container_checks_components_and_complete_archive_bounds() {
         for count in 2..=8 {
-            let raw = android_original(vec![vec![1]; count]).canonical_bytes().unwrap();
+            let raw = android_original(vec![vec![1]; count])
+                .canonical_bytes()
+                .unwrap();
             validate_android_platform_original(&raw).unwrap();
         }
         let seven_full = android_original(vec![vec![1; 16 * 1024]; 7]);
@@ -1149,10 +1154,9 @@ mod tests {
         assert!(attempt.raw_chunk_fields(1).is_err());
         let current = attempt.now().unwrap();
         drop(attempt);
-        let recovered = KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(
-            &root, owner(&f), current,
-        )
-        .unwrap();
+        let recovered =
+            KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(&root, owner(&f), current)
+                .unwrap();
         assert_eq!(recovered.ticket(), ticket);
         assert_eq!(recovered.recovery_fields().unwrap()[0], vec![4]);
         assert_eq!(recovered.raw_chunk_fields(0).unwrap()[1], raw);

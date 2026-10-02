@@ -101,12 +101,14 @@ impl StateTransaction<'_, '_> {
         &mut self,
         permit: crate::sns::SnsNativeMaintenancePermit,
         hash: Hash,
-    ) -> Result<(), String> {
-        let result = permit
-            .authenticate(self)
-            .and_then(|()| self.fastpq_source_quota.authorize_native_purpose(hash));
+    ) -> Result<(), crate::sns::SnsError> {
+        let result = permit.authenticate(self).and_then(|()| {
+            self.fastpq_source_quota
+                .authorize_native_purpose(hash)
+                .map_err(crate::sns::SnsError::Internal)
+        });
         if let Err(error) = &result {
-            self.fastpq_source_quota.fail_preparation(error.clone());
+            self.fastpq_source_quota.fail_preparation(error.to_string());
             *self.block_execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
         }
         result

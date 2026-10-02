@@ -3,6 +3,7 @@
 //! One exclusive instance owner validates its entire recovered prefix before exposing a tip.
 //! Complete signed availability and the original CommitQC share one canonical atomic frame.
 
+use super::{AdmissionAttemptError, LaneBatch, merge::CommittedLaneBlock};
 use crate::sumeragi::{
     availability_schedule::{AvailabilitySchedule, resolve_source},
     body_read::{BodyReadError, BodyReadJob, BodyReader},
@@ -90,6 +91,13 @@ struct StoreState {
     read: Option<PendingRead>,
 }
 
+// Inline custody belongs to this exact incarnation; no map allocation or shared cross-lane
+// retry slot is needed. The body header identifies the retained height independently.
+pub(super) struct BatchRead {
+    pub(super) body: AvailableBody,
+    pub(super) qc: Qc,
+}
+
 /// One fully recovered lane incarnation. Share this owner through Arc; second opens fail.
 pub struct FileLaneBlockStore {
     dir: PathBuf,
@@ -101,6 +109,7 @@ pub struct FileLaneBlockStore {
     schedule: Arc<dyn AvailabilitySchedule>,
     verifier: Arc<dyn AttestationVerifier + Send + Sync>,
     state: Mutex<StoreState>,
+    pub(super) batch_read: Mutex<Option<BatchRead>>,
     grown: Condvar,
 }
 impl core::fmt::Debug for FileLaneBlockStore {
@@ -225,6 +234,7 @@ impl FileLaneBlockStore {
                 write: None,
                 read: None,
             }),
+            batch_read: Mutex::new(None),
             grown: Condvar::new(),
         };
         Ok(LaneStoreOpen::new(store, tip))
@@ -246,6 +256,47 @@ impl FileLaneBlockStore {
             .and_then(|read| read.ready)
             .expect("completed original lane read");
         Ok(Some(prepared.into_parts()))
+    }
+
+    /// Decode a merge batch while retaining the exact authenticated source on local refusal.
+    /// Only this incarnation's earlier read must finish before switching requested heights.
+    /// Other native readers cannot consume this separate retained batch owner.
+    ///
+    /// # Errors
+    /// Invalid stored artifacts, unavailable historical authority, I/O or original-pool refusal.
+    pub(super) fn committed_batch(&self, height: u64) -> io::Result<Option<CommittedLaneBlock>> {
+        let mut slot = self.batch_read.lock();
+        loop {
+            if slot.is_none() {
+                let Some((body, qc)) = self.committed_body(height)? else {
+                    return Ok(None);
+                };
+                *slot = Some(BatchRead { body, qc });
+            }
+            let read = slot.as_ref().expect("retained authenticated batch read");
+            let batch = match LaneBatch::from_payload(read.body.payload().as_slice()) {
+                Ok(batch) => Some(batch),
+                // An authenticated malformed payload is distinct from local resource pressure.
+                Err(AdmissionAttemptError::Rejected(_)) => None,
+                Err(AdmissionAttemptError::Deferred(_)) => {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+            };
+            let read = slot.take().expect("completed original batch decode");
+            if read.body.header().height == height {
+                return Ok(Some(CommittedLaneBlock {
+                    block_hash: read.qc.block_hash,
+                    result: read.qc.result,
+                    batch,
+                }));
+            }
+        }
+    }
+
+    /// Retirement must preserve pending or currently active merge reads. A nonblocking probe
+    /// avoids making lifecycle reconciliation wait on another incarnation's decoding work.
+    pub(super) fn retains_batch_read(&self) -> bool {
+        self.batch_read.try_lock().is_none_or(|slot| slot.is_some())
     }
     /// Wait until the durable validated tip reaches `height`, bounded by `timeout`.
     #[must_use]

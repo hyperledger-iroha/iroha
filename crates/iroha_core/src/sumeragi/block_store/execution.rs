@@ -23,16 +23,17 @@ pub(super) fn validate(block: &SignedBlock) -> io::Result<()> {
     // cumulative decode budgets. No schedule decoded here selects availability authority.
     let result =
         ExecutionResultCommitment::decode(certificate.result_preimage()).map_err(|error| {
-            // A local decoder refusal says nothing about the original certified bytes. Preserve
-            // its typed cause and the caller's retained read instead of declaring disk corruption.
-            let kind = if matches!(&error, CommitmentError::Resource(_))
+            // Local refusal preserves the original certified read. Its outward category must
+            // need no replacement allocation while the original pool or allocator is exhausted.
+            if matches!(&error, CommitmentError::Resource(_))
                 && !cfg!(all(test, sumeragi_core_mutation = "HC20"))
             {
-                io::ErrorKind::WouldBlock
-            } else {
-                io::ErrorKind::InvalidData
-            };
-            io::Error::new(kind, error)
+                #[cfg(all(test, sumeragi_core_mutation = "HC24"))]
+                return io::Error::new(io::ErrorKind::WouldBlock, error);
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC24")))]
+                return io::ErrorKind::WouldBlock.into();
+            }
+            io::Error::new(io::ErrorKind::InvalidData, error)
         })?;
     let (len, hash) = block
         .executed_block_wire_identity()

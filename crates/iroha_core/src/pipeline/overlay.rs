@@ -478,7 +478,7 @@ fn authorize_and_prepare_raw_contract_dispatch<R: StateReadOnly>(
         &selector,
         &identity,
     )
-    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+    .map_err(contract_registry_attempt_error)?;
     let contract_subject = code::fetch_bound_contract_subject(state_ro, &identity.contract_address)
         .ok_or_else(|| {
             OverlayBuildError::ContractCall(format!(
@@ -783,6 +783,18 @@ pub(crate) fn enforce_pre_execution_policy(
         .map_err(OverlayBuildError::HeaderPolicy)?;
     Ok(())
 }
+fn contract_registry_attempt_error(
+    error: crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+) -> OverlayBuildError {
+    match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            OverlayBuildError::ContractCall(error.to_string())
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            OverlayBuildError::IvmRun(reason.into_vm_error())
+        }
+    }
+}
 pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     state_ro: &R,
     tx: &TransactionPayload,
@@ -830,7 +842,8 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
             "contract address differs from the exact native execution scope".into(),
         ));
     }
-    let artifacts = code::fetch_artifacts(state_ro, &artifact_id, contract_address.as_ref());
+    let artifacts = code::fetch_artifacts(state_ro, &artifact_id, contract_address.as_ref())
+        .map_err(contract_registry_attempt_error)?;
     let manifest_opt = artifacts.manifest.as_ref();
     // A stored V1 manifest is a complete consensus binding, not a collection
     // of optional constraints.
@@ -893,10 +906,12 @@ pub(crate) fn routed_artifact_id<R: StateReadOnly>(
         .ok_or_else(|| {
             OverlayBuildError::ContractCall("artifact execution height overflows".into())
         })?;
-    let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state_ro);
+    let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state_ro)
+        .map_err(|reason| OverlayBuildError::IvmRun(reason.into_vm_error()))?;
     let route = snapshot
         .inputs(state_ro.world())
         .execution_route(tx, height)
+        .map_err(|reason| OverlayBuildError::IvmRun(reason.into_vm_error()))?
         .ok_or_else(|| {
             OverlayBuildError::ContractCall(
                 "artifact has no exact immutable native execution scope".into(),
@@ -1451,7 +1466,7 @@ impl TxOverlay {
         world: &impl WorldReadOnly,
         authorization: &ContractEntrypointAuthorizationSnapshot,
         execution_height: Option<u64>,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if let Some(execution_height) = execution_height {
             authorization.validate_at_height(world, execution_height)
         } else {
@@ -1463,7 +1478,7 @@ impl TxOverlay {
         authorization: &ContractEntrypointAuthorizationSnapshot,
         authority: &AccountId,
         execution_height: Option<u64>,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if let Some(execution_height) = execution_height {
             authorization.validate_for_authority_at_height(world, authority, execution_height)
         } else {
@@ -1688,7 +1703,7 @@ impl TxOverlay {
         world: &impl WorldReadOnly,
         execution_context: &OverlayInstructionExecutionContext,
         execution_height: Option<u64>,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match (
             execution_context.contract_runtime_context.as_ref(),
             execution_context.entrypoint_authorization.as_ref(),
@@ -1703,17 +1718,19 @@ impl TxOverlay {
                     return Err(ValidationFail::NotPermitted(
                         "prepared contract effect does not match its immutable authorization snapshot"
                             .to_owned(),
-                    ));
+                    ).into());
                 }
                 Self::validate_authorization_snapshot(world, authorization, execution_height)
             }
             (Some(_), None) => Err(ValidationFail::NotPermitted(
                 "prepared contract effect is missing its entrypoint authorization snapshot"
                     .to_owned(),
-            )),
+            )
+            .into()),
             (None, Some(_)) => Err(ValidationFail::InternalError(
                 "overlay entrypoint authorization has no runtime contract context".to_owned(),
-            )),
+            )
+            .into()),
             (None, None) => Ok(()),
         }
     }
@@ -1730,7 +1747,7 @@ impl TxOverlay {
         &self,
         world: &impl WorldReadOnly,
         execution_height: Option<u64>,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if self.durable_state_overlay.len() != self.durable_state_authorizations.len()
             || !self
                 .durable_state_overlay
@@ -1739,7 +1756,8 @@ impl TxOverlay {
         {
             return Err(ValidationFail::InternalError(
                 "durable state overlay authorization keys are structurally inconsistent".to_owned(),
-            ));
+            )
+            .into());
         }
         for (path, authorization) in &self.durable_state_authorizations {
             if (self.source == TxOverlaySource::IvmProved
@@ -1748,13 +1766,13 @@ impl TxOverlay {
             {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
-                )));
+                )).into());
             }
             if let Some(authorization) = authorization {
                 if !authorization.owns_durable_state_path(path) {
                     return Err(ValidationFail::NotPermitted(format!(
                         "durable state path `{path}` does not belong to its contract authorization snapshot"
-                    )));
+                    )).into());
                 }
                 Self::validate_authorization_snapshot(world, authorization, execution_height)?;
             }
@@ -1813,7 +1831,8 @@ impl TxOverlay {
                     authorization,
                     authority,
                     execution_height,
-                )?;
+                )
+                .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                 let retains_root = self
                     .execution_contexts
                     .iter()
@@ -1844,10 +1863,12 @@ impl TxOverlay {
                         &state_tx.world,
                         execution_context,
                         execution_height,
-                    )?;
+                    )
+                    .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                 }
             }
-            self.validate_durable_authorizations(&state_tx.world, execution_height)?;
+            self.validate_durable_authorizations(&state_tx.world, execution_height)
+                .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
             let executor = state_tx.world.executor.clone();
             let mut instruction_index = 0usize;
             for chunk_instrs in self.instructions.chunks(chunk) {
@@ -1858,7 +1879,8 @@ impl TxOverlay {
                             authorization,
                             authority,
                             execution_height,
-                        )?;
+                        )
+                        .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                     }
                     let execution_context = self
                         .execution_contexts
@@ -1869,7 +1891,8 @@ impl TxOverlay {
                             &state_tx.world,
                             execution_context,
                             execution_height,
-                        )?;
+                        )
+                        .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                     }
                     let effect_authority =
                         execution_context.map_or(authority, |context| &context.authority);
@@ -1938,14 +1961,16 @@ impl TxOverlay {
                             authorization,
                             authority,
                             execution_height,
-                        )?;
+                        )
+                        .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                     }
                     if let Some(execution_context) = execution_context {
                         Self::validate_execution_context(
                             &state_tx.world,
                             execution_context,
                             execution_height,
-                        )?;
+                        )
+                        .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                     }
                     instruction_index = instruction_index.saturating_add(1);
                 }
@@ -1969,9 +1994,11 @@ impl TxOverlay {
                     authorization,
                     authority,
                     execution_height,
-                )?;
+                )
+                .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
             }
-            self.validate_durable_authorizations(&state_tx.world, execution_height)?;
+            self.validate_durable_authorizations(&state_tx.world, execution_height)
+                .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
             crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                 state_tx,
                 self.completed_axt.clone(),
@@ -1986,7 +2013,8 @@ impl TxOverlay {
                         &state_tx.world,
                         authorization,
                         execution_height,
-                    )?;
+                    )
+                    .map_err(|error| state_tx.attempt_error_to_validation_fail(error))?;
                 }
                 if let Some(stored) = value {
                     state_tx
@@ -2192,7 +2220,8 @@ where
     host.set_vrf_epoch_seeds_from_state(state_ro);
     host.set_query_state(state_ro);
     host.set_bound_contract_records_by_subject_snapshot(
-        code::snapshot_bound_contract_records_by_subject(state_ro),
+        code::snapshot_bound_contract_records_by_subject(state_ro)
+            .map_err(contract_registry_attempt_error)?,
     );
     apply_streaming_metadata(&mut host, streaming_meta);
     #[cfg(feature = "telemetry")]
@@ -2277,6 +2306,7 @@ where
         )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
+                .map_err(contract_registry_attempt_error)?
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
@@ -2338,7 +2368,7 @@ where
                 &call.entrypoint,
                 &identity,
             )
-            .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_invocation_execution_context(
                 call,
                 summary.prepared_contract(),
@@ -2501,7 +2531,7 @@ where
                     &selector,
                     &identity,
                 )
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+                .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_call_execution_context(
                 tx.metadata(),
                 summary.prepared_contract(),
@@ -2555,7 +2585,8 @@ where
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
             host.set_bound_contract_records_by_subject_snapshot(
-                code::snapshot_bound_contract_records_by_subject(state_ro),
+                code::snapshot_bound_contract_records_by_subject(state_ro)
+                    .map_err(contract_registry_attempt_error)?,
             );
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
@@ -2647,7 +2678,7 @@ where
                     &selector,
                     &identity,
                 )
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+                .map_err(contract_registry_attempt_error)?;
             // Proved executions do not support the implicit manifest registration append;
             // if a manifest is attached and missing from WSV, reject deterministically.
             enforce_manifest_is_pre_registered(state_ro, tx.payload(), summary.code_hash)?;
@@ -2795,6 +2826,7 @@ where
             #[cfg(feature = "telemetry")]
             let program_prepare_start = Instant::now();
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
+                .map_err(contract_registry_attempt_error)?
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
@@ -2858,7 +2890,7 @@ where
                 &call.entrypoint,
                 &identity,
             )
-            .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_invocation_execution_context(
                 call,
                 summary.prepared_contract(),
@@ -3046,7 +3078,7 @@ where
                     &selector,
                     &identity,
                 )
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+                .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_call_execution_context(
                 tx.metadata(),
                 summary.prepared_contract(),
@@ -3100,7 +3132,8 @@ where
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
             host.set_bound_contract_records_by_subject_snapshot(
-                code::snapshot_bound_contract_records_by_subject(state_ro),
+                code::snapshot_bound_contract_records_by_subject(state_ro)
+                    .map_err(contract_registry_attempt_error)?,
             );
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
@@ -3205,7 +3238,7 @@ where
                     &selector,
                     &identity,
                 )
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+                .map_err(contract_registry_attempt_error)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, proved.bytecode.as_ref())?;
             let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
             let force_live_rebuild = VmAccessFence::requires_live_rebuild(&amx_analysis);
@@ -3271,6 +3304,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
         )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
+                .map_err(contract_registry_attempt_error)?
                 .ok_or_else(|| {
                     OverlayBuildError::ContractCall(format!(
                         "contract instance `{}` not found in WSV",
@@ -3335,7 +3369,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 &call.entrypoint,
                 &identity,
             )
-            .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_invocation_execution_context(
                 call,
                 summary.prepared_contract(),
@@ -3505,7 +3539,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     &selector,
                     &identity,
                 )
-                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+                .map_err(contract_registry_attempt_error)?;
             let contract_call_context = parse_prepared_contract_call_execution_context(
                 tx.metadata(),
                 summary.prepared_contract(),
@@ -3555,7 +3589,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
             host.set_bound_contract_records_by_subject_snapshot(
-                code::snapshot_bound_contract_records_by_subject(state_ro),
+                code::snapshot_bound_contract_records_by_subject(state_ro)
+                    .map_err(contract_registry_attempt_error)?,
             );
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
@@ -8346,7 +8381,7 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
         Option<ContractEntrypointAuthorizationSnapshot>,
     >,
     root_authorization: &ContractEntrypointAuthorizationSnapshot,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if durable_state_overlay.len() != durable_state_authorizations.len()
         || !durable_state_overlay
             .keys()
@@ -8355,7 +8390,7 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
         return Err(ValidationFail::InternalError(
             "Executable::IvmProved replay produced structurally inconsistent durable-state authorization metadata"
                 .to_owned(),
-        ));
+        ).into());
     }
     for (path, authorization) in durable_state_authorizations {
         let authorization = authorization.as_ref().ok_or_else(|| {
@@ -8366,12 +8401,12 @@ pub(crate) fn validate_ivm_proved_durable_authorizations(
         if !authorization.descends_from(root_authorization) {
             return Err(ValidationFail::NotPermitted(format!(
                 "Executable::IvmProved durable state path `{path}` does not retain the root invocation chain"
-            )));
+            )).into());
         }
         if !authorization.owns_durable_state_path(path) {
             return Err(ValidationFail::NotPermitted(format!(
                 "Executable::IvmProved durable state path `{path}` does not belong to its contract authorization snapshot"
-            )));
+            )).into());
         }
         authorization.validate(world)?;
     }

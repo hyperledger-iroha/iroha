@@ -488,7 +488,11 @@ fn filter_permission_opened_alias_lookup_payload(
             torii_internal_json_error("alias by-account response must include an `items` array")
         })?;
     let mut malformed_item = false;
+    let mut operational_error = None;
     items.retain(|item| {
+        if operational_error.is_some() {
+            return false;
+        }
         let Some(alias_literal) = item
             .as_object()
             .and_then(|object| object.get("alias"))
@@ -498,26 +502,35 @@ fn filter_permission_opened_alias_lookup_payload(
             return false;
         };
         match parse_exact_account_alias_label_with_live_state(app, alias_literal) {
-            Ok(alias)
-                if torii_authority_can_resolve_resolved_account_alias(
-                    world,
-                    caller,
-                    &alias.resolved,
-                ) =>
-            {
-                true
+            Ok(alias) => match torii_authority_can_resolve_resolved_account_alias(
+                world,
+                caller,
+                &alias.resolved,
+            ) {
+                Ok(allowed) => allowed,
+                Err(error) => {
+                    operational_error = Some(error);
+                    false
+                }
+            },
+            Err(
+                error @ Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                )),
+            ) => {
+                operational_error = Some(error);
+                false
             }
-            Ok(_) => false,
             Err(error) => {
-                iroha_logger::warn!(
-                    alias = %alias_literal,
-                    ?error,
-                    "Torii alias-by-account permission filter dropped malformed alias literal"
-                );
+                iroha_logger::warn!(alias = %alias_literal, ?error,
+                    "Torii alias-by-account permission filter dropped malformed alias literal");
                 false
             }
         }
     });
+    if let Some(error) = operational_error {
+        return Err(error.into_response());
+    }
     if malformed_item {
         return Err(torii_internal_json_error(
             "alias by-account items must include string `alias`",

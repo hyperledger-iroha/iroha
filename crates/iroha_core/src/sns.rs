@@ -113,21 +113,23 @@ impl SnsNativeMaintenancePermit {
         transaction: &StateTransaction<'_, '_>,
         scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
         state: &AliasAutoRenewStateV1,
-    ) -> Result<Self, String> {
-        scope.authenticate(transaction)?;
+    ) -> Result<Self, SnsError> {
+        scope
+            .authenticate(transaction)
+            .map_err(SnsError::Internal)?;
         Ok(Self {
             network: transaction.network_id,
             proposal: transaction._curr_block.hash(),
             direct_slot: transaction
                 .direct_execution_identity()
-                .map_err(str::to_owned)?,
-            storage_key: alias_auto_renew_storage_key(&state.target)
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| SnsError::Internal(error.to_owned()))?,
+            storage_key: alias_auto_renew_storage_key(&state.target)?,
             revision: state.revision,
             record_digest: Self::record_digest(
                 state,
                 transaction.native_maintenance_binding_limit(),
-            )?,
+            )
+            .map_err(SnsError::Internal)?,
         })
     }
     fn record_digest(
@@ -161,32 +163,36 @@ impl SnsNativeMaintenancePermit {
     pub(crate) fn authenticate(
         &self,
         transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), String> {
-        transaction.validate_native_maintenance_scope()?;
+    ) -> Result<(), SnsError> {
+        transaction
+            .validate_native_maintenance_scope()
+            .map_err(SnsError::Internal)?;
         self.authenticate_source_record(transaction)
     }
     fn authenticate_source_record(
         &self,
         transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), String> {
+    ) -> Result<(), SnsError> {
         if self.network != transaction.network_id
             || self.proposal != transaction._curr_block.hash()
             || self.direct_slot
                 != transaction
                     .direct_execution_identity()
-                    .map_err(str::to_owned)?
+                    .map_err(|error| SnsError::Internal(error.to_owned()))?
         {
-            return Err("SNS native source belongs to a foreign execution scope".into());
+            return Err(SnsError::Internal(
+                "SNS native source belongs to a foreign execution scope".into(),
+            ));
         }
-        let current = alias_auto_renew_state_by_storage_key(&transaction.world, &self.storage_key)
-            .map_err(|error| error.to_string())?;
+        let current = alias_auto_renew_state_by_storage_key(&transaction.world, &self.storage_key)?;
         if current.revision != self.revision
-            || Self::record_digest(&current, transaction.native_maintenance_binding_limit())?
+            || Self::record_digest(&current, transaction.native_maintenance_binding_limit())
+                .map_err(SnsError::Internal)?
                 != self.record_digest
         {
-            return Err(
+            return Err(SnsError::Internal(
                 "SNS native source differs from the original record or configuration".into(),
-            );
+            ));
         }
         Ok(())
     }
@@ -214,7 +220,7 @@ impl VerifiedSnsAutoRenewalCharge {
         source_id: AssetId,
         destination: AccountId,
         amount: Quantity,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, SnsError> {
         Ok(Self {
             source: SnsNativeMaintenancePermit::issue(transaction, scope, state)?,
             selector,
@@ -291,6 +297,10 @@ pub(crate) struct RegisterNameInput {
 /// Errors returned by the ledger-backed SNS helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SnsError {
+    /// The original local attempt could not decode or fund authoritative state.
+    /// This nonserializable owner is never an inactive-name or payment verdict.
+    #[error("{0}")]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// The exact canonical registration is absent from authoritative storage.
     #[error("registration `{label}` not found")]
     RegistrationNotFound {
@@ -312,6 +322,57 @@ pub enum SnsError {
     #[error("{0}")]
     Internal(String),
 }
+impl SnsError {
+    /// Move the original local refusal without formatting or cloning its owner.
+    pub fn into_attempt_error<E>(
+        self,
+        rejected: impl FnOnce(Self) -> E,
+    ) -> crate::execution_attempt::ExecutionAttemptError<E> {
+        match self {
+            Self::Deferred(reason) => {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+            }
+            completed => {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(rejected(completed))
+            }
+        }
+    }
+
+    /// Borrow the original operational refusal without interpreting diagnostic text.
+    pub fn deferral(&self) -> Option<&crate::execution_attempt::ExecutionDeferred> {
+        match self {
+            Self::Deferred(reason) => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn retain_in_instruction(
+        self,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> iroha_data_model::isi::error::InstructionExecutionError {
+        if let Self::Deferred(reason) = self {
+            let _ = state.defer_execution(reason);
+            return iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                "local SNS execution did not complete".into(),
+            );
+        }
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+            self.to_string().into(),
+        )
+    }
+}
+
+fn sns_decode_error(error: norito::Error, context: &'static str) -> SnsError {
+    match crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+        SnsError::Internal(format!("{context}: {error}"))
+    }) {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            SnsError::Deferred(reason)
+        }
+    }
+}
+
 impl From<PricingError> for SnsError {
     fn from(error: PricingError) -> Self {
         match error {
@@ -461,9 +522,8 @@ pub fn alias_auto_renew_state(
         return Ok(None);
     };
     let mut cursor = bytes.as_slice();
-    let state = AliasAutoRenewStateV1::decode(&mut cursor).map_err(|error| {
-        SnsError::Internal(format!("failed to decode alias auto-renew state: {error}"))
-    })?;
+    let state = AliasAutoRenewStateV1::decode(&mut cursor)
+        .map_err(|error| sns_decode_error(error, "failed to decode alias auto-renew state"))?;
     if !cursor.is_empty() {
         return Err(SnsError::Internal(
             "alias auto-renew state contains trailing bytes".to_owned(),
@@ -493,9 +553,8 @@ fn alias_auto_renew_cursor(
         return Ok(None);
     };
     let mut cursor = bytes.as_slice();
-    let state = AliasAutoRenewCursorV1::decode(&mut cursor).map_err(|error| {
-        SnsError::Internal(format!("failed to decode alias auto-renew cursor: {error}"))
-    })?;
+    let state = AliasAutoRenewCursorV1::decode(&mut cursor)
+        .map_err(|error| sns_decode_error(error, "failed to decode alias auto-renew cursor"))?;
     if !cursor.is_empty() {
         return Err(SnsError::Internal(
             "alias auto-renew cursor contains trailing bytes".to_owned(),
@@ -581,12 +640,15 @@ fn alias_auto_renew_state_by_storage_key(
                 "alias auto-renew state `{storage_key}` disappeared during maintenance"
             ))
         })?;
-    let mut cursor = bytes.as_slice();
-    let state = AliasAutoRenewStateV1::decode(&mut cursor).map_err(|error| {
-        SnsError::Internal(format!(
-            "failed to decode alias auto-renew state `{storage_key}`: {error}"
-        ))
-    })?;
+    decode_alias_auto_renew_state(bytes, storage_key)
+}
+fn decode_alias_auto_renew_state(
+    bytes: &[u8],
+    storage_key: &StatePath,
+) -> Result<AliasAutoRenewStateV1, SnsError> {
+    let mut cursor = bytes;
+    let state = AliasAutoRenewStateV1::decode(&mut cursor)
+        .map_err(|error| sns_decode_error(error, "failed to decode alias auto-renew state"))?;
     if !cursor.is_empty() {
         return Err(SnsError::Internal(format!(
             "alias auto-renew state `{storage_key}` contains trailing bytes"
@@ -627,6 +689,8 @@ enum AliasAutoRenewAttempt {
     Renewed,
     Retry(String),
     Suspend(&'static str),
+    Deferred(crate::execution_attempt::ExecutionDeferred),
+    Storage(StateStorageAdmissionError),
 }
 fn alias_auto_renew_attempt(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -640,7 +704,12 @@ fn alias_auto_renew_attempt(
     }
     let selector = match crate::alias_setup::selector_for_resolved_alias_target(&state.target) {
         Ok(selector) => selector,
-        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+        Err(error) => {
+            return match error.deferral() {
+                Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+                None => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
     };
     let policy = match policy_by_id(state_transaction.world(), selector.suffix_id) {
         Ok(Some(policy)) => policy,
@@ -650,7 +719,12 @@ fn alias_auto_renew_attempt(
                 selector.suffix_id
             ));
         }
-        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+        Err(error) => {
+            return match error.deferral() {
+                Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+                None => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
     };
     if policy.policy_version != config.policy_version {
         return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_POLICY_DRIFT_CODE);
@@ -668,11 +742,19 @@ fn alias_auto_renew_attempt(
         &state.target,
         now_ms,
     ) {
-        return AliasAutoRenewAttempt::Retry(error.to_string());
+        return match error.deferral() {
+            Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+            None => AliasAutoRenewAttempt::Retry(error.to_string()),
+        };
     }
     let record = match get_name_record_by_selector(state_transaction.world(), &selector, now_ms) {
         Ok(record) => record,
-        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+        Err(error) => {
+            return match error.deferral() {
+                Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+                None => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
     };
     if record.owner != state.owner {
         return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_OWNER_DRIFT_CODE);
@@ -701,7 +783,12 @@ fn alias_auto_renew_attempt(
         now_ms,
     ) {
         Ok(quote) => quote,
-        Err(error) => return AliasAutoRenewAttempt::Retry(error.to_string()),
+        Err(error) => {
+            return match error.deferral() {
+                Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+                None => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
     };
     if quote.payment_asset_definition_id != config.payment_asset {
         return AliasAutoRenewAttempt::Suspend(ALIAS_AUTO_RENEW_ASSET_DRIFT_CODE);
@@ -725,7 +812,12 @@ fn alias_auto_renew_attempt(
         quote.charge_amount.clone(),
     ) {
         Ok(charge) => charge,
-        Err(error) => return AliasAutoRenewAttempt::Retry(error),
+        Err(error) => {
+            return match error {
+                SnsError::Deferred(reason) => AliasAutoRenewAttempt::Deferred(reason),
+                error => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
     };
     if let Err(error) =
         crate::smartcontracts::isi::asset::isi::execute_verified_sns_auto_renewal_charge(
@@ -733,6 +825,12 @@ fn alias_auto_renew_attempt(
             charge,
         )
     {
+        if let Err(refusal) = state_transaction.require_storage_admission() {
+            return AliasAutoRenewAttempt::Storage(refusal);
+        }
+        if let Some(reason) = state_transaction.execution_deferral() {
+            return AliasAutoRenewAttempt::Deferred(reason);
+        }
         return AliasAutoRenewAttempt::Retry(error.to_string());
     }
     let payment = native_payment_for_quote(&quote);
@@ -744,7 +842,10 @@ fn alias_auto_renew_attempt(
         payment,
     ) {
         Ok(_) => AliasAutoRenewAttempt::Renewed,
-        Err(error) => AliasAutoRenewAttempt::Retry(error.to_string()),
+        Err(error) => match error.deferral() {
+            Some(reason) => AliasAutoRenewAttempt::Deferred(reason.clone()),
+            None => AliasAutoRenewAttempt::Retry(error.to_string()),
+        },
     }
 }
 fn advance_alias_auto_renew_revision(state: &mut AliasAutoRenewStateV1) {
@@ -754,7 +855,7 @@ fn suspend_alias_auto_renew(
     state_block: &mut StateBlock<'_>,
     mut state: AliasAutoRenewStateV1,
     reason: &'static str,
-) -> Result<(), StateStorageAdmissionError> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
     advance_alias_auto_renew_revision(&mut state);
     state.next_retry_at_ms = None;
     state.suspended_reason = Some(reason.to_owned());
@@ -766,6 +867,11 @@ fn suspend_alias_auto_renew(
             iroha_logger::warn!(target = %target, reason, "alias auto-renew suspended");
         }
         Err(error) => {
+            if let Some(reason) = error.deferral() {
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    reason.clone(),
+                ));
+            }
             iroha_logger::error!(target = %target, %error, "failed to persist alias auto-renew suspension");
         }
     }
@@ -777,7 +883,7 @@ fn record_alias_auto_renew_failure(
     config: &AliasAutoRenewConfigV1,
     now_ms: u64,
     error: &str,
-) -> Result<(), StateStorageAdmissionError> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
     advance_alias_auto_renew_revision(&mut state);
     state.failure_count = state.failure_count.saturating_add(1);
     if state.failure_count >= config.max_failures {
@@ -811,6 +917,11 @@ fn record_alias_auto_renew_failure(
             }
         }
         Err(persist_error) => {
+            if let Some(reason) = persist_error.deferral() {
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    reason.clone(),
+                ));
+            }
             iroha_logger::error!(
                 target = %target,
                 %persist_error,
@@ -825,10 +936,15 @@ fn process_alias_auto_renew_storage_key(
     scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
     storage_key: &StatePath,
     now_ms: u64,
-) -> Result<(), StateStorageAdmissionError> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
     let state = match alias_auto_renew_state_by_storage_key(&state_block.world, storage_key) {
         Ok(state) => state,
         Err(error) => {
+            if let Some(reason) = error.deferral() {
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    reason.clone(),
+                ));
+            }
             iroha_logger::error!(%storage_key, %error, "malformed alias auto-renew state skipped");
             return Ok(());
         }
@@ -840,7 +956,20 @@ fn process_alias_auto_renew_storage_key(
         return Ok(());
     }
     let mut transaction = state_block.try_transaction()?;
-    match alias_auto_renew_attempt(&mut transaction, scope, &state, &config, now_ms) {
+    let attempt = alias_auto_renew_attempt(&mut transaction, scope, &state, &config, now_ms);
+    transaction.require_storage_admission()?;
+    if let Some(reason) = transaction.execution_deferral() {
+        return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+            reason,
+        ));
+    }
+    match attempt {
+        AliasAutoRenewAttempt::Storage(refusal) => return Err(refusal.into()),
+        AliasAutoRenewAttempt::Deferred(reason) => {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                reason,
+            ));
+        }
         AliasAutoRenewAttempt::NotDue => {}
         AliasAutoRenewAttempt::Renewed => {
             let mut updated = state;
@@ -855,6 +984,11 @@ fn process_alias_auto_renew_storage_key(
                     iroha_logger::info!(target = %target, now_ms, "alias lease auto-renewed");
                 }
                 Err(error) => {
+                    if let SnsError::Deferred(reason) = error {
+                        return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                            reason,
+                        ));
+                    }
                     iroha_logger::error!(target = %target, %error, "failed to persist successful alias auto-renew state");
                 }
             }
@@ -877,10 +1011,15 @@ fn process_alias_auto_renew_storage_key(
 pub(crate) fn process_alias_auto_renewals(
     state_block: &mut StateBlock<'_>,
     scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
-) -> Result<(), StateStorageAdmissionError> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
     let cursor = match alias_auto_renew_cursor(&state_block.world) {
         Ok(cursor) => cursor,
         Err(error) => {
+            if let Some(reason) = error.deferral() {
+                return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    reason.clone(),
+                ));
+            }
             iroha_logger::error!(%error, "alias auto-renew sweep skipped because its cursor is invalid");
             return Ok(());
         }
@@ -1003,7 +1142,7 @@ fn decode_record_for_selector(
     let decode = || {
         let mut slice = bytes;
         let record = NameRecordV1::decode(&mut slice)
-            .map_err(|_| SnsError::Internal("failed to decode an SNS record".to_owned()))?;
+            .map_err(|error| sns_decode_error(error, "failed to decode an SNS record"))?;
         if !slice.is_empty() {
             return Err(SnsError::Internal(
                 "SNS record contains trailing bytes".to_owned(),
@@ -1032,11 +1171,8 @@ fn decode_record_for_selector(
 }
 fn decode_policy_for_suffix(bytes: &[u8], suffix_id: SuffixId) -> Result<SuffixPolicyV1, SnsError> {
     let mut slice = bytes;
-    let policy = SuffixPolicyV1::decode(&mut slice).map_err(|err| {
-        SnsError::Internal(format!(
-            "failed to decode SNS suffix policy {suffix_id}: {err}"
-        ))
-    })?;
+    let policy = SuffixPolicyV1::decode(&mut slice)
+        .map_err(|error| sns_decode_error(error, "failed to decode SNS suffix policy"))?;
     if !slice.is_empty() {
         return Err(SnsError::Internal(format!(
             "SNS suffix policy {suffix_id} contains trailing bytes"
@@ -1169,10 +1305,8 @@ pub(crate) fn prepare_all_account_alias_lease_rekeys(
             break;
         }
         let mut slice = bytes.as_slice();
-        let mut record = NameRecordV1::decode(&mut slice).map_err(|err| {
-            SnsError::Internal(format!(
-                "failed to decode account-alias SNS record `{storage_key}`: {err}"
-            ))
+        let mut record = NameRecordV1::decode(&mut slice).map_err(|error| {
+            sns_decode_error(error, "failed to decode account-alias SNS record")
         })?;
         if !slice.is_empty() {
             return Err(SnsError::Internal(format!(
@@ -2784,8 +2918,8 @@ fn resolve_active_dataspace_by_id(
         }
         let decode_candidate = || {
             let mut slice = bytes.as_slice();
-            let record = NameRecordV1::decode(&mut slice).map_err(|_| {
-                SnsError::Internal("failed to decode a dataspace SNS record".to_owned())
+            let record = NameRecordV1::decode(&mut slice).map_err(|error| {
+                sns_decode_error(error, "failed to decode a dataspace SNS record")
             })?;
             if !slice.is_empty() {
                 return Err(SnsError::Internal(
@@ -2968,15 +3102,21 @@ pub fn active_account_alias_selector(
 }
 /// Resolve an active dataspace alias to its canonical id.
 ///
-/// This convenience projection fails closed for unknown or conflicting mappings.
-#[must_use]
+/// Unknown mappings project to absence; conflicts and local refusals retain their category.
+///
+/// # Errors
+/// Returns the original SNS error for conflicting, malformed, or locally deferred state.
 pub fn active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
     alias: &str,
     now_ms: u64,
-) -> Option<DataSpaceId> {
-    resolve_active_dataspace_id_by_alias(world, catalog, alias, now_ms).ok()
+) -> Result<Option<DataSpaceId>, SnsError> {
+    match resolve_active_dataspace_id_by_alias(world, catalog, alias, now_ms) {
+        Ok(id) => Ok(Some(id)),
+        Err(SnsError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 #[cfg(test)]
 /// Resolve active dataspace metadata from the bootstrap catalog or SNS.

@@ -629,6 +629,9 @@ fn rekey_account_id(
         new_account,
     )
     .map_err(|err| {
+        if err.deferral().is_some() {
+            return err.retain_in_instruction(state_transaction);
+        }
         InstructionExecutionError::InvariantViolation(
             format!("cannot preflight account-alias leases for rekey: {err}").into(),
         )
@@ -743,7 +746,7 @@ fn rekey_account_id(
         .collect::<BTreeSet<_>>();
     state_transaction
         .validate_fastpq_governance_rekey(old_account, new_account)
-        .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+        .map_err(|error| state_transaction.mandatory_source_instruction_error(error))?;
     state_transaction
         .world
         .triggers

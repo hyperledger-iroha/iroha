@@ -35,6 +35,14 @@ use private::{
 use super::der_air::rfc5280_io_witnesses_v1;
 #[cfg(test)]
 use super::p256_aggregate_adapter::P256CrossTraceTerminalRoleV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_aggregate_adapter::{
+    P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
+    evaluate_p256_bus_terminal_claim_equalities_v1,
+    evaluate_p256_cross_trace_terminal_claim_equalities_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_ecdsa_air::P256EcdsaRoleV1;
 #[cfg(test)]
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -59,14 +67,8 @@ use super::{
         zk_x509_der_stark_node_factor_v1,
     },
     io_air::ZkX509IoSegmentRoleV1,
-    p256_aggregate_adapter::{
-        P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1, P256_X5S1_SIGNATURES_V1,
-        P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
-        evaluate_p256_bus_terminal_claim_equalities_v1,
-        evaluate_p256_cross_trace_terminal_claim_equalities_v1,
-    },
+    p256_aggregate_adapter::{P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1, P256_X5S1_SIGNATURES_V1},
     p256_cross_trace_bus::P256_CROSS_TRACE_LANES_V1,
-    p256_ecdsa_air::P256EcdsaRoleV1,
     profile::{
         ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CRL_ENTRIES_V1,
         ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_UNCOMPRESSED_P256_BYTES_V1,
@@ -4959,6 +4961,7 @@ const _: () = assert!(P256_TERMINAL_WALLET_RECORDS_V1 == 76);
 const _: () = assert!(P256_TERMINAL_CLAIM_RECORDS_V1 == 348);
 /// Private prover products for one certificate-or-CRL P-256 equation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256CertificatePrivateProductsV1 {
     /// Eight role-ordered four-lane bus terminals.
     pub(crate) buses: P256BusTerminalClaimsV1,
@@ -4970,6 +4973,7 @@ pub(crate) struct ZkX509P256CertificatePrivateProductsV1 {
 }
 /// Private prover products for the wallet-ownership P-256 equation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256WalletPrivateProductsV1 {
     /// Eight role-ordered four-lane bus terminals.
     pub(crate) buses: P256BusTerminalClaimsV1,
@@ -4982,6 +4986,7 @@ pub(crate) struct ZkX509P256WalletPrivateProductsV1 {
 /// Private products retained only by the wiping bound P-256 witness owner.
 /// These values have no wire codec and never enter MAIN's public statement or transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256PrivateProductsV1 {
     /// Certificate slots zero through two followed by the signed CRL.
     pub(crate) certificate_or_crl:
@@ -5043,6 +5048,7 @@ fn set_p256_bus_terminal_claim_value_v1(
     *target = value;
     Ok(())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256PrivateProductsV1 {
     #[cfg(test)]
     pub(crate) fn canonical_zero_for_test_v1() -> Self {

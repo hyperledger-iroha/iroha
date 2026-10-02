@@ -318,7 +318,9 @@ impl StateBlock<'_> {
 
     /// Finalize within the exact original output seal. Every fallible preparation precedes
     /// writes; a local refusal restores the same capture for retry instead of recomputation.
-    pub(crate) fn advance_requested_sumeragi_schedule(&mut self) -> Result<(), ScheduleError> {
+    pub(crate) fn advance_requested_sumeragi_schedule(
+        &mut self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ScheduleError>> {
         let step = std::mem::take(&mut self.sumeragi_schedule);
         let ScheduleStep::Requested { captured, pulse } = step else {
             self.sumeragi_schedule = step;
@@ -339,12 +341,13 @@ impl StateBlock<'_> {
                 current_params,
                 params,
                 self.pipeline_ivm_prepared_cache.execution_budget(),
-            )?;
+            )
+            .map_err(boundary_capture_attempt_error)?;
             if let CapturedExecution::Boundary(boundary) = &captured {
                 self.finalize_validator_committee_boundary(boundary)
                     .map_err(ScheduleError::Epoch)?;
             }
-            Ok::<_, ScheduleError>((graph, params))
+            Ok::<_, crate::execution_attempt::ExecutionAttemptError<ScheduleError>>((graph, params))
         })();
         match prepare {
             Err(error) => {
@@ -375,24 +378,42 @@ impl StateBlock<'_> {
     }
 }
 
+/// Retain local boundary refusal evidence before projecting deterministic schedule failures.
+fn boundary_capture_attempt_error(
+    error: epoch_election::BoundaryCaptureError,
+) -> crate::execution_attempt::ExecutionAttemptError<ScheduleError> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    match error {
+        epoch_election::BoundaryCaptureError::Admission(refusal) => {
+            ExecutionAttemptError::Deferred(refusal.into())
+        }
+        epoch_election::BoundaryCaptureError::Allocator { .. } => ExecutionAttemptError::Deferred(
+            ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+        ),
+        epoch_election::BoundaryCaptureError::Invalid(message) => {
+            ExecutionAttemptError::Rejected(ScheduleError::Epoch(message))
+        }
+    }
+}
+
 /// Reconcile signed genesis authority with the actual executed registration state. Later
 /// epochs deliberately do not reread mutable validity when retaining original credentials.
 pub(crate) fn validate_executed_genesis(
     world: &impl WorldReadOnly,
     context: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
-) -> Result<(), ScheduleError> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ScheduleError>> {
     use iroha_data_model::{consensus::ConsensusKeyRole, parameter::system::ConsensusMode};
     context.validate().map_err(ScheduleError::Epoch)?;
     crate::executor::private_fees::policy(world).map_err(|error| {
-        ScheduleError::Epoch(format!(
-            "executed genesis fee policy is invalid: {}",
-            error.reason()
-        ))
+        error.map_rejection(|error| {
+            ScheduleError::Epoch(format!(
+                "executed genesis fee policy is invalid: {}",
+                error.reason()
+            ))
+        })
     })?;
     if context.authorization.epoch != 0 || context.authorization.first_height != 1 {
-        return Err(ScheduleError::Epoch(
-            "executed genesis has a non-genesis epoch".into(),
-        ));
+        return Err(ScheduleError::Epoch("executed genesis has a non-genesis epoch".into()).into());
     }
     for member in &context.committee {
         if !world.peers().iter().any(|peer| peer == &member.validator)
@@ -406,7 +427,8 @@ pub(crate) fn validate_executed_genesis(
         {
             return Err(ScheduleError::Epoch(
                 "executed genesis omits an exact signed validator registration".into(),
-            ));
+            )
+            .into());
         }
     }
     for peer in world.peers().iter() {
@@ -422,7 +444,8 @@ pub(crate) fn validate_executed_genesis(
         {
             return Err(ScheduleError::Epoch(
                 "executed genesis introduces an unsigned voting registration".into(),
-            ));
+            )
+            .into());
         }
     }
     if context.mode == ConsensusMode::Npos {
@@ -434,7 +457,8 @@ pub(crate) fn validate_executed_genesis(
         {
             return Err(ScheduleError::Epoch(
                 "executed genesis changes signed epoch geometry or seed".into(),
-            ));
+            )
+            .into());
         }
     }
     Ok(())

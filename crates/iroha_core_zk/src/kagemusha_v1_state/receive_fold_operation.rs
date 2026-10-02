@@ -399,7 +399,7 @@ where
         Ok(authorization)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Verify and atomically install one prepared receive fold.
     pub(crate) fn receive_fold_prepared(
         &mut self,

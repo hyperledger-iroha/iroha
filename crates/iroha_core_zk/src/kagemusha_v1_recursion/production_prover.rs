@@ -22,6 +22,8 @@ mod production_ordinary_preparation_reservation;
 pub(crate) use production_ordinary_preparation_reservation::GeneratedOrdinaryCashReservationOriginalsV1;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
+#[path = "production_ordinary_mint.rs"]
+mod production_ordinary_mint;
 #[path = "production_ordinary_padding.rs"]
 mod production_ordinary_padding;
 #[path = "production_ordinary_state.rs"]

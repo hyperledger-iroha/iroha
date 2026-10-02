@@ -131,7 +131,7 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
         ));
         let mut tx = block.transaction();
         assert!(
-            super::root_scope::execution_root_scope(&tx).is_ok(),
+            super::root_scope::execution_root_scope(&mut tx).is_ok(),
             "owner refusal scenarios must reach the authenticated permission boundary"
         );
         let mut binding = tx

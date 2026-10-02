@@ -702,6 +702,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
 
     /// Exact signed ordinary Guard roles used by the first ordinary production State family.
     /// Public helper originals remain untrusted until their actual equations are consumed.
+    #[cfg(feature = "kagemusha-production-prover")]
     pub(super) fn ordinary_recursion_artifacts(
         &self,
     ) -> Result<KagemushaRecursionArtifactsV1, KagemushaArtifactErrorV1> {

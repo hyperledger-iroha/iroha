@@ -63,7 +63,7 @@ mod public_contract_creation_fees {
                 fees.fee_asset_id = fee_id.to_string();
                 fees.fee_sink_account_id = sink.to_string();
                 let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-                let genesis: SignedBlock =
+                let _genesis: SignedBlock =
                     ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
                         header.set_height(nonzero!(1_u64));
                     })
@@ -138,7 +138,7 @@ mod public_contract_creation_fees {
                         &state_block.world,
                         &state_block.nexus.fees.fee_asset_id,
                         20,
-                    ),
+                    ).expect("completed pin read"),
                     Some(payer_asset.definition().clone()),
                     "the payer and signed fee limits use the network XOR identity"
                 );

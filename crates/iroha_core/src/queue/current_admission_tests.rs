@@ -172,8 +172,8 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
     };
     let busy_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
     let mut nexus = test_nexus_for_routes(&[
-        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         (busy_route.lane_id, busy_route.dataspace_id),
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
     ]);
     nexus.routing_policy.default_lane = busy_route.lane_id;
     nexus.routing_policy.default_dataspace = busy_route.dataspace_id;
@@ -269,10 +269,14 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
     // not divide this original input's gas budget or transfer pending ownership.
     for _ in 0..2 {
         assert!(
-            crate::sumeragi::payload::select(&state, &queue, max_bytes, 0).is_empty(),
+            crate::sumeragi::payload::select(&state, &queue, max_bytes, 0)
+                .expect("completed original routing read")
+                .is_empty(),
             "the global chain cannot steal fresh native-lane work"
         );
-        let selected = lane_inputs.candidates(4, max_bytes, &BTreeSet::new());
+        let selected = lane_inputs
+            .candidates(4, max_bytes, &BTreeSet::new())
+            .expect("completed original lane routing read");
         assert_eq!(
             selected.len(),
             1,
@@ -347,7 +351,8 @@ fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack(
     let assert_retained = || {
         assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
         for _ in 0..2 {
-            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0);
+            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0)
+                .expect("completed routing read");
             assert_eq!(
                 selected
                     .iter()

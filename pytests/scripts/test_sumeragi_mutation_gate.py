@@ -453,3 +453,234 @@ def test_hc20_preserves_original_stored_result_read_on_decoder_refusal():
     assert not rule.scenarios
     assert gate.has_switch("HC20", core=True)
     assert not gate.has_switch("HC20")
+
+
+def test_hc21_selects_only_original_root_store_affinity():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC21"]
+    assert rule.tests == (
+        "sumeragi::node::tests::root_owner_tests::prepared_root_uses_original_state_store",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC21", core=True)
+    assert not gate.has_switch("HC21")
+
+
+def test_hc22_checks_every_canonical_queue_entrypoint_domain():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC22"]
+    assert rule.tests == (
+        "queue::tests::queue_rejects_preaccepted_foreign_external_before_custody",
+        "queue::tests::queue_rejects_preaccepted_foreign_commitment_before_custody",
+        "queue::tests::queue_rejects_preaccepted_foreign_reveal_before_custody",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC22", core=True)
+    assert not gate.has_switch("HC22")
+
+
+def test_hc24_preserves_allocation_free_original_read_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC24"]
+    assert rule.tests == (
+        "sumeragi::block_store::body_read::tests::stored_result_decode_refusal_retains_original_decoded_owners_and_retries",
+        "sumeragi::block_store::committed_read::tests::committed_result_decode_refusal_keeps_original_read_slot_and_retries",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC24", core=True)
+    assert not gate.has_switch("HC24")
+
+
+def test_hc23_requires_retained_actor_before_startup_effects():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC23"]
+    assert rule.tests == (
+        "sumeragi::node::tests::p2p_owner_tests::network_start_rejects_closed_retained_actor_before_driver_files",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC23", core=True)
+    assert not gate.has_switch("HC23")
+
+
+def test_hc25_preserves_physical_certificate_decode_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC25"]
+    assert rule.tests == (
+        "sumeragi::block_store::body_read::tests::stored_certificate_allocator_refusal_keeps_original_read_and_retries",
+        "sumeragi::block_store::committed_read::tests::committed_certificate_allocator_refusal_retains_original_slot_and_retries",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC25", core=True)
+    assert not gate.has_switch("HC25")
+
+
+def test_core_amx_role_gate_names_signed_genesis_and_all_coordinator_operations():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC26"]
+    assert rule.tests == (
+        "sumeragi::node::tests::dataspace_roots::amx_scope_tests::signed_private_genesis_cannot_install_global_amx_coordinator",
+        "executor::root_scope::tests::amx_roles::every_amx_coordinator_instruction_rejects_private_execution_before_proof_decoding",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC26", core=True)
+    assert not gate.has_switch("HC26")
+
+
+def test_core_root_scope_refusal_gate_requires_original_signed_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC27"]
+    assert rule.tests == (
+        "sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_work_keeps_scope_decode_refusal_local_and_retries_original_carrier",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC27", core=True)
+    assert not gate.has_switch("HC27")
+
+
+def test_core_readonly_scope_gate_requires_query_and_vm_host_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC28"]
+    assert rule.tests == (
+        "sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_manifest_query_does_not_turn_scope_refusal_into_permanent_error",
+        "sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_host_query_keeps_scope_refusal_out_of_completed_vm_errors",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC28", core=True)
+    assert not gate.has_switch("HC28")
+
+
+def test_hc29_keeps_original_lane_batch_refusal_local_through_read_execute_and_recovery():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC29"]
+    assert rule.tests == (
+        "sumeragi::lanes::tests::original_signed_batch_decode_preserves_exact_local_refusal_and_terminal_limits",
+        "sumeragi::lanes::registry::tests::authenticated_registry_batch_decode_refusal_is_retryable_not_byzantine",
+        "sumeragi::lanes::executor::native_decode_tests::signed_four_validator_lane_execution_refusal_never_caches_invalid_or_publishes",
+        "sumeragi::lanes::executor::native_decode_tests::signed_four_validator_lane_recovery_keeps_available_phase_and_exact_original_owners",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC29", core=True)
+    assert not gate.has_switch("HC29")
+
+
+def test_hc31_borrows_original_lane_payload_and_checks_exact_allocation_census():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC31"]
+    assert rule.tests == (
+        "sumeragi::lanes::tests::signed_lane_batch_canonical_validation_preserves_original_bytes_without_new_allocations",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC31", core=True)
+    assert not gate.has_switch("HC31")
+
+
+def test_core_registry_refusal_gate_requires_native_fee_host_and_parliament_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC30"]
+    assert rule.tests == (
+        'sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_contract_lookup_does_not_turn_scope_refusal_into_vm_permission_denial',
+        'sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_account_permission_read_defers_without_constructing_a_json_token',
+        'validation_fee::tests::signed_fee_runtime_read_does_not_turn_scope_refusal_into_a_nonmatching_origin',
+        'validation_fee::tests::original_retained_fee_registry_does_not_publish_local_decode_refusal_as_malformed',
+        'smartcontracts::isi::world::isi::tests::signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC30", core=True)
+    assert not gate.has_switch("HC30")
+
+
+def test_core_credit_reader_gate_requires_record_and_asset_original_source_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC32"]
+    assert rule.tests == (
+        "validation_fee::tests::original_treasury_credit_record_decode_refusal_preserves_balance_and_retries",
+        "validation_fee::tests::original_treasury_credit_asset_decode_refusal_preserves_binding_and_retries",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC32", core=True)
+    assert not gate.has_switch("HC32")
+
+
+def test_core_decode_refusal_classifier_gate_retains_global_and_inner_format_rejections():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC33"]
+    assert rule.tests == (
+        "execution_attempt::tests::norito_global_archive_cap_is_terminal_inside_an_outer_decode_scope",
+        "execution_attempt::tests::norito_inner_format_limits_are_terminal_under_a_wider_outer_scope",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC33", core=True)
+    assert not gate.has_switch("HC33")
+
+
+def test_core_sns_permission_gate_requires_original_record_refusal_and_retry_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC35"]
+    assert rule.tests == (
+        "executor::tests::original_sns_alias_domain_permission_refusal_retries_without_a_rejection",
+        "executor::tests::original_sns_domain_transfer_permission_refusal_retries_without_a_rejection",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC35", core=True)
+    assert not gate.has_switch("HC35")
+
+
+def test_core_claim_fee_gate_requires_original_metadata_and_alias_refusal_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC36"]
+    assert rule.tests == (
+        "executor::tests::original_claim_metadata_refusal_defers_fee_quote_and_retries_exact_payload",
+        "executor::tests::original_claim_alias_refusal_after_metadata_defers_fee_quote_and_retries",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC36", core=True)
+    assert not gate.has_switch("HC36")
+
+
+def test_core_fee_selector_gate_requires_original_account_and_currency_read_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC37"]
+    assert rule.tests == (
+        "block::original_canonical_account_refusal_does_not_fall_through_to_alias_absence",
+        "executor::tests::original_network_xor_pin_refusal_defers_quote_and_retries_same_parameter",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC37", core=True)
+    assert not gate.has_switch("HC37")
+def test_native_source_owner_requires_applied_transcripts_and_isolated_capacity():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC34"]
+    assert rule.tests == (
+        'fastpq::source_reservation::admission::tests::native_authorization_has_no_entry_until_an_applied_transcript_and_drops_atomically',
+        'fastpq::source_reservation::admission::tests::native_pool_overflow_cannot_borrow_ordinary_or_governance_reservations',
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC34", core=True)
+    assert not gate.has_switch("HC34")
+
+
+
+
+def test_core_routing_gate_requires_original_sns_custody_and_capture_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC38"]
+    assert rule.tests == (
+        "queue::router::tests::original_dataspace_alias_read_refusal_keeps_routing_retryable",
+        "queue::router::tests::original_physical_policy_read_refusal_never_enters_captured_row",
+        "executor::root_scope::tests::original_private_instruction_routing_refusal_latches_before_scope_verdict",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC38", core=True)
+    assert not gate.has_switch("HC38")
+
+
+def test_core_native_metadata_gate_requires_original_root_and_late_policy_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC39"]
+    assert rule.tests == (
+        "state::network_policy_routes::tests::original_root_scope_read_refusal_does_not_publish_invalid_native_context",
+        "state::network_policy_routes::tests::original_lane_policy_read_refusal_after_root_keeps_exact_capture_retryable",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC39", core=True)
+    assert not gate.has_switch("HC39")
+
+def test_account_matchers_retain_original_sns_and_canonical_read_refusal():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC40"]
+    assert rule.tests == ('queue::router::tests::account_refusal_tests::original_account_target_refusal_never_selects_the_default_route', 'queue::router::tests::account_refusal_tests::original_canonical_account_matcher_preserves_decode_refusal_and_retry', 'queue::router::tests::account_refusal_tests::original_signed_account_matcher_refusal_is_not_a_mismatch_or_panic', 'queue::router::tests::account_refusal_tests::original_native_policy_account_matcher_retains_refusal_before_route_selection')
+    assert not rule.scenarios
+    assert gate.has_switch("HC40", core=True)
+    assert not gate.has_switch("HC40")
+
+
+def test_parameter_control_scope_gate_preserves_signed_global_and_physical_authority():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC41"]
+    assert rule.tests == (
+        "queue::router::alias_registry_routing_tests::parameter_control_preserves_global_physical_route_before_private_account_rule",
+        "queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal",
+        "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC41", core=True)
+    assert not gate.has_switch("HC41")

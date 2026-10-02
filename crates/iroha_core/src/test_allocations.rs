@@ -11,6 +11,9 @@ use std::{
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
     static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static REFUSAL_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static REFUSE_LAYOUT: Cell<Option<Layout>> = const { Cell::new(None) };
+    static REFUSAL_OBSERVED: Cell<bool> = const { Cell::new(false) };
 }
 
 struct CountingAllocator;
@@ -26,9 +29,28 @@ fn record_allocation() {
     });
 }
 
-// SAFETY: all operations delegate to System with the original allocation layout.
+fn refuse_allocation(layout: Layout) -> bool {
+    REFUSE_LAYOUT
+        .try_with(|expected| {
+            if expected.get() == Some(layout) {
+                expected.set(None);
+                let _ = REFUSAL_OBSERVED.try_with(|observed| observed.set(true));
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false)
+}
+
+// SAFETY: successful operations delegate to System with the original allocation layout.
+// A test-scoped null result follows GlobalAlloc's failure contract and leaves realloc's
+// original live owner untouched.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if refuse_allocation(layout) {
+            return std::ptr::null_mut();
+        }
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
             record_allocation();
@@ -37,6 +59,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if refuse_allocation(layout) {
+            return std::ptr::null_mut();
+        }
         let pointer = unsafe { System.alloc_zeroed(layout) };
         if !pointer.is_null() {
             record_allocation();
@@ -45,6 +70,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        if Layout::from_size_align(size, layout.align()).is_ok_and(refuse_allocation) {
+            return std::ptr::null_mut();
+        }
         let result = unsafe { System.realloc(pointer, layout, size) };
         if !result.is_null() {
             record_allocation();
@@ -80,6 +108,33 @@ pub(crate) fn allocations_during(f: impl FnOnce()) -> usize {
     ALLOCATION_COUNT.with(Cell::get)
 }
 
+/// Refuse one exact physical layout on this thread, then restore the allocator.
+/// The closure must use a fallible allocation path for this selected layout.
+///
+/// # Panics
+/// Rejects nested refusal before changing the outer observation.
+pub(crate) fn refuse_one_layout_during<T>(layout: Layout, f: impl FnOnce() -> T) -> (T, bool) {
+    assert!(
+        !REFUSAL_ACTIVE.with(Cell::get),
+        "nested allocation refusal would replace its original owner"
+    );
+    REFUSAL_ACTIVE.with(|active| active.set(true));
+    REFUSE_LAYOUT.with(|expected| expected.set(Some(layout)));
+    REFUSAL_OBSERVED.with(|observed| observed.set(false));
+    struct RestoreAllocator;
+    impl Drop for RestoreAllocator {
+        fn drop(&mut self) {
+            REFUSE_LAYOUT.with(|expected| expected.set(None));
+            REFUSAL_ACTIVE.with(|active| active.set(false));
+        }
+    }
+    let guard = RestoreAllocator;
+    let result = f();
+    let refused = REFUSAL_OBSERVED.with(Cell::get);
+    drop(guard);
+    (result, refused)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +142,112 @@ mod tests {
         hint::black_box,
         sync::atomic::{AtomicBool, Ordering},
     };
+
+    #[test]
+    fn physical_refusal_is_exact_once_and_restores_the_allocator() {
+        let layout = Layout::array::<u8>(37).unwrap();
+        let (result, refused) = refuse_one_layout_during(layout, || {
+            let mut other = Vec::<u8>::new();
+            other.try_reserve_exact(19).unwrap();
+            let mut selected = Vec::<u8>::new();
+            let refused = selected.try_reserve_exact(37);
+            selected.try_reserve_exact(37).unwrap();
+            refused
+        });
+        assert!(refused);
+        assert!(result.is_err());
+        assert!(!REFUSAL_ACTIVE.with(Cell::get));
+        let mut ordinary = Vec::<u8>::new();
+        ordinary.try_reserve_exact(37).unwrap();
+    }
+
+    #[test]
+    fn physical_refusal_restores_after_unwind_and_rejects_nested_replacement() {
+        let layout = Layout::array::<u8>(37).unwrap();
+        let (nested, refused) = refuse_one_layout_during(layout, || {
+            let nested = std::panic::catch_unwind(|| {
+                refuse_one_layout_during(Layout::array::<u8>(43).unwrap(), || ())
+            });
+            assert!(REFUSAL_ACTIVE.with(Cell::get));
+            let mut selected = Vec::<u8>::new();
+            assert!(selected.try_reserve_exact(37).is_err());
+            nested
+        });
+        assert!(nested.is_err());
+        assert!(refused);
+        let unwound = std::panic::catch_unwind(|| {
+            refuse_one_layout_during(layout, || panic!("refusal unwind"))
+        });
+        assert!(unwound.is_err());
+        assert!(!REFUSAL_ACTIVE.with(Cell::get));
+        let mut ordinary = Vec::<u8>::new();
+        ordinary.try_reserve_exact(37).unwrap();
+    }
+
+    #[test]
+    fn physical_refusal_covers_zeroed_and_reallocated_storage_without_losing_original() {
+        let selected = Layout::array::<u8>(37).unwrap();
+        let (pointer, refused) =
+            refuse_one_layout_during(selected, || unsafe { std::alloc::alloc_zeroed(selected) });
+        assert!(refused);
+        assert!(pointer.is_null());
+        let original = Layout::array::<u8>(19).unwrap();
+        let pointer = unsafe { std::alloc::alloc(original) };
+        assert!(!pointer.is_null());
+        unsafe {
+            pointer.write(42);
+        }
+        let (replacement, refused) = refuse_one_layout_during(selected, || unsafe {
+            std::alloc::realloc(pointer, original, selected.size())
+        });
+        assert!(refused);
+        assert!(replacement.is_null());
+        assert_eq!(
+            unsafe { pointer.read() },
+            42,
+            "refusal leaves the original allocation live"
+        );
+        unsafe {
+            std::alloc::dealloc(pointer, original);
+        }
+    }
+
+    #[test]
+    fn physical_refusal_excludes_other_threads() {
+        let ready = AtomicBool::new(false);
+        let start = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                ready.store(true, Ordering::Release);
+                while !start.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                let mut ordinary = Vec::<u8>::new();
+                let result = ordinary.try_reserve_exact(37);
+                done.store(true, Ordering::Release);
+                result
+            });
+            while !ready.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            let (result, refused) =
+                refuse_one_layout_during(Layout::array::<u8>(37).unwrap(), || {
+                    start.store(true, Ordering::Release);
+                    while !done.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                    let mut selected = Vec::<u8>::new();
+                    selected.try_reserve_exact(37)
+                });
+            worker
+                .join()
+                .unwrap()
+                .expect("other thread retains its original allocator");
+            assert!(refused);
+            assert!(result.is_err());
+        });
+    }
 
     #[test]
     fn allocation_census_has_positive_and_zero_controls() {

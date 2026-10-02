@@ -22,6 +22,8 @@ mod received_credit;
 pub(crate) use received_credit::{
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 
 // Only Main's retained capture map and real current owner enter this private constructor.
@@ -30,6 +32,14 @@ pub(super) fn loan_main_request(
     request_id: DigestV1,
 ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1> {
     received_credit::from_main(owner, request_id)
+}
+
+// Only actual Main replay/read-only witness selection forwards the historical constructor.
+pub(super) fn loan_main_request_historical(
+    owner: &KagemushaNativeOrdinaryCashOwnerV1,
+    request_id: DigestV1,
+) -> Result<KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1> {
+    received_credit::from_main_historical(owner, request_id)
 }
 
 /// Private data-only one-use key reservation. The sole constructor requires the actual owner.

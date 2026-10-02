@@ -64,8 +64,8 @@ impl LaneTransactions for NoTransactions {
         _height: u64,
         _max_bytes: usize,
         _skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
-    ) -> Vec<SignedTransaction> {
-        Vec::new()
+    ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
+        Ok(Vec::new())
     }
 }
 struct EmptyStore;

@@ -17,8 +17,6 @@ pub mod account_faucet_policy;
 pub mod aliases;
 /// Scoped canonical account/fee authority originals for an existing native ledger-wide reader.
 pub mod authority_originals;
-/// Actual signed account-scoped ordinary current-wallet original wire.
-pub mod ordinary_wallet_current;
 /// Typed non-success observations for challenge-bound bridge finality.
 pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.
@@ -41,6 +39,8 @@ pub mod kagemusha_api;
 pub mod kagemusha_state;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
+/// Actual signed account-scoped ordinary current-wallet original wire.
+pub mod ordinary_wallet_current;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.

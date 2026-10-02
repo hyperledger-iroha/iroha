@@ -261,6 +261,9 @@ impl SourceQuotaTransaction<'_> {
         }
         let result = (|| {
             let native = protocol_purpose && self.native_purpose == Some(hash);
+            if cfg!(all(test, sumeragi_core_mutation = "HC34")) && native {
+                return Ok(());
+            }
             let mut bundle = bundle.into_iter().peekable();
             if native && bundle.peek().is_none() {
                 return Err(SourceQuotaFailure::Invariant(

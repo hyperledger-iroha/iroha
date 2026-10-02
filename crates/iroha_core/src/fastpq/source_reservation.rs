@@ -693,7 +693,6 @@ impl ReservationTransaction<'_> {
         Ok(self.validate_owner(owner)?.usage)
     }
 
-    #[cfg(test)]
     /// Exact block usage visible inside this physical scope.
     pub(crate) fn usage(&self) -> SourceUsage {
         self.ledger.usage

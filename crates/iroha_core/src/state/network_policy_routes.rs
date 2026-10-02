@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::{
-    execution_attempt::ExecutionDeferred,
+    execution_attempt::{ExecutionAttemptError, ExecutionDeferred},
     queue::{
         RoutingDecision, RoutingPlan,
         policy_route::{PhysicalExecutionPolicyRoute, PhysicalPolicyRouteRejection},
@@ -103,14 +103,16 @@ impl CapturedNetworkPolicyRoute {
         tx: &SignedTransaction,
         state: &StateTransaction<'_, '_>,
         native: RoutingDecision,
-    ) -> Result<PhysicalExecutionPolicyRoute, TransactionRejectionReason> {
+    ) -> Result<PhysicalExecutionPolicyRoute, ExecutionAttemptError<TransactionRejectionReason>>
+    {
         if self.native != native || self.signed_hash != Some(tx.hash()) {
             return Err(policy_rejection(
                 "physical policy capability belongs to another signed source",
-            ));
+            )
+            .into());
         }
         let route = match self.projection {
-            PolicyProjection::Signed(result) => result,
+            PolicyProjection::Signed(result) => result.map_err(Into::into),
             PolicyProjection::Genesis(scope) if state.block_height() == 1 => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
                 PhysicalExecutionPolicyRoute::genesis(
@@ -125,16 +127,18 @@ impl CapturedNetworkPolicyRoute {
                     // their native lanes exist. Only this original genesis capability
                     // permits physical bootstrap execution outside its root dataspace.
                     SumeragiRootScope::Global => Ok(route),
-                    SumeragiRootScope::Dataspace { .. } => route.require_dataspace(native),
+                    SumeragiRootScope::Dataspace { .. } => {
+                        route.require_dataspace(native).map_err(Into::into)
+                    }
                 })
             }
             _ => {
-                return Err(policy_rejection(
-                    "source has no signed physical policy capability",
-                ));
+                return Err(
+                    policy_rejection("source has no signed physical policy capability").into(),
+                );
             }
         };
-        route.map_err(|error| policy_rejection(error.to_string()))
+        route.map_err(|error| error.map_rejection(|error| policy_rejection(error.to_string())))
     }
 
     /// Preflight fraud classification uses the same frozen physical lane as stateful admission.
@@ -150,26 +154,29 @@ impl CapturedNetworkPolicyRoute {
         tx: &AcceptedTransaction<'_>,
         state: &StateTransaction<'_, '_>,
         native: RoutingDecision,
-    ) -> Self {
+    ) -> Result<Self, ExecutionDeferred> {
         let projection = if tx.external().is_some() {
-            PolicyProjection::Signed(
-                PhysicalExecutionPolicyRoute::resolve(
-                    &state.nexus,
-                    &state.world,
-                    tx,
-                    state.block_height().saturating_sub(1),
-                    state.block_unix_timestamp_ms(),
-                )
-                .and_then(|route| route.require_dataspace(native)),
+            let resolved = PhysicalExecutionPolicyRoute::resolve(
+                &state.nexus,
+                &state.world,
+                tx,
+                state.block_height().saturating_sub(1),
+                state.block_unix_timestamp_ms(),
             )
+            .and_then(|route| route.require_dataspace(native).map_err(Into::into));
+            PolicyProjection::Signed(match resolved {
+                Ok(route) => Ok(route),
+                Err(ExecutionAttemptError::Rejected(error)) => Err(error),
+                Err(ExecutionAttemptError::Deferred(reason)) => return Err(reason),
+            })
         } else {
             PolicyProjection::SealedCommitment
         };
-        Self {
+        Ok(Self {
             native,
             signed_hash: tx.external().map(SignedTransaction::hash),
             projection,
-        }
+        })
     }
 }
 
@@ -216,25 +223,36 @@ impl CapturedNetworkPolicyRoutes {
         })
     }
 
-    pub(super) fn fill_from_preblock(&mut self, state: &StateBlock<'_>, source: &SignedBlock) {
+    pub(super) fn fill_from_preblock(
+        &mut self,
+        state: &StateBlock<'_>,
+        source: &SignedBlock,
+    ) -> Result<(), ExecutionDeferred> {
         if self.captured {
             self.invalid_context = Some("physical policy capture is not repeatable");
-            return;
+            return Ok(());
         }
         self.captured = true;
-        self.invalid_context = self.capture(state, source).err();
+        match self.capture(state, source) {
+            Ok(()) => Ok(()),
+            Err(ExecutionAttemptError::Rejected(error)) => {
+                self.invalid_context = Some(error);
+                Ok(())
+            }
+            Err(ExecutionAttemptError::Deferred(reason)) => Err(reason),
+        }
     }
 
     fn capture(
         &mut self,
         state: &StateBlock<'_>,
         source: &SignedBlock,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), ExecutionAttemptError<&'static str>> {
         if self.carrier != source.hash()
             || state._curr_block != source.header()
             || !self.rows.as_slice().is_empty()
         {
-            return Err("physical policy capture lost its original carrier");
+            return Err("physical policy capture lost its original carrier".into());
         }
         let height = source.header().height().get();
         let genesis = source.header().is_genesis() && state.block_hashes.is_empty();
@@ -250,7 +268,7 @@ impl CapturedNetworkPolicyRoutes {
             {
                 Some(context)
             }
-            _ => return Err("Network source has an invalid execution context"),
+            _ => return Err("Network source has an invalid execution context".into()),
         };
         // Use the same committed ledger time as RoutingSnapshot::of, including replacement
         // owners whose history has already been rewound to the actual predecessor.
@@ -270,10 +288,12 @@ impl CapturedNetworkPolicyRoutes {
                     .root_scope,
             )
         } else {
-            crate::sumeragi::lanes::routing::committed_root_scope(&state.world)
+            crate::sumeragi::lanes::routing::read_routing_root_scope(&state.world)
+                .map_err(ExecutionAttemptError::Deferred)?
         };
         let root_scope = root_scope.ok_or("Network source has no immutable root scope")?;
-        let policy = crate::sumeragi::lanes::lane_policy(&state.world);
+        let policy = crate::sumeragi::lanes::lane_policy(&state.world)
+            .map_err(ExecutionAttemptError::Deferred)?;
         let routes = crate::sumeragi::lanes::routing::RoutingInputs {
             root_scope: Some(root_scope),
             policy: policy.as_ref(),
@@ -292,6 +312,7 @@ impl CapturedNetworkPolicyRoutes {
             } else {
                 routes
                     .execution_route(&accepted, height)
+                    .map_err(ExecutionAttemptError::Deferred)?
                     .ok_or("Network source has no exact active native lane")?
             };
             if let Some(context) = context {
@@ -303,25 +324,32 @@ impl CapturedNetworkPolicyRoutes {
                     || !matches!(embedded.routing_plan_legs.as_slice(), [leg] if leg.lane_id == native.lane_id
                         && leg.dataspace_id == native.dataspace_id && leg.role == ExternalExecutionRouteRole::Coordinator)
                 {
-                    return Err("Network context differs from its exact pre-block native route");
+                    return Err(
+                        "Network context differs from its exact pre-block native route".into(),
+                    );
                 }
             }
             let projection = if genesis {
                 if !matches!(input, TransactionEntrypoint::External(_)) {
-                    return Err("authenticated genesis contains a non-signed Network source");
+                    return Err("authenticated genesis contains a non-signed Network source".into());
                 }
                 PolicyProjection::Genesis(root_scope)
             } else if accepted.external().is_some() {
-                PolicyProjection::Signed(
-                    PhysicalExecutionPolicyRoute::resolve(
-                        &state.nexus,
-                        &state.world,
-                        &accepted,
-                        height.saturating_sub(1),
-                        ledger_time_ms,
-                    )
-                    .and_then(|route| route.require_dataspace(native)),
+                let resolved = PhysicalExecutionPolicyRoute::resolve(
+                    &state.nexus,
+                    &state.world,
+                    &accepted,
+                    height.saturating_sub(1),
+                    ledger_time_ms,
                 )
+                .and_then(|route| route.require_dataspace(native).map_err(Into::into));
+                PolicyProjection::Signed(match resolved {
+                    Ok(route) => Ok(route),
+                    Err(ExecutionAttemptError::Rejected(error)) => Err(error),
+                    Err(ExecutionAttemptError::Deferred(reason)) => {
+                        return Err(ExecutionAttemptError::Deferred(reason));
+                    }
+                })
             } else {
                 PolicyProjection::SealedCommitment
             };

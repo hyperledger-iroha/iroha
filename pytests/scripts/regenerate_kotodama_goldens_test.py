@@ -226,8 +226,9 @@ def test_tracked_verification_never_rewrites_output(
     assert destination.read_bytes() == b"stale"
 
 
+@pytest.mark.parametrize("runtime_mode", [0o600, 0o644])
 def test_runtime_manifest_verification_uses_canonical_contract_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime_mode: int
 ) -> None:
     root = tmp_path / "repo"
     release = tmp_path / "stage" / "release"
@@ -250,7 +251,7 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
         assert cwd == root
         runtime_manifest = Path(rendered[rendered.index("--out") + 1])
         runtime_manifest.write_bytes(generated_manifest.read_bytes())
-        runtime_manifest.chmod(0o600)
+        runtime_manifest.chmod(runtime_mode)
         return ""
 
     monkeypatch.setattr(goldens, "run", fake_run)
@@ -258,7 +259,7 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
 
     assert artifact_path.stat().st_mode & 0o777 == 0o600
     assert generated_manifest.stat().st_mode & 0o777 == 0o600
-    assert (release.parent / "verified" / "example.manifest.json").stat().st_mode & 0o777 == 0o600
+    assert (release.parent / "verified" / "example.manifest.json").stat().st_mode & 0o777 == runtime_mode
 
     assert commands == [
             [

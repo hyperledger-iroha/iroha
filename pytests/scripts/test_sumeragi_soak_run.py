@@ -11,6 +11,7 @@ timeline and the verdict.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -171,13 +172,20 @@ def emit(fields):
     print(json.dumps({"timestamp": stamp, "level": "INFO", "fields": fields,
                       "target": "iroha_core::sumeragi::driver::audit"}), flush=True)
 
+def persist_height(path, value):
+    # A scheduled crash can interrupt truncation before the first written byte.
+    # Publish the complete successor atomically and retain the applied file until then.
+    staging = path.with_suffix(".pending")
+    staging.write_text(str(value))
+    staging.replace(path)
+
 while True:
     height += 1
     block = hashlib.sha256(f"block-{height}".encode()).hexdigest()
     result = hashlib.sha256(f"result-{height}".encode()).hexdigest()
     emit({"message": "sumeragi record durable", "instance": instance, "key": key,
           "height": height, "epoch": 1, "signed": f"prepare:0:{block}:{result}:0"})
-    height_file.write_text(str(height))
+    persist_height(height_file, height)
     emit({"message": "sumeragi block applied", "instance": instance, "height": height,
           "view": 0, "origin_view": 0, "block": block, "result": result,
           "proposer": height % 4, "payload_bytes": 64, "attest": False})
@@ -236,6 +244,43 @@ def free_base(count: int, avoid: set[int]) -> int:
         if all(soak.port_free(port) for port in ports):
             return base
     raise RuntimeError("no free port range")
+
+
+class FakeNodePersistenceTests(unittest.TestCase):
+    def test_interrupted_original_node_write_preserves_last_applied_height(self) -> None:
+        """Interrupt the actual fake-node persistence call before its first byte."""
+        source = ast.parse(FAKE_NODE)
+        loop = next(node for node in source.body if isinstance(node, ast.While))
+        write = next(
+            statement for statement in loop.body
+            if isinstance(statement, ast.Expr)
+            and any(
+                isinstance(node, ast.Name) and node.id == "height_file"
+                for node in ast.walk(statement)
+            )
+        )
+        definitions = ast.Module(
+            body=[node for node in source.body if isinstance(node, ast.FunctionDef)],
+            type_ignores=[],
+        )
+        operation = ast.Module(body=[write], type_ignores=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            height_file = Path(tmp) / "height"
+            height_file.write_text("41")
+            scope = {"Path": Path, "height_file": height_file, "height": 42}
+            exec(compile(definitions, "fake-node-definitions", "exec"), scope)
+
+            def interrupted_write(path: Path, *_args: object, **_kwargs: object) -> int:
+                with path.open("w"):
+                    pass
+                raise OSError("interrupted after truncation, before writing")
+
+            with mock.patch.object(Path, "write_text", autospec=True, side_effect=interrupted_write):
+                with self.assertRaisesRegex(OSError, "interrupted after truncation"):
+                    exec(compile(operation, "fake-node-height-write", "exec"), scope)
+            self.assertEqual(height_file.read_text(), "41")
+            exec(compile(operation, "fake-node-height-write", "exec"), scope)
+            self.assertEqual(height_file.read_text(), "42")
 
 
 class OrchestratorRunTests(unittest.TestCase):

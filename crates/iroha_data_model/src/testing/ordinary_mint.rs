@@ -56,7 +56,7 @@ fn make_context(
     let c = verified.app_credential();
     let s = c.subject();
     let (x, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![32; 32]));
-    let recipient_key = X25519Sha256::encode_public_key(&x);
+    let recipient_key = x.to_bytes();
     let owner = fixture.selection.owner.clone();
     let rt = &owner.runtime;
     let operation_id = [45; 32];
@@ -135,7 +135,7 @@ fn make_statement(
     let (x, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![33; 32]));
     let envelope = KagemushaEncryptedCreditEnvelopeV1 {
         version: 1,
-        ephemeral_x25519_public_key: X25519Sha256::encode_public_key(&x),
+        ephemeral_x25519_public_key: x.to_bytes(),
         nonce: [56; 24],
         ciphertext_and_tag: vec![
             57;
@@ -239,6 +239,53 @@ mod tests {
         assert!(
             f.request
                 .verify_account_signature(&f.account_consent)
+                .is_err()
+        );
+    }
+    #[test]
+    fn shared_fixture_retains_exact_distinct_x25519_keys_and_signed_originals() {
+        let fixture = kagemusha_ordinary_mint_codec_fixture_v1();
+        let context = &fixture.request.authorization.statement.context;
+        let (recipient, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![32; 32]));
+        let (ephemeral, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![33; 32]));
+        assert_eq!(context.recipient_one_time_key, recipient.to_bytes());
+        let envelope =
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &fixture.request.encrypted_credit,
+                context.recipient_one_time_key,
+            )
+            .unwrap();
+        assert_eq!(envelope.ephemeral_x25519_public_key, ephemeral.to_bytes());
+        assert_ne!(
+            context.recipient_one_time_key,
+            envelope.ephemeral_x25519_public_key
+        );
+        assert_eq!(
+            envelope
+                .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
+                .unwrap(),
+            fixture.request.encrypted_credit
+        );
+        fixture
+            .request
+            .verify_account_signature(&fixture.account_consent)
+            .unwrap();
+        let mut substituted = fixture.request.clone();
+        substituted
+            .authorization
+            .statement
+            .context
+            .recipient_one_time_key = ephemeral.to_bytes();
+        assert!(
+            substituted
+                .verify_account_signature(&fixture.account_consent)
+                .is_err()
+        );
+        let mut low_order = envelope;
+        low_order.ephemeral_x25519_public_key = [0; 32];
+        assert!(
+            low_order
+                .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
                 .is_err()
         );
     }

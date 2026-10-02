@@ -4,7 +4,7 @@ aliases.auto_renew_plan	POST	/v1/aliases/auto-renew/plan	public	canonical_accoun
 aliases.by_account	POST	/v1/aliases/by-account	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
 aliases.lease_renew_plan	POST	/v1/aliases/lease/renew/plan	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 aliases.resolve	POST	/v1/aliases/resolve	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
-aliases.resolve_index	POST	/v1/aliases/resolve-index	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
+aliases.resolve_index	POST	/v1/aliases/resolve-index	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
 aliases.setup_plan	POST	/v1/aliases/setup/plan	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 application.accounts_by_account_id_aliases_get	GET	/v1/accounts/{account_id}/aliases	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_assets_get	GET	/v1/accounts/{account_id}/assets	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true

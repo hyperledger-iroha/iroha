@@ -7,8 +7,13 @@ fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionI
         .or_else(|| AssetDefinitionId::parse_address_literal(literal).ok())
 }
 #[cfg(feature = "app_api")]
-fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpaceId> {
-    let object = item.as_object()?;
+fn asset_item_home_dataspace_id(
+    app: &AppState,
+    item: &Value,
+) -> Result<Option<DataSpaceId>, Error> {
+    let Some(object) = item.as_object() else {
+        return Ok(None);
+    };
     if let Some(alias_literal) = object
         .get("asset_alias")
         .and_then(Value::as_str)
@@ -36,7 +41,7 @@ fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpac
             return asset_definition_home_dataspace_id(app, asset_id.definition());
         }
     }
-    None
+    Ok(None)
 }
 #[cfg(feature = "app_api")]
 fn asset_item_has_global_scope(item: &Value) -> bool {
@@ -78,14 +83,14 @@ fn should_keep_authoritative_global_item(
     app: &AppState,
     route: RoutingDecision,
     item: &Value,
-) -> bool {
+) -> Result<bool, Error> {
     if !asset_item_has_global_scope(item) {
-        return true;
+        return Ok(true);
     }
-    if let Some(home_dataspace_id) = asset_item_home_dataspace_id(app, item) {
-        return home_dataspace_id == route.dataspace_id;
+    if let Some(home_dataspace_id) = asset_item_home_dataspace_id(app, item)? {
+        return Ok(home_dataspace_id == route.dataspace_id);
     }
-    route_is_public_or_universal(app, route)
+    Ok(route_is_public_or_universal(app, route))
 }
 #[cfg(feature = "app_api")]
 fn filter_non_authoritative_global_list_rows(
@@ -114,8 +119,18 @@ fn filter_non_authoritative_global_list_rows(
                 "expected `items` array while filtering routed list response",
             ));
         };
+        let mut refusal = None;
         items.retain(|item| {
-            let keep = should_keep_authoritative_global_item(app, *route, item);
+            if refusal.is_some() {
+                return true;
+            }
+            let keep = match should_keep_authoritative_global_item(app, *route, item) {
+                Ok(keep) => keep,
+                Err(error) => {
+                    refusal = Some(error);
+                    return true;
+                }
+            };
             if !keep {
                 let asset = item
                     .as_object()
@@ -130,6 +145,9 @@ fn filter_non_authoritative_global_list_rows(
             }
             keep
         });
+        if let Some(error) = refusal {
+            return Err(error_response_with_format(error, ResponseFormat::Json));
+        }
         let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
         let Some(total_value) = object.get_mut("total") else {
             return Err(torii_internal_json_error(
@@ -191,8 +209,18 @@ fn filter_non_authoritative_global_portfolio_rows(
                         "portfolio account rows must include `assets`",
                     ));
                 };
+                let mut refusal = None;
                 assets.retain(|asset| {
-                    let keep = should_keep_authoritative_global_item(app, *route, asset);
+                    if refusal.is_some() {
+                        return true;
+                    }
+                    let keep = match should_keep_authoritative_global_item(app, *route, asset) {
+                        Ok(keep) => keep,
+                        Err(error) => {
+                            refusal = Some(error);
+                            return true;
+                        }
+                    };
                     if !keep {
                         let asset_literal = asset
                             .as_object()
@@ -212,6 +240,9 @@ fn filter_non_authoritative_global_portfolio_rows(
                     }
                     keep
                 });
+                if let Some(error) = refusal {
+                    return Err(error_response_with_format(error, ResponseFormat::Json));
+                }
                 total_accounts = total_accounts.saturating_add(1);
                 total_positions =
                     total_positions.saturating_add(u64::try_from(assets.len()).unwrap_or(u64::MAX));
@@ -849,14 +880,23 @@ fn authorize_alias_resolve_index_payloads(
             .ok_or_else(|| {
                 torii_internal_json_error("routed alias-index response must include string `alias`")
             })?;
-        let alias =
-            parse_exact_account_alias_label_with_live_state(app, alias_literal).map_err(|_| {
+        let alias = parse_exact_account_alias_label_with_live_state(app, alias_literal).map_err(
+            |error| {
+                if matches!(
+                    &error,
+                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                    ))
+                ) {
+                    return error.into_response();
+                }
                 torii_proxy_error_response(
                     StatusCode::CONFLICT,
                     "route_conflict",
                     "a routed alias-index response contained a non-canonical alias",
                 )
-            })?;
+            },
+        )?;
         if public_dataspaces.contains(&alias.label.dataspace) {
             index += 1;
             continue;
@@ -869,7 +909,9 @@ fn authorize_alias_resolve_index_payloads(
             app.state.view().world(),
             caller,
             &alias.resolved,
-        ) {
+        )
+        .map_err(IntoResponse::into_response)?
+        {
             return Err(torii_alias_permission_denied_response(
                 "exact account-alias resolve permission is required for the returned alias-index binding",
             ));

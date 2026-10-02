@@ -406,7 +406,8 @@ pub fn staged_signed_native_genesis_with_projection<T: Send>(
                         let authority = StagedNativeGenesis {
                             genesis: authenticated.0.clone(),
                             epoch,
-                            lane_policy: iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                            lane_policy: iroha_core::sumeragi::lanes::lane_policy(staged.world())
+                                .wrap_err("read committed staged genesis lane policy")?,
                             lanes: staged.world().sumeragi_lanes().clone(),
                         };
                         let projection = project(&authenticated, staged)?;

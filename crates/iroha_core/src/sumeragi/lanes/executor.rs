@@ -23,7 +23,8 @@ use iroha_sumeragi::{
 };
 
 use super::{
-    Admission, AnchorView, LANE_DEDUP_WINDOW, LaneBatch, LaneChainView, TransactionCheck, admit,
+    Admission, AdmissionAttemptError, AnchorView, LANE_DEDUP_WINDOW, LaneBatch, LaneChainView,
+    TransactionCheck, admit,
 };
 use crate::sumeragi::driver::{
     SharedCrypto,
@@ -51,7 +52,7 @@ pub trait LaneTransactions: Send + Sync {
         height: u64,
         max_bytes: usize,
         skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
-    ) -> Vec<SignedTransaction>;
+    ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred>;
 }
 
 /// The chain facts after a lane block: its anchor and the anchored transactions of the last
@@ -115,6 +116,8 @@ pub struct LaneExecutor<A, C, T> {
     cache: BTreeMap<Hash32, Executed>,
     budget: AllocationBudget,
     payload_build: Option<LanePayloadBuild>,
+    /// Exact latest local routing refusal, retained by the original lane builder.
+    routing_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 
 struct LanePayloadBuild {
@@ -132,7 +135,12 @@ pub struct LaneRecovery<A, C, T> {
     crypto: SharedCrypto,
     tip: u64,
     next: u64,
-    pending: Option<(Qc, StoredAcquisition)>,
+    pending: Option<RecoveryRead>,
+}
+
+enum RecoveryRead {
+    Acquiring(Qc, StoredAcquisition),
+    Decoding(Qc, AvailableBody),
 }
 
 impl<A, C, T> core::fmt::Debug for LaneExecutor<A, C, T> {
@@ -186,6 +194,7 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                 cache: BTreeMap::new(),
                 budget,
                 payload_build: None,
+                routing_refusal: None,
             },
             store,
             crypto,
@@ -248,17 +257,17 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
         block: &AvailableBody,
         block_hash: &Hash32,
         parent: ChainState,
-    ) -> ExecOutcome {
+    ) -> Result<ExecOutcome, norito::core::DecodeResourceError> {
         if !block.admitted_to(&self.budget)
             || block.source().instance() != self.instance
             || block.source().config() != &self.config
         {
-            return ExecOutcome::Invalid;
+            return Ok(ExecOutcome::Invalid);
         }
         // Lane instances admit batches; only G executes beacon/Parliament control.
         // Match the independent lane evidence verifier before caching any admission.
         if block.header().attest || !block.header().control_witness.is_empty() {
-            return ExecOutcome::Invalid;
+            return Ok(ExecOutcome::Invalid);
         }
         let admission = |executor: &Self| {
             admit(
@@ -271,11 +280,15 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
             )
         };
         let mut outcome = admission(self);
-        if let Ok(Admission::Pending) = outcome
-            && let Ok(batch) = LaneBatch::from_payload(block.payload().as_slice())
-            && self.anchors.wait_for(batch.anchor_height, self.anchor_wait)
-        {
-            outcome = admission(self);
+        if let Ok(Admission::Pending) = outcome {
+            let batch = match LaneBatch::from_payload(block.payload().as_slice()) {
+                Ok(batch) => batch,
+                Err(AdmissionAttemptError::Deferred(refusal)) => return Err(refusal),
+                Err(AdmissionAttemptError::Rejected(_)) => return Ok(ExecOutcome::Invalid),
+            };
+            if self.anchors.wait_for(batch.anchor_height, self.anchor_wait) {
+                outcome = admission(self);
+            }
         }
         match outcome {
             Ok(Admission::Valid(result)) => {
@@ -290,15 +303,16 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneExecu
                         state,
                     },
                 );
-                ExecOutcome::Valid(r)
+                Ok(ExecOutcome::Valid(r))
             }
-            Ok(Admission::Pending) => {
-                ExecOutcome::Failed("the lane block's anchor is not applied yet".into())
-            }
-            Err(error) => {
+            Ok(Admission::Pending) => Ok(ExecOutcome::Failed(
+                "the lane block's anchor is not applied yet".into(),
+            )),
+            Err(AdmissionAttemptError::Rejected(error)) => {
                 iroha_logger::debug!(lane = %self.record.lane, %error, "lane block is not admissible");
-                ExecOutcome::Invalid
+                Ok(ExecOutcome::Invalid)
             }
+            Err(AdmissionAttemptError::Deferred(refusal)) => Err(refusal),
         }
     }
 }
@@ -341,48 +355,53 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> LaneRecov
                     ));
                 }
                 let job = StoredAcquisition::begin(&*self.store, source).map_err(recovery_error)?;
-                self.pending = Some((entry.commit_qc, job));
+                self.pending = Some(RecoveryRead::Acquiring(entry.commit_qc, job));
             }
-            let (qc, job) = self
-                .pending
-                .as_mut()
-                .expect("retained original lane restoration");
-            match job
-                .poll(&self.executor.budget, &*self.crypto)
-                .map_err(recovery_error)?
-            {
-                StoredProgress::Pending(_) => {
-                    return Err(io::Error::from(io::ErrorKind::WouldBlock));
-                }
-                StoredProgress::Absent => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "committed lane body missing",
-                    ));
-                }
-                StoredProgress::Available(body) => {
-                    let batch =
-                        LaneBatch::from_payload(body.payload().as_slice()).map_err(|error| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("lane recovery batch: {error}"),
-                            )
-                        })?;
-                    self.executor.applied.state = self.executor.applied.state.after(
-                        batch.anchor_height,
-                        batch
-                            .transactions
-                            .iter()
-                            .map(SignedTransaction::hash_as_entrypoint)
-                            .collect(),
-                    );
-                    self.executor.applied.block_hash = qc.block_hash;
-                    self.pending = None;
-                    self.next = self.next.checked_add(1).ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "lane height overflow")
-                    })?;
+            if let Some(RecoveryRead::Acquiring(_, job)) = self.pending.as_mut() {
+                let progress = job
+                    .poll(&self.executor.budget, &*self.crypto)
+                    .map_err(recovery_error)?;
+                match progress {
+                    StoredProgress::Pending(_) => return Err(io::ErrorKind::WouldBlock.into()),
+                    StoredProgress::Absent => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "committed lane body missing",
+                        ));
+                    }
+                    StoredProgress::Available(body) => {
+                        let Some(RecoveryRead::Acquiring(qc, _)) = self.pending.take() else {
+                            unreachable!("retained original lane restoration");
+                        };
+                        self.pending = Some(RecoveryRead::Decoding(qc, body));
+                    }
                 }
             }
+            let Some(RecoveryRead::Decoding(qc, body)) = self.pending.as_ref() else {
+                unreachable!("original authenticated body remains owned through decode");
+            };
+            let batch = match LaneBatch::from_payload(body.payload().as_slice()) {
+                Ok(batch) => batch,
+                Err(AdmissionAttemptError::Deferred(_)) => {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                Err(AdmissionAttemptError::Rejected(error)) => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+                }
+            };
+            self.executor.applied.state = self.executor.applied.state.after(
+                batch.anchor_height,
+                batch
+                    .transactions
+                    .iter()
+                    .map(SignedTransaction::hash_as_entrypoint)
+                    .collect(),
+            );
+            self.executor.applied.block_hash = qc.block_hash;
+            self.pending = None;
+            self.next = self.next.checked_add(1).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "lane height overflow")
+            })?;
         }
         Ok(())
     }
@@ -398,12 +417,11 @@ fn recovery_error(error: crate::sumeragi::driver::acquisition::StoredError) -> i
         ),
         _ => false,
     };
+    if retry {
+        return io::ErrorKind::WouldBlock.into();
+    }
     io::Error::new(
-        if retry {
-            io::ErrorKind::WouldBlock
-        } else {
-            io::ErrorKind::InvalidData
-        },
+        io::ErrorKind::InvalidData,
         format!("lane recovery: {error:?}"),
     )
 }
@@ -446,7 +464,10 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             return Some(ExecOutcome::Valid(executed.result));
         }
         let parent = self.parent_state(block)?;
-        Some(self.run(block, block_hash, parent))
+        match self.run(block, block_hash, parent) {
+            Ok(outcome) => Some(outcome),
+            Err(_) => None,
+        }
     }
 
     fn discard(&mut self, height: u64, keep: &[Hash32]) {
@@ -479,9 +500,11 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             ));
         };
         match self.run(block, &hash, parent) {
-            ExecOutcome::Valid(result) => Ok((result == commit_qc.result).then_some(result)),
-            ExecOutcome::Invalid | ExecOutcome::Cancelled => Ok(None),
-            ExecOutcome::Failed(reason) => Err(PublicationError::Retryable(reason)),
+            Ok(ExecOutcome::Valid(result)) => Ok((result == commit_qc.result).then_some(result)),
+            Ok(ExecOutcome::Invalid | ExecOutcome::Cancelled) => Ok(None),
+            Ok(ExecOutcome::Failed(reason)) => Err(PublicationError::Retryable(reason)),
+            // Allocate no diagnostic while the driver retains its original body for retry.
+            Err(_) => Err(PublicationError::Retryable(String::new())),
         }
     }
 
@@ -554,7 +577,18 @@ impl<A: AnchorSource, C: TransactionCheck + Send, T: LaneTransactions> Executor
             .unwrap_or(usize::MAX)
             .saturating_sub(64);
         // The batch merges after the anchor: route as of the next global height.
-        let selected = transactions.candidates(anchor_height.saturating_add(1), budget, &skip);
+        let selected = match transactions.candidates(anchor_height.saturating_add(1), budget, &skip)
+        {
+            Ok(selected) => {
+                self.routing_refusal = None;
+                selected
+            }
+            Err(reason) => {
+                let message = reason.to_string();
+                self.routing_refusal = Some(reason);
+                return Err(PublicationError::Retryable(message));
+            }
+        };
         if selected.is_empty() {
             return Ok((None, false));
         }
@@ -672,13 +706,14 @@ mod tests {
             _height: u64,
             _max_bytes: usize,
             skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
-        ) -> Vec<SignedTransaction> {
-            self.0
+        ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
+            Ok(self
+                .0
                 .lock()
                 .iter()
                 .filter(|tx| !skip.contains(&tx.hash_as_entrypoint()))
                 .cloned()
-                .collect()
+                .collect())
         }
     }
 
@@ -1014,3 +1049,7 @@ mod tests {
         assert!(lane.build(1, 0, 1 << 20, 100).unwrap().0.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "executor/native_decode_tests.rs"]
+mod native_decode_tests;

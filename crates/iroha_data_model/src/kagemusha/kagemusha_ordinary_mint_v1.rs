@@ -847,7 +847,7 @@ mod tests {
         let c = verified.app_credential();
         let s = c.subject();
         let (x, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![32; 32]));
-        let recipient_key = X25519Sha256::encode_public_key(&x);
+        let recipient_key = x.to_bytes();
         let owner = fixture.selection.owner.clone();
         let rt = &owner.runtime;
         let operation_id = [45; 32];
@@ -926,7 +926,7 @@ mod tests {
         let (x, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![33; 32]));
         let envelope = KagemushaEncryptedCreditEnvelopeV1 {
             version: 1,
-            ephemeral_x25519_public_key: X25519Sha256::encode_public_key(&x),
+            ephemeral_x25519_public_key: x.to_bytes(),
             nonce: [56; 24],
             ciphertext_and_tag: vec![
                 57;

@@ -86,7 +86,7 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
     for closed in [false, true] {
         if closed {
             for time in [2000, 3000] { chain.commit_at(time, Vec::new()); }
-            let mut policy = crate::sumeragi::lanes::lane_policy(chain.state().view().world()).unwrap();
+            let mut policy = crate::sumeragi::lanes::lane_policy(chain.state().view().world()).expect("completed original routing metadata read").unwrap();
             policy.fixed.clear();
             let update = chain.sign(&authority, [InstructionBox::from(iroha_data_model::isi::SetParameter::new(
                 iroha_data_model::parameter::Parameter::Custom(policy.into_custom_parameter())

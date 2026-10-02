@@ -19,7 +19,7 @@ use iroha_sumeragi::{crypto::AttestationVerifier, types::Hash32};
 use parking_lot::Mutex;
 
 use super::{
-    LaneBatch, incarnation_instance,
+    incarnation_instance,
     merge::{CommittedLaneBlock, LaneBlockSource},
     store::{FileLaneBlockStore, LaneStoreOpen},
 };
@@ -205,10 +205,20 @@ impl LaneStores {
         }
     }
 
-    /// Explicitly relinquish a retired incarnation's owner, including pending recovery.
-    /// Frames remain on disk for replay. Outstanding ready-store Arcs retain their exclusive lock.
+    /// Relinquish a retired runtime owner, including pending startup recovery. An active or
+    /// refused merge reader becomes a historical owner so its exact custody and lock survive.
+    /// Frames remain on disk for authenticated replay.
     pub fn release(&self, lane: LaneId, incarnation: &[u8; 32]) {
-        self.stores.lock().remove(&(lane, *incarnation));
+        let mut stores = self.stores.lock();
+        if let Some(StoreSlot::Ready(store, owned)) = stores.get_mut(&(lane, *incarnation)) {
+            // Under the registry lock a sole Arc has no external reader that can race this
+            // check. Already shared Arcs cover readers before they acquire the batch mutex.
+            if Arc::strong_count(store) > 1 || store.retains_batch_read() {
+                *owned = false;
+                return;
+            }
+        }
+        stores.remove(&(lane, *incarnation));
     }
 
     /// Release every runtime owner absent from the applied lane set, including openings
@@ -219,12 +229,25 @@ impl LaneStores {
     /// cannot discard their retained recovery progress or original allocation custody.
     pub(super) fn release_retired(&self, lanes: &SumeragiLaneState) {
         self.stores.lock().retain(|(lane, incarnation), slot| {
-            matches!(
-                slot,
-                StoreSlot::Opening(_, false) | StoreSlot::Ready(_, false)
-            ) || lanes
+            if lanes
                 .lane(*lane)
                 .is_some_and(|record| record.incarnation == *incarnation)
+            {
+                return true;
+            }
+            match slot {
+                StoreSlot::Opening(_, owned) => !*owned,
+                StoreSlot::Ready(store, owned) => {
+                    if !*owned {
+                        return true;
+                    }
+                    if Arc::strong_count(store) > 1 || store.retains_batch_read() {
+                        *owned = false;
+                        return true;
+                    }
+                    false
+                }
+            }
         });
     }
 }
@@ -241,17 +264,7 @@ impl LaneBlockSource for LaneStores {
         incarnation: &[u8; 32],
         height: u64,
     ) -> io::Result<Option<CommittedLaneBlock>> {
-        let store = self.store(lane, incarnation)?;
-        let Some((body, qc)) = store.committed_body(height)? else {
-            return Ok(None);
-        };
-        Ok(Some(CommittedLaneBlock {
-            block_hash: qc.block_hash,
-            result: qc.result,
-            // A completely authenticated Byzantine payload may not be a lane batch. That is
-            // distinct from corruption of its stored signed artifact, which returns Err above.
-            batch: LaneBatch::from_payload(body.payload().as_slice()).ok(),
-        }))
+        self.store(lane, incarnation)?.committed_batch(height)
     }
 
     fn wait_for(

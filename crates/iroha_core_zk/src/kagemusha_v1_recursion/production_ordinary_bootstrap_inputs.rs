@@ -75,26 +75,10 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         )?;
         let authorization = &mint.authorization;
         let credit = &mint.credit;
-        let eq_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fp>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                eq_history.as_bytes(),
-            )
-            .map_err(proving_error)?,
-        ];
-        let ep_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fq>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                ep_history.as_bytes(),
-            )
-            .map_err(proving_error)?,
-        ];
+        let eq_authorization_instances=inactive_column::<Fp>(&auxiliary_material.eq_mint_authorization_protocol.num_instance,
+            crate::kagemusha_v1_recursion::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,eq_history.as_bytes())?;
+        let ep_authorization_instances=inactive_column::<Fq>(&auxiliary_material.ep_mint_authorization_protocol.num_instance,
+            crate::kagemusha_v1_recursion::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,ep_history.as_bytes())?;
         let mint_request =
             crate::kagemusha_v1_recursion::KagemushaMintFinalityHelperVerificationRequestV1 {
                 eq_protocol_digest: credit.proof.eq_protocol_digest,

@@ -65,7 +65,7 @@ impl<'de> DeserializePayload<'de> for InitMode {
         Self::try_deserialize(archived).expect("stored init mode must parse")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as DeserializePayload>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::try_deserialize(archived.cast())?;
         InitMode::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }
@@ -111,7 +111,7 @@ impl<'de> DeserializePayload<'de> for FsyncMode {
         Self::try_deserialize(archived).expect("stored fsync mode must parse")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as DeserializePayload>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::try_deserialize(archived.cast())?;
         FsyncMode::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }

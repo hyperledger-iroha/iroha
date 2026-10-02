@@ -455,8 +455,9 @@ fn register_retail_lane(
         alias_tx,
         "paid namespace and admin alias registration",
     );
-    let mut policy =
-        lane_policy(chain.state().view().world()).expect("catalog installed the lane policy");
+    let mut policy = lane_policy(chain.state().view().world())
+        .expect("completed original routing metadata read")
+        .expect("catalog installed the lane policy");
     policy.routes.push(SumeragiLaneRoute {
         lane: RETAIL_LANE,
         account: None,
@@ -713,8 +714,10 @@ fn activated_chain() -> ActivatedChain {
         let view = chain.state().view();
         assert_eq!(
             RoutingSnapshot::of(&view)
+                .expect("completed original routing snapshot")
                 .inputs(view.world())
-                .route(activation_tx.payload(), ACTIVATION_HEIGHT),
+                .route(activation_tx.payload(), ACTIVATION_HEIGHT)
+                .expect("completed original routing read"),
             Some(RETAIL_LANE),
             "the activation executes only in its physical dataspace lane"
         );

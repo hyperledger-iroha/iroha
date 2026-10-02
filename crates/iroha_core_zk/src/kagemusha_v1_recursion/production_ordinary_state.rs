@@ -56,9 +56,9 @@ struct Originals {
     guard: OrdinaryGuardProofWireV1,
 }
 impl Originals {
-    fn bind<'s, 'w: 's>(
+    fn bind<'s>(
         &'s self,
-        witness: KagemushaRecursiveStateGenerationWitnessV1<'w>,
+        witness: KagemushaRecursiveStateGenerationWitnessV1<'s>,
         floor: Option<u32>,
     ) -> KagemushaRecursiveStateGenerationWitnessV1<'s> {
         let mut witness: KagemushaRecursiveStateGenerationWitnessV1<'s> = witness;
@@ -267,12 +267,12 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         })
     }
 
-    fn bind_ordinary_state_witness<'s, 'w: 's>(
+    fn bind_ordinary_state_witness<'s>(
         &self,
         selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
         approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         secret: &[u8; 32],
-        mut witness: KagemushaRecursiveStateGenerationWitnessV1<'w>,
+        mut witness: KagemushaRecursiveStateGenerationWitnessV1<'s>,
         originals: &'s Originals,
     ) -> Result<KagemushaRecursiveStateGenerationWitnessV1<'s>, KagemushaArtifactGenerationErrorV1>
     {

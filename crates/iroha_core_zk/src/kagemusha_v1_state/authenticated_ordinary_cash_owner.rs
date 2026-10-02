@@ -34,16 +34,25 @@ mod redeem_credit;
 use redeem_credit::RedeemOriginals;
 #[path = "ordinary_cash_lineage_transport.rs"]
 mod lineage_transport;
+#[path = "ordinary_mint_capture.rs"]
+mod mint_capture;
 #[path = "ordinary_cash_preparation_originals.rs"]
 mod preparation_originals;
+#[path = "ordinary_received_source_inbox.rs"]
+mod received_source;
 #[path = "ordinary_receiver_request_factory.rs"]
 mod receiver_request;
+pub(crate) use mint_capture::KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1;
+use mint_capture::{MintRecord, PendingMint};
 #[path = "ordinary_cash_state_commit.rs"]
 mod state_commit;
+use received_source::{ReceivedSourceAdmission, ReceivedSourceOriginals};
 use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
 pub(crate) use receiver_request::{
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 use state_commit::{
     FinalizedDeliveryOriginals, PreparedCommitAdmission, PreparedCommitOriginals, RetainedDelivery,
@@ -134,6 +143,8 @@ enum Record {
         request_id: DigestV1,
     },
     ReceiverCapture(CapturedReceiverRequestOriginals),
+    Mint(MintRecord),
+    ReceivedSource(ReceivedSourceOriginals),
     ReceiverCancel {
         request_id: DigestV1,
     },
@@ -239,9 +250,11 @@ pub struct KagemushaNativeOrdinaryCashOwnerV1 {
     carrier_budget: KagemushaOrdinaryCashCarrierBudgetV1,
     counter_floor: Option<u32>,
     pending: Option<Pending>,
+    pending_mint: Option<PendingMint>,
     used_operations: BTreeSet<DigestV1>,
     pending_receiver_request: Option<PendingReceiverRequest>,
     retained_receiver_requests: BTreeMap<DigestV1, RetainedReceiverRequest>,
+    received_sources: BTreeMap<DigestV1, ReceivedSourceAdmission>,
     financial_journal_revision: u64,
     terminal: Option<terminal::TerminalJournal>,
     recovery_catalog: Option<RecoveryCatalog>,
@@ -387,9 +400,11 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             carrier_budget,
             counter_floor,
             pending: None,
+            pending_mint: None,
             used_operations: BTreeSet::new(),
             pending_receiver_request: None,
             retained_receiver_requests: BTreeMap::new(),
+            received_sources: BTreeMap::new(),
             financial_journal_revision: 0,
             terminal: Some(terminal::TerminalJournal::new()),
             recovery_catalog: recover.then(|| RecoveryCatalog {
@@ -845,7 +860,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .recheck_live_source(self, pending.lease.as_deref())?;
             return Ok(pending.originals.request_id());
         }
-        if self.pending.is_some() || self.terminal.as_ref().is_none_or(|t| t.has_pending()) {
+        if self.pending.is_some()
+            || self.pending_mint.is_some()
+            || self.terminal.as_ref().is_none_or(|t| t.has_pending())
+        {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         let captured = self
@@ -1088,7 +1106,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         &self,
         next: &ReceiverRequestOriginals,
     ) -> Result<(), KagemushaStateErrorV1> {
-        let mut used = next.capacity_charge_bytes()?;
+        let mut used = self
+            .retained_received_source_capacity_charge()?
+            .checked_add(next.capacity_charge_bytes()?)
+            .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         for retained in self.retained_receiver_requests.values() {
             used = used
                 .checked_add(retained.captured.reservation().capacity_charge_bytes()?)
@@ -1103,18 +1124,21 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
 
     fn recheck_receiver_request_storage(&self) -> Result<(), KagemushaStateErrorV1> {
-        let mut bytes = 0u64;
+        let mut bytes = self.retained_received_source_capacity_charge()?;
         if let Some(pending) = &self.pending_receiver_request {
             if !self
                 .used_operations
                 .contains(&pending.originals.request_id())
                 || self.pending.is_some()
+                || self.pending_mint.is_some()
                 || self.terminal.as_ref().is_none_or(|t| t.has_pending())
                 || pending.originals.original_counter_floor() != self.counter_floor
             {
                 return Err(KagemushaStateErrorV1::SnapshotIntegrity);
             }
-            bytes = pending.originals.capacity_charge_bytes()?;
+            bytes = bytes
+                .checked_add(pending.originals.capacity_charge_bytes()?)
+                .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         for (id, retained) in &self.retained_receiver_requests {
             if *id != retained.captured.reservation().request_id()
@@ -1161,6 +1185,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.require_initial_lineage_anchor_current()?;
         self.require_outbox_capacity_for_new_slot()?;
         if self.pending.is_some()
+            || self.pending_mint.is_some()
             || self.pending_receiver_request.is_some()
             || !matches!(
                 operation_kind,
@@ -1704,6 +1729,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         preceding: Option<KagemushaRecoveryJournalPrefixV1>,
     ) -> Result<(), KagemushaStateErrorV1> {
         match record {
+            Record::Mint(record) => self.replay_mint(record, historical_leases)?,
+            Record::ReceivedSource(originals) => self.replay_received_source(originals)?,
             Record::PrepareCommit(originals) => self.replay_prepared_commit(originals)?,
             Record::StateAdvance {
                 prepared_original_sha256,
@@ -1734,6 +1761,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 reservation,
             } if self.anchor_request_sha256.is_some()
                 && self.pending.is_none()
+                && self.pending_mint.is_none()
                 && self.pending_receiver_request.is_none()
                 && operation != [0; 32]
                 && nonce != [0; 32]
@@ -2035,7 +2063,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 self.pending = None;
             }
             Record::Terminal(record) => {
-                if self.pending_receiver_request.is_some() {
+                if self.pending_receiver_request.is_some() || self.pending_mint.is_some() {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);
                 }
                 if let Some(selected_prefix) = record.preselection_prefix() {
@@ -2064,6 +2092,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 financial_control,
             } => {
                 if self.pending.is_some()
+                    || self.pending_mint.is_some()
                     || self.pending_receiver_request.is_some()
                     || self.terminal.as_ref().is_none_or(|t| t.has_pending())
                     || self.used_operations.contains(&originals.request_id())

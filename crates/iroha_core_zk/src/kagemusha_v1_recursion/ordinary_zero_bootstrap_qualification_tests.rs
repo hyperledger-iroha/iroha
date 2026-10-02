@@ -11,10 +11,8 @@ use super::super::{
         RecursiveStateConstructionV1,
     },
     mint_authority::KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
-    mint_authorization::{
-        MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
-    },
     ordinary_guard_circuit::OrdinaryGuardWitnessV1,
+    ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,
     ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1,
     terminal_authorization::{
         TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, public_instance as incoming_slot,
@@ -164,9 +162,9 @@ fn qualify() {
         let ep_incoming =
             mathematical_protocol(&ep_params, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
         let eq_authorization =
-            mathematical_protocol(&eq_params, MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
+            mathematical_protocol(&eq_params, ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1);
         let ep_authorization =
-            mathematical_protocol(&ep_params, MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
+            mathematical_protocol(&ep_params, ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1);
         let eq_mint = mathematical_protocol(
             &eq_params,
             KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
@@ -194,26 +192,10 @@ fn qualify() {
                 &ep_zero,
             )
             .expect("same production zero-Bootstrap parser constructor");
-        let eq_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fp>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                eq_zero.as_bytes(),
-            )
-            .unwrap(),
-        ];
-        let ep_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fq>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                ep_zero.as_bytes(),
-            )
-            .unwrap(),
-        ];
+        let eq_authorization_instances =
+            column::<Fp>(ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1, eq_zero.as_bytes());
+        let ep_authorization_instances =
+            column::<Fq>(ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1, ep_zero.as_bytes());
         let request = super::super::KagemushaMintFinalityHelperVerificationRequestV1 {
             eq_protocol_digest: credit.proof.eq_protocol_digest,
             ep_protocol_digest: credit.proof.ep_protocol_digest,

@@ -20,7 +20,8 @@ use iroha_data_model::kagemusha::{
 #[path = "ordinary_lineage_received_output_admission.rs"]
 mod received_output_admission;
 pub(crate) use received_output_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
 };
 
 const COMPACT_META_MAX: usize = 256 * 1024;

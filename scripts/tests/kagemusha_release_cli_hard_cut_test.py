@@ -193,13 +193,10 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         )
         self.assertNotIn("--abi-version", match.group(1))
 
-    def test_cli_and_model_pin_the_complete_role_inventory(self) -> None:
+    def test_cli_and_model_pin_the_complete_54_role_inventory(self) -> None:
         command_source = COMMAND.read_text(encoding="utf-8")
         model_source = RELEASE_MODEL.read_text(encoding="utf-8")
-        self.assertIn(
-            "const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 54;",
-            command_source,
-        )
+        self.assertNotIn("KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1", command_source)
         self.assertIn("KagemushaArtifactRoleV1::ALL.len()", command_source)
         all_match = re.search(
             r"pub const ALL: \[Self; 54\] = \[(.*?)\n    \];",
@@ -311,10 +308,12 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
             "expected_release_id",
             "expected_asset_identity_digest",
             "expected_asset_incarnation",
-            "expected_asset_scale",
+            "asset_scale",
             "expected_liability_pool_id",
         ):
             self.assertIn(pin, source)
+        self.assertIn('long = "expected-asset-scale"', source)
+        self.assertIn("asset_scale: pins.asset_scale", source)
         self.assertIn('"hardware_qualified", &false', source)
         self.assertIn('"monetary_admission", &false', source)
         self.assertIn('"runtime_loaded", &false', source)
