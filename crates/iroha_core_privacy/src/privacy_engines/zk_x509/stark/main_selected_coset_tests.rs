@@ -433,3 +433,263 @@ fn selected_cpu_pruned_and_full_compact_cost_include_original_scratch_clearing()
         }
     }
 }
+
+#[test]
+fn selected_horner_matches_pruned_full_fft_and_public_worker_schedules() {
+    for (native, common, mask_length) in [
+        (1, 2, 1),
+        (2, 7, 81),
+        (5, 12, 1816),
+        (5, 15, 1816),
+        (8, 15, 1816),
+    ] {
+        let native_values = (0..1usize << native)
+            .map(|row| F((17 * row + 3) as u64))
+            .collect::<Vec<_>>();
+        let mask = (0..mask_length)
+            .map(|degree| F((29 * degree + 7) as u64))
+            .collect::<Vec<_>>();
+        let coefficients = Column::from_vec_v1(
+            masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
+        );
+        let rows = 1usize << common;
+        let full = Column::from_vec_v1(
+            masked_trace_coefficients_on_coset_v1(&coefficients, native, common).unwrap(),
+        );
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            for selected in [
+                vec![0],
+                vec![rows - 1],
+                vec![0, rows - 1],
+                (0..rows.min(257)).collect(),
+                (0..rows).step_by(113).collect(),
+            ] {
+                let actual = pool
+                    .install(|| evaluate_horner_v1(&coefficients, native, common, &selected))
+                    .unwrap();
+                let pruned = pool
+                    .install(|| evaluate_v1(&coefficients, native, common, &selected))
+                    .unwrap();
+                assert_eq!(&*actual, &*pruned);
+                for (&index, &value) in selected.iter().zip(actual.iter()) {
+                    assert_eq!(value, full[index]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_horner_validates_before_writes_and_clears_populated_output() {
+    let coefficients = vec![F(11); 21];
+    for selected in [vec![], vec![64], vec![2, 1], vec![1, 1]] {
+        assert!(matches!(
+            evaluate_horner_v1(&coefficients, 4, 6, &selected),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        ));
+    }
+    for (coefficients, native, common, selected) in [
+        (vec![], 4, 6, vec![0]),
+        (vec![F::ONE; 65], 4, 6, vec![0]),
+        (vec![F::ONE], 6, 6, vec![0]),
+        (vec![F::ONE], 4, 33, vec![0]),
+    ] {
+        let (result, erased) =
+            inspection::observe_v1(|| evaluate_horner_v1(&coefficients, native, common, &selected));
+        assert!(result.is_err());
+        assert!(erased.is_empty());
+    }
+    let mut invalid = coefficients.clone();
+    invalid[20] = F(GOLDILOCKS_MODULUS_V1);
+    let (result, erased) = inspection::observe_v1(|| evaluate_horner_v1(&invalid, 4, 6, &[0]));
+    assert!(matches!(
+        result,
+        Err(AggregateStarkErrorV1::NonCanonicalField)
+    ));
+    assert!(erased.is_empty());
+    let selected = (0..257).collect::<Vec<_>>();
+    for workers in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        for unwind in [false, true] {
+            pool.install(|| {
+                let (result, erased) = inspection::observe_v1(|| {
+                    std::panic::catch_unwind(|| {
+                        let values =
+                            evaluate_horner_with_v1(&coefficients, 4, 10, &selected, |output| {
+                                assert!(output.iter().any(|value| *value != F::ZERO));
+                                if unwind {
+                                    panic!("after populated Horner output");
+                                }
+                            })
+                            .unwrap();
+                        assert_eq!(values.len(), selected.len());
+                        drop(values);
+                    })
+                });
+                assert_eq!(result.is_err(), unwind);
+                // Success transfers output into the existing clearing Column
+                // owner. Unwind must erase it before that transfer can occur.
+                assert_eq!(
+                    erased.iter().map(|row| row.cells).sum::<usize>(),
+                    if unwind { selected.len() } else { 0 }
+                );
+                if unwind {
+                    assert!(erased.iter().any(|row| row.nonzero_before > 0));
+                }
+                assert!(erased.iter().all(|row| row.nonzero_after == 0));
+            });
+        }
+    }
+}
+
+/// Count only public butterfly positions; this is a cost model, not timing.
+fn selected_public_pruned_positions_v1(common: u8, selected: &[usize]) -> usize {
+    fn count(rows: usize, offset: usize, indices: &[usize]) -> usize {
+        if indices.is_empty() || rows == 1 {
+            return 0;
+        }
+        let half = rows / 2;
+        let split = indices.partition_point(|&index| index < offset + half);
+        half + count(half, offset, &indices[..split])
+            + count(half, offset + half, &indices[split..])
+    }
+    let mut reversed = selected
+        .iter()
+        .map(|index| index.reverse_bits() >> (usize::BITS - u32::from(common)))
+        .collect::<Vec<_>>();
+    reversed.sort_unstable();
+    count(1usize << common, 0, &reversed)
+}
+
+#[test]
+fn selected_public_work_count_matches_small_full_and_singleton_trees() {
+    for common in 1..=10 {
+        let rows = 1usize << common;
+        assert_eq!(selected_public_pruned_positions_v1(common, &[0]), rows - 1);
+        assert_eq!(
+            selected_public_pruned_positions_v1(common, &[rows - 1]),
+            rows - 1
+        );
+        assert_eq!(
+            selected_public_pruned_positions_v1(common, &(0..rows).collect::<Vec<_>>()),
+            rows / 2 * usize::from(common)
+        );
+    }
+}
+
+#[test]
+#[ignore = "same-fixture native timing of test-only Horner; no production dispatch threshold selected"]
+fn selected_cpu_horner_pruned_full_cost_uses_public_geometry() {
+    use std::time::Instant;
+    // Diagnostic work cap only. The existing original benchmark above still
+    // covers all 2,176 selected rows for all six native domains without change.
+    // High-degree Horner has no proposed production use for those full sets;
+    // preserve its exact native-degree parity on a bounded public prefix here.
+    const HORNER_PRODUCTS_PER_COLUMN_V1: usize = 1 << 23;
+    let common = 22;
+    let rows = 1usize << common;
+    let workers = rayon::current_num_threads();
+    println!(
+        "x509_selected_horner_header common_log={common} workers={workers} rounds=3 horner_products_per_column_cap={HORNER_PRODUCTS_PER_COLUMN_V1} production_policy_changed=false"
+    );
+    let cases = [
+        ("singleton", vec![rows - 1]),
+        (
+            "spread_cut16",
+            (0..136)
+                .flat_map(|query| {
+                    let block = (query * 1729 + 17) % (rows / 16);
+                    block * 16..block * 16 + 16
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        ),
+        ("clustered_cut16", (rows - 136 * 16..rows).collect()),
+    ];
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let domains = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.native_trace_log2)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(domains, [5, 8, 15, 16, 18, 19].into_iter().collect());
+    for native in domains {
+        for width in [1, aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..1816)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (name, original_selected) in &cases {
+                let maximum_points = (HORNER_PRODUCTS_PER_COLUMN_V1 / columns[0].len()).max(1);
+                let selected = &original_selected[..original_selected.len().min(maximum_points)];
+                let expected = columns
+                    .iter()
+                    .map(|column| {
+                        full_compact_reference_v1(column, native, common, selected, |_| {}).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let pruned_positions = selected_public_pruned_positions_v1(common, selected);
+                let horner_products = columns[0].len() * selected.len();
+                for round in 0..3 {
+                    // Rotate the three paths, so each occupies each position once.
+                    for offset in 0..3 {
+                        let path = (round + offset) % 3;
+                        let started = Instant::now();
+                        let actual = columns
+                            .par_iter()
+                            .map(|column| match path {
+                                0 => evaluate_horner_v1(column, native, common, selected),
+                                1 => evaluate_v1(column, native, common, selected),
+                                _ => full_compact_reference_v1(
+                                    column,
+                                    native,
+                                    common,
+                                    selected,
+                                    |_| {},
+                                ),
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap();
+                        let elapsed = started.elapsed();
+                        assert_eq!(actual.len(), width);
+                        for (actual, expected) in actual.iter().zip(&expected) {
+                            assert_eq!(&**actual, &**expected);
+                        }
+                        let clear_started = Instant::now();
+                        drop(actual);
+                        let compact_clear = clear_started.elapsed();
+                        let path_name = ["horner", "pruned", "full_compact"][path];
+                        let path_field_bytes = width
+                            * (selected.len() + if path == 0 { 0 } else { rows })
+                            * core::mem::size_of::<F>();
+                        println!(
+                            "x509_selected_horner native_log={native} common_log={common} width={width} selection={name} fixture_selected_rows={} selected_rows={} round={round} path={path_name} transform_gather_scratch_clear_ns={} compact_clear_ns={} path_field_bytes={path_field_bytes} coefficient_count={} horner_products_per_column={horner_products} pruned_positions_per_column={pruned_positions}",
+                            original_selected.len(),
+                            selected.len(),
+                            elapsed.as_nanos(),
+                            compact_clear.as_nanos(),
+                            columns[0].len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

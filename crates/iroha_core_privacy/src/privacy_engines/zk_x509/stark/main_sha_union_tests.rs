@@ -479,7 +479,13 @@ fn lane_streamed_quartic_matches_dense_original_masks_and_atomic_chunk_sink() {
         let mut accumulator = vec![vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES];
         add_main_composition_coefficient_chunks_v1(&mut accumulator, &[chunks.clone()], cap)
             .unwrap();
-        assert_eq!(accumulator[0][0], dense);
+        assert_eq!(accumulator[0][0].as_slice(), &recovered[..]);
+        assert_eq!(&accumulator[0][0][..dense.len()], dense.as_slice());
+        assert!(
+            accumulator[0][0][dense.len()..]
+                .iter()
+                .all(|value| *value == E::ZERO)
+        );
         assert!(accumulator[0][1..].iter().all(Vec::is_empty));
         // A false final endpoint leaves a remainder and exceeds the declared
         // quotient degree; changing a mask tail also changes the real quotient.

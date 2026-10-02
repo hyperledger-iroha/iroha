@@ -163,8 +163,9 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
             return Err(malformed("parent has no authorized successor".into()).into());
         };
+        let mut validation = EpochValidationScope::new();
         let config = scheduled
-            .height_config()
+            .height_config_with_validation(&mut validation)
             .map_err(|error| malformed(error.to_string()))?;
         // Resource admission precedes the boolean signature relation and keeps
         // the original inherited cumulative allowance. No refusal is converted
@@ -183,7 +184,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             scheduled.epoch.clone(),
             height,
             BlsCrypto::with_aggregate_scratch(scratch),
-            &mut EpochValidationScope::new(),
+            &mut validation,
         )?;
         let certified = self
             .verification_context()

@@ -14,9 +14,38 @@ class KagemushaAndroidHardwareAppKeyPolicyV1Test {
         policy: KagemushaAndroidAppKeyHardwarePolicyV1 = KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY) =
         requirePersistentHardwareAppKeyV1(level, origin, purposes, digests, remaining, exportable, policy)
     @Test fun provisioningApiEligibilityHasNoOmapiStrongBoxOrOneUseQualificationClaim() {
-        assertEquals(false, persistentHardwareAppKeyApiAvailableV1(27))
+        assertEquals(false, persistentHardwareAppKeyApiAvailableV1(25))
+        assertEquals(true, persistentHardwareAppKeyApiAvailableV1(26))
+        assertEquals(true, persistentHardwareAppKeyApiAvailableV1(27))
         assertEquals(true, persistentHardwareAppKeyApiAvailableV1(28))
         assertEquals(true, persistentHardwareAppKeyApiAvailableV1(35))
+    }
+    @Test fun preStrongBoxApisSelectOnlyPermittedTeeBeforePlatformGeneration() {
+        for (api in listOf(26, 27)) for (featureReported in listOf(false, true)) {
+            for (policy in listOf(KagemushaAndroidAppKeyHardwarePolicyV1.TEE_ONLY,
+                KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX)) {
+                assertEquals(false, persistentHardwareAppKeyStrongBoxRequestedV1(api, policy, featureReported))
+            }
+            assertThrows(IllegalStateException::class.java) {
+                persistentHardwareAppKeyStrongBoxRequestedV1(api, KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY, featureReported)
+            }
+        }
+        for (policy in KagemushaAndroidAppKeyHardwarePolicyV1.values()) {
+            assertThrows(IllegalStateException::class.java) { persistentHardwareAppKeyStrongBoxRequestedV1(25, policy, true) }
+        }
+    }
+    @Test fun modernGenerationPreferencePreservesExplicitStrongBoxPolicy() {
+        for (api in listOf(28, 30, 31, 35)) {
+            assertEquals(false, persistentHardwareAppKeyStrongBoxRequestedV1(api, KagemushaAndroidAppKeyHardwarePolicyV1.TEE_ONLY, true))
+            for (policy in listOf(KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX,
+                KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY)) {
+                assertEquals(true, persistentHardwareAppKeyStrongBoxRequestedV1(api, policy, true))
+            }
+            assertEquals(false, persistentHardwareAppKeyStrongBoxRequestedV1(api, KagemushaAndroidAppKeyHardwarePolicyV1.TEE_OR_STRONGBOX, false))
+            assertThrows(IllegalStateException::class.java) {
+                persistentHardwareAppKeyStrongBoxRequestedV1(api, KagemushaAndroidAppKeyHardwarePolicyV1.STRONGBOX_ONLY, false)
+            }
+        }
     }
     @Test fun persistentGeneratedStrongBoxDoesNotRequireFiniteUsageOrRollbackTags() { check() }
     @Test fun genuineTeeIsAcceptedOnlyUnderItsExplicitPolicy() {

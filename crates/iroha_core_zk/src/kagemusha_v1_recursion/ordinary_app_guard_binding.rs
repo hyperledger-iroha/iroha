@@ -51,6 +51,7 @@ pub(super) struct OrdinaryCredentialIssuerCellsV1<F: KagemushaPoseidonFieldV1> {
 /// Reconstruct the full canonical ordinary credential from assigned semantic fields, including
 /// its original Ed signature and derived CRC, then bind SHA to the actual Native-admitted original.
 /// This is a same-original relation; it does not replace Native's genuine Ed authority verification.
+#[cfg(test)]
 pub(super) fn constrain_ordinary_credential_original_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

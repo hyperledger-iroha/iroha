@@ -2671,9 +2671,10 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     add_main_composition_coefficient_chunks_v1(&mut second_then_first, &first, coefficient_cap)
         .expect("first contribution second");
     assert_eq!(first_then_second, second_then_first);
-    assert!(
-        first_then_second[0][2].is_empty(),
-        "exact cancellation must remove the retained tail"
+    assert_eq!(
+        first_then_second[0][2],
+        vec![E::ZERO],
+        "exact cancellation must preserve the public contributor extent"
     );
     let canonical = first_then_second.clone();
     let mut wrong_lanes = second.clone();
@@ -2716,6 +2717,114 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     assert_eq!(first_then_second, canonical);
 }
 #[test]
+fn main_coefficient_accumulator_geometry_is_independent_of_values_and_cancellation() {
+    let coefficient_cap = 8;
+    let public_extents = [[8, 5, 0, 3, 1, 7], [6, 8, 4, 0, 1, 2], [8, 8, 4, 3, 1, 7]];
+    assert_eq!(COMPOSITION_DEGREE_CHUNKS, public_extents[0].len());
+    let evaluate = |coefficients: &[E], point: E| {
+        coefficients
+            .iter()
+            .rev()
+            .fold(E::ZERO, |sum, coefficient| sum.mul(point).add(*coefficient))
+    };
+    let mut expected_geometry = None;
+    // Equal public extents cover zero, dense and exact-cancellation secrets.
+    for mode in 0..3 {
+        let mut accumulator = ZeroizingExtensionLanesV1::new(
+            empty_main_composition_chunks_v1(),
+            zeroize_extension_lanes_v1,
+        );
+        for chunk in accumulator.iter_mut().flatten() {
+            chunk.try_reserve_exact(coefficient_cap).unwrap();
+        }
+        let allocations: Vec<_> = accumulator
+            .iter()
+            .flatten()
+            .map(|chunk| (chunk.as_ptr(), chunk.capacity()))
+            .collect();
+        let mut expected =
+            vec![vec![vec![E::ZERO; coefficient_cap]; COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES];
+        let mut retained_extents = [0; COMPOSITION_DEGREE_CHUNKS];
+        let mut geometry = Vec::new();
+        for (stage, extents) in public_extents.iter().enumerate() {
+            let mut contribution = ZeroizingExtensionLanesV1::new(
+                empty_main_composition_chunks_v1(),
+                zeroize_extension_lanes_v1,
+            );
+            for lane in 0..SECURITY_LANES {
+                for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                    for degree in 0..extents[chunk] {
+                        let coefficient = if mode == 0 {
+                            E::ZERO
+                        } else if mode == 2 && stage == 2 {
+                            expected[lane][chunk][degree].neg()
+                        } else {
+                            let value = (stage * 100 + lane * 50 + chunk * 8 + degree + 1) as u64;
+                            E::canonical([value, value + 1, value + 2, value + 3]).unwrap()
+                        };
+                        contribution[lane][chunk].push(coefficient);
+                        expected[lane][chunk][degree] =
+                            expected[lane][chunk][degree].add(coefficient);
+                    }
+                }
+            }
+            add_main_composition_coefficient_chunks_v1(
+                &mut accumulator,
+                &contribution,
+                coefficient_cap,
+            )
+            .unwrap();
+            for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                retained_extents[chunk] = retained_extents[chunk].max(extents[chunk]);
+            }
+            for lane in 0..SECURITY_LANES {
+                for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                    assert_eq!(
+                        accumulator[lane][chunk].as_slice(),
+                        &expected[lane][chunk][..retained_extents[chunk]]
+                    );
+                    for point in [E::ZERO, E::ONE, E::from_base(F(53))] {
+                        assert_eq!(
+                            evaluate(&accumulator[lane][chunk], point),
+                            evaluate(&expected[lane][chunk], point)
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .map(|chunk| (chunk.as_ptr(), chunk.capacity()))
+                    .collect::<Vec<_>>(),
+                allocations
+            );
+            geometry.push(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .map(|chunk| (chunk.len(), chunk.capacity()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        if mode == 2 {
+            assert!(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .all(|value| *value == E::ZERO)
+            );
+            assert!(accumulator.iter().flatten().any(|chunk| !chunk.is_empty()));
+        }
+        if let Some(expected_geometry) = &expected_geometry {
+            assert_eq!(&geometry, expected_geometry);
+        } else {
+            expected_geometry = Some(geometry);
+        }
+    }
+}
+#[test]
 fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let shared = layout.as_shared().expect("shared MAIN layout");
@@ -2724,7 +2833,7 @@ fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
     let chunks =
         composition_coefficient_chunks_v1(&coefficients, 2, &shared).expect("zero high tail");
     assert_eq!(chunks.len(), COMPOSITION_DEGREE_CHUNKS);
-    assert_eq!(chunks[0], vec![value(1), value(2), value(3)]);
+    assert_eq!(chunks[0], coefficients);
     coefficients[5] = value(1);
     assert!(matches!(
         composition_coefficient_chunks_v1(&coefficients, 2, &shared),

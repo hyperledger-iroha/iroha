@@ -639,25 +639,13 @@ fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
     }
     panic!("unsupported fixture signing authority: {authority}");
 }
-pub(super) fn contract_test_state(authority: &AccountId) -> State {
-    let domain = Domain::new(fixture_domain_id()).build(authority);
-    let account = build_fixture_account(authority, authority);
-    let world = World::with([domain], [account], []);
-    contract_test_state_with_world(authority, world)
-}
-/// Initialize the supplied World through its original signed genesis before host execution.
-pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World) -> State {
-    use crate::sumeragi::{
-        startup,
-        test_chain::{CertifiedTestChain, TestChainConfig},
-    };
+/// Execute the configured signed genesis while retaining its original State and Kura.
+fn signed_contract_host_state(config: crate::sumeragi::test_chain::TestChainConfig) -> State {
+    use crate::sumeragi::{startup, test_chain::CertifiedTestChain};
 
-    let config = TestChainConfig::new(world, 0);
     let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
     let consensus_mode = config.consensus_mode;
     let prepared = CertifiedTestChain::prepare(config).expect("prepare signed host genesis");
-    // Keep the original configured State and execute its signed genesis. A routing
-    // parameter by itself cannot authorize deployed artifact lookup or execution.
     let state = Arc::try_unwrap(prepared.state)
         .unwrap_or_else(|_| panic!("unpublished host fixture State is unique"));
     startup::apply_genesis(
@@ -668,6 +656,18 @@ pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World
         None,
     )
     .expect("apply signed host genesis");
+    state
+}
+pub(super) fn contract_test_state(authority: &AccountId) -> State {
+    let domain = Domain::new(fixture_domain_id()).build(authority);
+    let account = build_fixture_account(authority, authority);
+    let world = World::with([domain], [account], []);
+    contract_test_state_with_world(authority, world)
+}
+/// Authenticate the supplied World and grant the fixture authority its deployment permissions.
+pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World) -> State {
+    let state =
+        signed_contract_host_state(crate::sumeragi::test_chain::TestChainConfig::new(world, 0));
     grant_named_permission_to_account(
         &state,
         authority,
@@ -723,7 +723,9 @@ fn deployed_host_fixture_retains_original_genesis_and_artifact_scope() {
         .expect("original network-derived contract address")
     );
     assert!(
-        crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &address).is_some()
+        crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &address)
+            .expect("registry read completes")
+            .is_some()
     );
     assert_eq!(state.committed_height(), 1);
     assert_eq!(state.view().latest_block_hash(), Some(parent));

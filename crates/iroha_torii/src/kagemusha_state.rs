@@ -1,7 +1,7 @@
 //! Challenge-bound, data-only complete World publication at the native applied cut.
 
 use super::*;
-use crate::native_projection_response::encode;
+use crate::native_projection_response::{capacity, encode, native_committee_original_bytes};
 use iroha_core::{
     state::{AllocationBudget, StateReadOnly},
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
@@ -101,9 +101,31 @@ async fn handle(
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))
                 })
                 .map_err(|_| unavailable())?;
+            let genesis_committee = &genesis.commitment().schedule.current.committee;
+            let tip_committee = &tip.commitment().schedule.current.committee;
+            let genesis_storage = native_committee_original_bytes(
+                genesis_committee.len(),
+                genesis_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
+            let tip_storage = native_committee_original_bytes(
+                tip_committee.len(),
+                tip_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
             let proof_bytes = proof_bytes
                 .0
                 .checked_add(proof_bytes.1)
+                .and_then(|len| len.checked_add(genesis_storage))
+                .and_then(|len| len.checked_add(tip_storage))
                 .and_then(|len| len.checked_add(16 * 1024))
                 .ok_or_else(capacity)?;
             let _proof_charge = budget
@@ -169,11 +191,6 @@ fn unavailable() -> Error {
         code: "kagemusha_authority_state_unavailable",
         message: "Current certified native authority state is unavailable.".into(),
     }
-}
-pub(super) fn capacity() -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-    ))
 }
 
 use iroha_torii_shared::resource_names_state::{
@@ -326,22 +343,13 @@ async fn handle_resource_names_inner(
                             iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
                                 .map_err(|error| error.to_string())?;
                         for (_, value) in originals {
-                            let length =
-                                norito::canonical_frame_len(*value).map_err(|e| e.to_string())?;
-                            if length > 1024 * 1024 {
-                                return Err("native alias original exceeds bound".into());
-                            }
-                            let wire = encode(
+                            let wire = super::native_projection_response::encode_canonical(
                                 *value,
-                                ResponseFormat::Norito,
                                 1024 * 1024,
                                 &budget,
                                 unavailable,
                             )
                             .map_err(|error| error.to_string())?;
-                            if wire.as_ref().len() != length {
-                                return Err("native alias original length changed".into());
-                            }
                             wires.push_reserved(wire);
                         }
                         let mut aliases =
@@ -350,7 +358,7 @@ async fn handle_resource_names_inner(
                         for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
                             aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
                                 key,
-                                wire.as_ref(),
+                                wire.as_slice(),
                             ));
                         }
                         let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
@@ -439,39 +447,6 @@ fn validate_resource_names_request_target(
     Ok(challenge)
 }
 
-pub(super) fn native_committee_original_bytes<'a>(
-    expected: usize,
-    members: impl IntoIterator<Item = (&'a iroha_crypto::PublicKey, &'a [u8])>,
-) -> Result<usize, Error> {
-    // proof_committee retains a tuple Vec; build_proof collects FinalityValidator.
-    // Do not assume allocator reuse of two different element layouts. Both Vec
-    // geometries and each independently cloned compact key/PoP are prepaid.
-    let tuples = std::alloc::Layout::array::<(iroha_crypto::PublicKey, Vec<u8>)>(expected)
-        .map_err(|_| capacity())?
-        .size();
-    let final_values = std::alloc::Layout::array::<
-        iroha_data_model::sumeragi_finality::FinalityValidator,
-    >(expected)
-    .map_err(|_| capacity())?
-    .size();
-    let mut bytes = tuples.checked_add(final_values).ok_or_else(capacity)?;
-    let mut seen = 0usize;
-    for (key, pop) in members {
-        seen = seen.checked_add(1).ok_or_else(capacity)?;
-        if seen > expected {
-            return Err(capacity());
-        }
-        bytes = bytes
-            .checked_add(key.retained_allocation_layout().size())
-            .and_then(|value| value.checked_add(pop.len()))
-            .ok_or_else(capacity)?;
-    }
-    if seen != expected {
-        return Err(capacity());
-    }
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod resource_names_route_tests {
     use super::*;
@@ -548,31 +523,5 @@ mod resource_names_route_tests {
         assert!(
             validate_resource_names_request_target(&headers, &Method::GET, &uri, &value).is_err()
         );
-    }
-    #[test]
-    fn variable_committees_are_fully_prepaid_in_the_original_pool() {
-        let key =
-            iroha_crypto::KeyPair::from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal);
-        let pop = iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap();
-        let bytes = native_committee_original_bytes(
-            1024,
-            std::iter::repeat_n((key.public_key(), pop.as_slice()), 1024),
-        )
-        .unwrap();
-        assert!(
-            bytes > 16 * 1024,
-            "fixed metadata overhead is insufficient for supported large committees"
-        );
-        let budget = AllocationBudget::new(16 * 1024);
-        assert!(budget.try_reserve_bytes(bytes).is_err());
-        assert_eq!(budget.reserved_bytes(), 0);
-        let budget = AllocationBudget::new(bytes);
-        let charge = budget.try_reserve_bytes(bytes).unwrap();
-        assert_eq!(budget.reserved_bytes(), bytes);
-        drop(charge);
-        assert_eq!(budget.reserved_bytes(), 0);
-        assert!(native_committee_original_bytes(2, [(key.public_key(), pop.as_slice())]).is_err());
-        assert!(native_committee_original_bytes(0, [(key.public_key(), pop.as_slice())]).is_err());
-        assert!(native_committee_original_bytes(usize::MAX, std::iter::empty()).is_err());
     }
 }

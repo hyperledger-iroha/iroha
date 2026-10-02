@@ -113,7 +113,8 @@ pub enum KagemushaCircuitFamilyV1 {
     InnerState,
     /// Compact public transport decider for the aggregate state.
     State,
-    /// Compact outer recipient hardware authorization checked before reserve mutation.
+    /// Pre-debit authorization; the signed native profile selects the exact hardware-recursive
+    /// or ordinary-app leaf family. The same four semantic roles require fresh family-specific keys.
     MintAuthorization,
     /// Compact outer finalized reserve-mint receipt and consensus-finality helper.
     MintCredit,
@@ -598,6 +599,21 @@ pub struct KagemushaAuthenticatedArtifactSetV1<R> {
 }
 
 impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> {
+    /// Bind exact installed release artifacts with the sole internally derived empty effect.
+    /// This public constructor accepts an already authenticated model release, never its pins.
+    /// # Errors
+    /// Rejects a substituted/invalid release inventory, resolver or canonical empty-effect binding.
+    pub fn new_canonical(
+        release: &KagemushaAuthenticatedReleaseV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactErrorV1> {
+        let empty = crate::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(
+            release.release_id(),
+        )
+        .map_err(|error| KagemushaArtifactErrorV1::InvalidRelease(error.to_string()))?;
+        Self::new(release, empty, resolver)
+    }
+
     /// Bind an untrusted resolver to one already threshold-authenticated release.
     ///
     /// This validates the one release-wide proof suite, all 50 role/length bindings, and the
@@ -686,6 +702,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
 
     /// Exact signed ordinary Guard roles used by the first ordinary production State family.
     /// Public helper originals remain untrusted until their actual equations are consumed.
+    #[cfg(feature = "kagemusha-production-prover")]
     pub(super) fn ordinary_recursion_artifacts(
         &self,
     ) -> Result<KagemushaRecursionArtifactsV1, KagemushaArtifactErrorV1> {

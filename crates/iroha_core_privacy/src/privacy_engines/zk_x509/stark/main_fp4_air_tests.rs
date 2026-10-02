@@ -155,7 +155,7 @@ fn scalar_bus_fp4_capability_binds_all_five_local_terminal_columns() {
                         .unwrap(),
                     original
                 );
-                input[2][column] = E::from_base(F(u64::MAX));
+                input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
                         .evaluate_residues_v1(opening(&input), &input[4], challenges)
@@ -261,7 +261,7 @@ fn binding_sink_fp4_capability_binds_each_private_terminal_column() {
                         .unwrap(),
                     original
                 );
-                input[2][column] = E::from_base(F(u64::MAX));
+                input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
                         .evaluate_residues_v1(opening(&input), &input[4], challenges)
@@ -420,7 +420,7 @@ fn main_comparison_fp4_binds_private_terminal_columns_and_rejects_malformed_inpu
                         .unwrap(),
                     original
                 );
-                input[2][column] = E::from_base(F(u64::MAX));
+                input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
                         .evaluate_residues_v1(opening(&input), &input[4], challenges)
@@ -476,7 +476,7 @@ fn arithmetic_fp4_capability_binds_five_private_terminal_columns() {
                         .unwrap(),
                     original
                 );
-                input[2][column] = E::from_base(F(u64::MAX));
+                input[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
                         .evaluate_residues_v1(opening(&input), &input[4], challenges)

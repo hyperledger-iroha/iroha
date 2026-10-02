@@ -1704,6 +1704,14 @@ assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+# Stock JavaScript Cargo consumes the sealed root; the other privacy corridors
+# retain the independent external snapshot of that exact graph.
+grep -Fxq \
+  "IROHA_JS_CARGO_LOCKFILE_PATH=${PROVISION_REPOSITORY}/Cargo.lock" \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fxq \
+  "IROHA_PRIVACY_CARGO_LOCKFILE_PATH=${PROVISION_CORRIDOR}/lock/Cargo.lock" \
+  "${PROVISION_GITHUB_ENV}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH=' "${PROVISION_GITHUB_ENV}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL=' "${PROVISION_GITHUB_ENV}"
 grep -Fxq \
@@ -2072,7 +2080,7 @@ run_python_guard_for_root() {
   fi
   env \
     IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${selected_lock}" \
-    IROHA_JS_CARGO_LOCKFILE_PATH="${selected_lock}" \
+    IROHA_JS_CARGO_LOCKFILE_PATH="${root}/Cargo.lock" \
     IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${selected_lock}" \
     IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${selected_lock_seal}" \
     IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="${workspace_state}" \

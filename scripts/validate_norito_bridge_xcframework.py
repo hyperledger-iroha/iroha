@@ -137,6 +137,8 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_account_read_permission_multisig_payload_hash",
+    "connect_norito_account_read_permission_multisig_finalize",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
@@ -365,11 +367,11 @@ def _validate_root_identity(
 ) -> None:
     if local_integration and lockfile != root / "Cargo.lock":
         raise ValidationError("local integration requires the explicitly selected root Cargo.lock")
-    if not local_integration and payload["privacy_production_enabled"] is True and lockfile == root / "Cargo.lock":
+    if not local_integration and lockfile == root / "Cargo.lock":
         raise ValidationError("privacy production artifacts require an explicit external canonical graph snapshot")
     _regular_file(root / "Cargo.lock", "root source Cargo.lock")
     _regular_file(lockfile, "selected build Cargo.lock")
-    if not local_integration and payload["privacy_production_enabled"] is True and lockfile.lstat().st_mode & 0o222:
+    if not local_integration and lockfile.lstat().st_mode & 0o222:
         raise ValidationError("privacy production selected Cargo lock must be read-only")
     if _sha256(lockfile) != payload["cargo_lock_sha256"]:
         raise ValidationError("artifact Cargo.lock digest does not match selected build lock")
@@ -435,10 +437,9 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_int
         raise ValidationError("artifact version is not canonical")
     if payload["native_bridge_abi_version"] != 25:
         raise ValidationError("artifact does not bind exact native bridge ABI 25")
-    production = payload["privacy_production_enabled"]
-    if type(production) is not bool:
-        raise ValidationError("privacy_production_enabled must be boolean")
-    expected_features = ["privacy-production-enabled"] if production else []
+    if payload["privacy_production_enabled"] is not True:
+        raise ValidationError("artifact must include mandatory privacy support")
+    expected_features = ["privacy-production-enabled"]
     if payload["cargo_features"] != expected_features:
         raise ValidationError("artifact Cargo feature inventory is not exact")
     _validate_build_environment(root, payload["build_environment"])
@@ -753,14 +754,12 @@ def validate(
     payload = _load_manifest(manifest_path, root, lockfile, local_integration=local_integration)
 
     expected_top_level = {"Info.plist", MANIFEST_NAME, *EXPECTED_SLICES}
-    if payload["privacy_production_enabled"] is True:
-        expected_top_level.add(".privacy-production-enabled")
+    expected_top_level.add(".privacy-production-enabled")
     _exact_entries(xcframework, expected_top_level, "XCFramework top-level")
-    if payload["privacy_production_enabled"] is True:
-        privacy_marker = xcframework / ".privacy-production-enabled"
-        _regular_file(privacy_marker, "privacy-production-enabled marker")
-        if privacy_marker.stat().st_size != 0:
-            raise ValidationError("privacy-production-enabled marker must be empty")
+    privacy_marker = xcframework / ".privacy-production-enabled"
+    _regular_file(privacy_marker, "privacy-production-enabled marker")
+    if privacy_marker.stat().st_size != 0:
+        raise ValidationError("privacy-production-enabled marker must be empty")
 
     info_path = xcframework / "Info.plist"
     _regular_file(info_path, "XCFramework Info.plist")

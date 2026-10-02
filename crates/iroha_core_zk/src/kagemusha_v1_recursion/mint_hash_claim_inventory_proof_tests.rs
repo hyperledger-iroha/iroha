@@ -19,7 +19,11 @@ use crate::{
     pasta_cycle_loader::DeferredEquationWitness,
 };
 use halo2_proofs::{
-    halo2curves::CurveExt as _,
+    arithmetic::best_multiexp,
+    halo2curves::{
+        CurveExt as _,
+        group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
+    },
     plonk::{create_proof, keygen_pk, keygen_vk},
     poly::{
         commitment::ParamsProver as _,
@@ -126,7 +130,7 @@ where
 {
     let mut base = BaseCircuitBuilder::<C::ScalarExt>::new(false)
         .use_k(VERIFIER_K)
-        .use_lookup_bits(CLAIM_RLC_RADIX_BITS)
+        .use_lookup_bits(CARRIER_RLC_RADIX_BITS)
         .use_instance_columns(1);
     let range = base.range_chip();
     let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
@@ -209,7 +213,7 @@ fn check_actual_inventory_proof<C>(
 {
     let params = ParamsIPA::<C>::new(KAGEMUSHA_RECURSION_IPA_K_V1);
     let preliminary = full_inventory_fixture::<C>(parity, 17, false, None);
-    let commitments = std::array::from_fn(|index| {
+    let commitments: [C; 2] = std::array::from_fn(|index| {
         (best_multiexp::<C>(
             &preliminary.instances[index + 1],
             &params.get_g_lagrange()[..KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],

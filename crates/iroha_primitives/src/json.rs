@@ -162,8 +162,10 @@ impl Json {
         // `BTreeMap` and is the codec's single authority for JSON string and
         // finite-f64 spelling. Reusing it here prevents the ledger wrapper from
         // drifting from the JSON emitted by every other Norito component.
-        json::to_json_bounded(value, MAX_JSON_BYTES)
-            .map_err(|error| norito::Error::Message(error.to_string()))
+        json::to_json_bounded(value, MAX_JSON_BYTES).map_err(|error| match error {
+            json::BoundedJsonError::DecodeResource(error) => error.into(),
+            error => norito::Error::Message(error.to_string()),
+        })
     }
     fn canonicalize_text(value: &str) -> Result<String, norito::Error> {
         Self::ensure_size(value)?;
@@ -303,13 +305,23 @@ impl json::JsonDeserialize for Json {
                 "Json payload is valid but not in canonical lexical form".to_owned(),
             ));
         }
-        let canonical = Json::require_canonical_text(slice)
-            .map_err(|error| json::Error::Message(error.to_string()))?;
+        let canonical = Json::require_canonical_text(slice).map_err(|error| {
+            if error.is_decode_resource_limit() {
+                json::Error::from_decode_resource(error)
+            } else {
+                json::Error::Message(error.to_string())
+            }
+        })?;
         Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
     }
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
-        let canonical = Json::serialize_canonical_value(value)
-            .map_err(|error| json::Error::Message(error.to_string()))?;
+        let canonical = Json::serialize_canonical_value(value).map_err(|error| {
+            if error.is_decode_resource_limit() {
+                json::Error::from_decode_resource(error)
+            } else {
+                json::Error::Message(error.to_string())
+            }
+        })?;
         Json::try_from_canonical_string(canonical).map_err(json::Error::from_decode_resource)
     }
 }
@@ -633,6 +645,49 @@ mod tests {
         let j = Json::try_new(v.clone()).expect("try_new");
         let back: SerdeStruct = j.try_into_any().expect("try_into_any");
         assert_eq!(v, back);
+    }
+    #[test]
+    fn canonical_json_value_writer_preserves_exact_original_destination_refusal() {
+        let value = norito::json::Value::Null;
+        let expected = Json::from_norito_value_ref(&value).expect("original canonical null");
+        assert_eq!(expected.get(), "null");
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || Json::from_norito_value_ref(&value),
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(norito::Error::TotalAllocationExceeded {
+                    attempted: 4,
+                    limit: 0,
+                })
+            ),
+            "the first actual canonical destination must retain its exact refusal: {refused:?}"
+        );
+        assert_eq!(Json::from_norito_value_ref(&value).unwrap(), expected);
+        let semantic = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || <Json as json::JsonDeserialize>::json_from_value(&value),
+        );
+        assert!(matches!(semantic, Err(json::Error::DecodeResourceLimit)));
+        let wire = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || json::from_json::<Json>("null"),
+        );
+        assert!(matches!(wire, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(json::from_json::<Json>("null").unwrap(), expected);
+        let oversized = norito::json::Value::String("x".repeat(MAX_JSON_BYTES));
+        let bound = Json::from_norito_value_ref(&oversized).unwrap_err();
+        assert!(
+            !bound.is_decode_resource_limit(),
+            "intrinsic canonical body cap remains terminal"
+        );
+        let malformed = Json::from_str_norito("{not-json}").unwrap_err();
+        assert!(
+            !malformed.is_decode_resource_limit(),
+            "malformed source remains terminal"
+        );
     }
     #[test]
     fn norito_value_roundtrip() {

@@ -60,7 +60,7 @@ fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::
     let topology = manifest
         .transactions()
         .iter()
-        .flat_map(|transaction| transaction.topology())
+        .flat_map(iroha_genesis::RawGenesisTx::topology)
         .map(|entry| entry.peer.clone())
         .collect::<Vec<_>>();
     if topology.is_empty() {

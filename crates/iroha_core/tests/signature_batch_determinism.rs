@@ -97,7 +97,7 @@ fn shuffle<T: Clone>(rng: &mut Lcg, v: &[T]) -> Vec<T> {
 }
 #[test]
 fn ed25519_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
+    let (mut state, authority, _network_id, good) = setup_world_with_account(Algorithm::Ed25519);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let chain = crate::block::tests::component_chain(state);
@@ -144,7 +144,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
 }
 #[test]
 fn secp256k1_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
+    let (mut state, authority, _network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Secp256k1);
     let chain = crate::block::tests::component_chain(state);
@@ -191,7 +191,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_passes() {
-    let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, _network_id, signer) =
+        setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let chain = crate::block::tests::component_chain(state);
     let network_id = chain.network_id();
@@ -211,7 +212,7 @@ fn bls_multimessage_batch_passes() {
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_finds_same_bad_sig() {
-    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, _network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let chain = crate::block::tests::component_chain(state);
@@ -257,7 +258,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, _network_id, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let chain = crate::block::tests::component_chain(state);

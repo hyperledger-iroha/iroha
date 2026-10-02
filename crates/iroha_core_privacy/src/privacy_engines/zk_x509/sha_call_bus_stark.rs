@@ -2478,6 +2478,22 @@ pub(crate) struct ZkX509ShaBatchSegmentAuxSourceV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
+    /// Return the genuine private endpoint and compact-CA boundaries under
+    /// this source's original opaque shared binding. No supplied endpoint or
+    /// alternate raw challenge family is accepted by this operation.
+    pub(crate) fn rfc_union_air_terminals_v1(
+        &self,
+        expected: ZkX509CredentialPreAuxBindingV1,
+        segment: usize,
+    ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
+        if self.binding != Some(expected) {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Phase);
+        }
+        if self.replay.segment() != segment {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        self.replay_aux_rows_with_air_terminals_v1(|_, _| {})
+    }
     /// Deterministically replay a challenge-independent column from this
     /// already-bound owner. This exposes no new phase or challenge constructor.
     pub(crate) fn replay_base_column_v1(

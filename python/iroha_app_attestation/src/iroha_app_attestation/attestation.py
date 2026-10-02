@@ -37,6 +37,11 @@ PREPARATION_TTL_MS = 120_000
 APPLE_NONCE_OID = "1.2.840.113635.100.8.2"
 ANDROID_KEY_DESCRIPTION_OID = "1.3.6.1.4.1.11129.2.1.17"
 KEYMINT_VERSIONS = {100, 200, 300, 400, 500}
+# Ordinary persistent app identity has no finite-use KeyMint requirement. Version1
+# is absent because its schema has no attestationApplicationId/package signer pin.
+# https://source.android.com/docs/security/features/keystore/attestation
+ORDINARY_PERSISTENT_ANDROID_VERSION_PAIRS = frozenset({(2, 3), (3, 4), (4, 41)} |
+    {(version, version) for version in KEYMINT_VERSIONS})
 # Google's explicitly listed 2016 factory root remains trusted after expiry
 # when the exact chain is checked and the current revocation list is clean.
 # https://developer.android.com/privacy-and-security/security-key-attestation
@@ -892,11 +897,18 @@ class DurableAppleAssertionCounterStore:
         return checked
 
 
-def explicit_tags(value: DerValue) -> dict[int, DerValue]:
+def explicit_tags(value: DerValue, *, ordinary_version: int | None = None) -> dict[int, DerValue]:
     result: dict[int, DerValue] = {}
     prior = 0
+    accepted = KEYMINT_AUTH_TAGS
+    if ordinary_version == 2:
+        accepted = accepted - {303, 305, 405, 507, 508, 509, 718, 719, 720, 723, 724} | {703}
+    elif ordinary_version == 3:
+        accepted = accepted - {305, 405, 720, 723, 724}
+    elif ordinary_version == 4:
+        accepted = accepted - {405, 723, 724}
     for field in children(value):
-        require(field.tag_class == 2 and field.constructed and field.number in KEYMINT_AUTH_TAGS
+        require(field.tag_class == 2 and field.constructed and field.number in accepted
                 and field.number > prior, "unsupported, duplicate or unsorted KeyMint authorization tag")
         item = der_one(field.value)
         if field.number in KEYMINT_SET_TAGS:
@@ -908,7 +920,7 @@ def explicit_tags(value: DerValue) -> dict[int, DerValue]:
                 positive_integer(member)
         elif field.number in KEYMINT_INTEGER_TAGS:
             positive_integer(item)
-        elif field.number in KEYMINT_NULL_TAGS:
+        elif field.number in KEYMINT_NULL_TAGS or ordinary_version == 2 and field.number == 703:
             require(primitive(item, 5) == b"", "invalid KeyMint NULL authorization")
         elif field.number in KEYMINT_OCTET_TAGS:
             primitive(item, 4)
@@ -936,6 +948,35 @@ def verify_android_raw(
     key authenticates app approval; it supplies no monotonic monetary journal,
     rollback-resistant wallet state, trusted clock or hardware one-use grant.
     """
+    return _verify_android_raw(chain_der, selection, package_name, package_version,
+        signing_certificate_sha256, root_der, root_sha256, trusted_time_ms, openssl_path,
+        allowed_security_levels=allowed_security_levels, ordinary_persistent=False)
+
+
+def verify_android_persistent_app_key_raw(
+    chain_der: list[bytes], selection: Selection,
+    package_name: str, package_version: int, signing_certificate_sha256: bytes,
+    root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
+    *, allowed_security_levels: frozenset[int],
+) -> RawPlatformProof:
+    """Verify only ordinary persistent app identity, including genuine Keymaster TEE.
+
+    Trust, revocation by the caller, exact C challenge, package/signing pin, hardware
+    P-256 generation and locked verified boot remain required. Keymaster3's original
+    RootOfTrust has no verifiedBootHash; no value is fabricated for it. This proof
+    supplies no finite-use, rollback-protected money state or monetary authority.
+    """
+    return _verify_android_raw(chain_der, selection, package_name, package_version,
+        signing_certificate_sha256, root_der, root_sha256, trusted_time_ms, openssl_path,
+        allowed_security_levels=allowed_security_levels, ordinary_persistent=True)
+
+
+def _verify_android_raw(
+    chain_der: list[bytes], selection: Selection,
+    package_name: str, package_version: int, signing_certificate_sha256: bytes,
+    root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
+    *, allowed_security_levels: frozenset[int], ordinary_persistent: bool,
+) -> RawPlatformProof:
     require(type(allowed_security_levels) is frozenset and allowed_security_levels
             and all(type(item) is int for item in allowed_security_levels)
             and allowed_security_levels <= {1, 2},
@@ -974,13 +1015,16 @@ def verify_android_raw(
     level = positive_integer(description[1], 10)
     keymint_version = positive_integer(description[2])
     keymint_level = positive_integer(description[3], 10)
-    require(version in KEYMINT_VERSIONS and keymint_version == version
+    supported_version = ((version, keymint_version) in ORDINARY_PERSISTENT_ANDROID_VERSION_PAIRS
+                         if ordinary_persistent else version in KEYMINT_VERSIONS and keymint_version == version)
+    require(supported_version and (version != 2 or level == 1)
             and level in allowed_security_levels and keymint_level == level,
             "approval key security level differs from authenticated hardware policy")
     require(primitive(description[4], 4) == hashlib.sha256(selection.transcript()).digest(), "KeyMint challenge mismatch")
-    software = explicit_tags(description[6])
-    hardware = explicit_tags(description[7])
-    require(not HARDWARE_ONLY_TAGS.intersection(software), "hardware KeyMint authorization is software-enforced")
+    ordinary_version = version if ordinary_persistent else None
+    software = explicit_tags(description[6], ordinary_version=ordinary_version)
+    hardware = explicit_tags(description[7], ordinary_version=ordinary_version)
+    require(not (HARDWARE_ONLY_TAGS | ({703} if ordinary_version == 2 else set())).intersection(software), "hardware KeyMint authorization is software-enforced")
     require(ANDROID_APPROVAL_REQUIRED_HARDWARE_TAGS.issubset(hardware),
             "missing hardware KeyMint authorization")
     require(keymint_integer_set(hardware[1], 2) and positive_integer(hardware[2]) == 3
@@ -1007,10 +1051,11 @@ def verify_android_raw(
     # did not strictly specify verifiedBootKey length, so preserve that field's
     # nonzero check for valid older OEM attestations.
     # https://android.googlesource.com/platform/hardware/interfaces/+/6a88f79b6426e80e0f72a8eaf429b010b183c12e/security/keymint/aidl/android/hardware/security/keymint/KeyCreationResult.aidl
-    require(len(boot) == 4 and primitive(boot[1], 1) == b"\xff"
+    boot_fields = 3 if ordinary_persistent and version == 2 else 4
+    require(len(boot) == boot_fields and primitive(boot[1], 1) == b"\xff"
             and positive_integer(boot[2], 10) == 0 and any(primitive(boot[0], 4))
-            and len(primitive(boot[3], 4)) == 32
-            and any(primitive(boot[3], 4)), "Android boot state is not locked and verified")
+            and (boot_fields == 3 or len(primitive(boot[3], 4)) == 32
+                 and any(primitive(boot[3], 4))), "Android boot state is not locked and verified")
     digest = hashlib.sha256(encode_android_chain(chain_der)).digest()
     return RawPlatformProof(digest, point, device_key_reference(point), "android_keymint",
                             android_security_level=level)

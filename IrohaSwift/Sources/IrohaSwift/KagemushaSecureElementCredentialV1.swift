@@ -4,12 +4,11 @@
 import CryptoKit
 import Foundation
 
-#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential) && canImport(Security)
+#if canImport(SecureElementCredential) && canImport(Security)
   /// Async wired-mode session admitted only by the exact ABI-25 applet capability frame.
   ///
-  /// Targets must define `OFFLINE_SECURE_ELEMENT_CREDENTIAL` only after Apple grants the Secure
-  /// Element Credential entitlement and provisions the named applet. The compile gate prevents a
-  /// non-entitled build from calling `CredentialSession.startSession()`.
+  /// The platform framework is compiled whenever it is available. Apple entitlement and applet
+  /// provisioning are authenticated by the native admission path when the session opens.
   @available(iOS 18.1, *)
   public final class KagemushaSecureElementCredentialSessionV1: @unchecked Sendable {
     public var acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1 {
@@ -283,7 +282,7 @@ import Foundation
     }
   }
 #else
-  /// Compile-gated placeholder for builds without Apple's restricted SE credential entitlement.
+  /// Hardware discovery diagnostic when this SDK cannot import Apple's credential framework.
   @available(iOS 18.1, *)
   public final class KagemushaSecureElementCredentialSessionV1: @unchecked Sendable {
     public let acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1? = nil
@@ -294,14 +293,14 @@ import Foundation
       nil
     }
 
-    /// Restricted Apple session access remains unavailable without the real compile entitlement.
+    /// Unsupported framework discovery cannot admit an authenticated credential session.
     public func executeAuthenticated(
       operation _: KagemushaDeviceLifecycleOperationV1,
       requestID _: Data,
       canonicalCommand _: Data,
       acceptedDevicePublicKey _: Data?
     ) async throws -> KagemushaDeviceLifecycleResultV1 {
-      throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+      throw KagemushaDeviceLifecycleBridgeErrorV1.unavailable
     }
 
     public func close() async {}

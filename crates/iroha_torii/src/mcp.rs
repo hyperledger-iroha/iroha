@@ -2226,7 +2226,9 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
                 let error_class = match error {
                     BoundedJsonError::Unsupported => "unsupported",
                     BoundedJsonError::LengthMismatch => "length_mismatch",
-                    BoundedJsonError::AllocationFailed => "allocation_failed",
+                    BoundedJsonError::AllocationFailed | BoundedJsonError::DecodeResource(_) => {
+                        "allocation_failed"
+                    }
                     BoundedJsonError::BodyTooLarge => unreachable!("handled above"),
                 };
                 return jsonrpc_error_response(

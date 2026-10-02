@@ -57,7 +57,8 @@ ROOT_INPUTS = (
     Path("javascript/iroha_js/src/ivmArtifact.js"),
     Path("javascript/iroha_js/src/kotodamaCompiler/normalize.js"),
 )
-# Bind the koto binary owner and its normal compiler/admission dependencies.
+# Start at the executable's owner so the compiler and its runtime/admission
+# dependencies are included without traversing unrelated dev-dependencies.
 ROOT_PACKAGES = (Path("crates/kotodama_toolchain"),)
 # Package tests, examples, benches, fuzzers, and prose do not participate in a
 # normal koto/verifier build. Excluding those developer-only trees keeps the

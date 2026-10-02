@@ -125,8 +125,8 @@ impl LaneTransactions for NoTransactions {
         _: u64,
         _: usize,
         _: &BTreeSet<HashOf<TransactionEntrypoint>>,
-    ) -> Vec<SignedTransaction> {
-        Vec::new()
+    ) -> Result<Vec<SignedTransaction>, crate::execution_attempt::ExecutionDeferred> {
+        Ok(Vec::new())
     }
 }
 

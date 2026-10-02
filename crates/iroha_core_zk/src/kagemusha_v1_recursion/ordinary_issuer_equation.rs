@@ -8,7 +8,7 @@ use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue,
     QuantumCell::Constant,
-    gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
+    gates::{GateInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
 use halo2_ecc::{
     bigint::ProperCrtUint,

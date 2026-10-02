@@ -7129,6 +7129,7 @@ mod validation_fee_registry_restore_tests {
             .expect("missing proposal provenance does not corrupt the registry payload");
         let registry_error =
             crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("the registry validator must reject its missing exact proposal");
         assert!(
             registry_error.contains("authorized governance proposal is missing"),
@@ -7166,6 +7167,7 @@ mod validation_fee_registry_restore_tests {
             .expect("missing cross-store attempt does not corrupt the registry payload");
         let error =
             crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("the registry must retain its exact authorized Parliament attempt");
         assert!(
             error.contains("authorized Parliament attempt is missing"),
@@ -7202,6 +7204,7 @@ mod validation_fee_registry_restore_tests {
             &context.view(),
             RESTORED_HEIGHT,
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("a restored registry cannot target another exact network");
         assert!(
             error.contains("validation-fee policy network mismatch"),
@@ -8893,9 +8896,16 @@ fn parse_world(
             }
         }
         crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
-            .map_err(|message| json::Error::InvalidField {
-                field: "parameters".into(),
-                message,
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
+                    StateRestoreError::Serialization(json::Error::InvalidField {
+                        field: "parameters".into(),
+                        message,
+                    })
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    StateRestoreError::ExecutionDeferred(reason)
+                }
             })?;
         MusubiPersistedState {
             namespace_bindings: &world.musubi_namespace_bindings,
@@ -9433,11 +9443,27 @@ fn build_state(
         &state.view(),
         restored_height,
     )
-    .map_err(|error| {
-        MergeLedgerCommitError::ExecutionStatePublication(format!(
-            "restored validation-fee policy registry is invalid: {error}"
-        ))
+    .map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored validation-fee policy registry is invalid: {error}"
+            ))
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            MergeLedgerCommitError::ExecutionDeferred(reason)
+        }
     })?;
+    state
+        .world
+        .validate_retained_mandatory_sources()
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                MergeLedgerCommitError::ExecutionDeferred(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                MergeLedgerCommitError::ExecutionStatePublication(error)
+            }
+        })?;
     state
         .finalize_snapshot_derived_state_indexes(emergency_fast)
         .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;

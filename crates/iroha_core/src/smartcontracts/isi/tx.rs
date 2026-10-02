@@ -573,6 +573,29 @@ impl FinalizedExecutionCarrier {
     pub fn work_items(&self) -> u64 {
         self.work_items
     }
+    /// Project one exact Network input and its joined output from this authenticated carrier.
+    ///
+    /// No auxiliary transaction index or additional storage read is consulted. The complete row
+    /// is measured before its source and output are cloned.
+    ///
+    /// # Errors
+    /// Rejects a missing input, invalid source/output proofs, or a zero/exceeded row byte limit.
+    pub fn transaction_at(
+        &self,
+        input_index: u32,
+        max_row_bytes: u64,
+    ) -> Result<CommittedTransaction, QueryExecutionFail> {
+        if max_row_bytes == 0 {
+            return Err(QueryExecutionFail::GasBudgetExceeded);
+        }
+        let projection = NetworkCarrierProjection::new(std::sync::Arc::clone(&self.block))?;
+        projection.transaction_at(input_index, |bytes| {
+            if bytes > max_row_bytes {
+                return Err(QueryExecutionFail::GasBudgetExceeded);
+            }
+            Ok(())
+        })
+    }
     /// Consume the read result and retain its immutable authenticated body.
     pub fn into_block(self) -> std::sync::Arc<SignedBlock> {
         self.block
@@ -1968,6 +1991,88 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn finalized_carrier_projects_exact_transaction_without_a_complete_auxiliary_index() {
+        use crate::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use norito::codec::Encode as _;
+        let config = TestChainConfig::new(World::new(), 1_000);
+        let key = config.genesis_key.clone();
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        let signed = chain.sign(
+            &key,
+            [iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "exact cold carrier".into(),
+            )
+            .into()],
+            1_001,
+        );
+        let hash = signed.hash_as_entrypoint();
+        let saved_wire = signed.encode_wire_v1().unwrap();
+        chain.commit(vec![signed]);
+        let (work, bytes) = super::native_carrier_reader_tests::bounds(&chain, 2);
+        let fixture = crate::kura::tests::CommittedNetworkProofFixture::from_chain(chain);
+        fixture.make_target_cold();
+        assert!(
+            fixture
+                .kura
+                .get_block_heights_by_entrypoint_hash(hash)
+                .is_none()
+        );
+        let index_before = fixture.index_image();
+        let height = NonZeroUsize::new(2).unwrap();
+        let view = fixture.state.view();
+        assert!(matches!(
+            committed_transactions_indexed_snapshot(
+                &view,
+                CompoundPredicate::from_filters(CommittedTxFilters {
+                    entry_eq: Some(hash),
+                    ..CommittedTxFilters::default()
+                }),
+                query_work_limits(),
+                1,
+                TRANSACTION_HISTORY_MAX_BYTES,
+            ),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+        drop(view);
+        fixture.kura.reset_canonical_query_reads_for_test();
+        let carrier = fixture
+            .state
+            .read_finalized_execution_carrier(height, work, bytes)
+            .unwrap();
+        let input_index = carrier
+            .block()
+            .network_entrypoints()
+            .position(|entrypoint| entrypoint.hash() == hash)
+            .unwrap() as u32;
+        let details = carrier.transaction_at(input_index, bytes).unwrap();
+        assert_eq!(details.entrypoint_hash, hash);
+        assert!(details.result().is_ok());
+        let TransactionEntrypoint::External(committed) = details.entrypoint() else {
+            panic!("exact external transaction");
+        };
+        assert_eq!(committed.encode_wire_v1().unwrap(), saved_wire);
+        let row_bytes = details.encode().len() as u64;
+        assert_eq!(
+            carrier.transaction_at(input_index, row_bytes).unwrap(),
+            details
+        );
+        for limit in [0, row_bytes - 1] {
+            assert!(matches!(
+                carrier.transaction_at(input_index, limit),
+                Err(QueryExecutionFail::GasBudgetExceeded)
+            ));
+        }
+        assert!(carrier.transaction_at(u32::MAX, bytes).is_err());
+        assert_eq!(fixture.kura.canonical_query_reads_for_test(), (2, bytes));
+        assert_eq!(fixture.index_image(), index_before);
+        assert!(!fixture.target_cached());
+    }
+
+    #[test]
     fn finalized_carrier_reader_denies_before_body_io_and_returns_no_partial_rows() {
         let chain = super::native_carrier_reader_tests::chain();
         let height = NonZeroUsize::new(2).unwrap();
@@ -2219,9 +2324,25 @@ pub(crate) mod tests {
         let ExecutionOutputV1::Network(row) = &mut rows[0] else {
             unreachable!()
         };
-        row.result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted("query rejection 9:9".into()),
-        )));
+        let Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::Find(
+                iroha_data_model::query::error::FindError::Domain(domain),
+            ),
+        ))) = &mut row.result.0
+        else {
+            panic!(
+                "original native rejection must name the missing domain: {:?}",
+                row.result
+            );
+        };
+        assert_eq!(domain.to_string(), "missing-query-domain.universal");
+        // Alter the actual typed rejection without discarding its original receipt fields.
+        // The replacement label has the same canonical length, so the durable index stays exact.
+        *domain = iroha_model_base::domain::DomainId::try_new(
+            "changed-query-domain",
+            domain.dataspace().as_ref(),
+        )
+        .expect("same-length canonical domain label");
         install_query_outputs(&mut changed, rows);
         changed.validate_output_merkle_cache().unwrap();
         assert_eq!(changed.hash(), original.hash());
@@ -2240,6 +2361,16 @@ pub(crate) mod tests {
         let wire = changed.encode_wire().unwrap();
         assert_eq!(wire.len(), original.encode_wire().unwrap().len());
         assert_ne!(Hash::new(&wire), Hash::new(original.encode_wire().unwrap()));
+        let decoded = iroha_data_model::block::decode_framed_signed_block(&wire)
+            .expect("changed output is internally canonical, unlike a checksum corruption");
+        let expected_height = fixture.target_height.get() as u64;
+        let frame_error =
+            crate::sumeragi::certified_chain::read_frame(Arc::new(decoded), expected_height)
+                .expect_err("original execution certificate cannot commit the changed output");
+        assert!(matches!(&frame_error,
+            crate::sumeragi::certified_chain::ChainReadError::ExecutionMismatch { height }
+                if *height == expected_height));
+        let expected_error = QueryExecutionFail::Conversion(frame_error.to_string());
         fixture.store.overwrite_body(fixture.target_height, &wire);
         let error = execute_transactions_fixture(
             CompoundPredicate::from_filters(CommittedTxFilters {
@@ -2250,8 +2381,9 @@ pub(crate) mod tests {
         )
         .err()
         .expect("original QC must reject self-consistent changed output");
-        assert!(
-            matches!(error, QueryExecutionFail::Conversion(message) if message.contains("storage authentication"))
+        assert_eq!(
+            error, expected_error,
+            "query must reject the exact original execution commitment mismatch"
         );
     }
     #[test]
@@ -2328,12 +2460,56 @@ pub(crate) mod tests {
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
         });
+        let work_per_carrier: Vec<u64> = fixture
+            .store
+            .blocks
+            .iter()
+            .map(|block| {
+                u64::try_from(
+                    block
+                        .network_entrypoint_count()
+                        .max(block.execution_outputs().len())
+                        .max(1),
+                )
+                .expect("original carrier work fits u64")
+            })
+            .collect();
+        let carrier_bound = *work_per_carrier.iter().max().expect("original carriers");
+        let total_bound = work_per_carrier.iter().copied().sum::<u64>();
+        assert_eq!(
+            work_per_carrier[0], 3,
+            "genuine genesis has three native inputs"
+        );
+        assert!(work_per_carrier[1..].iter().all(|work| *work == 2));
+        assert_eq!(carrier_bound, 3);
+        assert_eq!(total_bound, 35);
+        // The original two-row carrier limit still rejects the three-row
+        // genesis; an authenticated complete scan must budget its actual rows.
+        let mut refused_visits = 0_usize;
+        let refused = visit_committed_transactions_with_work_budget(
+            &state_view,
+            false_filter.clone(),
+            2,
+            total_bound,
+            TRANSACTION_HISTORY_MAX_BYTES,
+            |_, matches| {
+                assert!(!matches);
+                refused_visits += 1;
+                Ok(ControlFlow::Continue(()))
+            },
+        )
+        .expect_err("a two-row carrier policy must refuse the original three-row genesis");
+        assert_eq!(refused, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(
+            refused_visits, 32,
+            "all sixteen two-row successors remain admitted"
+        );
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions_with_work_budget(
             &state_view,
             false_filter,
-            2,
-            33,
+            carrier_bound,
+            total_bound,
             TRANSACTION_HISTORY_MAX_BYTES,
             |_, matches| {
                 assert!(!matches);
@@ -2343,6 +2519,10 @@ pub(crate) mod tests {
         )
         .expect("each carrier fits independently within the projection bound");
         assert!(exhausted);
+        assert_eq!(
+            visited,
+            usize::try_from(total_bound).expect("retained row census")
+        );
         assert!(visited > 2, "the scan crossed multiple bounded carriers");
     }
     #[test]
@@ -2519,6 +2699,19 @@ pub(crate) mod tests {
     #[test]
     fn fallible_transaction_visitor_defers_unreached_corruption_but_exact_fails() {
         let fixture = canonical_query_fixture();
+        let mut corrupted_wire = fixture.store.blocks[fixture.unrelated_height.get() - 1]
+            .encode_wire()
+            .expect("original canonical historical wire");
+        *corrupted_wire
+            .last_mut()
+            .expect("original wire is nonempty") ^= 1;
+        let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
+            .expect_err("altered source must fail its canonical frame checksum");
+        assert!(
+            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
+            if message == "checksum mismatch")
+        );
+        let expected_error = QueryExecutionFail::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();
         let mut visited = 0_usize;
@@ -2550,8 +2743,9 @@ pub(crate) mod tests {
             |_, _, _| Ok(ControlFlow::Continue(())),
         )
         .expect_err("exact scan must fail on selected historical corruption");
-        assert!(
-            matches!(err, QueryExecutionFail::Conversion(message) if message.contains("storage authentication"))
+        assert_eq!(
+            err, expected_error,
+            "exact visitor must propagate the complete canonical source refusal"
         );
     }
     /// Verifies that all per-field iterators over a committed block are consistent.

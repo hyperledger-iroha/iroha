@@ -1,4 +1,4 @@
-//! Private canonical fetch and original CALL/RETURN/STORE/scalar producer ownership.
+//! Private canonical fetch and original CALL/RETURN/STORE/scalar/branch producer ownership.
 //!
 //! One original packet array owns architectural control, operand reads, both
 //! lifecycle roles and protected return-PC state. The same references feed the
@@ -37,7 +37,7 @@ const DEPTH_BITS: usize = HALT_INVERSE + 1;
 const RETURN_DELTA: usize = DEPTH_BITS + 2 * DEPTH_BITS_PER_VALUE;
 /// One private fetch/control workspace shared by every original port.
 const SCALAR: usize = RETURN_DELTA + 2;
-/// Private source bits, ALU digits and exact comparison cells follow control.
+/// Private source bits, ALU, comparison and shift cells follow control.
 pub(super) const WIDTH: usize = SCALAR + scalar::WIDTH;
 /// Exhaustive original producers owned by this dispatcher, in native order.
 pub(super) const PORTS: usize = 21;
@@ -217,6 +217,7 @@ enum Role {
     Return,
     Store,
     Scalar,
+    Branch,
 }
 fn role(instruction: u32) -> Option<Role> {
     match wide::opcode(instruction) {
@@ -230,6 +231,7 @@ fn role(instruction: u32) -> Option<Role> {
             Some(Role::Return)
         }
         wide::memory::STORE64 => Some(Role::Store),
+        _ if scalar::is_branch(instruction) => Some(Role::Branch),
         _ if scalar::is_supported(instruction) => Some(Role::Scalar),
         _ => None,
     }
@@ -340,6 +342,8 @@ fn append_control_residues<'a>(
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
+    let rotating = select(&|_, w| scalar::is_rotate(w));
+    let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
         out.push(bit(row[FETCH + i]));
@@ -349,7 +353,14 @@ fn append_control_residues<'a>(
         }
     }
     out.push(fetched.sub(active));
-    out.push(child.add(returning).add(store).add(scalar).sub(active));
+    out.push(
+        child
+            .add(returning)
+            .add(store)
+            .add(scalar)
+            .add(branching)
+            .sub(active),
+    );
     for value in &row[WORDS..CHILD_INVERSE] {
         out.push(bit(*value));
     }
@@ -434,7 +445,8 @@ fn append_control_residues<'a>(
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
         // Native base cost: two for CALL/RETURN, three for STORE64, one
-        // for scalar arithmetic; the final borrow forbids underflow.
+        // for scalar arithmetic and conditional branches, plus one for rotates.
+        // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
         } else {
@@ -446,6 +458,8 @@ fn append_control_residues<'a>(
                 .mul(F(2))
                 .add(store.mul(F(3)))
                 .add(scalar)
+                .add(rotating)
+                .add(branching)
         } else {
             F::ZERO
         };
@@ -732,6 +746,15 @@ fn append_control_residues<'a>(
                     constant_limb(pc.wrapping_add_signed(delta * 4), i)
                 }
                 Some(Role::Store | Role::Scalar) => constant_limb(pc + 4, i),
+                Some(Role::Branch) => {
+                    // PreparedContract has already checked both successors
+                    // against its instruction boundaries. Native branches do
+                    // not halt, even when their predicate is true.
+                    let fallthrough = constant_limb(pc + 4, i);
+                    let target =
+                        constant_limb(pc.wrapping_add_signed(i64::from(wide::imm8(w)) * 4), i);
+                    fallthrough.add(scalar::branch_taken(row).mul(target.sub(fallthrough)))
+                }
                 _ => F::ZERO,
             }
         });
@@ -767,7 +790,7 @@ fn append_control_residues<'a>(
     }
 }
 
-/// Join the same canonical private fetch/control and scalar register equations.
+/// Join the same canonical private fetch/control and scalar/branch register equations.
 /// Every original producer, including all three scalar ports, belongs to the
 /// exhaustive private-history join. No public operand statement is introduced.
 pub(super) fn append_residues<'a>(

@@ -77,7 +77,7 @@ fn composition_growth_clears_displaced_allocation_and_reserved_additions_keep_ad
 }
 
 #[test]
-fn composition_cancellation_clears_removed_cells_before_truncation() {
+fn composition_cancellation_retains_extent_and_clears_on_drop() {
     let mut accumulator = ZeroizingExtensionLanesV1::new(chunks(), zeroize_extension_lanes_v1);
     let mut contribution = chunks();
     for chunk in &mut contribution[0] {
@@ -85,12 +85,27 @@ fn composition_cancellation_clears_removed_cells_before_truncation() {
             *coefficient = E::ZERO.sub(*coefficient);
         }
     }
-    let initialized = accumulator[0].iter().map(Vec::len).sum::<usize>();
+    let extents = accumulator[0].iter().map(Vec::len).collect::<Vec<_>>();
+    let initialized = extents.iter().sum::<usize>();
     let (result, records) = inspection::observe_v1(|| {
-        add_main_composition_coefficient_chunks_v1(&mut accumulator, &contribution, 32)
+        let result =
+            add_main_composition_coefficient_chunks_v1(&mut accumulator, &contribution, 32);
+        assert_eq!(
+            accumulator[0].iter().map(Vec::len).collect::<Vec<_>>(),
+            extents
+        );
+        assert!(
+            accumulator[0]
+                .iter()
+                .flatten()
+                .all(|value| *value == E::ZERO)
+        );
+        // The original clearing owner must visit the full public extent even
+        // though exact cancellation has already made every coefficient zero.
+        drop(accumulator);
+        result
     });
     result.unwrap();
-    assert!(accumulator[0].iter().all(Vec::is_empty));
     assert_eq!(
         records.iter().map(|record| record.cells).sum::<usize>(),
         initialized

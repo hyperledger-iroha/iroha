@@ -8,7 +8,7 @@ import Foundation
   import Security
 #endif
 
-#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential) && canImport(Security)
+#if canImport(SecureElementCredential) && canImport(Security)
   import SecureElementCredential
 #endif
 
@@ -642,7 +642,7 @@ actor KagemushaSecureElementCredentialProvisionerV1 {
   }
 #endif
 
-#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential) && canImport(Security)
+#if canImport(SecureElementCredential) && canImport(Security)
   @available(iOS 18.1, *)
   struct KagemushaAppleSecureElementCredentialBackendV1:
     KagemushaSecureElementCredentialBackendV1

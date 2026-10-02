@@ -1,8 +1,9 @@
 //! Descriptor-held C21 custody: separate generation and attestation invocation fences.
 //! These bytes admit no final credential, hardware monotonicity or monetary operation.
 
-use super::super::{PrivateJournal, PrivateJournalFormat};
+use super::super::{KagemushaOrdinaryNativeTimeIntervalV1, PrivateJournal, PrivateJournalFormat};
 use super::KagemushaOrdinaryIdentityErrorV1::UnknownOutcome;
+use super::preparation_reservation::KagemushaOrdinaryPreparationSelectedOriginalsV1;
 use super::{
     Custody, KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1, Rejected,
     Result,
@@ -57,20 +58,71 @@ pub struct KagemushaOrdinaryAppEnrollmentAttemptV1 {
     raw: Option<(KagemushaDevicePublicKeyV1, Vec<u8>)>,
     pending: Option<KagemushaPendingAppIdentityV1>,
     admitted_original: Option<Vec<u8>>,
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
     reference_ms: u64,
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
     reference_clock: continuous_clock::Reading,
+    selected_clock: Option<Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>>,
 }
 impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
-    /// Create a durable preparation only from the actual independently authenticated C owner.
-    /// `reference_ms` is supplied by the native authenticated-time source, never C/JNI.
+    /// Bind the entire actual selected clock owner before any C21 platform effect.
     /// # Errors
-    /// Rejects existing/uncertain storage, expired originals or unavailable native randomness.
+    /// Rejects changed selected custody, future C, expiry or unknown storage.
+    pub fn create_with_native_selected(
+        root: &Path,
+        owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) -> Result<Self> {
+        selected.require_prepared_original_scope(&owner)?;
+        let now = selected.trusted_time_interval()?.lower_ms();
+        let mut this = Self::create_at_reference(root, owner, now)?;
+        this.selected_clock = Some(selected);
+        this.recheck()?;
+        Ok(this)
+    }
+    /// Reopen the same actual C prefix under the original selected signed-clock owner.
+    /// # Errors
+    /// Rejects historical-original substitution or stale current selected policies.
+    pub fn open_with_native_selected(
+        root: &Path,
+        owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+        retained_only: bool,
+    ) -> Result<Self> {
+        selected.require_prepared_original_scope(&owner)?;
+        let now = selected.trusted_time_interval()?.lower_ms();
+        let mut this = Self::open_mode(root, owner, now, retained_only)?;
+        this.selected_clock = Some(selected);
+        if retained_only {
+            this.recheck_retained_originals()?;
+        } else {
+            this.recheck()?;
+        }
+        Ok(this)
+    }
+    /// Create a fixture-only C preparation at the supplied synthetic reference time.
+    /// Shipping callers must use [`Self::create_with_native_selected`].
+    /// # Errors
+    /// Rejects stale C originals, existing or uncertain storage, or unavailable native randomness.
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
     pub fn create(
         root: &Path,
         owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
         reference_ms: u64,
     ) -> Result<Self> {
+        Self::create_at_reference(root, owner, reference_ms)
+    }
+    /// Create a durable preparation only from the actual independently authenticated C owner.
+    /// `reference_ms` is supplied by the native authenticated-time source, never C/JNI.
+    /// # Errors
+    /// Rejects existing/uncertain storage, expired originals or unavailable native randomness.
+    fn create_at_reference(
+        root: &Path,
+        owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
+        reference_ms: u64,
+    ) -> Result<Self> {
         owner.recheck_at_trusted_time(reference_ms)?;
+        #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
         let clock = continuous_clock::Reading::now()?;
         let mut random = [0; 8];
         OsRng.try_fill_bytes(&mut random).map_err(|_| Custody)?;
@@ -100,10 +152,13 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
             raw: None,
             pending: None,
             admitted_original: None,
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
             reference_ms,
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
             reference_clock: clock,
+            selected_clock: None,
         };
-        this.recheck()?;
+        this.recheck_at_reference(reference_ms, false)?;
         Ok(this)
     }
 
@@ -111,6 +166,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
     /// A complete invocation fence without its original remains frozen; it is never retried.
     /// # Errors
     /// Rejects changed C, extra/torn/reordered frames, missing issuer admission or expired scope.
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
     pub fn open_existing(
         root: &Path,
         owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
@@ -122,6 +178,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
     /// Current policies/descriptors remain required although the original C may have expired.
     /// # Errors
     /// Rejects every incomplete/unknown/cancelled prefix or invalid historical admission.
+    #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
     pub fn open_retained_originals(
         root: &Path,
         owner: KagemushaPreparedOrdinaryAppEnrollmentV1,
@@ -139,6 +196,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
         if !retained_only {
             owner.recheck_at_trusted_time(reference_ms)?;
         }
+        #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
         let clock = continuous_clock::Reading::now()?;
         let mut journal = PrivateJournal::open_existing(
             &root.join(hex::encode(owner.preparation.challenge.enrollment_id)),
@@ -173,8 +231,11 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
             raw: None,
             pending: None,
             admitted_original: None,
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
             reference_ms,
+            #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
             reference_clock: clock,
+            selected_clock: None,
         };
         for row in rows.into_iter().skip(1) {
             match (this.stage, row) {
@@ -208,44 +269,57 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
                 _ => return Err(Custody),
             }
         }
-        if retained_only {
-            this.recheck_retained_originals()?;
-        } else {
-            this.recheck()?;
-        }
+        this.recheck_at_reference(reference_ms, retained_only)?;
         Ok(this)
     }
+    fn interval(&self) -> Result<KagemushaOrdinaryNativeTimeIntervalV1> {
+        if let Some(selected) = &self.selected_clock {
+            return selected.trusted_time_interval();
+        }
+        #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
+        return Ok(KagemushaOrdinaryNativeTimeIntervalV1::fixture_point(
+            self.reference_ms
+                .checked_add(continuous_clock::Reading::now()?.elapsed_ms(self.reference_clock)?)
+                .ok_or(Custody)?,
+        ));
+        #[cfg(not(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness")))]
+        Err(Custody)
+    }
     fn now(&self) -> Result<u64> {
-        self.reference_ms
-            .checked_add(continuous_clock::Reading::now()?.elapsed_ms(self.reference_clock)?)
-            .ok_or(Custody)
+        self.interval().map(|interval| interval.lower_ms())
     }
     /// Require actual held storage and original current native scope before any platform effect.
     /// # Errors
     /// Rejects revoked/expired original custody, a changed descriptor or cancelled attempt.
     pub fn recheck(&self) -> Result<()> {
-        self.journal.check_owned().map_err(|_| Custody)?;
-        self.owner.recheck_at_trusted_time(self.now()?)?;
-        if self.stage == 6 {
-            return Err(Rejected);
-        }
-        Ok(())
+        self.interval()?
+            .check_both(|now| self.recheck_at_reference(now, false))
     }
-    /// Recheck only an accepted raw original for possession/final credential recovery.
-    /// No generation/attestation/signing method uses this check instead of fresh C admission.
+    /// Check historical accepted C/raw originals while requiring current policy at both bounds.
     /// # Errors
-    /// Rejects an incomplete prefix, stale current policy, changed descriptor or raw original.
+    /// Rejects incomplete, stale or changed originals.
     pub fn recheck_retained_originals(&self) -> Result<()> {
+        self.interval()?
+            .check_both(|now| self.recheck_at_reference(now, true))
+    }
+    fn recheck_at_reference(&self, now: u64, retained: bool) -> Result<()> {
         self.journal.check_owned().map_err(|_| Custody)?;
-        if self.stage != 5 {
-            return Err(Rejected);
+        if retained {
+            if self.stage != 5 {
+                return Err(Rejected);
+            }
+            self.owner.recheck_retained_originals_at_trusted_time(now)?;
+            self.pending
+                .as_ref()
+                .ok_or(Custody)?
+                .recheck_retained_originals_at_trusted_time(now)
+        } else {
+            self.owner.recheck_at_trusted_time(now)?;
+            if self.stage == 6 {
+                return Err(Rejected);
+            }
+            Ok(())
         }
-        self.owner
-            .recheck_retained_originals_at_trusted_time(self.now()?)?;
-        self.pending
-            .as_ref()
-            .ok_or(Custody)?
-            .recheck_retained_originals_at_trusted_time(self.now()?)
     }
     /// Borrow the already accepted exact pending raw holder for completed E recovery only.
     /// # Errors
@@ -569,7 +643,7 @@ impl KagemushaOrdinaryAppEnrollmentAttemptV1 {
         if self.owner.preparation.challenge.platform_class
             == KagemushaHardwarePlatformClassV1::AndroidKeyMint
         {
-            validate_android_archive(raw)?;
+            validate_android_platform_original(raw)?;
         }
         Ok(())
     }
@@ -606,29 +680,14 @@ fn replay_bounded(journal: &mut PrivateJournal) -> Result<Vec<Record>> {
     }
     Err(Custody)
 }
-fn validate_android_archive(raw: &[u8]) -> Result<()> {
-    if raw.len() < 6 || &raw[..5] != b"KMCA\x01" || !(2..=8).contains(&raw[5]) {
-        return Err(Rejected);
-    }
-    let mut offset = 6usize;
-    for _ in 0..raw[5] {
-        let end = offset.checked_add(4).ok_or(Rejected)?;
-        let size = u32::from_be_bytes(
-            raw.get(offset..end)
-                .ok_or(Rejected)?
-                .try_into()
-                .map_err(|_| Rejected)?,
-        ) as usize;
-        offset = end;
-        if size == 0 || size > 16 * 1024 {
-            return Err(Rejected);
-        }
-        offset = offset
-            .checked_add(size)
-            .filter(|n| *n <= raw.len())
-            .ok_or(Rejected)?;
-    }
-    if offset != raw.len() {
+fn validate_android_platform_original(raw: &[u8]) -> Result<()> {
+    // This is only the sole Model container's exact role/resource shape. It grants no
+    // certificate, challenge, application, revocation, issuer or financial verdict.
+    let original = KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(raw)
+        .map_err(|_| Rejected)?;
+    if original.android_certificate_chain_der().is_none()
+        || original.canonical_bytes().map_err(|_| Rejected)? != raw
+    {
         return Err(Rejected);
     }
     Ok(())
@@ -655,6 +714,182 @@ mod tests {
         )
         .unwrap()
     }
+    fn selected_scope(
+        f: &Fixture,
+        native_owner: KagemushaRetailEnrollmentOwnerV1,
+        issuer_policy: KagemushaRetailEnrollmentIssuerPolicyV1,
+    ) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
+        let key = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        let core = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            key.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap();
+        Arc::new(
+            KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
+                native_owner,
+                f.release.clone(),
+                issuer_policy,
+                f.trust.clone(),
+                f.app_authority.clone(),
+                f.selection.preparation.challenge.hardware_profile_id,
+                &core,
+                300,
+            )
+            .unwrap(),
+        )
+    }
+    fn selected(f: &Fixture) -> Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1> {
+        selected_scope(f, f.selection.owner.clone(), f.issuer_policy.clone())
+    }
+    // Independently valid signed C originals with another Native lane, issuer or original epoch.
+    // These deterministic public signatures construct no installed clock or financial owner.
+    fn resigned_fixture_scope(
+        f: &Fixture,
+        changed: u8,
+    ) -> (
+        KagemushaPreparedOrdinaryAppEnrollmentV1,
+        Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) {
+        use iroha_crypto::{Algorithm, KeyPair, Signature};
+        let mut native_owner = f.selection.owner.clone();
+        let mut issuer_policy = f.issuer_policy.clone();
+        let seed = match changed {
+            0 => {
+                native_owner.lane_id[0] ^= 1;
+                61
+            }
+            1 => 63,
+            2 => 61,
+            _ => panic!("unsupported public fixture mutation"),
+        };
+        let issuer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        issuer_policy.issuer_public_key = issuer.public_key().clone();
+        let mut original = f.selection.preparation.clone();
+        original.challenge.enrollment_id = native_owner.enrollment_id().unwrap();
+        original.challenge.lane_id = native_owner.lane_id;
+        if changed == 2 {
+            original.challenge.hardware_epoch = 3;
+        }
+        original.challenge.issuer_policy_digest =
+            kagemusha_ordinary_retail_issuer_policy_digest_v1(&issuer_policy).unwrap();
+        original.signature = Signature::new(
+            issuer.private_key(),
+            &original.challenge.canonical_signing_bytes().unwrap(),
+        );
+        let c = original.challenge;
+        let prepared = KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
+            original,
+            native_owner.clone(),
+            f.release.clone(),
+            f.trust.clone(),
+            f.app_authority.clone(),
+            issuer_policy.clone(),
+            c.hardware_profile_id,
+            c.client_nonce,
+            c.financial_authority_commitment,
+            c.hardware_epoch,
+            300,
+        )
+        .unwrap();
+        (prepared, selected_scope(f, native_owner, issuer_policy))
+    }
+
+    #[test]
+    fn ordinary_c_selected_creation_rejects_valid_foreign_scope_before_wal_creation() {
+        for apple in [false, true] {
+            let own = Fixture::new(apple);
+            let foreign = Fixture::new(!apple);
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            for (foreign_prepared, selected) in [
+                (owner(&foreign), selected(&foreign)),
+                resigned_fixture_scope(&own, 0),
+                resigned_fixture_scope(&own, 1),
+            ] {
+                let prepared = owner(&own);
+                prepared.recheck_at_trusted_time(300).unwrap();
+                foreign_prepared.recheck_at_trusted_time(300).unwrap();
+                selected
+                    .require_prepared_original_scope(&foreign_prepared)
+                    .unwrap();
+                assert!(
+                    KagemushaOrdinaryAppEnrollmentAttemptV1::create_with_native_selected(
+                        &root, prepared, selected,
+                    )
+                    .is_err()
+                );
+                assert!(std::fs::read_dir(&root).unwrap().next().is_none());
+            }
+            // Prepared admission independently binds a nonzero original financial epoch.
+            // The selected clock/policy join cannot silently restrict that existing contract.
+            let (prepared, selected) = resigned_fixture_scope(&own, 2);
+            assert_eq!(prepared.preparation.challenge.hardware_epoch, 3);
+            selected.require_prepared_original_scope(&prepared).unwrap();
+            KagemushaOrdinaryAppEnrollmentAttemptV1::create_with_native_selected(
+                &root, prepared, selected,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn ordinary_c_selected_reopen_rejects_valid_foreign_scope_without_replacing_original() {
+        for apple in [false, true] {
+            let own = Fixture::new(apple);
+            let foreign = Fixture::new(!apple);
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let mut held = KagemushaOrdinaryAppEnrollmentAttemptV1::create_with_native_selected(
+                &root,
+                owner(&own),
+                selected(&own),
+            )
+            .unwrap();
+            let ticket = held.ticket();
+            held.fence_generation().unwrap();
+            let prefix = held.journal.recovery_prefix().unwrap();
+            let path = held
+                .journal
+                .original_directory()
+                .unwrap()
+                .join(FORMAT.filename);
+            let original = std::fs::read(&path).unwrap();
+            drop(held);
+            for (foreign_prepared, foreign_selected) in [
+                (owner(&foreign), selected(&foreign)),
+                resigned_fixture_scope(&own, 0),
+                resigned_fixture_scope(&own, 1),
+            ] {
+                foreign_selected
+                    .require_prepared_original_scope(&foreign_prepared)
+                    .unwrap();
+                for retained_only in [false, true] {
+                    assert!(
+                        KagemushaOrdinaryAppEnrollmentAttemptV1::open_with_native_selected(
+                            &root,
+                            owner(&own),
+                            foreign_selected.clone(),
+                            retained_only,
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(std::fs::read(&path).unwrap(), original);
+                }
+            }
+            let mut recovered = KagemushaOrdinaryAppEnrollmentAttemptV1::open_with_native_selected(
+                &root,
+                owner(&own),
+                selected(&own),
+                false,
+            )
+            .unwrap();
+            assert_eq!(recovered.ticket(), ticket);
+            assert_eq!(recovered.journal.recovery_prefix().unwrap(), prefix);
+            assert!(matches!(recovered.fence_generation(), Err(UnknownOutcome)));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
+
     #[test]
     fn ordinary_c_journal_fences_each_invocation_and_recovers_same_original_reference() {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -802,21 +1037,130 @@ mod tests {
     }
     #[test]
     fn ordinary_c_raw_archive_and_retention_reject_changed_original_boundaries() {
-        let mut archive = b"KMCA\x01\x02".to_vec();
-        for bytes in [
-            b"synthetic DER one".as_slice(),
-            b"synthetic DER two".as_slice(),
-        ] {
-            archive.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-            archive.extend_from_slice(bytes);
-        }
-        // Only outer envelope structure is checked here; raw DER semantics remain issuer-owned.
-        validate_android_archive(&archive).unwrap();
+        let value = android_original(vec![
+            b"synthetic DER one".to_vec(),
+            b"synthetic DER two".to_vec(),
+        ]);
+        let archive = value.canonical_bytes().unwrap();
+        // Only the complete outer container is checked; DER semantics remain issuer-owned.
+        validate_android_platform_original(&archive).unwrap();
         let mut extra = archive.clone();
         extra.push(0);
-        assert!(validate_android_archive(&extra).is_err());
-        assert!(validate_android_archive(&archive[..archive.len() - 1]).is_err());
-        archive[5] = 9;
-        assert!(validate_android_archive(&archive).is_err());
+        assert!(validate_android_platform_original(&extra).is_err());
+        assert!(validate_android_platform_original(&archive[..archive.len() - 1]).is_err());
+        let invalid = android_original(vec![vec![1]; 9]);
+        assert!(
+            validate_android_platform_original(&norito::encode_canonical(&invalid).unwrap())
+                .is_err()
+        );
+    }
+
+    fn android_original(chain: Vec<Vec<u8>>) -> KagemushaPlatformAttestationOriginalV1 {
+        KagemushaPlatformAttestationOriginalV1 {
+            version: 1,
+            evidence: KagemushaPlatformAttestationEvidenceV1::AndroidKeyMint {
+                certificate_chain_der: chain,
+            },
+        }
+    }
+
+    #[test]
+    fn ordinary_c_android_container_rejects_legacy_role_version_and_corruption() {
+        let value = android_original(vec![vec![1; 32], vec![2; 32]]);
+        let original = value.canonical_bytes().unwrap();
+        let mut changed = original.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        let apple = KagemushaPlatformAttestationOriginalV1 {
+            version: 1,
+            evidence: KagemushaPlatformAttestationEvidenceV1::AppleAppAttest {
+                attestation_object_cbor: vec![0xa0],
+            },
+        };
+        let mut wrong_version = value.clone();
+        wrong_version.version = 2;
+        let mut legacy = b"KMCA\x01\x02".to_vec();
+        for cert in [vec![1; 32], vec![2; 32]] {
+            legacy.extend_from_slice(&(cert.len() as u32).to_be_bytes());
+            legacy.extend_from_slice(&cert);
+        }
+        for raw in [
+            legacy,
+            vec![1; 64],
+            apple.canonical_bytes().unwrap(),
+            norito::encode_canonical(&wrong_version).unwrap(),
+            changed,
+            [original.as_slice(), &[0]].concat(),
+            original[..original.len() - 1].to_vec(),
+        ] {
+            assert!(validate_android_platform_original(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_c_android_container_checks_components_and_complete_archive_bounds() {
+        for count in 2..=8 {
+            let raw = android_original(vec![vec![1]; count])
+                .canonical_bytes()
+                .unwrap();
+            validate_android_platform_original(&raw).unwrap();
+        }
+        let seven_full = android_original(vec![vec![1; 16 * 1024]; 7]);
+        validate_android_platform_original(&seven_full.canonical_bytes().unwrap()).unwrap();
+        for chain in [
+            vec![],
+            vec![vec![1]],
+            vec![vec![1]; 9],
+            vec![vec![], vec![1]],
+            vec![vec![1; 16 * 1024 + 1], vec![1]],
+            vec![vec![1; 16 * 1024]; 8],
+        ] {
+            let raw = norito::encode_canonical(&android_original(chain)).unwrap();
+            assert!(validate_android_platform_original(&raw).is_err());
+        }
+        assert!(validate_android_platform_original(&[]).is_err());
+        assert!(validate_android_platform_original(&vec![0; MAX_RAW + 1]).is_err());
+    }
+
+    #[test]
+    fn ordinary_c_android_retains_and_recovers_only_the_same_complete_original() {
+        // Synthetic fixture/DER data tests private journal custody, never physical attestation.
+        let f = Fixture::new(false);
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let mut attempt =
+            KagemushaOrdinaryAppEnrollmentAttemptV1::create(&root, owner(&f), 300).unwrap();
+        let ticket = attempt.ticket();
+        attempt.fence_generation().unwrap();
+        let alias = kagemusha_ordinary_android_app_key_alias_v1(&f.selection.preparation.challenge)
+            .unwrap();
+        attempt.retain_key_reference(&alias).unwrap();
+        attempt.fence_attestation().unwrap();
+        let point = f.selection.issuance.credential.subject.app_public_key;
+        let raw = android_original(vec![vec![1; 32], vec![2; 32]])
+            .canonical_bytes()
+            .unwrap();
+        let metadata = attempt.retain_raw(point, &raw).unwrap();
+        assert_eq!(metadata[0], Sha256::digest(&raw).to_vec());
+        let wal = root
+            .join(hex::encode(f.selection.preparation.challenge.enrollment_id))
+            .join(FORMAT.filename);
+        let before = std::fs::read(&wal).unwrap();
+        let substituted = android_original(vec![vec![2; 32], vec![1; 32]])
+            .canonical_bytes()
+            .unwrap();
+        assert!(attempt.retain_raw(point, &substituted).is_err());
+        assert_eq!(std::fs::read(&wal).unwrap(), before);
+        assert_eq!(attempt.raw_chunk_fields(0).unwrap()[1], raw);
+        assert!(attempt.raw_chunk_fields(1).is_err());
+        let current = attempt.now().unwrap();
+        drop(attempt);
+        let recovered =
+            KagemushaOrdinaryAppEnrollmentAttemptV1::open_existing(&root, owner(&f), current)
+                .unwrap();
+        assert_eq!(recovered.ticket(), ticket);
+        assert_eq!(recovered.recovery_fields().unwrap()[0], vec![4]);
+        assert_eq!(recovered.raw_chunk_fields(0).unwrap()[1], raw);
+        assert!(recovered.pending_identity().is_err());
+        assert_eq!(std::fs::read(&wal).unwrap(), before);
     }
 }

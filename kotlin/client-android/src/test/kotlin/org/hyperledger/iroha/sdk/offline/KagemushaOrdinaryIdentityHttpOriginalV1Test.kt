@@ -10,7 +10,6 @@ import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
-import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAndroidKeyAttestationArchiveV1
 import org.junit.jupiter.api.Test
 import kotlin.test.*
 
@@ -22,7 +21,7 @@ class KagemushaOrdinaryIdentityHttpOriginalV1Test {
         var calls = 0
         val prepared = held.prepare { request ->
             calls++; request.requireCurrent()
-            assertEquals("/v1/offline/enrollment/ordinary/prepare", request.path)
+            assertEquals("/v1/kagemusha/enrollment/ordinary/prepare", request.path)
             assertEquals(endpoint.reserved[7].toString(Charsets.US_ASCII), request.requestId)
             val body = objectFields(request.body())
             assertEquals(setOf("account_id", "client_nonce_hex", "release_id_hex", "profile_id_hex", "lane_id_hex", "financial_authority_commitment_hex"), body.keys)
@@ -64,7 +63,7 @@ class KagemushaOrdinaryIdentityHttpOriginalV1Test {
         var calls = 0
         val admitted = prepared.admitOriginalAttestation { request ->
             calls++; request.requireCurrent()
-            assertEquals("/v1/offline/enrollment/ordinary/raw-attestation", request.path)
+            assertEquals("/v1/kagemusha/enrollment/ordinary/raw-attestation", request.path)
             val body = objectFields(request.body())
             assertEquals(hex(sha(endpoint.prepared[2])), body["operation_id"])
             assertEquals(base64(endpoint.raw), body["raw_attestation_base64"])
@@ -103,8 +102,8 @@ class KagemushaOrdinaryIdentityHttpOriginalV1Test {
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
         val point = byteArrayOf(4) + ByteArray(64) { 7 }
-        val raw = KagemushaAndroidKeyAttestationArchiveV1.encodeOriginal(listOf(
-            byteArrayOf(0x30, 2, 1, 1), byteArrayOf(0x30, 2, 1, 2))).transportBytes()
+        val raw = KagemushaPlatformAttestationOriginalV1.android(listOf(
+            byteArrayOf(0x30, 2, 1, 1), byteArrayOf(0x30, 2, 1, 2))).canonicalBytes()
         val signedRaw = ByteArray(314) { 0x39 }; val pending = bytes(0x40)
         val policy = "inert pinned policy".toByteArray()
         val nonce = bytes(2)

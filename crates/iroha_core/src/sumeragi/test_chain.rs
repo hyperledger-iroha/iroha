@@ -1537,6 +1537,31 @@ pub struct PendingTestExecution<'chain> {
 }
 
 impl PendingTestExecution<'_> {
+    /// Durably append the original certificate and finalize its actual State metadata while
+    /// a held physical history writer defers visibility. This retains the original overlay
+    /// for immutable checkpoint inspection; [`Self::publish`] retries its ordinary publisher.
+    ///
+    /// # Errors
+    /// The original certificate, durable append or actual publication preparation refuses.
+    #[cfg(test)]
+    pub fn prepare_publication_for_inspection(&mut self, signers: Signers) -> Result<(), String> {
+        if self.published.is_some() {
+            return Err("published source cannot prepare another inspection".into());
+        }
+        self.prepare(signers)?;
+        let (_, qc) = self
+            .certificate
+            .as_ref()
+            .expect("original certificate retained");
+        self.chain
+            .blocks
+            .append(&self.block, qc)
+            .map_err(|error| error.to_string())?;
+        self.chain
+            .executor
+            .prepare_publication_for_inspection(&self.block, qc)
+    }
+
     /// Hash of R returned by the original execution.
     #[must_use]
     pub fn result(&self) -> Hash32 {
@@ -1724,6 +1749,27 @@ pub(super) fn prepare_configured_genesis(
     let account = AccountId::new(key.public_key().clone());
     for attempt in 0..2 {
         let network = NetworkId::from_genesis_hash(genesis.hash());
+        let default_catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let catalog = nexus_config.map_or(&default_catalog, |nexus| &nexus.dataspace_catalog);
+        // Match the production fresh-start owner before State can install namespace defaults.
+        // These authenticated leases/permissions depend only on unchanged instructions,
+        // authorities, catalog, root scope and signed private fee policy, so the same rows
+        // survive policy re-signing below without retaining a provisional network identity.
+        if let Err(error) = crate::sns::seed_genesis_alias_bootstrap(&mut world, &genesis, catalog)
+        {
+            return Err(StartFailure {
+                error: TestChainError::Genesis(format!(
+                    "initialize authenticated genesis SNS bootstrap: {error}"
+                )),
+                state: Arc::new(State::new_with_chain_and_network_id_for_testing(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                    chain_id.clone(),
+                    network,
+                )),
+            });
+        }
         let (mut state, kura) = if let Some(nexus) = nexus_config {
             let (mut state, kura) =
                 State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
@@ -1832,7 +1878,7 @@ pub(super) fn prepare_configured_genesis(
                 });
             }
         };
-        // The provisional execution never publishes. Only the original pristine World survives;
+        // The provisional execution never publishes. Its pristine bootstrap World survives;
         // no result, schedule, context values, or provisional network identity crosses this move.
         world = state.world;
     }
@@ -1933,6 +1979,142 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_genesis_bootstrap_matches_final_original_without_provisional_effects() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountAliasDomain},
+            isi::Register,
+            permission::Permission,
+        };
+        use iroha_executor_data_model::permission::account::{
+            AccountAliasPermissionScope, CanManageAccountAlias,
+        };
+        use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+
+        let key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(key.public_key().clone());
+        let clock = AccountId::new(
+            KeyPair::from_seed(vec![CLOCK_SEED; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let recipient = AccountId::new(
+            KeyPair::from_seed(vec![0xCF; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let domain = DomainId::try_new("bootstrap", "universal").unwrap();
+        let alias = AccountAlias::new(
+            "merchant".parse().unwrap(),
+            Some(AccountAliasDomain::new(domain.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        );
+        let original_world = || {
+            World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
+                [
+                    Account::new(authority.clone()).build(&authority),
+                    Account::new(clock.clone()).build(&clock),
+                ],
+                [],
+            )
+        };
+        let mut config = TestChainConfig::new(original_world(), 1_000);
+        config.genesis_instructions = vec![
+            Register::domain(Domain::new(domain.clone())).into(),
+            Register::account(Account::new(recipient.clone()).with_label(Some(alias.clone())))
+                .into(),
+        ];
+        // A distinct actual process policy forces the provisional-policy re-signing pass.
+        let mut zk = crate::state::default_zk_config();
+        zk.max_verify_calls_per_tx = 3;
+        config.zk = Some(zk);
+        let prepared = CertifiedTestChain::prepare(config).expect("authenticated alias bootstrap");
+        assert_ne!(
+            prepared
+                .manifest
+                .sumeragi_context_parameters()
+                .execution_policy_hash,
+            SumeragiGenesisContextParameters::recommended().execution_policy_hash,
+        );
+        let original_wire = prepared.genesis.canonical_wire().to_vec();
+        let catalog = prepared.state.nexus_snapshot().dataspace_catalog;
+        let mut expected = original_world();
+        crate::sns::seed_genesis_alias_bootstrap(&mut expected, prepared.genesis.block(), &catalog)
+            .expect("fresh seeding from the final original genesis");
+        // State also seeds the reserved universal dataspace and existing domain leases.
+        // Reproduce that exact initialization over the freshly seeded final original.
+        let expected = State::new_with_chain_and_network_id_for_testing(
+            expected,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            prepared.state.chain_id_ref().clone(),
+            NetworkId::from_genesis_hash(prepared.genesis.block().hash()),
+        );
+        {
+            let view = prepared.state.view();
+            let expected_view = expected.view();
+            assert_eq!(view.height(), 0);
+            assert_eq!(prepared.kura.blocks_count(), 0);
+            assert!(view.world().domains().get(&domain).is_none());
+            assert!(view.world().accounts().get(&recipient).is_none());
+            assert_eq!(
+                view.world()
+                    .smart_contract_state()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+                expected_view
+                    .world()
+                    .smart_contract_state()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+                "only the same final-original bootstrap rows survive provisional execution",
+            );
+            assert_eq!(
+                view.world()
+                    .account_permissions()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+                expected_view
+                    .world()
+                    .account_permissions()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+            );
+            let permissions = view.world().account_permissions().get(&authority).unwrap();
+            for scope in [
+                AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+                AccountAliasPermissionScope::Domain(domain.clone()),
+            ] {
+                assert!(permissions.contains(&Permission::from(CanManageAccountAlias { scope })));
+            }
+            assert_eq!(
+                crate::sns::get_name_record(
+                    view.world(),
+                    &catalog,
+                    crate::sns::SnsNamespace::AccountAlias,
+                    "merchant@bootstrap.universal",
+                    1_000,
+                )
+                .unwrap()
+                .owner,
+                recipient,
+            );
+        }
+        let chain = CertifiedTestChain::from_prepared(prepared)
+            .expect("the original signed genesis consumes its authenticated bootstrap");
+        assert_eq!(chain.height(), 1);
+        assert_eq!(chain.genesis().encode_wire().unwrap(), original_wire);
+        let view = chain.state().view();
+        assert!(view.world().domains().get(&domain).is_some());
+        assert!(view.world().accounts().get(&recipient).is_some());
+        assert_eq!(view.world().account_aliases().get(&alias), Some(&recipient));
+    }
 
     #[test]
     fn configured_genesis_cadence_is_signed_and_used_for_original_sealed_work() {

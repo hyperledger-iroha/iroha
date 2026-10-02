@@ -794,11 +794,38 @@ mod tests {
         // These historical pins included the original 32 whole-segment totals
         // and 64 public RFC-stream products; restore their exact old descriptor.
         fields[17] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors".to_vec();
-        // The selected-input multiplicity repair changes both the P256
-        // compiler descriptor and its actual six-child digest. Historical
-        // rejection fixtures must retain those original public fields too.
+        // These rejection fixtures predate the selected-input writer multiplicities.
+        // Freeze both the descriptor and its exact original schedule digest;
+        // inheriting either current field would manufacture a mixed profile.
         fields[27] = b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=sha3-384-opaque48-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release".to_vec();
-        fields[28] = hex::decode("27920427fcfec454c4454b1af2035f3b0af4dcadfeafb6c6824f93478217fc9a3107137c5eac8eacb141fe8e72d1384d").unwrap();
+        fields[28] = hex::decode(
+            "27920427fcfec454c4454b1af2035f3b0af4dcadfeafb6c6824f93478217fc9a3107137c5eac8eacb141fe8e72d1384d",
+        )
+        .unwrap();
+    }
+    #[test]
+    fn retired_profile_restoration_freezes_pre_aux_sha_and_p256_manifest_fields() {
+        let sha_digests = [[0x51; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
+        let p256_digest = [0x61; 48];
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let mut canonical = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        let mut substituted = canonical.clone();
+        substituted[12] = b"substituted-current-pre-aux-descriptor".to_vec();
+        substituted[17] = b"substituted-current-sha-call-descriptor".to_vec();
+        substituted[27] = b"substituted-current-p256-descriptor".to_vec();
+        substituted[28] = vec![0x91; 48];
+        restore_retired_public_terminal_profile_descriptors_v1(&mut canonical);
+        restore_retired_public_terminal_profile_descriptors_v1(&mut substituted);
+        assert_eq!(substituted, canonical);
+        assert_eq!(canonical[28].len(), 48);
+        for (field, (retired, current)) in canonical.iter().zip(fields).enumerate() {
+            if ![9, 10, 12, 13, 14, 17, 27, 28].contains(&field) {
+                assert_eq!(retired, current);
+            }
+        }
     }
     #[test]
     fn compiled_profile_binds_private_terminal_closure() {

@@ -37,7 +37,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
 
     /** Discovery is transport evidence only and grants no release or monetary authority. */
     class DiscoveryResult internal constructor(
-        val bridge: KagemushaDeviceLifecycleBridgeV1,
+        val bridge: KagemushaDeviceLifecycleBridgeV1?,
         val status: DiscoveryStatus,
         failures: List<DiscoveryFailure>,
         private val closeUndelivered: () -> Unit = {},
@@ -52,7 +52,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
         }
         init {
             require((status == DiscoveryStatus.AVAILABLE) ==
-                (bridge.availability == KagemushaDeviceLifecycleBridgeV1.Availability.AVAILABLE))
+                (bridge != null))
         }
     }
 
@@ -66,7 +66,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
         }, failure)
 
     private fun unavailable(status: DiscoveryStatus, failures: List<DiscoveryFailure> = emptyList()) =
-        DiscoveryResult(KagemushaDeviceLifecycleBridgeV1.onlineOnly(), status, failures)
+        DiscoveryResult(null, status, failures)
 
     @JvmStatic
     @JvmOverloads
@@ -85,6 +85,11 @@ object KagemushaOmapiDeviceLifecycleV1 {
         discovery.whenComplete { discovered, failure ->
             if (failure != null) {
                 bridge.completeExceptionally(failure)
+            } else if (discovered.bridge == null) {
+                bridge.completeExceptionally(IllegalStateException(
+                    "KAGEMUSHA OMAPI discovery failed: ${discovered.status}",
+                    discovered.failures.firstOrNull()?.cause,
+                ))
             } else if (!bridge.complete(discovered.bridge)) {
                 // Discovery may already have won while cancellation prevents transfer to the caller.
                 discovered.discardIfUndelivered()
@@ -113,8 +118,8 @@ object KagemushaOmapiDeviceLifecycleV1 {
      * Open without blocking the application thread and resolve within [discoveryTimeoutMillis].
      *
      * An absent service, denied AID, incomplete foundation applet, malformed capability frame,
-     * ambiguous qualified readers, timeout, or any platform error completes with an online-only
-     * bridge. With no explicit reader pin, only embedded eSE readers are eligible; exactly one
+     * ambiguous qualified readers, timeout, or platform errors are retained as discovery diagnostics.
+     * A usable bridge projection completes exceptionally on failure. With no explicit reader pin, exactly one
      * applet must pass the complete capability contract.
      */
     @JvmStatic

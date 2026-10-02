@@ -7285,7 +7285,7 @@ def test_gateway_load_staging_contract_is_rechecked_at_promotion() -> None:
     cases = (
         (
             {"duration_seconds": MODULE.GATEWAY_LOAD_MIN_STAGING_DURATION_SECS - 1},
-            "duration_seconds must be an integer >= 86400",
+            "duration_seconds must be an integer >= 1",
         ),
         (
             {
@@ -7341,6 +7341,19 @@ def test_gateway_load_staging_contract_is_rechecked_at_promotion() -> None:
         )
 
         assert any(diagnostic in error for error in errors)
+
+
+def test_gateway_load_short_observation_is_valid_at_promotion() -> None:
+    payload = gate_summary("gateway_load")
+    add_fingerprint_metadata(payload, kind_name="staging_load", duration_seconds=1)
+
+    _summary, errors = MODULE.validate_gate_summary(
+        MODULE.GATE_BY_NAME["gateway_load"],
+        payload,
+        production_validation_options(),
+    )
+
+    assert errors == []
 
 
 def test_gateway_load_suite_bound_artifacts_must_match_suite_digest(

@@ -3812,6 +3812,22 @@ impl KagemushaAuthenticatedReleaseV1 {
         self.manifest_digest
     }
 
+    /// Project the complete canonical manifest from this actual threshold-admitted release.
+    /// The returned bytes are data only and cannot recreate release authority.
+    /// # Errors
+    /// Refuses failed canonical encoding, an oversized manifest or an internal digest mismatch.
+    pub fn canonical_manifest_original(&self) -> Result<Vec<u8>, KagemushaReleaseErrorV1> {
+        let original = norito::encode_canonical(&self.manifest)
+            .map_err(|_| KagemushaReleaseErrorV1::Encode)?;
+        if original.is_empty()
+            || original.len() > KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1
+            || digest_encoded(MANIFEST_DIGEST_DOMAIN, &self.manifest)? != self.manifest_digest
+        {
+            return Err(KagemushaReleaseErrorV1::InvalidManifest);
+        }
+        Ok(original)
+    }
+
     /// Return the authenticated validation-receipt digest.
     #[must_use]
     pub fn receipt_digest(&self) -> [u8; 32] {

@@ -106,6 +106,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let wrong_code_registry = policy_registry(std::slice::from_ref(&wrong_code_policy));
     install_policy_registry_fixture(&wrong_code_registry, &mut state_tx);
     let wrong_code_error = active_policy(&state_tx)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("the governed binding cannot name another SHA-256 artifact");
     assert!(
         matches!(wrong_code_error, TransactionRejectionReason::Validation(
@@ -116,6 +117,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let registry = policy_registry(std::slice::from_ref(&policy));
     install_policy_registry_fixture(&registry, &mut state_tx);
     active_policy(&state_tx)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("read active policy")
         .expect("policy is active");
     let runtime = crate::executor::ContractRuntimeExecutionContext {
@@ -185,6 +187,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     commit_validation_fee_credit(&mut state_tx, Some(&payout_credit))
         .expect("seed consensus validation-fee credit");
     let (_, asset_binding_key) = validation_fee_credit_state_keys(&state_tx, &payout_credit)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("resolve treasury credit paths");
     let valid_asset_binding = state_tx
         .world
@@ -197,7 +200,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .smart_contract_state
         .remove(asset_binding_key.clone());
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditAssetBinding { .. })
     ));
     state_tx
@@ -205,7 +209,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .smart_contract_state
         .insert(asset_binding_key.clone(), vec![0xFF]);
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditAssetBinding { .. })
     ));
     state_tx
@@ -221,7 +226,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     )
     .expect("convert wrong-asset fixture credit");
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &wrong_asset_credit),
+        read_validation_fee_credit_balance(&state_tx, &wrong_asset_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::CreditAssetBindingMismatch { .. })
     ));
     let expected_credit_key = validation_fee_credit_lifecycle_state_key_for_address(
@@ -233,6 +239,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         validation_fee_credit_state_key_for_address(&runtime.contract_address);
     assert_eq!(
         validation_fee_credit_state_keys(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("resolve treasury credit path")
             .0,
         expected_credit_key,
@@ -293,7 +300,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         norito::to_bytes(&100_i64).expect("encode retired primitive state value"),
     );
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
     ));
     state_tx
@@ -305,7 +313,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         norito::to_bytes(&100_i64).expect("encode retired fixed-width credit leaf"),
     );
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
     ));
     state_tx.world.smart_contract_state.remove(retired_key);
@@ -316,7 +325,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .smart_contract_state
         .insert(expected_credit_key.clone(), noncanonical_record);
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
     ));
     let mut wrong_schema_record = record.clone();
@@ -326,7 +336,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         norito::to_bytes(&wrong_schema_record).expect("encode wrong-schema state record"),
     );
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
     ));
     let wrong_scale: Quantity = "0.001".parse().expect("canonical scale-three quantity");
@@ -336,7 +347,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
             .expect("encode schema-bound wrong-scale credit"),
     );
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &payout_credit),
+        read_validation_fee_credit_balance(&state_tx, &payout_credit).map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
             amount,
             allowed_scale: 2,
@@ -356,7 +367,8 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .smart_contract_state
         .insert(expected_credit_key.clone(), canonical_credit_state.clone());
     assert!(matches!(
-        read_validation_fee_credit_balance(&state_tx, &wrong_policy_scale),
+        read_validation_fee_credit_balance(&state_tx, &wrong_policy_scale)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(
             ValidationFeeAdmissionError::CreditAssetNumericSpecMismatch {
                 expected_scale: 1,
@@ -381,7 +393,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .checked_add(&payout_credit.amount)
         .expect("fixture debit must fit nominal quantity");
     assert!(matches!(
-        consume_validation_fee_credit(&mut state_tx, &excessive_debit),
+        consume_validation_fee_credit(&mut state_tx, &excessive_debit).map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFeeAdmissionError::InsufficientCreditBalance {
             available,
             requested,
@@ -406,6 +418,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         .expect("accumulated nominal credit may exceed the u64 policy-scalar domain");
     assert_eq!(
         read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read accumulated wide credit"),
         "18446744073709551616.1"
             .parse::<Quantity>()
@@ -433,6 +446,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&state_tx, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("failed addition must leave maximum credit unchanged"),
         maximum
     );
@@ -463,6 +477,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
             .expect("staged fixture credit must fit nominal quantity");
         assert_eq!(
             read_validation_fee_credit_balance(&failed_signed_transaction, &payout_credit,)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect("read staged fee credit"),
             staged_credit
         );
@@ -472,6 +487,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         let mut failed_trigger_transaction = block.transaction();
         assert_eq!(
             read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect("read credit after failed signed transaction"),
             payout_credit.amount,
             "a failed signed transaction must not create fee credit"
@@ -492,6 +508,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         );
         assert_eq!(
             read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit,)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect("read staged debit"),
             Quantity::zero(),
             "the validator stages the debit in the trigger subtransaction"
@@ -511,6 +528,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let mut successful_trigger_transaction = block.transaction();
     assert_eq!(
         read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read rolled-back debit"),
         payout_credit.amount,
         "a failed trigger subtransaction must roll its staged credit debit back"
@@ -582,6 +600,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read consumed validation-fee credit"),
         Quantity::zero(),
         "matching payout consumes exactly its policy-minor-unit debit"
@@ -669,6 +688,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&exhausted_credit_transaction, &partial_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read credit after zero quote"),
         partial_credit.amount,
         "a zero quote must not debit lifecycle credit"
@@ -696,6 +716,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&exhausted_credit_transaction, &partial_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read credit after invalid quote"),
         partial_credit.amount,
         "an invalid quote must not debit lifecycle credit"
@@ -723,6 +744,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&exhausted_credit_transaction, &partial_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read drained partial credit"),
         Quantity::zero()
     );
@@ -753,19 +775,23 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     );
     assert_eq!(
         read_validation_fee_credit_balance(&exhausted_credit_transaction, &successor_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read isolated successor credit"),
         successor_credit.amount
     );
     consume_validation_fee_credit(&mut exhausted_credit_transaction, &successor_credit)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("drain successor fixture");
     assert_eq!(
         read_validation_fee_credit_balance(&exhausted_credit_transaction, &successor_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("read retained successor lifecycle credit"),
         Quantity::zero(),
         "a drained first-release lifecycle must retain a canonical zero balance"
     );
     let (successor_balance_key, successor_asset_key) =
         validation_fee_credit_state_keys(&exhausted_credit_transaction, &successor_credit)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("resolve retained successor lifecycle state");
     assert!(
         exhausted_credit_transaction
@@ -1213,6 +1239,7 @@ fn ordinary_validation_fee_fixture_retains_original_root_and_bound_artifact() {
                 state_tx,
                 &runtime.binding.contract_address,
             )
+            .expect("registry read completes")
             .expect("the ordinary fixture retains immutable original artifact scope");
             assert_eq!(record.code_bytes, code);
             assert_eq!(record.contract_subject, runtime.binding.treasury_account_id);
@@ -1262,11 +1289,12 @@ fn active_policy_admission_rejects_completed_ivm_proved_axt() {
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert_eq!(
         active_policy(&state_tx)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("active policy lookup succeeds")
             .expect("bound policy is active"),
         policy
     );
-    let error = enforce_ivm_proved_completed_axt_admission(1, &state_tx)
+    let error = enforce_ivm_proved_completed_axt_admission(1, &mut state_tx)
         .expect_err("active policy must reject opaque IvmProved AXT effects");
     assert!(
         matches!(error, ValidationFail::NotPermitted(ref message)

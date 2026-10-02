@@ -147,6 +147,10 @@ pub fn parse_app_attest_assertion_extensions(
 ///
 /// This digest binds assertion extension values to `app_release_digest` in authenticated
 /// release policy. It must be computed from release metadata independently of the assertion.
+///
+/// # Errors
+/// Rejects an unsupported validation category or an empty, oversized, or malformed
+/// bundle version with [`AppAttestExtensionError::Malformed`].
 pub fn app_attest_release_extensions_digest(
     validation_category: u32,
     bundle_version: &str,

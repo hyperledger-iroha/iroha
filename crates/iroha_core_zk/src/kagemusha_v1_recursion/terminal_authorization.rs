@@ -95,10 +95,7 @@ use super::{
 use crate::pasta_dense_msm::preflight_k16_dense_single_job_source_count_v1;
 #[cfg(feature = "zk-halo2-ipa")]
 use crate::pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1};
-#[cfg(all(
-    any(test, feature = "kagemusha-production-prover"),
-    feature = "zk-halo2-ipa"
-))]
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
 use crate::pasta_sha256::PastaSha256ConfigV1;
 #[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-production-prover"))]

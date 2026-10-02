@@ -65,6 +65,40 @@ fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias
         .rebuild_account_scope_directory()
         .expect("active account alias must define a valid account scope");
 }
+/// Retain the canonical live domain lease needed by a component's domain-owned state.
+fn seed_trigger_domain_name_lease(
+    tx: &mut StateTransaction<'_, '_>,
+    owner: &AccountId,
+    domain_id: &DomainId,
+) {
+    let selector = crate::sns::selector_for_domain(domain_id).expect("domain selector");
+    let storage_key = crate::sns::record_storage_key(&selector);
+    if tx.world.smart_contract_state.get(&storage_key).is_none() {
+        let domain_owner = tx
+            .world
+            .domains
+            .get(domain_id)
+            .map(|domain| domain.owned_by().clone())
+            .unwrap_or_else(|| owner.clone());
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&domain_owner)
+            .expect("domain owner address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector,
+            domain_owner,
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_model_base::metadata::Metadata::default(),
+        );
+        tx.world
+            .smart_contract_state
+            .insert(storage_key, norito::codec::Encode::encode(&record));
+    }
+}
+
 fn seed_account_alias_lease(
     tx: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -74,32 +108,7 @@ fn seed_account_alias_lease(
         .domain_id(&tx.nexus.dataspace_catalog)
         .expect("fixture alias domain")
     {
-        let selector = crate::sns::selector_for_domain(&domain_id).expect("domain selector");
-        let storage_key = crate::sns::record_storage_key(&selector);
-        if tx.world.smart_contract_state.get(&storage_key).is_none() {
-            let domain_owner = tx
-                .world
-                .domains
-                .get(&domain_id)
-                .map(|domain| domain.owned_by().clone())
-                .unwrap_or_else(|| owner.clone());
-            let address = iroha_data_model::account::AccountAddress::from_account_id(&domain_owner)
-                .expect("domain owner address");
-            let record = iroha_data_model::sns::NameRecordV1::new(
-                selector,
-                domain_owner,
-                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                0,
-                0,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                iroha_model_base::metadata::Metadata::default(),
-            );
-            tx.world
-                .smart_contract_state
-                .insert(storage_key, norito::codec::Encode::encode(&record));
-        }
+        seed_trigger_domain_name_lease(tx, owner, &domain_id);
     }
     let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
         .expect("account alias selector");

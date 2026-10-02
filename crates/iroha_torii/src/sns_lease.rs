@@ -147,9 +147,15 @@ mod tests {
     }
     #[test]
     fn lease_publication_refuses_private_or_unbound_roots() {
-        let app = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(false);
+        let app = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            false,
+        );
         global(app.state.view().world()).unwrap();
-        let app = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(true);
+        let app = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            true,
+        );
         assert!(global(app.state.view().world()).is_err());
         assert!(global(&iroha_core::state::World::new().view()).is_err());
     }

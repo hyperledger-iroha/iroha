@@ -46,7 +46,7 @@ object KagemushaAndroidWalletV1 {
      * Discover the audited native device service and bind it to an OEM provider adapter.
      *
      * Raw one-use KeyMint evidence is available through [keyMintEvidence]. Monetary execution
-     * remains online-only until native Core verifies the paired ratchet proof and supplies the
+     * requires native Core to verify the paired ratchet proof and supplies the
      * complete authenticated lifecycle. Missing native support is an error.
      */
     @JvmStatic
@@ -63,9 +63,6 @@ object KagemushaAndroidWalletV1 {
         authorizeBootstrap: () -> Unit,
     ): KagemushaWalletV1 {
         val bridgeCapabilities = bridge.capabilities()
-            ?: throw IllegalStateException(
-                "KAGEMUSHA V1 is online-only: no qualified non-forking Android hardware service",
-            )
         val provider = factory.open(bridge, intentStore, authorizeBootstrap)
         val qualification = provider.qualification()
         requireNativeQualificationBinding(

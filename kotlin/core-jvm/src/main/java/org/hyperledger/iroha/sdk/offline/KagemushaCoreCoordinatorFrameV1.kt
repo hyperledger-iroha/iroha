@@ -8,6 +8,7 @@ import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAppAttestOriginalV1
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -74,6 +75,39 @@ object KagemushaCoreCoordinatorFrameV1 {
         val retained = fields.map { it.copyOf() }
         validateResponseFields(method, request, retained)
         return encode(retained, MAXIMUM_RESPONSE_BYTES)
+    }
+
+    /** Encode the dedicated Bootstrap selector, ticket actions or initial publication reads. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalRequest(fields: List<ByteArray>): ByteArray {
+        encodedSize(fields, MAXIMUM_REQUEST_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapRequest(retained)
+        return encode(retained, MAXIMUM_REQUEST_BYTES)
+    }
+
+    /** Decode only the dedicated Bootstrap request grammar; data grants no Native authority. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalRequest(requestFrame: ByteArray): List<ByteArray> =
+        decode(requestFrame, MAXIMUM_REQUEST_BYTES).also(KagemushaAppOwnedHardwareFrameV1::requireOrdinaryBootstrapRequest)
+
+    /** Separate Bootstrap-only C19 correlation. This API creates no Native owner or money permission. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, fields: List<ByteArray>): ByteArray {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        encodedSize(fields, MAXIMUM_RESPONSE_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, retained)
+        return encode(retained, MAXIMUM_RESPONSE_BYTES)
+    }
+
+    /** Decode only the original Bootstrap owner response, preserving the generic monetary S gate. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, responseFrame: ByteArray): List<ByteArray> {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        return decode(responseFrame, MAXIMUM_RESPONSE_BYTES).also {
+            KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, it)
+        }
     }
 
     /** Canonical little-endian native discriminant, suitable for method request fields. */
@@ -233,9 +267,9 @@ object KagemushaCoreCoordinatorFrameV1 {
                 bounded(fields, 3, 8 * 1024)
                 val previous = number(fields, 4).toUInt()
                 require(previous != UInt.MAX_VALUE) { "App Attest counter is exhausted" }
-                KagemushaSelectionFrameV1.requireAppAttest(selection)
-                require(KagemushaAppAttestOriginalCounterV1.read(field(fields, 3)) > previous) {
-                    "App Attest assertion counter did not advance"
+                KagemushaSelectionFrameV1.requireAppAttestSubject(selection)
+                require(KagemushaAppAttestOriginalV1.counter(field(fields, 3)) > previous) {
+                    "App Attest counter did not advance beyond the retained floor"
                 }
                 digest(fields, 5); digest(fields, 6)
             }
@@ -334,8 +368,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                         "App Attest acknowledgment substituted original bytes"
                     }
                 }
-                require(number(response, 4).toUInt() == KagemushaAppAttestOriginalCounterV1.read(field(request, 3))) {
-                    "App Attest acknowledgment substituted the original assertion counter"
+                require(number(response, 4).toUInt() == KagemushaAppAttestOriginalV1.counter(field(request, 3))) {
+                    "App Attest acknowledgment substituted the original counter"
                 }
                 equal(response, 5, request, 5); equal(response, 6, request, 6)
             }

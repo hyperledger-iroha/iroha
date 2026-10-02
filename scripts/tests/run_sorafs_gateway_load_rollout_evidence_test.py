@@ -214,9 +214,22 @@ def test_runner_rejects_weakened_production_load_thresholds(
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "min_staging_duration_secs must be >= 86400" in captured.err
+    assert "min_staging_duration_secs must be" not in captured.err
     assert "min_streams must be >= 1000" in captured.err
     assert captured.out == ""
+
+
+def test_runner_accepts_short_operator_observation(tmp_path: Path, capsys) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--min-staging-duration-secs") + 1] = "1"
+
+    assert MODULE.main([*args, "--dry-run"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    plan = json.loads(captured.out)
+    assert plan["thresholds"]["min_staging_duration_secs"] == 1
+    verifier = plan["steps"][0]["command"]
+    assert verifier[verifier.index("--min-staging-duration-secs") + 1] == "1"
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:

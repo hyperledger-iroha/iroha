@@ -114,14 +114,55 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         ))
     }
 
+    /// Build the actual first-release one-member W account ceremony with genuine signatures.
+    /// This remains synthetic test evidence, never an installed Native or physical owner.
+    /// # Panics
+    /// Panics if a maintained model/signature invariant changes.
+    #[must_use]
+    pub fn with_single_member_wallet(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+    ) -> Self {
+        Self::with_integrity_controller(apple, integrity, financial_commitment, true)
+    }
     fn with_integrity(apple: bool, integrity: bool, financial_commitment: [u8; 32]) -> Self {
-        Self::with_integrity_and_release(apple, integrity, financial_commitment, [3; 32])
+        Self::with_integrity_controller(apple, integrity, financial_commitment, false)
+    }
+    fn with_integrity_controller(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+        wallet_controller: bool,
+    ) -> Self {
+        Self::with_integrity_and_release_controller(
+            apple,
+            integrity,
+            financial_commitment,
+            [3; 32],
+            wallet_controller,
+        )
     }
     fn with_integrity_and_release(
         apple: bool,
         integrity: bool,
         financial_commitment: [u8; 32],
         app_release_digest: [u8; 32],
+    ) -> Self {
+        Self::with_integrity_and_release_controller(
+            apple,
+            integrity,
+            financial_commitment,
+            app_release_digest,
+            false,
+        )
+    }
+    fn with_integrity_and_release_controller(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+        app_release_digest: [u8; 32],
+        wallet_controller: bool,
     ) -> Self {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
@@ -218,7 +259,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             .unwrap();
         let release_attestation = KagemushaReleaseAttestationV1 {
             version: 1,
-            subject: release_subject.clone(),
+            subject: release_subject,
             approvals: release_keys[..2]
                 .iter()
                 .map(|key| KagemushaReleaseApprovalV1 {
@@ -253,7 +294,20 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             scale: 2,
         };
         let owner = KagemushaRetailEnrollmentOwnerV1 {
-            account_id: AccountId::new(wallet.public_key().clone()),
+            account_id: if wallet_controller {
+                AccountId::new_multisig(
+                    crate::account::MultisigPolicy::new(
+                        1,
+                        vec![
+                            crate::account::MultisigMember::new(wallet.public_key().clone(), 1)
+                                .unwrap(),
+                        ],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                AccountId::new(wallet.public_key().clone())
+            },
             runtime: runtime.clone(),
             lane_id: [16; 32],
         };
@@ -320,7 +374,10 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             raw.extend_from_slice(&auth);
             raw.push(0x69);
             raw.extend_from_slice(b"signature");
-            raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+            raw.extend_from_slice(&[
+                0x58,
+                u8::try_from(der.as_bytes().len()).expect("P-256 DER signature fits one CBOR byte"),
+            ]);
             raw.extend_from_slice(der.as_bytes());
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw }
         } else {
@@ -767,6 +824,5 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
         "app_authority_seed_hex":(hex::encode([61;32])),"platform_p256_secret_hex":(hex::encode([7;32])),
         "vectors":vectors
     });
-    let bytes = norito::json::to_vec(&document).unwrap();
-    bytes
+    norito::json::to_vec(&document).unwrap()
 }

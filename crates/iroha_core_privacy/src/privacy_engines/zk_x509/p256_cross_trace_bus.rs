@@ -1448,6 +1448,7 @@ fn build_writer_row_v1(
     }
 }
 /// Four final residues equating the fully chained source product to the independent sink product.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1(
     final_source: [F; P256_CROSS_TRACE_LANES_V1],
     sink: [F; P256_CROSS_TRACE_LANES_V1],

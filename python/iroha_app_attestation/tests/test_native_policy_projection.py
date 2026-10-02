@@ -4,9 +4,10 @@ import copy
 import hashlib
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from iroha_app_attestation.attestation import AttestationRejected
-from iroha_app_attestation.native_policy_projection import decode_native_policy_projection, PROVIDER_SCHEMA, SCHEMA
+from iroha_app_attestation.native_policy_projection import NativePolicyProjection, decode_native_policy_projection, PROVIDER_SCHEMA, SCHEMA
 from iroha_app_attestation.provider import _apple_release_digest
 from test_ordinary_enrollment import CIRCUIT_ISSUER_POINT
 
@@ -48,6 +49,46 @@ def fixture(apple=False):
 
 
 class NativePolicyProjectionTests(unittest.TestCase):
+    def test_preparation_join_matches_the_exact_native_issuer_for_both_platforms(self):
+        for apple in (False, True):
+            projection = decode_native_policy_projection(original(fixture(apple)))
+            projection.require_preparation_issuer_join(
+                native_issuer_pins=((b'\x03'*32, b'\x07'*32, b'\x73'*32),))
+            self.assertEqual(projection.policies[0].core_preparation_public_key, b'\x73'*32)
+            self.assertEqual(projection.policies[0].authority_public_key, b'\x74'*32)
+
+    def test_preparation_join_refuses_substituted_role_policy_width_and_empty_profiles(self):
+        projection = decode_native_policy_projection(original(fixture()))
+        for digest, key in ((b'\x07'*32, b'\x74'*32), (b'\x99'*32, b'\x73'*32),
+                            (b'\x07'*32, CIRCUIT_ISSUER_POINT), (b'\x07'*32, bytes(32)),
+                            (bytes(32), b'\x73'*32), (b'\x07'*32, bytearray(b'\x73'*32))):
+            with self.assertRaises(AttestationRejected):
+                projection.require_preparation_issuer_join(
+                    native_issuer_pins=((b'\x03'*32, digest, key),))
+        pins = ((b'\x03'*32, b'\x07'*32, b'\x73'*32),)
+        for absent_or_ambiguous in ((), pins + pins,
+                                    pins + ((b'\x99'*32, b'\x07'*32, b'\x73'*32),)):
+            with self.assertRaises(AttestationRejected):
+                projection.require_preparation_issuer_join(native_issuer_pins=absent_or_ambiguous)
+        empty = NativePolicyProjection((), (), projection.original_sha256)
+        with self.assertRaises(AttestationRejected):
+            empty.require_preparation_issuer_join(native_issuer_pins=pins)
+
+    def test_preparation_join_checks_every_profile_and_preserves_governed_role_aliases(self):
+        projection = decode_native_policy_projection(original(fixture()))
+        second = replace(projection.policies[0], hardware_profile_id=b'\x99'*32,
+                         issuer_policy_digest=b'\x98'*32, core_preparation_public_key=b'\x74'*32)
+        mixed = NativePolicyProjection((projection.policies[0], second), (), projection.original_sha256)
+        with self.assertRaises(AttestationRejected):
+            mixed.require_preparation_issuer_join(
+                native_issuer_pins=((b'\x03'*32, b'\x07'*32, b'\x73'*32),))
+        mixed.require_preparation_issuer_join(native_issuer_pins=(
+            (b'\x03'*32, b'\x07'*32, b'\x73'*32), (b'\x99'*32, b'\x98'*32, b'\x74'*32)))
+        value = fixture(); value['profiles'][0]['authority_public_key'] = '73'*32
+        admitted_data = decode_native_policy_projection(original(value))
+        admitted_data.require_preparation_issuer_join(
+            native_issuer_pins=((b'\x03'*32, b'\x07'*32, b'\x73'*32),))
+
     def test_android_public_originals_match_platform_policy_and_retained_google_principal(self):
         raw=original(fixture());projection=decode_native_policy_projection(raw)
         self.assertEqual(projection.original_sha256,hashlib.sha256(raw).digest())

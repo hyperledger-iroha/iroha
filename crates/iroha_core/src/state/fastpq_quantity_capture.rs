@@ -353,7 +353,7 @@ impl StateTransaction<'_, '_> {
     /// Frozen diagnostic preimage ceiling; inspection grants no invocation owner.
     pub(crate) fn quantity_candidate_preimage_limit(&self) -> u64 {
         let profile = self.fastpq_source_policy.0;
-        if self.tx_call_hash.is_some() {
+        if self.tx_call_hash.is_some() || self.fastpq_source_quota.has_native_purpose() {
             profile.intrinsic.max_input_transcript_bytes
         } else {
             profile.mandatory.per_obligation.max_input_transcript_bytes
@@ -625,7 +625,9 @@ impl StateTransaction<'_, '_> {
             .checked_add(kinds.len())
             .ok_or(QuantityCaptureIssue::Capacity)?;
         let profile = self.fastpq_source_policy.0;
-        let limit = if captured.is_protocol_purpose() {
+        let limit = if captured.is_protocol_purpose()
+            && !self.fastpq_source_quota.is_native_purpose(entry_hash)
+        {
             profile.mandatory.per_obligation
         } else {
             profile.intrinsic

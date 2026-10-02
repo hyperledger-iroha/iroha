@@ -21,7 +21,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Bounded bootstrap/startup, request-bound native finality and signed top-up boundaries have component implementations. | Durable hardware authority, recursive monetary proofs, reserve settlement, provisioning and physical-device evidence. |
+| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Current-owner financial control, complete recursive monetary proofs, funded State transitions, settlement, recovery and physical-device evidence. |
 
 ## Immediate blockers
 
@@ -69,23 +69,35 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
-All four validators return readiness HTTP 200, have three peers, and converged
-at height 3 after an ordinary signed transaction resolved to StateApplied.
-The public endpoint at `https://taira.sora.org` has verified TLS, and the
-same-revision basic doctor reports healthy public routes and curated MCP tools.
+Taira's four validators run the a2a98f02 daemon build with fresh keys and signed
+genesis. The genesis beacon ceremony resolved to StateApplied at height 5.
+All four completed sequential C2 restarts with their keys and ledger retained.
+Latest direct checks verified each active process, current selector and C2
+binary, with height 8, three peers and readiness HTTP 200. Public TLS,
+readiness and status are healthy at a2a98f02, height 8, three peers, twenty-one
+approved transactions, zero rejected transactions and an empty queue. The
+same-revision native basic doctor passed all fifteen checks with no failures.
 The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes deployment recovery and initializes fresh safety records
-before first startup. Deployment preparation, transfer and the routine updater
-accept an authenticated build-only candidate without a full regression gate.
-On-chain governance owns deployment policy; no fixed 24-hour fault test is a
-deployment prerequisite for testnet or production.
+Current source initializes fresh safety records before first startup and retires
+completed execution after successful replay before strict native archive
+attachment. Deployment preparation, transfer and the routine updater accept an
+authenticated build-only candidate without a full regression gate. On-chain
+governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
+for testnet or production. Release qualification remains open.
 
-Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
-completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
-use the approved deployment tooling. Retained incident records describe the
+Fresh-account funding applied at height 6; ordinary paid public pings applied
+at heights 7 and 8, with exactly one C2 ping submission. Native read-only
+funding resume now returns Applied with exact committed-transaction readback
+at height 6. The live endpoint objective is achieved; broader native release
+qualification and original public-reset coordinator completion remain separate.
+Mac outbound-port exhaustion was recovered, with the ephemeral-port setting
+and scoped SYN guard persisted. The temporary artifact server was stopped.
+Physical DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+Validators run in a Linux guest on MacStadium in Dublin; use the approved
+deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
+
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -118,7 +130,10 @@ fixture are now applied. Stock verifier-only, evidence and optimized test builds
 pass for source20, including all four genuine profile/proof/pre-aux diagnostics.
 Its expanded selection records 1,183 passes and four X509 fixture failures. The
 historical-descriptor repair and independently regenerated scoped DER values
-are applied with private scalar/comparison equations; native validation is pending.
+are applied. The resolved merge and subsequent private scalar/branch equations,
+public X509 coefficient extents, fixed-row construction and cleanup repairs now
+require fresh combined native validation. The source22 build attempts failed
+source-observation guards when the merge began; they supply no native test pass.
 All 648 macOS CPU cost/parity measurements pass, with the pruned transform faster
 than the full-transform reference. Linux comparison and a complete current
 maximum proof remain pending.
@@ -134,6 +149,20 @@ Fresh canonical fixture generation, native SDK consumers, Swift/Android packages
 workspace checks and four-validator tests still require one integrated candidate.
 Complete cryptographic/side-channel, physical-device and signed release evidence
 remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact boundaries.
+
+KAGEMUSHA component coverage includes journal recovery, issuer-key and
+enrollment-floor controls, expired-preparation custody, Guard-generation and
+reciprocal claim-carrier binding. The non-test real-proof frontend, strict privacy
+lint and complete ordinary suite remain under qualification. SDK native-custody
+and assembly tools have explicit feature/target owners; FASTPQ uses the existing
+STARK feature. Current dependency costs and the native proving context remain
+under review.
+
+Ordinary recursive credential generation is blocked by the Eq circuit requiring
+8,584 advice columns against the 1,024-column limit. The complete-circuit
+preflight and compact authenticated carrier layout still need fresh compiler,
+layout, parity and proof qualification.
+
 
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and

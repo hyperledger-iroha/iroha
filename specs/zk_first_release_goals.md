@@ -46,8 +46,13 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current base is `d05dc9c1` on `optimizations`. The last complete privacy
-candidate is source17, recorded at
+The current checkout is `optimizations` at `dab3433065`, with the resolved
+`c87c37aaa1` merge still uncommitted. Source22's privacy and Core builds were
+interrupted by that merge; their source guards failed and no planned native
+controls ran. The merge's fixture repairs passed 18 final focused Rust tests.
+The subsequently applied X509 public-extent, fixed-matrix and cleanup changes,
+selected-query diagnostics and private IVM branches await fresh combined native
+validation. The last complete selected privacy candidate is source17, recorded at
 `dist/zk-remediation/2026-09-30/epoch19-integrated-source17/source.json`
 (SHA-256 `cf8c2dd49d1b315e5040b7f4db0e8daf039ac00607ba01fbef5ecd1e303739b5`).
 Stock Rust 1.93.1 production and normal optimized test builds pass on macOS and
@@ -133,11 +138,18 @@ policy/key custody, complete refresh, secure parameters and the full
 program relation remain open; the component is not a qualified encryption
 construction. The proposed full-ring N=131072/QP2725 refresh point fails its
 ordinary-LWE quantum screen at about 122.165 bits against the 128-bit target. A
-smaller mixed-width QP2589 candidate satisfies the conditional arithmetic bounds,
-but its estimator screen stops at a nonfinite BDD result after one completed
-attack. A diagnostic traces this to NaN beta-CDF factors at valid interior inputs;
-a numerically validated screen remains required. Neither candidate has
-secure-construction or refresh qualification.
+smaller mixed-width QP2589 candidate satisfies the conditional arithmetic bounds.
+Its original nonfinite BDD run remains a failed screen; certified numerical
+repair completes the twelve original attack cases, but the expanded ChaLoy21
+quantum screen fails at 127.472 bits. The exact QP2571 successor passes twenty
+ordinary-LWE model cases, with a minimum 128.4063 bits, and all five selected BDD
+minima pass full-factor interval checks. Scoped ring-primal and small CRT
+projection bounds do not establish joint ring, algebraic or related-key security.
+The return key targets an embedded old-ring secret, requiring separate analysis:
+its modulo-special-prime screen is incomplete, while the disjoint-digit model
+has finite estimates but leaves its multimodal error structure unqualified.
+The two-secret cycle, full refresh, circuit privacy and complete program relation
+remain open. No candidate is selected or activated by these screens.
 
 The held native canonical-input/digit successor passes 19 component tests,
 including nine new controls. It owns both complete canonical ciphertext components,
@@ -175,11 +187,13 @@ The private dispatcher now constrains the original owner depth to the native
 0..=1,024 range, with exact push/pop transitions and root depth zero. The native
 limit has one shared owner; the reviewed change preserves its value. The private AIR depth controls and full-depth native LIFO/slot-reuse control
 pass on source17 with default stacks.
-The private dispatcher also has original-port scalar arithmetic, bitwise and
-signed/unsigned/equality comparison equations. They preserve private fetches,
-matched tags, register aliases and r0 semantics; eleven new controls and the
-existing shared-bank consumers await native execution on the combined source.
-These components do not enable IVM proof admission.
+The private dispatcher also has original-port scalar arithmetic, bitwise,
+signed/unsigned/equality comparison and all six conditional-branch equations.
+Branches use the same constrained predicate for the PC, require both native
+operand tags to be public and preserve the original 21-port history join.
+Prepared-contract admission checks both successors. Scalar, branch, alias/r0,
+gas/cycle, degree and shared-bank controls await native execution on the combined
+source. These components do not enable IVM proof admission.
 
 ### ZK04 — FASTPQ
 
@@ -269,6 +283,15 @@ regenerated and independently checked, and the four primary diagnostics pass.
 The expanded run exposed four additional fixture failures; their scoped DER and
 historical-profile repairs await native rerun. CPU/accelerator parity and a new
 maximum proof remain required.
+
+The applied composition repair preserves public coefficient extents through
+zero values and cancellation, with full initialized-allocation erasure. Arithmetic
+fixed preprocessing now fills its already-owned public matrix once per row,
+reducing full row constructions from 44,564,480 to 2,621,440 across the five
+maximum registrations while retaining eight-column IFFT batches. This is a
+work-count reduction, not a measured proof speedup. A test-only Horner comparison
+preserves the original full selected-query baseline. Native parity, cleanup and
+Linux one/four/twenty-worker timing remain pending for these changes.
 
 Full semantic, soundness, zero-knowledge, transcript and side-channel qualification
 remain open. Conditional classical-ROM/masking derivations do not establish

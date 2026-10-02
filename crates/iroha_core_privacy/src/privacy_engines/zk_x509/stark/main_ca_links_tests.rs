@@ -462,3 +462,82 @@ fn admitted_joint_point_uses_the_closed_original_ca_and_main_domain_exclusions()
             .unwrap()
     );
 }
+
+#[test]
+fn ca_original_coefficient_transfer_clears_full_initialized_allocation_on_success_and_error() {
+    use super::super::super::super::private_table::inspection;
+    let (layout, _) = plan_v1();
+    let shared = layout.as_shared().unwrap();
+    let rows = MainCaPrivatePlanV1::QUOTIENT_ROWS_V1;
+    let count = MainCaPrivatePlanV1::MAXIMUM_QUOTIENT_DEGREE_V1 + 1;
+    for outcome in 0..3 {
+        let mut values = Vec::new();
+        values.try_reserve_exact(rows).unwrap();
+        values.resize(rows, E::ZERO);
+        assert_eq!(values.len(), rows);
+        assert_eq!(values.capacity(), rows);
+        for index in [0, 91, count - 1] {
+            values[index] = E::from_base(F(17));
+        }
+        if outcome == 1 {
+            values[count] = E::ONE;
+        }
+        let coefficients = ZeroizingExtensionColumnV1(values);
+        let mut accumulator = ZeroizingExtensionLanesV1::new(
+            (0..SECURITY_LANES)
+                .map(|_| (0..COMPOSITION_DEGREE_CHUNKS).map(|_| Vec::new()).collect())
+                .collect(),
+            zeroize_extension_lanes_v1,
+        );
+        // Reserve the destination before inspection so no displaced allocation
+        // contributes to the census of the single original coefficient owner.
+        accumulator[0][0].try_reserve_exact(count).unwrap();
+        let address = accumulator[0][0].as_ptr();
+        let capacity = accumulator[0][0].capacity();
+        if outcome == 2 {
+            accumulator[0].pop();
+        }
+        let (result, erased) = inspection::observe_v1(|| {
+            MainCaPrivatePlanV1::add_original_first_chunk_v1(
+                coefficients,
+                &shared,
+                &mut accumulator,
+            )
+        });
+        assert_eq!(result.is_ok(), outcome == 0);
+        assert_eq!(accumulator[0][0].as_ptr(), address);
+        assert_eq!(accumulator[0][0].capacity(), capacity);
+        assert_eq!(
+            erased.iter().map(|record| record.cells).sum::<usize>(),
+            rows
+        );
+        assert!(erased.iter().all(|record| record.nonzero_after == 0));
+        let populated = erased
+            .iter()
+            .filter(|record| record.cells != 0)
+            .collect::<Vec<_>>();
+        if outcome == 1 {
+            assert!(matches!(result, Err(ZkX509StarkErrorV1::ConstraintOpening)));
+            assert_eq!(populated.len(), 1);
+            assert_eq!(populated[0].cells, rows);
+            assert_eq!(populated[0].nonzero_before, 4);
+        } else {
+            // Tail erasure happens while the original full-length owner is
+            // alive; the same allocation's retained prefix clears on transfer Drop.
+            assert_eq!(populated.len(), 2);
+            assert_eq!(populated[0].cells, rows - count);
+            assert_eq!(populated[0].nonzero_before, 0);
+            assert_eq!(populated[1].cells, count);
+            assert_eq!(populated[1].nonzero_before, 3);
+        }
+        if outcome == 0 {
+            assert_eq!(accumulator[0][0].len(), count);
+            for index in [0, 91, count - 1] {
+                assert_eq!(accumulator[0][0][index], E::from_base(F(17)));
+            }
+            assert!(accumulator[0][1..].iter().all(Vec::is_empty));
+        } else {
+            assert!(accumulator.iter().flatten().all(Vec::is_empty));
+        }
+    }
+}

@@ -203,7 +203,6 @@ use crate::{json_entry, json_object, json_value};
 /// `can_read_all` is kept separately because unscoped protocol records must
 /// fail closed for ordinary dataspace readers, even when every currently
 /// configured dataspace happens to be visible.
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
@@ -211,7 +210,6 @@ pub(crate) struct DataspaceReadVisibility {
     exact_account: Option<AccountId>,
 }
 
-#[cfg(feature = "app_api")]
 impl DataspaceReadVisibility {
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
@@ -3737,11 +3735,16 @@ fn quote_app_api_transaction_builder(
             Some(route.route.dataspace_id),
         )
     }
-    .map_err(|error| {
-        conversion_error(format!(
+    .map_err(|error| match error {
+        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ),
+        ),
+        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => conversion_error(format!(
             "failed to quote {context} transaction fees: {}",
             error.code()
-        ))
+        )),
     })?;
     if !payload
         .fee_payment
@@ -9334,7 +9337,11 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
 fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
     let native = rec.evidence.decode_native().map_err(|error| match error {
-        iroha_sumeragi::message::CodecError::Resource(_) => history_capacity_error(),
+        iroha_sumeragi::message::CodecError::Resource(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        }
         other => conversion_error(format!("stored native evidence is not canonical: {other}")),
     })?;
     let class = match native {
@@ -9865,9 +9872,7 @@ fn push_accepted_transaction_for_ingress_with_routing(
             let plan = queue
                 .route_plan_with_state(&accepted_tx, state.as_ref())
                 .map_err(|error| Error::PushIntoQueue {
-                    source: Box::new(queue::Error::UnresolvedRoute {
-                        reason: error.to_string(),
-                    }),
+                    source: Box::new(error.into()),
                     backpressure: queue.current_backpressure(),
                 })?;
             super::require_current_transaction_route(&plan)?;
@@ -15192,7 +15197,7 @@ fn evaluate_contract_view_request(
     } = prepared;
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
-    let result = match execute_contract_view(
+    let result = match contract_transport_attempt(execute_contract_view(
         &state,
         &authority,
         &contract_address,
@@ -15202,7 +15207,7 @@ fn evaluate_contract_view_request(
         entrypoint_descriptor,
         payload,
         gas_limit,
-    ) {
+    ))? {
         Ok(result) => result,
         Err(err) => {
             return Ok(Err(ContractViewErrorResponseDto {
@@ -15284,7 +15289,7 @@ pub fn handle_post_contract_call_simulate(
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
         ensure_callable_contract_entrypoint(&manifest, resolved_entrypoint)?;
-    let response = match execute_contract_call_simulation(
+    let response = match contract_transport_attempt(execute_contract_call_simulation(
         &state,
         &authority,
         &contract_address,
@@ -15294,7 +15299,7 @@ pub fn handle_post_contract_call_simulate(
         entrypoint_descriptor,
         payload,
         gas_limit,
-    ) {
+    ))? {
         Ok(result) => ContractCallSimulateResponseDto {
             ok: true,
             dataspace: dataspace.clone(),
@@ -16271,6 +16276,7 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_hit: diag.context.predecoded_hit,
     }
 }
+#[cfg(test)]
 fn exact_contract_permission_target(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
@@ -16292,20 +16298,38 @@ fn authority_has_exact_contract_permission(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     required: &str,
-) -> std::result::Result<bool, String> {
-    let target = exact_contract_permission_target(contract_address, entrypoint, required);
-    let direct = world
-        .account_permissions_iter(authority)
-        .map_err(|err| format!("failed to resolve contract authority: {err}"))?
-        .any(|permission| permission == &target);
-    let through_role = world.account_roles_iter(authority).any(|role_id| {
-        world
-            .roles()
-            .get(role_id)
-            .is_some_and(|role| role.permissions().any(|permission| permission == &target))
-    });
-    Ok(direct || through_role)
+) -> std::result::Result<bool, iroha_core::execution_attempt::ExecutionAttemptError<String>> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    match iroha_core::executor::enforce_named_contract_entrypoint_permission(
+        world, authority, contract_address, entrypoint, Some(required),
+    ) {
+        Ok(()) => Ok(true),
+        Err(ExecutionAttemptError::Rejected(iroha_data_model::ValidationFail::NotPermitted(_))) => Ok(false),
+        Err(error) => Err(error.map_rejection(|error| format!("failed to resolve contract authority: {error}"))),
+    }
 }
+// Only completed attempts can be serialized into the public view/simulation result DTOs.
+fn contract_transport_attempt<T, E>(
+    result: std::result::Result<T, iroha_core::execution_attempt::ExecutionAttemptError<E>>,
+) -> Result<std::result::Result<T, E>> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(ExecutionAttemptError::Rejected(error)) => Ok(Err(error)),
+        Err(ExecutionAttemptError::Deferred(_)) => Err(history_capacity_error()),
+    }
+}
+// Local host/VM refusal is an unfinished attempt, not a completed view or simulation result.
+fn contract_vm_attempt_error<E>(
+    error: ivm::VMError,
+    rejected: impl FnOnce(ivm::VMError) -> E,
+) -> iroha_core::execution_attempt::ExecutionAttemptError<E> {
+    match iroha_core::execution_attempt::ExecutionDeferred::from_vm_error(&error) {
+        Some(reason) => iroha_core::execution_attempt::ExecutionAttemptError::Deferred(reason),
+        None => iroha_core::execution_attempt::ExecutionAttemptError::Rejected(rejected(error)),
+    }
+}
+
 fn resolve_exact_contract_runtime_alias(
     world: &impl WorldReadOnly,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -16370,7 +16394,7 @@ fn ensure_contract_view_authorized(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     required: Option<&str>,
-) -> std::result::Result<(), ContractViewExecutionError> {
+) -> std::result::Result<(), iroha_core::execution_attempt::ExecutionAttemptError<ContractViewExecutionError>> {
     let Some(required) = required else {
         return Ok(());
     };
@@ -16379,7 +16403,7 @@ fn ensure_contract_view_authorized(
         Err(ContractViewExecutionError {
             message: "contract view authorization must not be empty".to_owned(),
             vm_diagnostic: None,
-        })
+        }.into())
     } else if authority_has_exact_contract_permission(
         world,
         authority,
@@ -16387,10 +16411,10 @@ fn ensure_contract_view_authorized(
         entrypoint,
         required,
     )
-    .map_err(|message| ContractViewExecutionError {
+    .map_err(|error| error.map_rejection(|message| ContractViewExecutionError {
         message,
         vm_diagnostic: None,
-    })? {
+    }))? {
         Ok(())
     } else {
         Err(ContractViewExecutionError {
@@ -16398,7 +16422,7 @@ fn ensure_contract_view_authorized(
                 "contract view entrypoint `{entrypoint}` requires permission `{required}`"
             ),
             vm_diagnostic: None,
-        })
+        }.into())
     }
 }
 fn contract_call_runtime_permission(
@@ -16422,7 +16446,7 @@ fn ensure_contract_call_authorized(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     required: Option<&str>,
-) -> std::result::Result<(), ContractCallSimulationError> {
+) -> std::result::Result<(), iroha_core::execution_attempt::ExecutionAttemptError<ContractCallSimulationError>> {
     let Some(required) = required else {
         return Ok(());
     };
@@ -16434,7 +16458,7 @@ fn ensure_contract_call_authorized(
             normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
-        });
+        }.into());
     }
     if authority_has_exact_contract_permission(
         world,
@@ -16443,13 +16467,13 @@ fn ensure_contract_call_authorized(
         entrypoint,
         required,
     )
-    .map_err(|message| ContractCallSimulationError {
+    .map_err(|error| error.map_rejection(|message| ContractCallSimulationError {
         message,
         vm_diagnostic: None,
         normalized_payload: None,
         gas_used: 0,
         queued_instructions: Vec::new(),
-    })? {
+    }))? {
         Ok(())
     } else {
         Err(ContractCallSimulationError {
@@ -16458,7 +16482,7 @@ fn ensure_contract_call_authorized(
             normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
-        })
+        }.into())
     }
 }
 fn execute_contract_view(
@@ -16471,7 +16495,7 @@ fn execute_contract_view(
     descriptor: &manifest::EntrypointDescriptor,
     payload: Option<IrohaJson>,
     gas_limit: u64,
-) -> std::result::Result<IrohaJson, ContractViewExecutionError> {
+) -> std::result::Result<IrohaJson, iroha_core::execution_attempt::ExecutionAttemptError<ContractViewExecutionError>> {
     let entry_pc = resolve_contract_entrypoint_pc(
         program.prepared_contract(),
         selector,
@@ -16524,7 +16548,7 @@ fn execute_contract_view(
         |error| ContractViewExecutionError {
             message: error.to_string(),
             vm_diagnostic: None,
-        },
+        }.into(),
     )?;
     let mut host = iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         authority.clone(),
@@ -16538,10 +16562,10 @@ fn execute_contract_view(
         program.prepared_contract(),
         selector,
     )
-    .map_err(|error| ContractViewExecutionError {
+    .map_err(|error| error.map_rejection(|error| ContractViewExecutionError {
         message: error.to_string(),
         vm_diagnostic: None,
-    })?;
+    }))?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -16562,10 +16586,10 @@ fn execute_contract_view(
         .get();
     let mut vm = program
         .checkout_runtime(gas_limit, heap_limit)
-        .map_err(|err| ContractViewExecutionError {
+        .map_err(|err| contract_vm_attempt_error(err, |err| ContractViewExecutionError {
             message: format!("failed to prepare contract view runtime: {err}"),
             vm_diagnostic: None,
-        })?;
+        }))?;
     // Views are not allowed to retain any instruction, durable-state write,
     // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
     host.restrict_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
@@ -16585,42 +16609,42 @@ fn execute_contract_view(
     if let Some(arguments) = prepared_arguments.as_ref() {
         arguments
             .precharge_vm(&mut vm)
-            .map_err(|error| ContractViewExecutionError {
+            .map_err(|error| contract_vm_attempt_error(error, |error| ContractViewExecutionError {
                 message: format!("failed to precharge contract view arguments: {error}"),
                 vm_diagnostic: None,
-            })?;
+            }))?;
     }
     let return_pc = vm.memory.code_len();
     vm.set_register(1, return_pc);
     vm.set_program_counter(entry_pc)
-        .map_err(|err| ContractViewExecutionError {
+        .map_err(|err| contract_vm_attempt_error(err, |err| ContractViewExecutionError {
             message: format!("failed to seek to contract view entrypoint: {err}"),
             vm_diagnostic: None,
-        })?;
+        }))?;
     vm.run_with_host(&mut host)
-        .map_err(|err| ContractViewExecutionError {
+        .map_err(|err| contract_vm_attempt_error(err, |err| ContractViewExecutionError {
             message: format!("contract view execution failed: {err}"),
             vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-        })?;
+        }))?;
     if let Some(violation) = host.output_budget_violation() {
         return Err(ContractViewExecutionError {
             message: format!("contract view attempted bounded output: {violation:?}"),
             vm_diagnostic: None,
-        });
+        }.into());
     }
     let queued = host.drain_instructions();
     if !queued.is_empty() {
         return Err(ContractViewExecutionError {
             message: "view entrypoint attempted to emit instructions".to_owned(),
             vm_diagnostic: None,
-        });
+        }.into());
     }
     let durable_overlay = host.drain_durable_state_overlay();
     if !durable_overlay.is_empty() {
         return Err(ContractViewExecutionError {
             message: "view entrypoint attempted to mutate durable state".to_owned(),
             vm_diagnostic: None,
-        });
+        }.into());
     }
     let value = descriptor.return_schema.as_ref().map_or_else(
         || Ok(Value::Null),
@@ -16635,7 +16659,7 @@ fn execute_contract_view(
     IrohaJson::from_norito_value_ref(&value).map_err(|error| ContractViewExecutionError {
         message: format!("contract view returned invalid or oversized JSON: {error}"),
         vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-    })
+    }).map_err(Into::into)
 }
 fn execute_contract_call_simulation(
     state: &CoreState,
@@ -16647,7 +16671,7 @@ fn execute_contract_call_simulation(
     descriptor: &manifest::EntrypointDescriptor,
     payload: Option<IrohaJson>,
     gas_limit: u64,
-) -> std::result::Result<ContractCallSimulationExecution, ContractCallSimulationError> {
+) -> std::result::Result<ContractCallSimulationExecution, iroha_core::execution_attempt::ExecutionAttemptError<ContractCallSimulationError>> {
     let entry_pc =
         resolve_contract_entrypoint_pc(program.prepared_contract(), selector, descriptor.kind)
             .map_err(|err| ContractCallSimulationError {
@@ -16717,7 +16741,7 @@ fn execute_contract_call_simulation(
             normalized_payload: None,
             gas_used: 0,
             queued_instructions: Vec::new(),
-        },
+        }.into(),
     )?;
     let mut host = iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         authority.clone(),
@@ -16731,13 +16755,13 @@ fn execute_contract_call_simulation(
         program.prepared_contract(),
         selector,
     )
-    .map_err(|error| ContractCallSimulationError {
+    .map_err(|error| error.map_rejection(|error| ContractCallSimulationError {
         message: error.to_string(),
         vm_diagnostic: None,
         normalized_payload: normalized_payload.clone(),
         gas_used: 0,
         queued_instructions: Vec::new(),
-    })?;
+    }))?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -16761,13 +16785,13 @@ fn execute_contract_call_simulation(
         .get();
     let mut vm = program
         .checkout_runtime(gas_limit, heap_limit)
-        .map_err(|err| ContractCallSimulationError {
+        .map_err(|err| contract_vm_attempt_error(err, |err| ContractCallSimulationError {
             message: format!("failed to prepare contract call runtime: {err}"),
             vm_diagnostic: None,
             normalized_payload: normalized_payload.clone(),
             gas_used: 0,
             queued_instructions: Vec::new(),
-        })?;
+        }))?;
     host.restrict_output_limits(
         iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(
             u64::MAX,
@@ -16793,25 +16817,30 @@ fn execute_contract_call_simulation(
     if let Some(arguments) = prepared_arguments.as_ref() {
         arguments
             .precharge_vm(&mut vm)
-            .map_err(|error| ContractCallSimulationError {
+            .map_err(|error| contract_vm_attempt_error(error, |error| ContractCallSimulationError {
                 message: format!("failed to precharge contract call arguments: {error}"),
                 vm_diagnostic: None,
                 normalized_payload: normalized_payload.clone(),
                 gas_used: 0,
                 queued_instructions: Vec::new(),
-            })?;
+            }))?;
     }
     let return_pc = vm.memory.code_len();
     vm.set_register(1, return_pc);
     vm.set_program_counter(entry_pc)
-        .map_err(|err| ContractCallSimulationError {
+        .map_err(|err| contract_vm_attempt_error(err, |err| ContractCallSimulationError {
             message: format!("failed to seek to contract call entrypoint: {err}"),
             vm_diagnostic: None,
             normalized_payload: normalized_payload.clone(),
             gas_used: 0,
             queued_instructions: Vec::new(),
-        })?;
+        }))?;
     let run_result = vm.run_with_host(&mut host);
+    if let Err(error) = &run_result {
+        if let Some(reason) = iroha_core::execution_attempt::ExecutionDeferred::from_vm_error(error) {
+            return Err(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(reason));
+        }
+    }
     if let Some(violation) = host.output_budget_violation() {
         return Err(ContractCallSimulationError {
             message: format!("contract call simulation output budget exceeded: {violation:?}"),
@@ -16819,7 +16848,7 @@ fn execute_contract_call_simulation(
             normalized_payload: normalized_payload.clone(),
             gas_used: gas_limit.saturating_sub(vm.gas_remaining),
             queued_instructions: Vec::new(),
-        });
+        }.into());
     }
     let queued = host.drain_instructions();
     let _durable_state_overlay = host.drain_durable_state_overlay();
@@ -16832,7 +16861,7 @@ fn execute_contract_call_simulation(
             normalized_payload,
             gas_used,
             queued_instructions,
-        });
+        }.into());
     }
     let result = descriptor
         .return_schema
@@ -17213,9 +17242,7 @@ fn unsigned_transaction_routing_plan(
     queue
         .route_payload_plan_with_state(&payload, state)
         .map_err(|err| Error::PushIntoQueue {
-            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-                reason: err.to_string(),
-            }),
+            source: Box::new(err.into()),
             backpressure: queue.current_backpressure(),
         })
 }
@@ -17513,7 +17540,7 @@ fn resolve_multisig_account_selector(
             let nexus = state.nexus_snapshot();
             let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
             let state_view = state.view();
-            if !authority_can_resolve_account_alias(state_view.world(), authority, &label) {
+            if !authority_can_resolve_account_alias(state_view.world(), authority, &label).map_err(crate::live_dataspace_resolution_error)? {
                 return Err(multisig_selector_forbidden_error(
                     "multisig_alias_resolve_forbidden",
                     format!("missing account-alias resolve permission for `{alias}`"),
@@ -17679,7 +17706,7 @@ fn resolve_multisig_account_and_spec(
         let label = parse_multisig_account_alias(&alias_literal, &nexus.dataspace_catalog)?;
         let world = state.world_view();
         let allowed_via_alias_permission =
-            authority_can_resolve_account_alias(&world, authority, &label);
+            authority_can_resolve_account_alias(&world, authority, &label).map_err(crate::live_dataspace_resolution_error)?;
         if !allowed_via_alias_permission {
             iroha_logger::warn!(
                 alias = %alias_literal,
@@ -18885,6 +18912,35 @@ fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
             })
         })
         .or_else(|| {
+            // A single typed transfer exposes transport/display fields without
+            // making a partial projection of a multi-instruction proposal.
+            let [instruction] = proposal.instructions.as_slice() else {
+                return None;
+            };
+            let iroha_data_model::isi::TransferBox::Asset(transfer) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::TransferBox>()?
+            else {
+                return None;
+            };
+            let mut payload = Map::new();
+            payload.insert("kind".into(), Value::from("TRANSFER"));
+            payload.insert(
+                "asset_id".into(),
+                Value::from(transfer.source().definition().to_string()),
+            );
+            payload.insert("amount".into(), Value::from(transfer.object().to_string()));
+            payload.insert(
+                "from_account_id".into(),
+                Value::from(transfer.source().account().to_string()),
+            );
+            payload.insert(
+                "to_account_id".into(),
+                Value::from(transfer.destination().to_string()),
+            );
+            Some(IrohaJson::new(Value::Object(payload)))
+        })
+        .or_else(|| {
             proposal.instructions.first().and_then(|instruction| {
                 let Ok(
                     iroha_executor_data_model::isi::multisig::MultisigInstructionBox::InvalidateOutstanding(invalidate),
@@ -19070,6 +19126,57 @@ fn query_multisig_proposals(
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_contract_call_tests {
     use super::*;
+    #[test]
+    fn local_contract_authorization_refusal_is_transport_capacity_not_a_completed_denial() {
+        use iroha_core::execution_attempt::ExecutionAttemptError;
+        use iroha_core::state::World;
+        use iroha_data_model::{account::Account, permission::Permission};
+        let authority = sample_account_id();
+        let address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E".parse().unwrap(),
+            &authority, 0, iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        ).unwrap();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let grant: Permission = iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: address.clone(), entrypoint: "inspect".into(),
+        }.into();
+        world.account_permissions_mut_for_testing().insert(authority.clone(), std::collections::BTreeSet::from([grant]));
+        let run = || ensure_contract_view_authorized(&world.view(), &authority, &address, "inspect", Some("CanInvokeContractEntrypoint"));
+        assert!(run().is_ok());
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32), run,
+        );
+        assert!(matches!(&refused, Err(ExecutionAttemptError::Deferred(reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity));
+        let transport = contract_transport_attempt(refused);
+        assert!(matches!(transport, Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)))));
+        assert!(matches!(contract_transport_attempt(run()), Ok(Ok(()))));
+        let denied = ensure_contract_view_authorized(&world.view(), &authority, &address, "another", Some("CanInvokeContractEntrypoint"));
+        assert!(matches!(contract_transport_attempt(denied), Ok(Err(_))));
+        let refused_call = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+            || ensure_contract_call_authorized(&world.view(), &authority, &address, "inspect", Some("CanInvokeContractEntrypoint")),
+        );
+        assert!(matches!(contract_transport_attempt(refused_call), Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)))));
+    }
+
+    #[test]
+    fn contract_vm_transport_keeps_original_allocation_refusal_owner() {
+        use iroha_core::execution_attempt::ExecutionAttemptError;
+        let pool = iroha_allocation::AllocationBudget::new(8);
+        let held = pool.try_reserve_bytes(8).unwrap();
+        let refusal = pool.try_reserve_bytes(1).unwrap_err();
+        let expected = refusal.clone();
+        let converted = contract_vm_attempt_error(ivm::VMError::AllocationDeferred(refusal), |_| panic!("local refusal cannot be formatted as a completed VM error"));
+        let ExecutionAttemptError::<()>::Deferred(owner) = converted else { panic!("original refusal remains local") };
+        assert_eq!(owner.allocation_refusal(), Some(&expected));
+        drop(held);
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert!(matches!(contract_vm_attempt_error(ivm::VMError::PermissionDenied, |error| error), ExecutionAttemptError::Rejected(ivm::VMError::PermissionDenied)));
+    }
+
     fn manifest_with_entrypoints(
         entrypoints: Option<Vec<manifest::EntrypointDescriptor>>,
     ) -> manifest::ContractManifest {
@@ -19917,7 +20024,10 @@ mod multisig_contract_call_tests {
             Some(&binding),
         )
         .expect_err("caller-supplied top-level marker must not be duplicated");
-        assert!(err.to_string().contains("must not supply a top-level"));
+        assert!(matches!(err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
+                if message.contains("must not supply a top-level")));
     }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -21391,6 +21501,50 @@ mod multisig_selector_tests {
             MultisigProposalStatus::CollectingSignatures,
             "only a native terminal record may prove final execution",
         );
+    }
+    #[test]
+    fn single_asset_transfer_has_exact_typed_intent_and_rejects_partial_projection() {
+        let source = checked_multisig_selector_account_id(0x77, "derive transfer intent source");
+        let destination =
+            checked_multisig_selector_account_id(0x78, "derive transfer intent destination");
+        let definition = test_asset_definition_id();
+        let instruction: dm::InstructionBox = dm::Transfer::asset_quantity(
+            dm::AssetId::new(definition.clone(), source.clone()),
+            25_u32,
+            destination.clone(),
+        )
+        .into();
+        let mut proposal = MultisigProposalValue::new(
+            vec![instruction.clone()],
+            100,
+            200,
+            BTreeSet::new(),
+            None,
+        );
+        let world = World::default();
+        let world_view = world.view();
+        assert_eq!(
+            multisig_proposal_operation_type(&world_view, &source, &proposal),
+            "TRANSFER",
+        );
+        let intent = multisig_proposal_intent(&world_view, &source, &proposal)
+            .expect("single transfer intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("transfer intent value");
+        assert_eq!(
+            intent,
+            norito::json!({
+                "kind": "TRANSFER",
+                "asset_id": (definition.to_string()),
+                "amount": "25",
+                "from_account_id": (source.to_string()),
+                "to_account_id": (destination.to_string()),
+            }),
+        );
+        proposal.instructions.push(instruction);
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
+        proposal.instructions.clear();
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
     }
     #[test]
     fn policy_change_invalidation_has_explicit_operation_type_and_exact_account_intent() {
@@ -35272,6 +35426,7 @@ pub(crate) fn committed_transactions_snapshot(
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
+app_api_items! {
 struct HistoryVisibilityReads {
     state: Arc<CoreState>,
     height: u64,
@@ -35414,6 +35569,7 @@ fn committed_transaction_is_visible_in_block(
 ) -> bool {
     visibility.can_read_all()
         || visibility.allows_external_entrypoint_hash(block, *transaction.entrypoint_hash())
+}
 }
 include!("routing/committed_transaction_pagination.rs");
 app_api_items! {
@@ -55580,6 +55736,7 @@ fn verify_faucet_pow(
 #[path = "routing/faucet_pow_tests.rs"]
 mod faucet_pow_tests;
 }
+#[cfg(feature = "app_api")]
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
     account_id: AccountId,
@@ -55684,7 +55841,7 @@ fn normalize_account_onboarding_request(
         &world,
         &signer.authority,
         &alias,
-    ) {
+    ).map_err(crate::live_dataspace_resolution_error)? {
         return Err(onboarding_invalid_request(
             "onboarding signer lacks exact account-alias manage permission",
         ));
@@ -57261,7 +57418,7 @@ pub async fn handle_v1_account_aliases(
             &world,
             &caller,
             &resolved_alias,
-        ) {
+        ).map_err(crate::live_dataspace_resolution_error)? {
             continue;
         }
         let target = iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(resolved_alias);
@@ -60353,6 +60510,7 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
     NonZeroUsize::new(height_usize)
 }
 
+app_api_items! {
 /// Maximum historical blocks decoded by one Explorer cursor request.
 const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
@@ -60506,6 +60664,7 @@ fn instruction_history_filter_digest(
             filters.asset_id.as_ref().map(ToString::to_string),
         ],
     )
+}
 }
 app_api_items! {
 #[cfg(test)]

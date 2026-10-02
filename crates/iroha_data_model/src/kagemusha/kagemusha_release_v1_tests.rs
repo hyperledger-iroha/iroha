@@ -16,7 +16,19 @@ use sha2::Sha256;
 
 #[test]
 fn retained_hardware_policy_preimage_matches_native_digest_and_rejects_invalid_sets() {
-    let profiles = vec![enabled_profile(1, [0x73; 32])];
+    let inventory = artifacts();
+    let unqualified_profile = enabled_profile(1, [0x73; 32]);
+    assert!(
+        kagemusha_hardware_policy_digest_preimage_v1(&[unqualified_profile]).is_err(),
+        "an unsealed qualification cannot enter the retained policy digest"
+    );
+    let qualification =
+        profile_qualification(&unqualified_profile, &inventory, &helper_protocols(), 0x61);
+    assert_eq!(
+        qualification.profile.qualification_digest,
+        qualification.expected_qualification_digest().unwrap()
+    );
+    let profiles = vec![qualification.profile];
     let bytes = kagemusha_hardware_policy_digest_preimage_v1(&profiles).unwrap();
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
     assert_eq!(

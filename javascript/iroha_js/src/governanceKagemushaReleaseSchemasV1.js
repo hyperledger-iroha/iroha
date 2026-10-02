@@ -256,7 +256,11 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
           "mint_hash_claim_pk_eq",
           "mint_hash_claim_vk_eq",
           "mint_hash_claim_pk_ep",
-          "mint_hash_claim_vk_ep"
+          "mint_hash_claim_vk_ep",
+          "ordinary_app_guard_pk_eq",
+          "ordinary_app_guard_vk_eq",
+          "ordinary_app_guard_pk_ep",
+          "ordinary_app_guard_vk_ep"
         ],
         "type": "string"
       },
@@ -1005,7 +1009,8 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
           "platform_credential",
           "guard_bundle",
           "mint_hash_shard",
-          "mint_hash_claim"
+          "mint_hash_claim",
+          "ordinary_app_guard"
         ],
         "type": "string"
       },

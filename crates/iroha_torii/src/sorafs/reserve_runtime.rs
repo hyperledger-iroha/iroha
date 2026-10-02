@@ -291,7 +291,10 @@ fn classify_local_reserve_transaction_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             ReserveTransactionSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::Expired => ReserveTransactionSubmissionDispositionV1::Rejected,
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_) => {
+            ReserveTransactionSubmissionDispositionV1::Rejected
+        }
         _ => ReserveTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
@@ -1810,6 +1813,34 @@ mod tests {
             ReserveOperationV1::ChargeRent(instruction) => Some(*instruction.billing_periods()),
             _ => None,
         }
+    }
+    #[test]
+    fn queue_domain_mismatch_is_permanent_reserve_runtime_rejection() {
+        assert_eq!(
+            classify_local_reserve_transaction_submission(
+                &iroha_core::queue::Error::TransactionDomainMismatch(
+                    iroha_data_model::isi::error::Mismatch {
+                        expected: iroha_data_model::transaction::TransactionDomain::Network(
+                            iroha_data_model::NetworkId::from_genesis_hash(
+                                iroha_crypto::HashOf::from_untyped_unchecked(
+                                    iroha_crypto::Hash::prehashed([0xD2; 32])
+                                )
+                            )
+                        ),
+                        actual: iroha_data_model::transaction::TransactionDomain::Genesis,
+                    },
+                )
+            ),
+            ReserveTransactionSubmissionDispositionV1::Rejected
+        );
+        assert_eq!(
+            classify_local_reserve_transaction_submission(&iroha_core::queue::Error::Full),
+            ReserveTransactionSubmissionDispositionV1::DefinitelyNotSubmitted
+        );
+        assert_eq!(
+            classify_local_reserve_transaction_submission(&iroha_core::queue::Error::IsInQueue),
+            ReserveTransactionSubmissionDispositionV1::Submitted
+        );
     }
     #[test]
     fn generation_chooses_largest_affordable_batch_and_replays_same_tip_identically() {

@@ -20,9 +20,6 @@ export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-art
 mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ./gradlew :client-android:buildNativeLibs
 
-# Build the production-featured generated native artifacts
-./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
-
 # Publish to local Maven
 ./gradlew publishToMavenLocal
 ```
@@ -116,10 +113,35 @@ All mutable collections and byte arrays are copied on construction and access. U
   and consumes the authenticated repository-root `Cargo.lock`. Bootstrap,
   alternate locks, and compiler or profile configuration overrides are rejected;
   the root lock and effective Cargo configuration are rechecked after execution.
+- **ARMv7 diagnostic**: from `kotlin`, use the existing owner-only local artifact
+  root, set `MOBILE_SDK_PYTHON_BINARY` to the canonical executable of Python 3.12
+  (symbolic links are rejected), and run
+  `MOBILE_SDK_ANDROID_ARTIFACT_DIR=/Users/takemiyamakoto/dev/iroha/dist/norito-bridge-android-local ./gradlew :client-android:compileArmv7Diagnostic -PirohaAndroidLocalIntegration=true --console=plain`.
+  This task uses the same pinned Rust, NDK, Python, locked offline Cargo and
+  source-seal gates, with one `armv7-linux-androideabi` target and the fixed
+  `privacy-production-enabled` feature. It preserves the warm
+  `native/cargo-target/armv7-diagnostic/` lane and writes raw ELF32 bytes plus
+  `native/armv7-diagnostic/diagnostic-manifest.json` under that root's SDK module
+  build directory. The report records ARM machine 40, actual native exports and
+  LOAD alignment; it grants neither release admission nor KAGEMUSHA device
+  qualification. The task supplies no generated JNI or AAR outputs and leaves
+  the admitted `arm64-v8a`/`x86_64` inventory unchanged. Configure the pinned
+  toolchain and install its ARMv7 standard library before compiling. Run
+  `:client-android:verifyArmv7DiagnosticContract` to check routing without a
+  native build.
 
 ## Testing
 
 JUnit 5 with `@ParameterizedTest` / `@MethodSource` for data-driven tests. Test companion objects provide argument lists via `@JvmStatic` methods.
+
+The wallet's separate `:kagemusha-wallet-android:testDebugHostNative` task requires
+an explicitly rebuilt host bridge in one canonical `IROHA_NATIVE_LIBRARY_PATH`
+directory. Its sole ordered `host-native` case uses the main wallet JNI owner,
+checks ABI 25/signer contract 7 and actual startup phase 1/selection revocation
+phase 5 refusal when no genuine Native root is registered, then verifies the
+managed Core-open fence. Phase 6 does not execute after phase 1 refuses. Keep
+client test JNI doubles out of this classpath, retain missing-symbol failures,
+and never treat this host test as root/account, release or physical-device admission.
 
 ## Version Catalog
 

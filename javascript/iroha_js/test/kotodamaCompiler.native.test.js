@@ -195,32 +195,6 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
   const signature = "fn combine(int _ value, int minimum, int maximum)";
   const call = "combine(amount, maximum: 10, minimum: 0)";
   assert.equal(source.split(signature).length, 2);
-  // Ordinary parameters accept positional values as well as their names.
-  const ordinaryRaw = await nativeBinding.compileKotodama({
-    ...request,
-    source: source.replace(signature, "fn combine(int value, int minimum, int maximum)"),
-  });
-  assert.equal(ordinaryRaw.ok, true, ordinaryRaw.diagnosticsJson);
-  assert.equal(ordinaryRaw.diagnosticsJson, null);
-  const ordinary = normalizeCompilerResult(ordinaryRaw);
-  assert.equal(ordinary.ok, true);
-  assert.deepEqual(ordinary.output.artifactBytes, result.output.artifactBytes);
-  assert.deepEqual(ordinary.output.manifest, result.output.manifest);
-
-  const positionalOnly = "fn combine(int _ value, int _ minimum, int maximum)";
-  const rejectedRaw = await nativeBinding.compileKotodama({
-    ...request, source: source.replace(signature, positionalOnly),
-  });
-  assert.equal(rejectedRaw.ok, false, positionalOnly);
-  assert.equal(rejectedRaw.output, null);
-  const rejected = normalizeCompilerResult(rejectedRaw);
-  assert.equal(rejected.ok, false);
-  assert.deepEqual(
-    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-      .map((diagnostic) => diagnostic.code),
-    ["E_POSITIONAL_ARGUMENT_REQUIRED"],
-  );
-
   assert.equal(source.split(call).length, 2);
   for (const acceptedCall of [call, "combine(amount, 0, 10)", "combine(value: amount, maximum: 10, minimum: 0)"]) {
     const acceptedRaw = await nativeBinding.compileKotodama({
@@ -233,6 +207,10 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
     assert.equal(accepted.ok, true);
     assert.deepEqual(accepted.output.manifest.entrypoints, manifest.entrypoints);
     assert.deepEqual(accepted.output.manifest.error_types, manifest.error_types);
+    if (acceptedCall === call) {
+      assert.deepEqual(accepted.output.artifactBytes, result.output.artifactBytes);
+      assert.deepEqual(accepted.output.manifest, result.output.manifest);
+    }
   }
   // Retain both rejection contracts: positional-only declarations cannot be named,
   // and StateMap.page retains its required builtin labels.

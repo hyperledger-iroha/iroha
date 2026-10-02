@@ -70,6 +70,7 @@ fn account_fixture() -> &'static (
         let node_id = PeerId::new(node.public_key().clone());
         let config = Hash::new(b"fixture node config");
         let body = SumeragiFinalityAttestationBody {
+            observed_at_unix_ms: 1_000_000,
             challenge,
             network_id: native.network_id(),
             node_fingerprint: Hash::new(node_id.encode()),

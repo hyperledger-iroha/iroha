@@ -7119,6 +7119,10 @@
         "type": "FastpqSourceLimitsV1"
       },
       {
+        "name": "max_native_maintenance_invocations",
+        "type": "u32"
+      },
+      {
         "name": "mandatory",
         "type": "FastpqMandatorySourcePolicyV1"
       }
@@ -28424,6 +28428,10 @@
       {
         "name": "challenge",
         "type": "Array<u8, 32>"
+      },
+      {
+        "name": "observed_at_unix_ms",
+        "type": "u64"
       },
       {
         "name": "network_id",

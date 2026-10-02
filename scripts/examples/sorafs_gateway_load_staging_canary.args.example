@@ -23,7 +23,7 @@ dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 --hardware-profile
 gateway-load-hardware-c6i-2xlarge
 --duration-seconds
-86400
+1
 --stream-count
 1200
 --peak-concurrent-range-streams

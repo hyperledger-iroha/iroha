@@ -277,13 +277,14 @@
               "max_total_statement_bytes": 272175
             },
             "block": {
-              "max_executed_entries": 3659,
-              "max_transcripts": 57584,
-              "max_deltas": 57584,
-              "max_input_transcript_bytes": 501314448,
+              "max_executed_entries": 3723,
+              "max_transcripts": 58608,
+              "max_deltas": 58608,
+              "max_input_transcript_bytes": 510095248,
               "max_statement_bytes": 272175,
-              "max_total_statement_bytes": 994636613
+              "max_total_statement_bytes": 1012055813
             },
+            "max_native_maintenance_invocations": 64,
             "mandatory": {
               "max_retained_obligations": 64,
               "per_obligation": {

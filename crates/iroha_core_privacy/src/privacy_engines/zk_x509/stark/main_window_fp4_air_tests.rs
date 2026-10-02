@@ -109,7 +109,7 @@ fn window_fp4_binds_private_cross_and_scalar_columns_and_preserves_degree_four()
                     .unwrap(),
                 original
             );
-            changed[2][column] = E::from_base(F(u64::MAX));
+            changed[2][column] = E::noncanonical_fixture_v1();
             assert!(
                 evaluator
                     .evaluate_residues_v1(opening(&changed), &changed[4], challenges)

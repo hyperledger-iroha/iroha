@@ -11,6 +11,8 @@
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::ZkX509MainTraceAssemblyV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_cross_trace_bus::evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::ClearingVecV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
@@ -60,7 +62,6 @@ use super::{
         P256CrossTraceBoundaryFixedV1, P256CrossTraceBusErrorV1, P256CrossTraceChallengesV1,
         P256CrossTraceEndpointV1, P256CrossTraceEventFixedV1, P256CrossTraceSinkFixedV1,
         P256CrossTraceTagV1, P256CrossTraceWriterAuxRowV1, P256CrossTraceWriterSourceFixedV1,
-        evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1,
         evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1,
     },
     p256_ecdsa_air::P256EcdsaRoleV1,
@@ -667,6 +668,7 @@ fn evaluate_compact_cross_residues_v1<A: PolynomialAirFieldV1>(
     }
     Ok(residues)
 }
+#[cfg(test)]
 fn compact_cross_terminal_v1<A: PolynomialAirFieldV1>(
     events: usize,
     aux: &[A],
@@ -863,6 +865,7 @@ fn arithmetic_value_copy_events_v1(
     }
     Ok(events)
 }
+#[cfg(test)]
 fn arithmetic_copy_terminal_v1<A: PolynomialAirFieldV1>(
     events: usize,
     aux: &[A],
@@ -876,6 +879,7 @@ fn arithmetic_copy_terminal_v1<A: PolynomialAirFieldV1>(
 }
 /// Verifier-owned role of one external cross-product source segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) enum P256CrossTraceTerminalRoleV1 {
     /// Value-bus writer multiplicities.
     ValueWriter,
@@ -890,6 +894,7 @@ pub(crate) enum P256CrossTraceTerminalRoleV1 {
 }
 /// One explicit, transcript-bound source-segment terminal claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceTerminalClaimV1 {
     /// Registration-owned segment role.
     pub(crate) role: P256CrossTraceTerminalRoleV1,
@@ -900,6 +905,7 @@ pub(crate) struct P256CrossTraceTerminalClaimV1 {
 }
 /// Explicit transcript-bound claims for the three non-cross product buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256BusTerminalClaimsV1 {
     /// Value-bus execution permutation terminal.
     pub(crate) value_execution: [F; P256_VALUE_BUS_LANES_V1],
@@ -923,6 +929,7 @@ pub(crate) struct P256BusTerminalClaimsV1 {
 pub(crate) const P256_TERMINAL_CLAIMS_TRANSCRIPT_LABEL_V1: &[u8] =
     b"zk-x509-p256-terminal-claims-v1";
 /// Exact source role order for one ECDSA statement role.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_cross_trace_terminal_roles_v1(
     role: P256EcdsaRoleV1,
 ) -> &'static [P256CrossTraceTerminalRoleV1] {
@@ -944,11 +951,13 @@ pub(crate) fn p256_cross_trace_terminal_roles_v1(
         P256EcdsaRoleV1::WalletOwnership => &WALLET,
     }
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_claim_fields_are_canonical_v1(fields: impl IntoIterator<Item = F>) -> bool {
     fields
         .into_iter()
         .all(|field| F::canonical(field.0).is_some())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_p256_cross_trace_terminal_claims_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -971,9 +980,9 @@ fn validate_p256_cross_trace_terminal_claims_v1(
 }
 /// Exact host-side terminal-claim equalities, ending at the independent binding sink.
 ///
-/// The proof parser must absorb these claims after all auxiliary roots and
-/// before composition/query challenges. Each claim is separately constrained
-/// inside its source trace with [`evaluate_p256_terminal_claim_binding_v1`].
+/// Private product validation checks this chain before constructing a bound native source.
+/// Registered private MAIN endpoint columns bind each product to its source trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -1002,6 +1011,7 @@ pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     Ok(residues)
 }
 /// Host-side equality residues for value, arithmetic-copy, and scalar buses.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
     claims: P256BusTerminalClaimsV1,
 ) -> Result<[F; 4 * P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
@@ -1037,6 +1047,7 @@ pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
 ///
 /// `last_selector` is verifier preprocessing for that source's own native final row, so this works
 /// across heterogeneous trace sizes without a host lift.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_terminal_claim_binding_v1<A: PolynomialAirFieldV1>(
     last_selector: A,
     opened_terminal: [A; P256_CROSS_TRACE_LANES_V1],
@@ -1627,6 +1638,7 @@ pub(crate) fn p256_value_execution_cross_terminal_claim_v1(
     })
 }
 /// Direct value-bus side arithmetic-copy terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_value_execution_arithmetic_copy_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_ARITHMETIC_COPY_LANES_V1], P256AggregateAdapterErrorV1> {
@@ -1636,12 +1648,14 @@ pub(crate) fn p256_value_execution_arithmetic_copy_terminal_v1<A: PolynomialAirF
     )
 }
 /// Writer terminal carried by one value-execution auxiliary opening.
+#[cfg(test)]
 pub(crate) fn p256_value_execution_cross_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     Ok(decode_writer_aux_v1(&aux[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX])?.terminal)
 }
 /// Final native-row selector in value-execution preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_value_execution_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1],
 ) -> A {
@@ -2355,18 +2369,21 @@ pub(crate) fn evaluate_p256_arithmetic_aggregate_residues_over_field_v1<A: Polyn
     Ok(residues)
 }
 /// Arithmetic scalar-source terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_arithmetic_scalar_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_SCALAR_BIT_BUS_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(8, &aux[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX])
 }
 /// Direct arithmetic side value-copy terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_arithmetic_value_copy_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_ARITHMETIC_COPY_LANES_V1], P256AggregateAdapterErrorV1> {
     arithmetic_copy_terminal_v1(3, &aux[ARITHMETIC_VALUE_COPY_AUX..])
 }
 /// Final native-row selector in arithmetic preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_arithmetic_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
 ) -> A {
@@ -2759,18 +2776,21 @@ pub(crate) fn p256_window_cross_terminal_claim_v1(
     })
 }
 /// Window scalar-source terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_window_scalar_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_SCALAR_BIT_BUS_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(1, &aux[WINDOW_SCALAR_AUX..])
 }
 /// Window external-chain terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_window_cross_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(3, &aux[WINDOW_CROSS_AUX..WINDOW_SCALAR_AUX])
 }
 /// Final native-row selector in window preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_window_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1],
 ) -> A {
@@ -3114,12 +3134,14 @@ pub(crate) fn p256_reduction_cross_terminal_claim_v1(
     })
 }
 /// Reduction external-chain terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_reduction_cross_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(2, &aux[REDUCTION_CROSS_AUX..])
 }
 /// Final native-row selector in reduction preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_reduction_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1],
 ) -> A {
@@ -3422,12 +3444,14 @@ pub(crate) fn p256_low_s_cross_terminal_claim_v1(
     })
 }
 /// Wallet low-S external-chain terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_low_s_cross_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[A; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(1, &aux[LOW_S_CROSS_AUX..])
 }
 /// Final native-row selector in low-S preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_low_s_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1],
 ) -> A {
@@ -3454,7 +3478,8 @@ const SINK_SELECTION_REAL_BITS_BASE: usize = SINK_SELECTION_ACTIVE_BASE + 1;
 const SINK_SELECTION_SELECTED_BITS_BASE: usize = SINK_SELECTION_REAL_BITS_BASE + 8;
 const _: () = assert!(SINK_SELECTION_SELECTED_BITS_BASE + 8 == P256_BINDING_SINK_BASE_WIDTH_V1);
 const _: () = assert!(SINK_SELECTION_CONTINUE_FIXED + 1 == P256_BINDING_SINK_FIXED_WIDTH_V1);
-/// Existing committed real key and constant activity columns, before dummy selection.
+/// Verifier-owned real key bytes and private activity column in the committed sink.
+/// Qx and Qy are the first 64 big-endian bytes, before optional-certificate selection.
 pub(crate) const fn p256_real_key_input_columns_v1() -> (usize, usize, usize) {
     (
         SINK_SELECTION_REAL_BASE,
@@ -3462,13 +3487,16 @@ pub(crate) const fn p256_real_key_input_columns_v1() -> (usize, usize, usize) {
         P256_INPUT_SELECTION_ROW_START_V1,
     )
 }
-/// Unreduced SHA digest bytes in the committed real input, before dummy selection.
+
+/// Verifier-owned unreduced SHA digest bytes in the same real-input column.
+/// The four preceding 32-byte words are Qx, Qy, r and s; no selected/dummy column is used.
 pub(crate) const fn p256_real_digest_input_columns_v1() -> (usize, usize) {
     (
         SINK_SELECTION_REAL_BASE,
         P256_INPUT_SELECTION_ROW_START_V1 + 4 * 32,
     )
 }
+
 fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErrorV1> {
     if byte < 4 * 32 {
         Ok(0)
@@ -3869,12 +3897,14 @@ pub(crate) fn evaluate_p256_binding_sink_aggregate_residues_over_field_v1<
     Ok(residues)
 }
 /// Independent sink terminal projection.
+#[cfg(test)]
 pub(crate) fn p256_binding_sink_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1],
 ) -> Result<[A; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(6, aux)
 }
 /// Final native-row selector in binding-sink preprocessing.
+#[cfg(test)]
 pub(crate) fn p256_binding_sink_last_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_BINDING_SINK_FIXED_WIDTH_V1],
 ) -> A {
@@ -3928,6 +3958,7 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_aggregate_residues_over_field_v1<
 }
 /// Bind both direct source terminals to the packed-bus terminal at the
 /// verifier-preprocessed final active bus row.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_scalar_source_terminal_openings_v1<A: PolynomialAirFieldV1>(
     bus_last_active_selector: A,
     arithmetic_source: [F; P256_SCALAR_BIT_BUS_LANES_V1],
@@ -4377,6 +4408,54 @@ fn p256_main_value_fixed_source_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )?)
 }
+/// Borrow the admitted public matrix without allocating another field owner.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256PublicArithmeticFixedDestinationV1<'a> {
+    columns: &'a mut [Vec<F>],
+    committed: bool,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl Drop for P256PublicArithmeticFixedDestinationV1<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            for column in &mut *self.columns {
+                super::private_table::zeroize_fields_v1(column);
+            }
+        }
+    }
+}
+/// Fill only a complete public arithmetic fixed matrix, with one row per call.
+/// The private replay helpers retain their independent eight-column limit.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_public_arithmetic_fixed_matrix_with_v1(
+    rows: usize,
+    columns: &mut [Vec<F>],
+    mut fixed_row: impl FnMut(
+        usize,
+    ) -> Result<
+        [F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+        P256AggregateAdapterErrorV1,
+    >,
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    if !rows.is_power_of_two()
+        || columns.len() != P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
+        || columns.iter().any(|column| column.len() != rows)
+    {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    let mut destination = P256PublicArithmeticFixedDestinationV1 {
+        columns,
+        committed: false,
+    };
+    for row in 0..rows {
+        let values = P256AggregateAuxRowScratchV1(fixed_row(row)?);
+        for (column, &value) in destination.columns.iter_mut().zip(&values.0) {
+            column[row] = value;
+        }
+    }
+    destination.committed = true;
+    Ok(())
+}
 /// Closed verifier-only fixed preprocessing for every canonical P-256 MAIN registration.
 ///
 /// Construction depends solely on native verifier topology. It accepts no witness rows, proof
@@ -4552,10 +4631,32 @@ impl P256MainVerifierFixedSourceV1 {
             .copied()
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-    /// Fill up to eight arithmetic fixed columns from one canonical row pass.
-    /// The caller owns the already admitted final fixed-polynomial matrix; this
-    /// method retains only one stack row and never accepts a witness schedule.
+    /// Fill the already admitted public arithmetic matrix with one canonical
+    /// row pass. The only scratch is one clearing stack row; the existing
+    /// column allocations stay with the caller on success, error and unwind.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn fill_arithmetic_fixed_matrix_v1(
+        &self,
+        registration: P256MainRegistrationV1,
+        columns: &mut [Vec<F>],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        if P256MainRegistrationV1::new_v1(
+            registration.signature_v1(),
+            P256MainAdapterV1::Arithmetic,
+            0,
+        )? != registration
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let fixed = self.arithmetic_v1(registration.role_v1());
+        fill_public_arithmetic_fixed_matrix_with_v1(
+            P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
+            columns,
+            |row| fixed.row_v1(row),
+        )
+    }
+    /// Independent eight-column replay oracle for the public matrix fill.
+    #[cfg(test)]
     pub(crate) fn fill_arithmetic_fixed_columns_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -6265,18 +6366,18 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
-    /// Borrow the exact verifier-owned arithmetic schedule for bounded replay.
-    pub(crate) fn fill_arithmetic_fixed_columns_v1(
+    /// Fill the admitted public matrix from this exact bound owner's verifier
+    /// schedule; private trace replay keeps its separate eight-column limit.
+    pub(crate) fn fill_arithmetic_fixed_matrix_v1(
         &self,
         registration: P256MainRegistrationV1,
-        first: usize,
-        outputs: &mut [&mut [F]],
+        columns: &mut [Vec<F>],
     ) -> Result<(), P256AggregateAdapterErrorV1> {
         self.signature_v1(registration)?;
         self.fixed
             .as_ref()
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
-            .fill_arithmetic_fixed_columns_v1(registration, first, outputs)
+            .fill_arithmetic_fixed_matrix_v1(registration, columns)
     }
     /// Borrow execution replay from this exact checked MAIN owner. As with the
     /// arithmetic replay factory, all terminal copies come from the private
@@ -6613,6 +6714,7 @@ impl P256MainBoundSourceV1 {
         }
     }
     /// Private product owner for all five role-positioned signatures; no public scalar codec.
+    #[cfg(test)]
     pub(crate) fn terminal_claims_v1(
         &self,
     ) -> Result<ZkX509P256PrivateProductsV1, P256AggregateAdapterErrorV1> {
@@ -7374,6 +7476,58 @@ mod tests {
         fixed[SINK_SELECTION_INACTIVE_REAL_FIXED] = F(u64::from(inactive_real));
         (base, fixed)
     }
+    #[test]
+    fn real_input_projections_use_range_checked_unselected_key_and_digest_cells() {
+        let (key_column, activity_column, key_start) = p256_real_key_input_columns_v1();
+        let (digest_column, digest_start) = p256_real_digest_input_columns_v1();
+        assert_ne!(key_column, SINK_SELECTION_SELECTED_BASE);
+        assert_eq!(digest_column, key_column);
+        assert_eq!(digest_start - key_start, 128);
+        let fixed = P256BindingSinkFixedProviderV1::new_with_optional_certificate_v1(
+            P256EcdsaRoleV1::CertificateOrCrl,
+            true,
+        )
+        .unwrap();
+        for (start, count) in [(key_start, 64), (digest_start, 32)] {
+            for row in start..start + count {
+                let actual_fixed = fixed.row_v1(row).unwrap();
+                assert_eq!(actual_fixed[SINK_SELECTION_BYTE_FIXED], F::ONE);
+                let dummy = actual_fixed[SINK_SELECTION_DUMMY_FIXED].0 as u8;
+                let inactive = actual_fixed[SINK_SELECTION_INACTIVE_REAL_FIXED].0 as u8;
+                // Distinct real and selected cells are legal only while inactive:
+                // the projection must retain the committed real source.
+                let (base, _) = selection_byte_row_v1(F::ZERO, inactive, dummy, dummy, inactive);
+                assert_eq!(base[key_column], F(u64::from(inactive)));
+                assert_eq!(base[activity_column], F::ZERO);
+                assert!(
+                    selection_tail_residues_v1(&base, &base, &actual_fixed)
+                        .iter()
+                        .all(|residue| *residue == F::ZERO)
+                );
+                let mut changed = base;
+                let changed_real = inactive ^ 1;
+                changed[key_column] = F(u64::from(changed_real));
+                write_byte_bits_v1(
+                    &mut changed[SINK_SELECTION_REAL_BITS_BASE..SINK_SELECTION_REAL_BITS_BASE + 8],
+                    changed_real,
+                );
+                assert!(
+                    selection_tail_residues_v1(&changed, &changed, &actual_fixed)
+                        .iter()
+                        .any(|residue| *residue != F::ZERO)
+                );
+            }
+        }
+        assert_eq!(
+            fixed.row_v1(digest_start + 32).unwrap()[SINK_SELECTION_SELECTOR_FIXED],
+            F::ONE
+        );
+        assert_eq!(
+            fixed.row_v1(key_start - 1).unwrap()[SINK_SELECTION_BYTE_FIXED],
+            F::ZERO
+        );
+    }
+
     #[test]
     fn binding_sink_commits_all_321_optional_certificate_relations() {
         let mut caught = 0_usize;

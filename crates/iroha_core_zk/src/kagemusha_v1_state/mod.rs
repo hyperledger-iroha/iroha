@@ -25,12 +25,20 @@ pub use response_evidence_archive::{
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod authenticated_core_owner;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use authenticated_core_owner::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
 #[cfg(all(
     unix,
     feature = "kagemusha-production-prover",
     feature = "zk-halo2-ipa"
 ))]
 pub use authenticated_core_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
+#[cfg(all(
+    unix,
+    feature = "kagemusha-production-prover",
+    feature = "zk-halo2-ipa"
+))]
+pub(crate) use authenticated_core_owner::verify_ordinary_bootstrap_guard_v1;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use authenticated_core_owner::{
     KagemushaAuthenticatedBootstrapProvingSelectionV1, KagemushaAuthenticatedBootstrapStageV1,
@@ -47,24 +55,56 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
-    KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
+    KagemushaNativeOrdinaryCashOwnerV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaOriginalOutgoingHardwareCommitV1,
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub(crate) use authenticated_core_owner::{
-    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
-    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
+};
+#[cfg(unix)]
+mod ordinary_native_clock;
+#[cfg(unix)]
+pub(crate) use ordinary_native_clock::KagemushaRetainedOrdinaryNativeClockOriginalsV1;
+#[cfg(unix)]
+pub use ordinary_native_clock::{
+    KAGEMUSHA_ORDINARY_NATIVE_CLOCK_SELECTION_ORIGINAL_MAX_BYTES_V1,
+    KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1,
+    KagemushaOrdinaryNativeClockErrorV1, KagemushaOrdinaryNativeClockNodeV1,
+    KagemushaOrdinaryNativeClockOriginalsV1, KagemushaOrdinaryNativeClockOwnerV1,
+    KagemushaOrdinaryNativeClockPolicyV1, KagemushaOrdinaryNativeClockReadV1,
+    KagemushaOrdinaryNativeClockSelectionOriginalV1, KagemushaOrdinaryNativeSignedClockOriginalV1,
+    KagemushaOrdinaryNativeTimeIntervalV1, KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1,
+    verify_ordinary_native_signed_clock_original_v1,
 };
 #[cfg(unix)]
 mod ordinary_app_identity;
 #[cfg(unix)]
 pub use ordinary_app_identity::{
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
-    KagemushaOrdinaryPreparationCarrierV1, KagemushaOrdinaryPreparationReservationV1,
-    KagemushaOrdinaryPreparationSelectedOriginalsV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
+    KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    KagemushaOrdinaryGovernedPolicyOriginalsV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaOrdinaryIssuerPreparationAttemptV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
     KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
+};
+#[cfg(unix)]
+pub(crate) use ordinary_app_identity::{
+    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
+    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -135,7 +175,11 @@ pub use candidate_lifecycle::{
     PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1, SenderOutboxReservationOutcomeV1,
 };
 pub use handoff_verification::KagemushaHandoffEvidenceV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 pub use handoff_verification::{
     KagemushaHandoffEvidenceSizesV1, KagemushaHandoffSequenceVerificationV1,
     verify_kagemusha_handoff_evidence_sequence_v1, verify_kagemusha_handoff_evidence_v1,
@@ -145,7 +189,7 @@ pub use mint_fold_private_inputs::KagemushaMintFoldOpeningCapabilityV1;
 #[cfg(any(
     test,
     feature = "kagemusha-real-proof-harness",
-    all(unix, feature = "zk-halo2-ipa")
+    feature = "kagemusha-production-prover"
 ))]
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldOpeningWitnessV1;
 #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
@@ -154,8 +198,6 @@ pub use mint_inbox::*;
 pub(crate) use mint_inbox::{
     KagemushaTestnetVerifiedMintProofsV1, verify_applied_top_up_mint_stage_experimental_v1,
 };
-#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
-pub(crate) use mint_inbox_operations::MintCreditStageOutcomeV1;
 #[cfg(test)]
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
@@ -187,6 +229,8 @@ pub use redemption_release::{
     KAGEMUSHA_REDEMPTION_TERMINAL_RECEIPT_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
 };
 
+#[cfg(test)]
+mod diagnostic_sender_lifecycle;
 #[cfg(test)]
 mod state_frame_identity_tests;
 #[cfg(test)]
@@ -422,7 +466,7 @@ where
         self.store.recover_prepared(certificate)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Abort one uncommitted CAS without changing either authoritative committed root.
     pub(crate) fn abort_prepared(
         &mut self,
@@ -3001,7 +3045,7 @@ where
         KagemushaOutgoingCommitCapabilityV1::for_prepared(prepared)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Verify and persist a private redemption candidate proof before hardware consumes state.
     pub(crate) fn persist_outgoing_redemption_candidate(
         &mut self,
@@ -3408,7 +3452,7 @@ where
         Ok(authorization)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Verify and atomically apply one durably prepared finalized mint credit.
     pub(crate) fn mint_fold_prepared(
         &mut self,
@@ -3420,7 +3464,7 @@ where
         self.install_mint_fold(credit, preview, mint_finality, authorization, false)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Release the byte-bounded WAL entry for an abandoned, uncommitted mint preview.
     pub(crate) fn abandon_mint_fold_preview(
         &mut self,
@@ -5062,3 +5106,11 @@ fn captured_state_frame_owners() {
         "iroha_core::zk::kagemusha_v1_state::SnapshotCommitmentPreimageV1",
     );
 }
+
+#[path = "hardware_evidence_bootstrap.rs"]
+mod hardware_evidence_bootstrap;
+pub(crate) use hardware_evidence_bootstrap::KagemushaHardwareBootstrapArtifactMeasurementsV1;
+pub use hardware_evidence_bootstrap::{
+    KagemushaCompiledHardwareBootstrapBindingV1, KagemushaFirstDeviceHardwareEvidenceOwnerV1,
+    KagemushaHardwareEvidenceErrorV1,
+};

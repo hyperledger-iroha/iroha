@@ -54,6 +54,12 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     /** Use the same actual native owner for non-monetary app approval and enrollment possession. */
     fun appIdentityOperations(): KagemushaNativeAppApprovalCoordinatorV1 = appIdentity
 
+    /** Bind a separate full-original current FI transport to this sole opened descriptor.
+     * This returns data transport only; Bootstrap and fields never establish money readiness.
+     */
+    fun ordinaryCurrentControlTransportBinding(): KagemushaOrdinaryCurrentControlTransportBindingV1 =
+        KagemushaOrdinaryCurrentControlTransportBindingV1(bridge)
+
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {
         enrollmentPhases.revokeLocal()

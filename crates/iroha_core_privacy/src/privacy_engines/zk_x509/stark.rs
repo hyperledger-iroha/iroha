@@ -20,9 +20,9 @@
 //! Proof dimensions are reconstructed from the verifier statement. The wire contains no
 //! caller-selected parameter and the strict reader rejects every truncation and trailing suffix.
 mod main_aggregate;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 use super::der_stark::{
-    ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
+    ZK_X509_DER_STARK_BUS_LANES_V1, ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
     evaluate_zk_x509_der_stark_residues_v1, zk_x509_der_stark_terminal_claims_v1,
 };
 #[cfg(test)]
@@ -31,8 +31,11 @@ use super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1;
 use super::main_assembly::{ZkX509MainIoBaseMaterialV1, ZkX509MainTraceAssemblyV1};
 #[cfg(test)]
 use super::p256_aggregate_adapter::{
-    P256CrossTraceTerminalRoleV1, ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1,
+    P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1, P256CrossTraceTerminalRoleV1,
+    ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1,
     ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1, absorb_p256_terminal_claims_v1,
+    evaluate_p256_bus_terminal_claim_equalities_v1,
+    evaluate_p256_cross_trace_terminal_claim_equalities_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_aggregate_adapter::{P256MainBaseSourceV1, P256MainBoundSourceV1};
@@ -68,12 +71,11 @@ use super::{
         FIX_LAST_ACTIVE as DER_FIX_LAST_ACTIVE, FIX_LAST_AGGREGATE, FIX_LAST_COMPARATOR,
         FIX_LAST_PARSER, FIX_PADDING, FIX_PARSER, FIX_PARSER_CONTINUE,
         ZK_X509_DER_STARK_AUX_WIDTH_V1, ZK_X509_DER_STARK_BASE_WIDTH_V1,
-        ZK_X509_DER_STARK_BUS_LANES_V1, ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1,
-        ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1, ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1,
-        ZK_X509_DER_STARK_FIXED_WIDTH_V1, ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1,
-        ZK_X509_DER_STARK_TRACE_LOG2_V1, ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkErrorV1,
-        ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkShapeV1,
-        derive_zk_x509_der_stark_public_terminals_v1,
+        ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1, ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1,
+        ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1, ZK_X509_DER_STARK_FIXED_WIDTH_V1,
+        ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1, ZK_X509_DER_STARK_TRACE_LOG2_V1,
+        ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkErrorV1, ZkX509DerStarkPublicTerminalsV1,
+        ZkX509DerStarkShapeV1, derive_zk_x509_der_stark_public_terminals_v1,
     },
     engine::construct_zk_x509_compiled_profile_v1,
     fixed_algebraic::{ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1},
@@ -107,14 +109,12 @@ use super::{
         P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1, P256_WINDOW_AGGREGATE_AUX_WIDTH_V1,
         P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1, P256_WINDOW_AGGREGATE_TRACE_LOG2_V1,
         P256_WINDOW_REGISTERED_CONSTRAINT_COUNT_V1, P256AggregateAdapterErrorV1,
-        P256ArithmeticCopyChallengesV1, P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
-        P256MainAdapterV1, P256MainRegistrationV1, P256MainVerifierFixedSourceV1,
-        P256ValueExecutionAggregateChallengesV1, evaluate_p256_bus_terminal_claim_equalities_v1,
-        evaluate_p256_cross_trace_terminal_claim_equalities_v1,
+        P256ArithmeticCopyChallengesV1, P256MainAdapterV1, P256MainRegistrationV1,
+        P256MainVerifierFixedSourceV1, P256ValueExecutionAggregateChallengesV1,
         validate_p256_main_registration_order_v1,
     },
     p256_air::{P256_ARITHMETIC_BASE_WIDTH_V1, P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1},
-    p256_cross_trace_bus::{P256_CROSS_TRACE_LANES_V1, P256CrossTraceChallengesV1},
+    p256_cross_trace_bus::P256CrossTraceChallengesV1,
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_reduction_air::{P256_LOW_S_BASE_WIDTH_V1, P256_REDUCTION_BASE_WIDTH_V1},
     p256_scalar_bit_bus::{
@@ -154,8 +154,8 @@ use super::{
         ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1, ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
         ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
         ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
-        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZkX509P256PrivateProductsV1,
-        ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
+        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZkX509Rfc5280StarkFixedRowV1,
+        ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
         compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
         evaluate_zk_x509_rfc5280_local_residues_v1,
     },
@@ -186,7 +186,10 @@ use super::{
         ZkX509ProjectionAuxTraceV1, ZkX509ProjectionTraceV1, build_zk_x509_projection_aux_trace_v1,
         compile_zk_x509_projection_fixed_trace_v1,
     },
-    rfc5280_stark::{ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkColumnProviderV1},
+    rfc5280_stark::{
+        ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkColumnProviderV1,
+        ZkX509ShaUnionCentersV1,
+    },
     sha_call_bus_stark::{
         ZkX509ShaBatchSegmentAuxSourceV1, ZkX509ShaBatchSegmentBaseSourceV1,
         ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1,
@@ -205,7 +208,9 @@ use super::{
     p256_aggregate_adapter::{
         derive_p256_arithmetic_copy_challenges_v1, p256_cross_trace_terminal_roles_v1,
     },
-    p256_cross_trace_bus::derive_zk_x509_p256_cross_trace_challenges_v1,
+    p256_cross_trace_bus::{
+        P256_CROSS_TRACE_LANES_V1, derive_zk_x509_p256_cross_trace_challenges_v1,
+    },
     p256_scalar_bit_bus::derive_zk_x509_p256_scalar_bit_bus_challenges_v1,
     p256_value_bus::derive_zk_x509_p256_value_bus_challenges_v1,
     profile::{
@@ -218,7 +223,10 @@ use super::{
         ZkX509ProjectionCopyChallengesV1, ZkX509ProjectionWitnessV1,
         build_zk_x509_projection_trace_v1,
     },
-    rfc5280_stark::{ZkX509P256CertificatePrivateProductsV1, ZkX509P256WalletPrivateProductsV1},
+    rfc5280_stark::{
+        ZkX509P256CertificatePrivateProductsV1, ZkX509P256PrivateProductsV1,
+        ZkX509P256WalletPrivateProductsV1,
+    },
     sha_call_bus_stark::ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -468,6 +476,7 @@ const P256_LAYOUT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-aggregat
 const P256_REGISTRATION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-registration:v1";
 #[cfg(test)]
 const DER_PROOF_MAGIC_V1: [u8; 4] = *b"X5P1";
+#[cfg(test)]
 const DER_PROOF_CLAIM_COUNT_V1: usize = 2 * ZK_X509_DER_STARK_BUS_LANES_V1;
 #[cfg(test)]
 const DER_PROOF_CLAIM_RECORD_BYTES_V1: usize = 2 + 2 + 8;
@@ -2557,12 +2566,14 @@ fn derive_p256_aggregate_challenges_v1(
     Ok(challenges)
 }
 /// Proof-encoded P-256 product terminals in their sole legal role order.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct P256TerminalRegistrationV1 {
     buses: P256BusTerminalClaimsV1,
     cross_sources: Vec<P256CrossTraceTerminalClaimV1>,
     sink: [F; P256_CROSS_TRACE_LANES_V1],
 }
+#[cfg(test)]
 impl P256TerminalRegistrationV1 {
     fn validate(&self, role: P256EcdsaRoleV1) -> Result<(), ZkX509StarkErrorV1> {
         let bus_residues = evaluate_p256_bus_terminal_claim_equalities_v1(self.buses)
@@ -2583,6 +2594,7 @@ impl P256TerminalRegistrationV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 impl Drop for P256TerminalRegistrationV1 {
     fn drop(&mut self) {
         zeroize_p256_terminal_registration_v1(self);
@@ -7512,6 +7524,7 @@ impl MainTraceGroupSourceV1 for MainP256Log5TraceGroupSourceV1<'_> {
         Ok(output)
     }
 }
+#[cfg(test)]
 fn zeroize_p256_terminal_registration_v1(registration: &mut P256TerminalRegistrationV1) {
     registration.buses.value_execution.fill(F::ZERO);
     registration.buses.value_sorted.fill(F::ZERO);
@@ -8578,27 +8591,20 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
         );
         #[cfg(test)]
         der_timer.complete_v1();
-        let mut sha_union = super::rfc5280_stark::ZkX509ShaUnionCentersV1::empty_v1();
-        for (segment, source) in sha_aux.iter().enumerate() {
-            let mut column = zeroed_main_trace_column_v1(ZK_X509_DER_STARK_TRACE_SIZE_V1)?;
-            let terminals = source
-                .fill_aux_column_with_air_terminals_v1(segment, 0, &mut column)
-                .map_err(map_main_sha_source_error_v1)?;
-            sha_union
-                .install_segment_v1(segment, &terminals.segment.rfc_stream_products)
-                .map_err(map_main_rfc_source_error_v1)?;
-        }
         #[cfg(test)]
         let rfc_timer = super::prover_observation::PhaseTimerV1::start_v1(
             super::prover_observation::PhaseV1::RfcBinding,
         );
-        let rfc = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
-            &assembly.rfc_base,
-            post_base.der(),
-            post_base.rfc5280(),
-            sha_union,
-        )
-        .map_err(map_main_rfc_source_error_v1)?;
+        // Only this original binding and the four already-bound physical SHA sources can
+        // produce the private union owner. It retains the sixteen private centers and checks
+        // each physical segment through actual SHA replay; only compact-CA boundaries escape.
+        let (sha_union, ca_calls) =
+            ZkX509ShaUnionCentersV1::from_bound_sources_v1(&sha_aux, binding)
+                .map_err(map_main_rfc_source_error_v1)?;
+        let _private_ca_calls = zeroize::Zeroizing::new(ca_calls);
+        let rfc =
+            ZkX509Rfc5280StarkColumnProviderV1::new_v1(&assembly.rfc_base, binding, sha_union)
+                .map_err(map_main_rfc_source_error_v1)?;
         #[cfg(test)]
         rfc_timer.complete_v1();
         let der_fixed = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
@@ -8922,7 +8928,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     self.source.post_base.sha_word(),
                     self.source.post_base.sha(),
                     self.source.post_base.rfc5280(),
-                    segment as u8,
+                    u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 )
                 .map_err(map_main_sha_source_error_v1)?
             }
@@ -9899,6 +9905,7 @@ fn main_p256_scalar_registration_v1(
     }
     Ok(matched)
 }
+#[cfg(test)]
 fn main_p256_terminal_registration_v1(
     claims: &ZkX509P256PrivateProductsV1,
     signature: usize,
@@ -9934,6 +9941,7 @@ fn main_p256_terminal_registration_v1(
     terminals.validate(role)?;
     Ok(terminals)
 }
+#[cfg(test)]
 fn main_p256_terminal_registrations_v1(
     claims: &ZkX509P256PrivateProductsV1,
 ) -> Result<[P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1], ZkX509StarkErrorV1> {

@@ -840,38 +840,14 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                 observed_finalized_height,
                 replay: false,
             }),
-            Err(crate::Error::PushIntoQueue { source, .. }) => match source.as_ref() {
-                iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
-                    Ok(ModerationStrictIngressReceiptV1 {
-                        transaction_id,
-                        observed_finalized_height,
-                        replay: true,
-                    })
-                }
-                iroha_core::queue::Error::Full
-                | iroha_core::queue::Error::LatencySaturated
-                | iroha_core::queue::Error::MaximumTransactionsPerUser => {
-                    Err(ModerationStrictIngressFailureV1::Backpressure)
-                }
-                iroha_core::queue::Error::AdmissionInvariant { .. }
-                | iroha_core::queue::Error::KagemushaV1OperationIndexInconsistent { .. }
-                | iroha_core::queue::Error::UnresolvedRoute { .. } => {
-                    Err(ModerationStrictIngressFailureV1::Unavailable)
-                }
-                iroha_core::queue::Error::Expired
-                | iroha_core::queue::Error::UnsupportedTransactionAdmission { .. }
-                | iroha_core::queue::Error::KagemushaV1OperationCarrierRejected { .. }
-                | iroha_core::queue::Error::KagemushaV1OperationIdConflict { .. }
-                | iroha_core::queue::Error::UnregisteredAuthority { .. }
-                | iroha_core::queue::Error::Governance(_)
-                | iroha_core::queue::Error::GovernanceNotPermitted { .. }
-                | iroha_core::queue::Error::LaneComplianceDenied { .. }
-                | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
-                | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
-                | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
-                    Err(ModerationStrictIngressFailureV1::PermanentRejection)
-                }
-            },
+            Err(crate::Error::PushIntoQueue { source, .. }) => {
+                classify_local_moderation_queue_rejection(source.as_ref())?;
+                Ok(ModerationStrictIngressReceiptV1 {
+                    transaction_id,
+                    observed_finalized_height,
+                    replay: true,
+                })
+            }
             Err(_) => Err(ModerationStrictIngressFailureV1::Unavailable),
         }
     }
@@ -960,6 +936,40 @@ fn map_signing_failure(error: ModerationSigningFailureV1) -> ModerationSubmissio
             ModerationSubmissionFailureV1::NotSubmittedBackpressure
         }
         ModerationSigningFailureV1::Refused => ModerationSubmissionFailureV1::PermanentRejection,
+    }
+}
+// Only exact already-retained transactions produce a replay receipt. A signed
+// domain mismatch is permanent even when preacceptance came from another State.
+fn classify_local_moderation_queue_rejection(
+    error: &iroha_core::queue::Error,
+) -> Result<(), ModerationStrictIngressFailureV1> {
+    match error {
+        iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => Ok(()),
+        iroha_core::queue::Error::Full
+        | iroha_core::queue::Error::Deferred(_)
+        | iroha_core::queue::Error::LatencySaturated
+        | iroha_core::queue::Error::MaximumTransactionsPerUser => {
+            Err(ModerationStrictIngressFailureV1::Backpressure)
+        }
+        iroha_core::queue::Error::AdmissionInvariant { .. }
+        | iroha_core::queue::Error::KagemushaV1OperationIndexInconsistent { .. }
+        | iroha_core::queue::Error::UnresolvedRoute { .. } => {
+            Err(ModerationStrictIngressFailureV1::Unavailable)
+        }
+        iroha_core::queue::Error::Expired
+        | iroha_core::queue::Error::TransactionDomainMismatch(_)
+        | iroha_core::queue::Error::UnsupportedTransactionAdmission { .. }
+        | iroha_core::queue::Error::KagemushaV1OperationCarrierRejected { .. }
+        | iroha_core::queue::Error::KagemushaV1OperationIdConflict { .. }
+        | iroha_core::queue::Error::UnregisteredAuthority { .. }
+        | iroha_core::queue::Error::Governance(_)
+        | iroha_core::queue::Error::GovernanceNotPermitted { .. }
+        | iroha_core::queue::Error::LaneComplianceDenied { .. }
+        | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
+        | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
+        | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
+            Err(ModerationStrictIngressFailureV1::PermanentRejection)
+        }
     }
 }
 fn map_ingress_failure(error: ModerationStrictIngressFailureV1) -> ModerationSubmissionFailureV1 {
@@ -1678,6 +1688,43 @@ mod tests {
                 Hash::prehashed([seed; 32]),
             ),
         )
+    }
+    #[test]
+    fn queue_domain_mismatch_is_permanent_moderation_rejection() {
+        use iroha_core::queue::Error;
+        use iroha_data_model::{isi::error::Mismatch, transaction::TransactionDomain};
+
+        for actual in [
+            TransactionDomain::Genesis,
+            TransactionDomain::Network(test_network_id(2)),
+        ] {
+            let error = Error::TransactionDomainMismatch(Mismatch {
+                expected: TransactionDomain::Network(test_network_id(1)),
+                actual,
+            });
+            assert_eq!(
+                classify_local_moderation_queue_rejection(&error),
+                Err(ModerationStrictIngressFailureV1::PermanentRejection)
+            );
+        }
+        assert_eq!(
+            classify_local_moderation_queue_rejection(&Error::IsInQueue),
+            Ok(())
+        );
+        assert_eq!(
+            classify_local_moderation_queue_rejection(&Error::InBlockchain),
+            Ok(())
+        );
+        assert_eq!(
+            classify_local_moderation_queue_rejection(&Error::Full),
+            Err(ModerationStrictIngressFailureV1::Backpressure)
+        );
+        assert_eq!(
+            classify_local_moderation_queue_rejection(&Error::AdmissionInvariant {
+                reason: "original index unavailable".to_owned()
+            }),
+            Err(ModerationStrictIngressFailureV1::Unavailable)
+        );
     }
     #[test]
     fn torii_strict_ingress_public_binding_preflight_is_exact() {

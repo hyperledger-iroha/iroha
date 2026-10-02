@@ -685,6 +685,10 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
+    #[expect(
+        variant_size_differences,
+        reason = "The Copy block parameter retains the complete immutable FASTPQ profile inline; boxing changes its API and allocation behavior."
+    )]
     pub enum BlockParameter {
         MaxTransactions(NonZeroU64),
         /// Change the active Time count inside the committed capacity envelope.

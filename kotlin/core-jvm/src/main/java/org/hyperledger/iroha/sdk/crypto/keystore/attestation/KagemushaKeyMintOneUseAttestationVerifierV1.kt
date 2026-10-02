@@ -98,13 +98,23 @@ internal object KagemushaSelectionFrameV1 {
     }
 
     /** Logical transition indices are independent of the Apple assertion counter. */
-    fun requireAppAttest(frame: ByteArray) {
+    fun requireAppAttestSubject(frame: ByteArray) {
         val operation = requireSubject(frame, allowEnrollment = true)
         val before = BigInteger(1, frame.copyOfRange(BEFORE, BEFORE + 16).reversedArray())
         val after = BigInteger(1, frame.copyOfRange(AFTER, AFTER + 16).reversedArray())
         require(if (operation == 0) before == BigInteger.ZERO && after == BigInteger.ZERO
             else before + BigInteger.ONE == after) {
             "App Attest Core S has invalid logical transition indices"
+        }
+    }
+
+    /** Bootstrap requires absent outgoing commitments and zero logical indices in its original lane. */
+    fun requireOrdinaryBootstrapExact(frame: ByteArray, lane: ByteArray) {
+        require(requireSubject(frame, allowEnrollment = true) == 0 &&
+            frame.copyOfRange(BEFORE, FRAME_BYTES).all { it == 0.toByte() }
+        ) { "Ordinary Bootstrap requires zero logical indices" }
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane)) {
+            "Bootstrap S belongs to another original lane"
         }
     }
 }

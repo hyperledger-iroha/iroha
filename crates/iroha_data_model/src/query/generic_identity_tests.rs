@@ -221,7 +221,7 @@ fn complete_query_frames_match_current_canonical_fixtures() {
     #[cfg(feature = "ids_projection")]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_ids_identity_frames.json"),
-        "de644c2f23dd85776b6fc82ff5652fe219f709a827449d6f1d95db17ea8b5a73",
+        "e2101ac59ba28454a918d50714b0cf1a98b2e29411391938ac0fa219054b7f4e",
         28,
     );
     assert_eq!(hex::encode(Sha256::digest(source.as_bytes())), digest);

@@ -1241,8 +1241,8 @@ fn stream_main_fixed_polynomial_sets_v1(
     consume(&mut completed)
 }
 /// Construct the existing final fixed matrix directly, avoiding a second
-/// pending copy. Arithmetic rows are shared by eight columns; each independent
-/// inverse transform then runs in place within that same bounded batch.
+/// pending copy. Each public arithmetic row fills all its admitted columns once;
+/// inverse transforms still run in place within bounded eight-column batches.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_log19_fixed_polynomial_set_v1(
     source: &MainLog19ProverConstraintSourceV1<'_, '_>,
@@ -1272,22 +1272,27 @@ fn main_log19_fixed_polynomial_set_v1(
                 zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
             );
         }
-        for (batch_index, batch) in set
+        #[cfg(test)]
+        let rows_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionArithmeticFixedRows);
+        source
+            .source
+            .p256
+            .fill_arithmetic_fixed_matrix_v1(binding, &mut set.columns)?;
+        #[cfg(test)]
+        rows_timer.complete_v1();
+        #[cfg(test)]
+        let inverse_timer =
+            PhaseTimerV1::start_v1(PhaseV1::CompositionArithmeticFixedInverseTransform);
+        for batch in set
             .columns
             .chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-            .enumerate()
         {
-            let first = batch_index * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
-            let mut outputs = batch.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
-            source
-                .source
-                .p256
-                .fill_arithmetic_fixed_columns_v1(binding, first, &mut outputs)?;
-            drop(outputs);
             batch.par_iter_mut().try_for_each(|column| {
                 goldilocks_ifft_v1(column, root).map_err(map_transparent_error_v1)
             })?;
         }
+        #[cfg(test)]
+        inverse_timer.complete_v1();
     } else {
         for column in 0..registration.segment.fixed_width {
             let mut values = source.source.native_fixed_column_v1(registration, column)?;
@@ -1722,15 +1727,10 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
             for (target, source) in target.iter_mut().zip(source) {
                 *target = target.add(*source);
             }
-            let retained = target
-                .iter()
-                .rposition(|coefficient| *coefficient != E::ZERO)
-                .map_or(0, |degree| degree + 1);
-            // Cancellation makes the values zero mathematically, but only the
-            // explicit eraser guarantees that initialized cells are cleared
-            // before truncation removes them from the owner's Drop extent.
-            super::super::private_table::zeroize_words_v1(&mut target[retained..]);
-            target.truncate(retained);
+            // Keep the maximum public contributor extent after cancellation.
+            // Value-based trimming would expose private coefficients through
+            // scan work and the final chunk length. The clearing owner retains
+            // every initialized cell until it erases the whole live extent.
         }
     }
     Ok(())

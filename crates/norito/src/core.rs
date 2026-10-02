@@ -534,6 +534,35 @@ impl Drop for DecodeLimitsGuard {
 pub fn decode_limits_active() -> bool {
     DECODE_BUDGET_LAYERS.with(|slot| !slot.borrow().is_empty())
 }
+/// Check whether an original decoder error names a still-active resource ceiling.
+///
+/// Call this after the inner decoder's scopes have unwound and before projecting the error.
+/// A wider surviving scope cannot claim an inner format limit. The global archive cap and
+/// nesting limits are not local capacity refusals. This does not supply an allocation-pool
+/// owner or a release notification.
+#[doc(hidden)]
+pub fn decode_error_matches_active_limits(error: &Error) -> bool {
+    DECODE_BUDGET_LAYERS.with(|slot| {
+        slot.borrow().iter().any(|layer| {
+            let limits = layer.budget.limits;
+            match error {
+                Error::SequenceLengthExceeded { length, limit } => {
+                    length > limit && *limit == limit_to_u64(limits.max_sequence_elements())
+                }
+                Error::FieldLengthExceeded { length, limit } => {
+                    length > limit && *limit == limit_to_u64(limits.max_field_bytes())
+                }
+                Error::TotalElementsExceeded { attempted, limit } => {
+                    attempted > limit && *limit == limit_to_u64(limits.max_total_elements())
+                }
+                Error::TotalAllocationExceeded { attempted, limit } => {
+                    attempted > limit && *limit == limit_to_u64(limits.max_total_allocated_bytes())
+                }
+                _ => false,
+            }
+        })
+    })
+}
 #[inline]
 fn limit_to_u64(limit: usize) -> u64 {
     u64::try_from(limit).unwrap_or(u64::MAX)

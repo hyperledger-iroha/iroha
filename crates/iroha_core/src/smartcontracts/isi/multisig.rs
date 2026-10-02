@@ -629,6 +629,9 @@ fn rekey_account_id(
         new_account,
     )
     .map_err(|err| {
+        if err.deferral().is_some() {
+            return err.retain_in_instruction(state_transaction);
+        }
         InstructionExecutionError::InvariantViolation(
             format!("cannot preflight account-alias leases for rekey: {err}").into(),
         )
@@ -743,7 +746,7 @@ fn rekey_account_id(
         .collect::<BTreeSet<_>>();
     state_transaction
         .validate_fastpq_governance_rekey(old_account, new_account)
-        .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+        .map_err(|error| state_transaction.mandatory_source_instruction_error(error))?;
     state_transaction
         .world
         .triggers
@@ -3387,6 +3390,7 @@ mod tests {
             seed_default_namespace_policies_for_payment_asset,
         },
         state::{State, StateReadOnly, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -3412,7 +3416,7 @@ mod tests {
             },
         },
         kaigi::{KaigiId, KaigiRecord, NewKaigi},
-        nexus::{DataSpaceCatalog, DataSpaceMetadata, UniversalAccountId},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
         prelude::{Domain, InstructionBox, Json, Quantity, Register},
@@ -3427,11 +3431,11 @@ mod tests {
     };
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
-    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
     };
     fn new_account_id(key_pair: &KeyPair) -> AccountId {
@@ -3446,14 +3450,14 @@ mod tests {
         chain_id: ChainId,
         nexus: Option<iroha_config::parameters::actual::Nexus>,
     ) -> State {
-        use crate::sumeragi::{
-            startup,
-            test_chain::{CertifiedTestChain, TestChainConfig},
-        };
-
         let mut config = TestChainConfig::new(world, 0);
         config.chain_id = chain_id;
         config.nexus = nexus;
+        runtime_state_from_config(config)
+    }
+    fn runtime_state_from_config(config: TestChainConfig) -> State {
+        use crate::sumeragi::startup;
+
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
         let prepared =
@@ -3556,13 +3560,24 @@ mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         }
     }
-    fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
+    struct FiRegistrationAliasFixture {
+        config: TestChainConfig,
+        signer1: KeyPair,
+        signer2: KeyPair,
+        retail_account: AccountId,
+        sbp: DataSpaceId,
+        sbp_lane: LaneId,
+        hbl_domain: DomainId,
+        payment_asset_definition_id: AssetDefinitionId,
+    }
+    fn fi_registration_alias_fixture() -> FiRegistrationAliasFixture {
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let retail_account = new_account_id(&checked_keypair());
         let sbp = DataSpaceId::new(10);
+        let sbp_lane = LaneId::new(1);
         let hbl_domain = DomainId::try_new("hbl", "sbp").expect("hbl.sbp domain");
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
@@ -3597,12 +3612,156 @@ mod tests {
         ])
         .expect("sbp dataspace catalog");
         nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        // Retain SBP's configured physical lane geometry in the original fixture;
+        // global topology and parameter control retain the universal lane.
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sbp_lane,
+                    dataspace_id: sbp,
+                    alias: "sbp".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("SBP and universal lane catalog");
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
-        let state = runtime_state(
-            world,
-            ChainId::from("multisig-fi-registration-alias-batch"),
-            Some(nexus),
+        // The executor resolves aliases from committed SNS state. A static node
+        // catalog and domain entity cannot replace either original parent lease.
+        let bootstrap_dataspace = EnsureAlias::new(
+            AliasIntentV1::Dataspace(iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
+                dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
+                    "sbp".parse().expect("canonical sbp dataspace name"),
+                    sbp,
+                ),
+                owner: signer1_id.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset_definition_id.clone(),
+                max_amount: Quantity::zero(),
+                valid_until_ms: u64::MAX,
+            },
         );
+        let bootstrap_domain = EnsureAlias::new(
+            AliasIntentV1::Domain(iroha_data_model::alias_setup::AliasDomainIntentV1 {
+                domain: iroha_data_model::alias_setup::ResolvedDomainV1::new(
+                    hbl_domain.clone(),
+                    sbp,
+                ),
+                owner: signer1_id.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset_definition_id.clone(),
+                max_amount: Quantity::zero(),
+                valid_until_ms: u64::MAX,
+            },
+        );
+        let mut config = TestChainConfig::new(world, 0);
+        config.chain_id = ChainId::from("multisig-fi-registration-alias-batch");
+        config.nexus = Some(nexus);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        // Foundational permissions belong to the actual genesis authority. The
+        // original signed EnsureAlias batch retains its single global route;
+        // SBP-scoped Grant instructions would require their own physical route.
+        config.world.account_permissions_mut_for_testing().insert(
+            genesis_account,
+            BTreeSet::from([
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(sbp),
+                }),
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(hbl_domain.clone()),
+                }),
+            ]),
+        );
+        config.genesis_instructions = vec![bootstrap_dataspace.into(), bootstrap_domain.into()];
+        FiRegistrationAliasFixture {
+            config,
+            signer1,
+            signer2,
+            retail_account,
+            sbp,
+            sbp_lane,
+            hbl_domain,
+            payment_asset_definition_id,
+        }
+    }
+    #[test]
+    fn multisig_fi_bootstrap_requires_each_exact_genesis_signer_permission() {
+        for missing_domain_permission in [false, true] {
+            let mut fixture = fi_registration_alias_fixture();
+            let genesis_account = AccountId::new(fixture.config.genesis_key.public_key().clone());
+            let permission = Permission::from(CanManageAccountAlias {
+                scope: if missing_domain_permission {
+                    AccountAliasPermissionScope::Domain(fixture.hbl_domain)
+                } else {
+                    AccountAliasPermissionScope::Dataspace(fixture.sbp)
+                },
+            });
+            let permissions = fixture
+                .config
+                .world
+                .account_permissions_mut_for_testing()
+                .view()
+                .get(&genesis_account)
+                .expect("actual genesis signer permissions")
+                .iter()
+                .filter(|existing| *existing != &permission)
+                .cloned()
+                .collect();
+            fixture
+                .config
+                .world
+                .account_permissions_mut_for_testing()
+                .insert(genesis_account.clone(), permissions);
+            let failure = CertifiedTestChain::prepare(fixture.config)
+                .expect_err("each exact parent permission is required by original signed genesis");
+            assert_eq!(failure.state.view().height(), 0);
+            assert!(matches!(
+                &failure.error,
+                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(_)
+            ));
+            assert!(
+                format!("{:?}", failure.error).contains("alias.setup.authority_forbidden"),
+                "missing exact permission must refuse at alias authority: {:?}",
+                failure.error,
+            );
+            assert!(
+                !failure
+                    .state
+                    .view()
+                    .world()
+                    .account_permissions()
+                    .get(&genesis_account)
+                    .expect("unapplied signer permissions")
+                    .contains(&permission),
+                "bootstrap cannot recreate an absent signer permission",
+            );
+        }
+    }
+    fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
+        let FiRegistrationAliasFixture {
+            config,
+            signer1,
+            signer2,
+            retail_account,
+            sbp,
+            sbp_lane,
+            hbl_domain,
+            payment_asset_definition_id,
+        } = fi_registration_alias_fixture();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let state = runtime_state_from_config(config);
         assert_eq!(
             state
                 .nexus_snapshot()
@@ -3611,6 +3770,17 @@ mod tests {
                 .map(|entry| entry.id),
             Some(sbp),
             "signed genesis retains the configured SBP catalog",
+        );
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| (lane.id, lane.dataspace_id))
+                .collect::<Vec<_>>(),
+            vec![(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (sbp_lane, sbp)],
+            "signed genesis retains both original physical execution lanes",
         );
         assert_eq!(
             state
@@ -3629,6 +3799,40 @@ mod tests {
         block.admit_fastpq_source_for_testing(proposal_call);
         block.admit_fastpq_source_for_testing(approval_call);
         let mut tx = block.transaction_for_callback_testing();
+        assert_eq!(
+            crate::sns::resolve_active_dataspace_id_by_alias(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                "sbp",
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("original signed genesis retains the sbp name lease"),
+            sbp,
+        );
+        assert_eq!(
+            get_name_record(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                SnsNamespace::Dataspace,
+                "sbp",
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("committed bootstrap dataspace lease")
+            .owner,
+            signer1_id,
+        );
+        assert_eq!(
+            get_name_record(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                SnsNamespace::Domain,
+                &hbl_domain.to_string(),
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("committed bootstrap FI domain lease")
+            .owner,
+            signer1_id,
+        );
         let spec = spec(
             BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             2,

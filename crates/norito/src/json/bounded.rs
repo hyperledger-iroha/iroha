@@ -6,7 +6,7 @@ use std::{
     fmt,
     mem::MaybeUninit,
 };
-/// Fixed, data-independent failures from bounded JSON serialization.
+/// Fixed-shape failures from bounded JSON serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BoundedJsonError {
     /// The serializer has no checked writer implementation.
@@ -18,6 +18,9 @@ pub enum BoundedJsonError {
     /// Reserving the admitted destination buffer failed.
     #[error("bounded JSON destination allocation failed")]
     AllocationFailed,
+    /// Original caller-budget or physical destination-allocation refusal.
+    #[error(transparent)]
+    DecodeResource(crate::core::DecodeResourceError),
     /// The serializer emitted a different length on its checked second pass.
     #[error("bounded JSON serializer length changed between passes")]
     LengthMismatch,
@@ -242,13 +245,16 @@ fn allocate_exact_json_destination(
     if length == 0 {
         return Ok(Vec::new().into_boxed_slice());
     }
+    let bytes = u64::try_from(length).map_err(|_| BoundedJsonError::BodyTooLarge)?;
     let layout =
-        Layout::array::<MaybeUninit<u8>>(length).map_err(|_| BoundedJsonError::AllocationFailed)?;
+        Layout::array::<MaybeUninit<u8>>(length).map_err(|_| BoundedJsonError::BodyTooLarge)?;
     // SAFETY: `layout` is non-zero and came from `Layout::array`. A null
     // result is handled before the pointer is converted into an owning box.
     let allocation = unsafe { alloc(layout) }.cast::<MaybeUninit<u8>>();
     if allocation.is_null() {
-        return Err(BoundedJsonError::AllocationFailed);
+        return Err(BoundedJsonError::DecodeResource(
+            crate::core::DecodeResourceError::AllocationFailed { bytes },
+        ));
     }
     let slice = std::ptr::slice_from_raw_parts_mut(allocation, length);
     // SAFETY: `allocation` owns exactly `layout`; a boxed slice of `length`
@@ -267,8 +273,12 @@ where
     let mut counter = CountingJsonSink::new(max_bytes);
     value.json_serialize_to(&mut counter)?;
     let expected = counter.length;
-    crate::core::reserve_decode_allocation(expected)
-        .map_err(|_| BoundedJsonError::AllocationFailed)?;
+    crate::core::reserve_decode_allocation(expected).map_err(|error| {
+        error.decode_resource_error().map_or(
+            BoundedJsonError::Unsupported,
+            BoundedJsonError::DecodeResource,
+        )
+    })?;
     record_destination_allocation_attempt();
     let mut output = allocate_destination(expected)?;
     if output.len() != expected {
@@ -278,7 +288,10 @@ where
         let mut sink = ExactBoxedJsonSink::new(&mut output);
         value
             .json_serialize_to(&mut sink)
-            .map_err(|_| BoundedJsonError::LengthMismatch)?;
+            .map_err(|error| match error {
+                BoundedJsonError::DecodeResource(_) | BoundedJsonError::AllocationFailed => error,
+                _ => BoundedJsonError::LengthMismatch,
+            })?;
         sink.length
     };
     if actual != expected {
@@ -1383,6 +1396,45 @@ mod tests {
         assert_eq!(attempted.get(), Some(exact));
     }
     #[test]
+    fn second_pass_retains_actual_nested_admission_refusal() {
+        struct Original(Cell<usize>);
+        impl JsonSerialize for Original {
+            fn json_serialize(&self, output: &mut String) {
+                output.push('0');
+            }
+            fn json_serialize_to(
+                &self,
+                output: &mut dyn JsonWriteSink,
+            ) -> Result<(), BoundedJsonError> {
+                let pass = self.0.get();
+                self.0.set(pass + 1);
+                if pass == 1 {
+                    crate::core::reserve_decode_allocation(1).map_err(|error| {
+                        BoundedJsonError::DecodeResource(error.decode_resource_error().unwrap())
+                    })?;
+                }
+                output.push('0')
+            }
+        }
+        let value = Original(Cell::new(0));
+        let refused = crate::core::with_decode_limits_scope(
+            crate::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, usize::MAX),
+            || to_json_bounded(&value, 1),
+        );
+        assert_eq!(
+            refused,
+            Err(BoundedJsonError::DecodeResource(
+                crate::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: 2,
+                    limit: 1
+                },
+            ))
+        );
+        assert_eq!(value.0.get(), 2, "actual second-pass allocation refused");
+        value.0.set(0);
+        assert_eq!(to_json_bounded(&value, 1).unwrap(), "0");
+    }
+    #[test]
     fn active_decode_budget_rejects_destination_before_reserve() {
         let payload = fixture();
         let exact = super::super::to_json(&payload)
@@ -1398,7 +1450,12 @@ mod tests {
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         assert_eq!(
             crate::core::with_decode_limits_scope(limits, || { to_json_bounded(&payload, exact) }),
-            Err(BoundedJsonError::AllocationFailed)
+            Err(BoundedJsonError::DecodeResource(
+                crate::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: u64::try_from(exact).unwrap(),
+                    limit: u64::try_from(exact - 1).unwrap(),
+                },
+            ))
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
     }
@@ -1419,7 +1476,12 @@ mod tests {
             crate::core::with_decode_limits_scope(too_small, || {
                 to_json_bounded_boxed(&payload, exact)
             }),
-            Err(BoundedJsonError::AllocationFailed)
+            Err(BoundedJsonError::DecodeResource(
+                crate::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: u64::try_from(exact).unwrap(),
+                    limit: u64::try_from(exact - 1).unwrap(),
+                },
+            ))
         );
         let exact_limit =
             crate::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact, usize::MAX);

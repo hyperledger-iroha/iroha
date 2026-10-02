@@ -188,7 +188,7 @@ pub(crate) async fn handler_account_onboarding_current_state(
             app.state.query_view().world(),
             caller,
             &alias.resolved,
-        ) {
+        )? {
             return Ok(super::torii_alias_permission_denied_response(
                 "exact Alias or applicable Domain/Dataspace resolve permission is required for the requested alias scope",
             ));

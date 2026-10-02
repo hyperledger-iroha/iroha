@@ -525,7 +525,7 @@ def test_raw_report_leakage_fails(tmp_path: Path) -> None:
 
 def test_staging_load_thresholds_fail(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    staging = staging_load(duration=600, p95=2_000)
+    staging = staging_load(duration=0, p95=2_000)
     staging["peak_concurrent_range_streams"] = 999
     write_json(tmp_path / "staging-load.json", staging)
     summary = tmp_path / "summary.json"
@@ -534,7 +534,7 @@ def test_staging_load_thresholds_fail(tmp_path: Path) -> None:
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["staging_load"]["artifacts"][0]
-    assert "duration_seconds must be at least 86400" in artifact["errors"]
+    assert "duration_seconds must be at least 1" in artifact["errors"]
     assert (
         "peak_concurrent_range_streams must be at least 1000"
         in artifact["errors"]
@@ -630,7 +630,7 @@ def test_basis_point_thresholds_must_be_possible(
     assert not summary.exists()
 
 
-def test_production_duration_and_concurrency_thresholds_cannot_be_weakened(
+def test_production_concurrency_threshold_cannot_be_weakened(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -657,7 +657,7 @@ def test_production_duration_and_concurrency_thresholds_cannot_be_weakened(
     )
 
     captured = capsys.readouterr()
-    assert "--min-staging-duration-secs must be >= 86400" in captured.err
+    assert "--min-staging-duration-secs must be" not in captured.err
     assert "--min-streams must be >= 1000" in captured.err
     assert not summary.exists()
 
@@ -676,8 +676,32 @@ def test_production_duration_and_concurrency_thresholds_cannot_be_weakened(
     payload["peak_concurrent_range_streams"] = 999
     kind, errors = MODULE.validate_evidence_payload(payload, weakened_options)
     assert kind == "staging_load"
-    assert "duration_seconds must be at least 86400" in errors
+    assert not any("duration_seconds" in error for error in errors)
     assert "peak_concurrent_range_streams must be at least 1000" in errors
+
+
+def test_short_observation_requires_no_fixed_deployment_soak(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "staging-load.json", staging_load(duration=1))
+
+    assert run_gate(tmp_path) == 0
+
+    options = validation_options()
+    longer_observation = MODULE.ValidationOptions(
+        now_unix=options.now_unix,
+        max_evidence_age_secs=options.max_evidence_age_secs,
+        min_staging_duration_secs=300,
+        min_streams=options.min_streams,
+        min_success_rate_bps=options.min_success_rate_bps,
+        max_error_rate_bps=options.max_error_rate_bps,
+        max_p95_latency_ms=options.max_p95_latency_ms,
+        max_p99_latency_ms=options.max_p99_latency_ms,
+    )
+    kind, errors = MODULE.validate_evidence_payload(
+        staging_load(duration=1), longer_observation
+    )
+    assert kind == "staging_load"
+    assert "duration_seconds must be at least 300" in errors
 
 
 def test_telemetry_requires_gateway_metrics(tmp_path: Path) -> None:

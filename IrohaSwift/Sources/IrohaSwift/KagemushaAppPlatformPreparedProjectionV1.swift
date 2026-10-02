@@ -19,10 +19,35 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
   let appSigningIdentityDigest: Data
   let financialSubject: Data
   let approval: KagemushaAppApprovalSigningProjectionV1?
+  let bootstrapApproval: KagemushaBootstrapAppApprovalSigningProjectionV1?
 
   init(nativeFields: [Data], approvalID: Data?, enrollmentChallengeHash: Data?) throws {
+    try self.init(nativeFields: nativeFields, approvalID: approvalID,
+      enrollmentChallengeHash: enrollmentChallengeHash, bootstrapOperationID: nil, bootstrapCredentialDigest: nil)
+  }
+
+  init(nativeBootstrapFields: [Data], operationID: Data, credentialDigest: Data) throws {
+    try self.init(nativeFields: nativeBootstrapFields, approvalID: nil,
+      enrollmentChallengeHash: nil, bootstrapOperationID: operationID, bootstrapCredentialDigest: credentialDigest)
+  }
+
+  /// Phase1 accepts only ordinary monetary W; Bootstrap has its own typed phase8 entry.
+  static func validateApprovalTransport(_ fields: [Data], operationID: Data) throws {
+    _ = try Self(nativeFields: fields, approvalID: operationID, enrollmentChallengeHash: nil)
+  }
+
+  /// Phase8 validates only exact zero-State Bootstrap transport, granting no native holder.
+  static func validateBootstrapTransport(_ fields: [Data], operationID: Data) throws {
+    guard fields.count == 14 else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid native bootstrap fields")
+    }
+    _ = try Self(nativeBootstrapFields: fields, operationID: operationID, credentialDigest: fields[8])
+  }
+
+  private init(nativeFields: [Data], approvalID: Data?, enrollmentChallengeHash: Data?,
+    bootstrapOperationID: Data?, bootstrapCredentialDigest: Data?) throws {
     let f = nativeFields.map { Data($0) }
-    guard f.count == 14, (approvalID == nil) != (enrollmentChallengeHash == nil),
+    guard f.count == 14, [approvalID, enrollmentChallengeHash, bootstrapOperationID].compactMap({ $0 }).count == 1,
       f[0].count == 8, Self.nonzero(f[0]), f[2].count == 1,
       [UInt8(4), 5].contains(f[2][0]), (1...255).contains(f[3].count),
       !f[3].contains(0), let alias = String(data: f[3], encoding: .utf8),
@@ -55,9 +80,18 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
       floor = nil
     }
     let approval: KagemushaAppApprovalSigningProjectionV1?
-    if let id = approvalID {
-      let w = try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: f[1],
-        nativeFinancialSubject: f[13])
+    let bootstrapApproval: KagemushaBootstrapAppApprovalSigningProjectionV1?
+    if let id = approvalID ?? bootstrapOperationID {
+      let w: KagemushaAppOperationApprovalWrapperV1
+      if let digest = bootstrapCredentialDigest {
+        let bootstrap = try KagemushaBootstrapAppApprovalSigningProjectionV1(nativeSigningBytes: f[1],
+          nativeFinancialSubject: f[13], credentialDigest: digest)
+        bootstrapApproval = bootstrap; approval = nil; w = bootstrap.wrapper
+      } else {
+        let ordinary = try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: f[1],
+          nativeFinancialSubject: f[13])
+        approval = ordinary; bootstrapApproval = nil; w = ordinary.wrapper
+      }
       guard Self.digest(id), w.operationID == id, Self.digest(f[8]),
         w.enrollmentDigest == f[8], w.attestedKeyID == f[6],
         Data(w.canonicalFinancialSubject[155..<187]) == f[8],
@@ -71,19 +105,18 @@ struct KagemushaAppPlatformPreparedProjectionV1: Sendable {
         w.authorityPolicyDigest == challenge.appAuthorityPolicyDigest else {
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("native W scope or key differs")
       }
-      approval = w
     } else {
       guard f[8].isEmpty, f[13].isEmpty else {
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("pending enrollment carries credential or financial subject")
       }
       try Self.validateEnrollmentPossession(f[1], id: enrollmentChallengeHash!, key: f[6], challenge: challenge)
-      approval = nil
+      approval = nil; bootstrapApproval = nil
     }
     ticket = f[0]; signingBytes = f[1]; platform = f[2][0]; keyAlias = alias
     generationChallenge = f[4]; publicKeyX963 = f[5]; keyID = f[6]
     enrollmentChallenge = f[7]; credentialDigest = f[8]; nativeScope = f[9]
     appleCounterFloor = floor; androidLevelsMask = f[11][0]
-    appSigningIdentityDigest = f[12]; financialSubject = f[13]; self.approval = approval
+    appSigningIdentityDigest = f[12]; financialSubject = f[13]; self.approval = approval; self.bootstrapApproval = bootstrapApproval
   }
 
   private static func validateEnrollmentPossession(_ e: Data, id: Data, key: Data,

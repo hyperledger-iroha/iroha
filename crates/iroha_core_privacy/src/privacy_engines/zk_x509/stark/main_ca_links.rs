@@ -685,9 +685,11 @@ impl MainCaPrivatePlanV1 {
         if coefficients[count..].iter().any(|value| *value != E::ZERO) {
             return Err(ZkX509StarkErrorV1::ConstraintOpening);
         }
+        // The tail has been checked zero, but explicitly erase every original
+        // initialized cell before the public degree bound removes it from Drop.
+        super::super::super::private_table::zeroize_words_v1(&mut coefficients.0[count..]);
         let mut lane = vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS];
         lane[0] = core::mem::take(&mut coefficients.0);
-        // The discarded tail has just been checked to contain only public zero.
         lane[0].truncate(count);
         let contribution = ZeroizingExtensionLanesV1::new(vec![lane], zeroize_extension_lanes_v1);
         add_main_composition_coefficient_chunks_v1(accumulator, &contribution, cap)

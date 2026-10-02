@@ -4,7 +4,7 @@
 //! and balances for a mixed set of transactions.
 use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
-    state::{StateReadOnly, WorldReadOnly},
+    state::WorldReadOnly,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;

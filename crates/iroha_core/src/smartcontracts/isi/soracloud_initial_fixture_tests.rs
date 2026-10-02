@@ -172,23 +172,7 @@ fn state_with_soracloud_permission_on_chain(
         ALICE_ID.clone(),
     )
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-    state_transaction.world.public_lane_validators.insert(
-        (LaneId::SINGLE, ALICE_ID.clone()),
-        PublicLaneValidatorRecord {
-            lane_id: LaneId::SINGLE,
-            validator: ALICE_ID.clone(),
-            peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()),
-            stake_account: ALICE_ID.clone(),
-            total_stake: Quantity::from(1_000_u64),
-            self_stake: Quantity::from(1_000_u64),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_height: 1,
-            election_exit_height: None,
-            deactivation_height: None,
-            last_reward_epoch: None,
-        },
-    );
+    insert_active_public_lane_validator(&mut state_transaction, ALICE_ID.clone(), 1_000);
     state_transaction.apply();
     state_block.commit_world_overlay_for_testing()?;
     Ok(state)
@@ -242,8 +226,8 @@ fn initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permissio
     let header = initial_soracloud_header(&state, 2);
     assert_eq!(header.prev_block_hash(), Some(parent));
     let mut block = state.block(header);
-    let transaction = block.transaction();
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+    let mut transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok());
     require_soracloud_permission(&ALICE_ID, &transaction)?;
     assert_eq!(
         transaction
@@ -254,13 +238,26 @@ fn initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permissio
             .status,
         PublicLaneValidatorStatus::Active,
     );
+    let bonded = &transaction
+        .world
+        .public_lane_stake_shares
+        .get(&(LaneId::SINGLE, ALICE_ID.clone(), ALICE_ID.clone()))
+        .expect("original matching self-bonded share")
+        .bonded;
+    let validator = transaction
+        .world
+        .public_lane_validators
+        .get(&(LaneId::SINGLE, ALICE_ID.clone()))
+        .expect("original seeded validator");
+    assert_eq!(bonded, &validator.total_stake);
+    assert_eq!(bonded, &validator.self_stake);
     drop(transaction);
     drop(block);
     let component = state_with_soracloud_permission(&kura)?;
     let mut block = component.block(initial_soracloud_header(&component, 2));
-    let transaction = block.transaction();
+    let mut transaction = block.transaction();
     require_soracloud_permission(&ALICE_ID, &transaction)?;
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_err());
     Ok(())
 }
 

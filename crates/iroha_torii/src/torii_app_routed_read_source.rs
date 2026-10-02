@@ -675,7 +675,10 @@ fn execute_torii_contract_alias_local_source_read(
             }
         };
     let Some(dataspace_id) =
-        dataspace_id_for_alias_segment(app, contract_alias.dataspace_segment())
+        (match dataspace_id_for_alias_segment(app, contract_alias.dataspace_segment()) {
+            Ok(id) => id,
+            Err(error) => return error_response_with_format(error, ResponseFormat::Json),
+        })
     else {
         return error_response_with_format(
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(

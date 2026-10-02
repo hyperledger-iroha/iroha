@@ -990,6 +990,68 @@ def run_source_mode(args: argparse.Namespace) -> int:
     return 1 if violations else 0
 
 
+# These two state-free proof/custody owners are the complete reviewed Native
+# admission. This is not a layer-wide exemption or an extensible allowlist.
+NATIVE_CUSTODY_OWNER_CONTRACTS: dict[str, dict[str, Any]] = {
+    "iroha_core_zk": {
+        "features": [
+            "circuit-params", "kagemusha-production-prover", "proofs-halo2",
+            "zk-halo2", "zk-halo2-ipa", "zk-ipa-native",
+        ],
+        "required_path": ["iroha", "iroha_core_zk"],
+        "permitted_layer": "node_execution",
+        "permitted_forbidden_features": [],
+    },
+    "iroha_zkp_halo2": {
+        "features": ["default", "full", "model-primitives", "parallel"],
+        "required_path": ["iroha", "iroha_core_zk", "iroha_zkp_halo2"],
+        "permitted_layer": None,
+        "permitted_forbidden_features": ["full", "parallel"],
+    },
+}
+
+
+def _native_owner_contracts(selection: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate the complete fixed Native context before granting any admission."""
+
+    contracts = selection.get("package_contracts", {})
+    if not isinstance(contracts, dict):
+        raise ValueError("package_contracts must be an object")
+    if not contracts:
+        return contracts
+    if (
+        selection.get("package") != "iroha"
+        or selection.get("features") != ["kagemusha-ordinary-native"]
+        or selection.get("default_features") is not True
+        or selection.get("include_root_dev_dependencies", False) is not False
+        or selection.get("target") != "all"
+    ):
+        raise ValueError("Native owner contracts require the exact shipping SDK selection")
+    if contracts != NATIVE_CUSTODY_OWNER_CONTRACTS:
+        raise ValueError("Native owner contracts differ from the reviewed exact admission")
+    required_layers = {
+        "node_execution", "node_configuration", "telemetry_runtime", "storage_runtime",
+    }
+    if not required_layers.issubset(selection.get("forbidden_layers", [])):
+        raise ValueError("Native owner contracts must retain every SDK runtime denial")
+    if not {"iroha_p2p", "kotodama_lang", "kotodama_toolchain"}.issubset(
+        selection.get("forbidden_packages", [])
+    ):
+        raise ValueError("Native owner contracts must retain P2P and compiler denial")
+    required_features = {
+        "iroha": {"dev-tools", "test-fixtures", "test-network-private-settlement-evidence"},
+        "iroha_core_zk": {
+            "default", "halo2-dev-tests", "kagemusha-real-proof-harness", "proofs-stark",
+            "test-utils", "zk-stark", "zk-tests",
+        },
+        "iroha_zkp_halo2": {"bench", "full", "goldilocks_backend", "parallel", "schema-structural"},
+    }
+    for package, features in required_features.items():
+        if not features.issubset(selection.get("forbidden_features", {}).get(package, [])):
+            raise ValueError("Native owner contracts must retain SDK and proof-feature denial")
+    return contracts
+
+
 def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
     """Validate explicit package ownership and shipping or test feature selections."""
 
@@ -1046,6 +1108,14 @@ def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 raise ValueError(f"boundary `{name}` has invalid forbidden feature ownership")
             if not all(isinstance(feature, str) and feature for feature in features):
                 raise ValueError(f"boundary `{name}` forbidden features must be strings")
+        forbidden_packages = selection.get("forbidden_packages", [])
+        if (
+            not isinstance(forbidden_packages, list)
+            or not all(isinstance(package, str) and package for package in forbidden_packages)
+            or len(forbidden_packages) != len(set(forbidden_packages))
+        ):
+            raise ValueError(f"boundary `{name}` forbidden_packages must be unique strings")
+        _native_owner_contracts(selection)
     return policy
 
 
@@ -1119,15 +1189,47 @@ def evaluate_boundary_tree(
         for package in policy["layers"][layer]
     }
     violations: dict[tuple[str, str], dict[str, Any]] = {}
+    contracts = _native_owner_contracts(selection)
+    admitted: Mapping[str, Any] = {}
+    if contracts:
+        if "kagemusha-ordinary-native" not in rows[0]["features"]:
+            violations[(selection["package"], "contract")] = {
+                "package": selection["package"],
+                "owner_contract": "Native capability is absent from the selected root",
+                "path": rows[0]["path"],
+            }
+        for package, contract in contracts.items():
+            matching = [row for row in rows if row["package"] == package]
+            if not matching:
+                reason = "required proof/custody owner is absent"
+            elif any(row["features"] != contract["features"] for row in matching):
+                reason = "enabled owner features differ from the exact shipping contract"
+            elif not any(row["path"] == contract["required_path"] for row in matching):
+                reason = "required direct proof/custody ownership path is absent"
+            else:
+                continue
+            violations[(package, "contract")] = {
+                "package": package, "owner_contract": reason,
+                "path": matching[0]["path"] if matching else [selection["package"]],
+            }
+        if not violations:
+            admitted = contracts
     for row in sorted(rows, key=lambda row: (len(row["path"]), row["path"])):
         package = row["package"]
-        if package in denied:
+        admission = admitted.get(package, {})
+        if package in selection.get("forbidden_packages", []):
+            violations.setdefault((package, "package"), {
+                "package": package, "forbidden_package": True, "path": row["path"],
+            })
+        if package in denied and admission.get("permitted_layer") != denied[package]:
             violations.setdefault((package, "layer"), {
                 "package": package, "forbidden_layer": denied[package],
                 "path": row["path"],
             })
         forbidden = selection["forbidden_features"].get(package, [])
         for feature in sorted(set(forbidden).intersection(row["features"])):
+            if feature in admission.get("permitted_forbidden_features", []):
+                continue
             violations.setdefault((package, feature), {
                 "package": package, "forbidden_feature": feature,
                 "path": row["path"],
@@ -1167,7 +1269,12 @@ def run_boundary_mode(args: argparse.Namespace) -> int:
         for name, result in reports.items():
             print(f"boundary={name} within_boundary={str(result['within_boundary']).lower()}", file=stream)
             for violation in result["violations"]:
-                reason = violation.get("forbidden_layer") or f"feature {violation['forbidden_feature']}"
+                reason = (
+                    violation.get("forbidden_layer")
+                    or violation.get("owner_contract")
+                    or (f"feature {violation['forbidden_feature']}"
+                        if "forbidden_feature" in violation else "forbidden package")
+                )
                 print(f"ERROR: {name}: {' -> '.join(violation['path'])} ({reason})", file=sys.stderr)
         if args.json_out is not None:
             write_json(report, args.json_out)

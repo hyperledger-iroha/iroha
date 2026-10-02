@@ -45,13 +45,9 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
     );
     let der_challenges = der_challenges_v1();
     let challenges = challenges_v1();
-    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
-        material,
-        der_challenges,
-        challenges,
-        ZkX509ShaUnionCentersV1::identity_fixture_v1(),
-    )
-    .expect("release RFC column provider and terminal claims");
+    let provider =
+        ZkX509Rfc5280StarkColumnProviderV1::fixture_v1(material, der_challenges, challenges)
+            .expect("release RFC column provider and terminal claims");
     let der_trace = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), der_challenges)
         .expect("release DER complete native trace");
     let der_terminals =

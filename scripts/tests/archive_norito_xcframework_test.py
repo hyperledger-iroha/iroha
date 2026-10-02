@@ -144,6 +144,11 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPOSITORY_ROOT / relative, destination)
         (source_root / "Cargo.lock").write_bytes(FIXTURE_CARGO_LOCK)
+        graph_directory = self.root / "graph"
+        graph_directory.mkdir()
+        self.lockfile = graph_directory / "Cargo.lock"
+        self.lockfile.write_bytes(FIXTURE_CARGO_LOCK)
+        self.lockfile.chmod(0o400)
         graph_owner = source_root / "ci/privacy_sdk_cargo_lockfile.sh"
         graph_owner.parent.mkdir()
         graph_owner.write_text(
@@ -207,6 +212,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
                 library["SupportedPlatformVariant"] = variant
             libraries.append(library)
 
+        (self.framework / ".privacy-production-enabled").touch()
         info = {
             "AvailableLibraries": libraries,
             "CFBundlePackageType": "XFWK",
@@ -250,8 +256,8 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         manifest = {
             "version": "0.1.0",
             "native_bridge_abi_version": 25,
-            "privacy_production_enabled": False,
-            "cargo_features": [],
+            "privacy_production_enabled": True,
+            "cargo_features": ["privacy-production-enabled"],
             "build_environment": build_environment,
             "source_commit": "1" * 40,
             "embedded_source_commit": "1" * 40,
@@ -295,13 +301,13 @@ owner._load_generation_validator = lambda: validator
 owner._validate_native_binaries = lambda _snapshot, _validator: None
 if "--exercise-owner-cli" in sys.argv[6:]:
     sys.argv = [
-        str(sys.argv[1]), "--lockfile-path", str(Path(sys.argv[1]).resolve().parents[1] / "Cargo.lock"), "--xcframework", sys.argv[3],
+        str(sys.argv[1]), "--lockfile-path", str(Path(sys.argv[1]).resolve().parents[2] / "graph/Cargo.lock"), "--xcframework", sys.argv[3],
         "--output", sys.argv[4], "--scratch-dir", sys.argv[5],
         *(["--allow-dirty-source"] if "--allow-dirty-source" in sys.argv[6:] else []),
     ]
     owner.main()
 else:
-    digest, size = owner.archive_xcframework(sys.argv[3], sys.argv[4], sys.argv[5], lockfile_path=Path(sys.argv[1]).resolve().parents[1] / "Cargo.lock")
+    digest, size = owner.archive_xcframework(sys.argv[3], sys.argv[4], sys.argv[5], lockfile_path=Path(sys.argv[1]).resolve().parents[2] / "graph/Cargo.lock")
     print(f"{digest} {size}")
 """,
             encoding="utf-8",
@@ -386,7 +392,7 @@ else:
                 manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
                 with mock.patch.object(owner, "_load_generation_validator", return_value=validator):
                     with self.assertRaisesRegex(owner.ArchiveError, "field inventory"):
-                        owner._validate_generation(self.framework, lockfile_path=ROOT / "Cargo.lock", allow_dirty_source=True)
+                        owner._validate_generation(self.framework, lockfile_path=self.lockfile, allow_dirty_source=True)
                 self.assertEqual(list(self.output_root.iterdir()), [])
 
     def test_dirty_archive_cli_keeps_real_tool_provenance(self) -> None:
@@ -405,7 +411,7 @@ else:
         result = subprocess.run(
             [
                 sys.executable, "-I", "-S", "-B", str(OWNER),
-                "--lockfile-path", str(ROOT / "Cargo.lock"), "--xcframework", str(self.framework),
+                "--lockfile-path", str(self.lockfile), "--xcframework", str(self.framework),
                 "--output", str(output),
                 "--scratch-dir", str(self.scratch_root),
                 "--allow-dirty-source",
@@ -622,7 +628,7 @@ else:
             with self.assertRaisesRegex(owner.ArchiveError, "not authenticated"):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertFalse(output.exists())
@@ -658,7 +664,7 @@ else:
             with self.assertRaises(owner.ArchiveInterrupted):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertFalse(output.exists())
@@ -705,7 +711,7 @@ else:
             with self.assertRaisesRegex(owner.ArchiveError, "must not already exist"):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertEqual(output.read_bytes(), b"competing-destination-update")
@@ -754,7 +760,7 @@ else:
             with self.assertRaisesRegex(owner.ArchiveError, "appeared"):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertEqual(output.read_bytes(), b"competing-atomic-publication")
@@ -798,7 +804,7 @@ else:
             with self.assertRaisesRegex(owner.ArchiveError, "authenticated inode"):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertFalse(output.exists())
@@ -843,7 +849,7 @@ else:
             with self.assertRaisesRegex(owner.ArchiveError, "authenticated inode"):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertEqual(output.read_bytes(), b"foreign-late-source")
@@ -863,7 +869,7 @@ else:
                     str(self.framework),
                     str(self.output_root / "repository-contained.zip"),
                     str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
     def test_manifest_hash_mismatch_fails_before_publication(self) -> None:
@@ -913,7 +919,7 @@ else:
             "_load_generation_validator",
             return_value=CapturingValidator,
         ):
-            owner._validate_generation(self.framework, lockfile_path=ROOT / "Cargo.lock")
+            owner._validate_generation(self.framework, lockfile_path=self.lockfile)
 
         self.assertIs(captured["verify_repository_provenance"], True)
         self.assertFalse((self.artifact_root / "NoritoBridge.artifacts.json").exists())
@@ -948,7 +954,7 @@ else:
             ):
                 owner.archive_xcframework(
                     str(self.framework), str(output), str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
 
         self.assertFalse(output.exists())
@@ -1207,7 +1213,7 @@ else:
                     str(self.framework),
                     str(output),
                     str(self.scratch_root),
-                    lockfile_path=ROOT / "Cargo.lock",
+                    lockfile_path=self.lockfile,
                 )
         self.assertFalse(output.exists())
 

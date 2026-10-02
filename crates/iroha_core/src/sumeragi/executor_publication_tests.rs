@@ -109,6 +109,7 @@ fn with_worker_from(
             );
             let mut worker = Worker {
                 payload_build: None,
+                routing_refusal: None,
                 context: &context,
                 state: &context.state,
                 applied: context.applied,

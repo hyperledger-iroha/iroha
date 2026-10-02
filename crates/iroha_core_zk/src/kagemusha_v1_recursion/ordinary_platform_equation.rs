@@ -51,6 +51,18 @@ pub(super) fn constrain_original_android_approval_stream_v1<F: KagemushaPoseidon
     wrapper: &[PastaSha256ByteV1<F>; A::TOTAL_BYTES],
     signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
 ) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
+    constrain_original_android_signed_message_stream_v1(builder, jobs, raw_der, wrapper, signature)
+}
+
+/// Verify the same original DER equation for a separately framed model-owned signed message.
+/// This equation admits no Native operation purpose; callers must bind every message byte.
+pub(super) fn constrain_original_android_signed_message_stream_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    raw_der: &[u8],
+    wrapper: &[PastaSha256ByteV1<F>],
+    signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
+) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
     if !(8..=72).contains(&raw_der.len()) {
         return Err("ordinary Android original DER exceeds canonical bound".to_owned());
     }
@@ -95,6 +107,7 @@ pub(super) fn constrain_original_android_approval_stream_v1<F: KagemushaPoseidon
     Ok(original)
 }
 
+#[cfg(test)]
 pub(super) fn constrain_original_android_approval_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -122,6 +135,40 @@ pub(super) fn constrain_original_apple_approval_stream_v1<F: KagemushaPoseidonFi
     accepted_counter: AssignedValue<F>,
     signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
 ) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
+    constrain_original_apple_signed_message_stream_v1(
+        builder,
+        jobs,
+        raw_assertion,
+        wrapper,
+        Some(wrapper),
+        authenticator_data,
+        governed_rp_hash,
+        expected_release_digest,
+        governed_release_digest,
+        retained_counter_floor,
+        accepted_counter,
+        signature,
+    )
+}
+
+/// Reuse the same full original CBOR/DER/RP/release/counter and platform equation for a
+/// separate model-owned message. Only the operation-wrapper caller supplies its closed
+/// wrapper shape; receiver requests retain their own exact model framing instead.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn constrain_original_apple_signed_message_stream_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    raw_assertion: &[u8],
+    wrapper: &[AssignedValue<F>],
+    approval_wrapper: Option<&[AssignedValue<F>; A::TOTAL_BYTES]>,
+    authenticator_data: &[AssignedValue<F>; 37],
+    governed_rp_hash: &[AssignedValue<F>; 32],
+    expected_release_digest: [u8; 32],
+    governed_release_digest: &[AssignedValue<F>; 32],
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
+    signature: &OrdinaryPlatformSignatureCellsV1<'_, F>,
+) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
     let range = builder.range_chip();
     let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
     let der = constrain_p256_canonical_der_v1(&chip, builder.main(0), signature.r, signature.s);
@@ -136,25 +183,27 @@ pub(super) fn constrain_original_apple_approval_stream_v1<F: KagemushaPoseidonFi
     )?;
     let ctx = builder.main(0);
     let gate = range.gate();
-    for (cell, byte) in wrapper.iter().zip(
-        KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1
-            .iter()
-            .copied()
-            .chain((A::BODY.len() as u64).to_le_bytes()),
-    ) {
-        gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+    if let Some(wrapper) = approval_wrapper {
+        for (cell, byte) in wrapper.iter().zip(
+            KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1
+                .iter()
+                .copied()
+                .chain((A::BODY.len() as u64).to_le_bytes()),
+        ) {
+            gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+        }
+        for (cell, byte) in wrapper[A::VERSION].iter().zip([1_u8, 0]) {
+            gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+        }
+        // The whole wrapper admits the two distinct Native purposes. The actual State consumer
+        // requires PrepareTransition for its pre-candidate relation; the terminal money consumer
+        // separately requires MonetaryTransition and its exact candidate/body.
+        let purpose = wrapper[A::PURPOSE.start];
+        let first = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::ONE));
+        let second = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::from(2)));
+        let invalid = gate.mul(ctx, first, second);
+        gate.assert_is_const(ctx, &invalid, &F::ZERO);
     }
-    for (cell, byte) in wrapper[A::VERSION].iter().zip([1_u8, 0]) {
-        gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
-    }
-    // The whole wrapper admits the two distinct Native purposes. The actual State consumer
-    // requires PrepareTransition for its pre-candidate relation; the terminal money consumer
-    // separately requires MonetaryTransition and its exact candidate/body.
-    let purpose = wrapper[A::PURPOSE.start];
-    let first = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::ONE));
-    let second = gate.sub(ctx, purpose, halo2_base::QuantumCell::Constant(F::from(2)));
-    let invalid = gate.mul(ctx, first, second);
-    gate.assert_is_const(ctx, &invalid, &F::ZERO);
     let mut rp = Vec::with_capacity(32);
     for (actual, expected) in authenticator_data[..32].iter().zip(governed_rp_hash) {
         range.range_check(ctx, *expected, 8);
@@ -206,6 +255,7 @@ pub(super) fn constrain_original_apple_approval_stream_v1<F: KagemushaPoseidonFi
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn constrain_original_apple_approval_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -250,3 +300,7 @@ mod tests {
         let _ = constrain_original_apple_approval_v1::<Fq>;
     }
 }
+
+#[cfg(test)]
+#[path = "ordinary_signed_message_equation_tests.rs"]
+mod signed_message_tests;

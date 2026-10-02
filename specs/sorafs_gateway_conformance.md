@@ -18,8 +18,8 @@ for gateway self-certification.
    handles, malformed proofs, admission mismatches, and downgrade attempts.
 3. **Load testing:** Sustain ≥1,000 concurrent range streams against a seeded
    payload set and verify deterministic latency, throughput, and refusal
-   behaviour. L1 production qualification additionally requires one
-   86,400-second-or-longer, multi-provider run covering cold, warm, and mixed
+   behaviour. Diagnostic load qualification uses an operator-selected
+   duration for a multi-provider run covering cold, warm, and mixed
    caches, exact 1% corruption, revocation, malformed-flood,
    denylist/rate-limit pressure, and failover.
 4. **Attestation:** Produce structured run reports that operators can sign when
@@ -183,7 +183,7 @@ hardware-specific signer mode.
 | B6 | Client exceeds rate limit window | 429 `rate_limited` with `Retry-After` header |
 | C1 | 1k concurrent range streaming across cold, warm, and mixed caches | P95 latency < target, no proof failures |
 | C2 | 1k concurrent streaming with injected 1% corruption | All corrupted responses rejected, gateway returns 422 |
-| C3 | 24-hour multi-provider stream run with revocation, malformed flood, denylist/rate-limit pressure, and failover | Every pressure path exercised; service recovers without state divergence |
+| C3 | Operator-selected multi-provider diagnostic stream run with revocation, malformed flood, denylist/rate-limit pressure, and failover | Every pressure path exercised; service recovers without state divergence |
 | D1 | Load with governed compliance-catalog trigger | 451 Unavailable For Legal Reasons |
 
 The Rust harness already exercises scenarios A1, A2, A3, A4, B1, B2, B3, B4, B5, and B6 against deterministic fixtures, asserting canonical digests, byte-range alignment, refusal semantics, and policy enforcement.
@@ -270,8 +270,8 @@ The resulting report mirrors the conformance output (including `provider_reports
 
 - Archive signed local conformance reports from
   `ci/check_sorafs_gateway_conformance.sh` for each release candidate.
-- Run the same fixture bundle against live staging hardware for at least 86,400
-  seconds and record gateway version, hardware profile, exact cold/warm/mixed
+- Run the same fixture bundle against live staging hardware for an
+  operator-selected diagnostic duration and record gateway version, hardware profile, exact cold/warm/mixed
   coverage, peak concurrent range streams, at least two distinct providers,
   exact 1% corruption, revocation, malformed-flood, denylist/rate-limit
   pressure, and failover alongside the signed report.

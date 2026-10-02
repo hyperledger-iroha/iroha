@@ -3252,7 +3252,6 @@ fn register_smart_contract_bytes_from_json(
     )?;
     let code_value = required_value(&mut fields, "code", "RegisterSmartContractBytes")?;
     let code = parse_base64(code_value, "RegisterSmartContractBytes.code")?;
-    require_exact_json_fields(&fields, &[], "RegisterSmartContractBytes")?;
     let instruction = RegisterSmartContractBytes { artifact_id, code };
     Ok(Box::new(instruction).into_instruction_box())
 }

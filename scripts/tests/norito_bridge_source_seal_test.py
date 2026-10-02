@@ -85,6 +85,493 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "fixture")
 
+    def test_trybuild_diagnostics_admit_only_exact_reviewed_roles(self) -> None:
+        expected = frozenset({
+            "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_duplicate.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_invalid.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/event_set_identity_missing.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/has_origin_multiple_attributes.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_duplicate.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_invalid.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/registrable_builder_identity_missing.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/transparent_api_private_field.stderr",
+            "crates/iroha_data_model_derive/tests/ui_fail/transparent_api_private_item.stderr",
+            "crates/iroha_data_model_derive/wip/event_set_identity_duplicate.stderr",
+            "crates/iroha_data_model_derive/wip/event_set_identity_invalid.stderr",
+            "crates/iroha_data_model_derive/wip/event_set_identity_missing.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/generics.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_commas.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_conflicts.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_default_invalid_expr.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_env_without_var.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_no_comma_between_attrs.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/invalid_attrs_struct.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/removed_key_attribute.stderr",
+            "crates/iroha_derive/tests/config_base_ui_fail/unsupported_shapes.stderr",
+            "crates/iroha_derive/tests/ui_fail/from_variant_conflicting_implementation.stderr",
+            "crates/iroha_derive/tests/ui_fail/from_variant_incorrect_attr_placement.stderr",
+            "crates/iroha_derive/tests/ui_fail/from_variant_removed_skip_container.stderr",
+            "crates/iroha_derive/tests/ui_fail/from_variant_same_type.stderr",
+            "crates/iroha_derive/tests/ui_fail/from_variant_skip_try_from_non_newtype.stderr",
+            "crates/iroha_derive/tests/ui_fail/struct_from_variant.stderr",
+            "crates/iroha_derive/tests/ui_fail/telemetry_future_non_async.stderr",
+            "crates/iroha_executor_data_model_derive/tests/ui/fail/parameter_missing_default.stderr",
+            "crates/iroha_executor_data_model_derive/tests/ui/fail/parameter_missing_traits.stderr",
+            "crates/iroha_executor_data_model_derive/tests/ui/fail/permission_missing_deserialize.stderr",
+            "crates/iroha_executor_data_model_derive/tests/ui/fail/permission_missing_serde.stderr",
+            "crates/iroha_primitives/tests/ui_fail/must_use_not_used.stderr",
+            "crates/iroha_primitives_derive/tests/ui/fail/numeric_empty.stderr",
+            "crates/iroha_primitives_derive/tests/ui/fail/numeric_invalid.stderr",
+            "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_bad.stderr",
+            "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_missing_colon.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/duplicate_binary_validation_hook.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/enum_duplicate_index.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/malformed_binary_validation_hook.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/transparent_enum_multi_variant.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/transparent_struct_multiple_fields.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/args_no_wsv.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/bare_spec.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/doubled_plus.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/metric_name_with_space.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/no_args.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/non_snake_case_name.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/not_execute.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/not_return_result.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/return_nothing.stderr",
+            "crates/iroha_telemetry_derive/tests/ui_fail/trailing_plus.stderr",
+            "crates/norito_derive/tests/ui/fail/attrs_conflict_named.stderr",
+            "crates/norito_derive/tests/ui/fail/attrs_conflict_tuple.stderr",
+            "crates/norito_derive/tests/ui/fail/attrs_tuple_rename.stderr",
+            "crates/norito_derive/tests/ui/fail/enum_duplicate_index.stderr",
+            "crates/norito_derive/tests/ui/fail/fastjson_enum.stderr",
+            "crates/norito_derive/tests/ui/fail/frame_identity_schema_name.stderr",
+            "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
+            "crates/norito_derive/tests/ui/fail/json_enum_missing_tag.stderr",
+            "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
+            "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
+            "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",
+            "crates/norito_derive/tests/ui/fail/schema_identity_missing.stderr",
+            "crates/norito_derive/tests/ui/fail/schema_identity_nested.stderr",
+        })
+        self.assertEqual(seal._REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS, expected)
+        self.assertNotIn(".stderr", seal._PUBLIC_SOURCE_SUFFIXES)
+        for relative in expected:
+            with self.subTest(relative=relative):
+                self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
+
+    def test_trybuild_diagnostics_seal_complete_bytes_and_tracked_deletion(self) -> None:
+        originals = {}
+        for relative in seal._REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Public synthetic diagnostics exercise source custody only, not compilation.
+            contents = ("error: test-only diagnostic for " + path.stem + "\n").encode()
+            path.write_bytes(contents)
+            originals[relative] = contents
+        self.git("add", "crates")
+        inputs = sorted({"/".join(relative.split("/")[:2]) for relative in originals})
+        listed = seal.listed_files(self.root, inputs, self.root / "Cargo.lock")
+        self.assertEqual(set(listed), set(originals))
+        original = seal.fingerprint(self.root, inputs, self.root / "Cargo.lock")
+        for relative, contents in sorted(originals.items()):
+            self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
+        # Mutate one original per package and each retained copy, covering all roles.
+        selected = {}
+        for relative in sorted(originals):
+            role = relative.split("/")[1]
+            if "/wip/" in relative:
+                role = relative
+            selected.setdefault(role, relative)
+        for relative in selected.values():
+            contents = originals[relative]
+            with self.subTest(relative=relative):
+                self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
+                path = self.root / relative
+                path.write_bytes(contents + b"  changed expected diagnostic\n")
+                self.assertNotEqual(
+                    seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original
+                )
+                path.write_bytes(contents)
+                self.assertEqual(
+                    seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original
+                )
+        (self.root / sorted(originals)[0]).unlink()
+        self.assertNotEqual(
+            seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original
+        )
+
+    def test_trybuild_diagnostics_reject_unreviewed_filename_roles(self) -> None:
+        for relative in (
+            "crates/norito_derive/tests/ui/fail/unreviewed.stderr",
+            "crates/norito_derive/tests/ui/pass/json_deny_unknown_fields_tuple.stderr",
+            "crates/another_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
+            "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.STDERR",
+            "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr.bak",
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                    seal._public_source_relative(relative)
+
+    def test_trybuild_diagnostics_cannot_override_material_or_provider_refusal(self) -> None:
+        for relative in (
+            "crates/norito_derive/tests/private/example.stderr",
+            "crates/norito_derive/tests/ui/fail/auth-token.stderr",
+            "crates/norito_derive/tests/ui/fail/credentials.stderr",
+            "crates/norito_derive/tests/ui/fail/example.pem",
+            "crates/norito_derive/tests/ui/fail/.env.local",
+            "crates/norito_derive/tests/ui/fail/vultr.stderr",
+            "crates/norito_derive/tests/ui/fail/sydneycreds.stderr",
+            "output/json_deny_unknown_fields_tuple.stderr",
+        ):
+            with self.subTest(relative=relative):
+                # A mistaken future role declaration must not bypass earlier refusal.
+                with mock.patch.object(
+                    seal, "_REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS", frozenset({relative})
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                        seal._public_source_relative(relative)
+
+    def test_trybuild_diagnostics_reject_symlinked_file_and_ancestor(self) -> None:
+        relative = "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr"
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"error: public test-only diagnostic\n")
+        original = path.read_bytes()
+        self.assertEqual(seal._read_public_source_bytes(self.root, relative), original)
+        target = self.root / "public-target.txt"
+        target.write_bytes(original)
+        path.unlink()
+        path.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "symlinked"):
+            seal._read_public_source_bytes(self.root, relative)
+        path.unlink()
+        path.write_bytes(original)
+        directory = path.parent
+        retained = directory.with_name("retained-fail")
+        directory.rename(retained)
+        directory.symlink_to(retained, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "symlinked"):
+            seal._read_public_source_bytes(self.root, relative)
+
+    def test_trybuild_diagnostics_reject_noncanonical_paths_before_content_intake(self) -> None:
+        relative = "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr"
+        for offered in (
+            "/" + relative, "./" + relative, "crates/../" + relative,
+            relative.replace("/", "\\", 1), relative + "\n", relative + "\x00",
+        ):
+            with self.subTest(relative=offered):
+                with mock.patch.object(seal.os, "open") as open_file:
+                    with self.assertRaisesRegex(RuntimeError, "not canonical"):
+                        seal._read_public_source_bytes(self.root, offered)
+                    open_file.assert_not_called()
+
+    def test_trybuild_diagnostics_preserve_root_and_regular_file_refusal(self) -> None:
+        relative = "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr"
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+            seal._read_public_source_bytes(self.root, relative)
+        path.rmdir()
+        os.mkfifo(path)
+        with mock.patch.object(seal.os, "open") as open_file:
+            with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+                seal._read_public_source_bytes(self.root, relative)
+            open_file.assert_not_called()
+        path.unlink()
+        path.write_bytes(b"error: public test-only diagnostic\n")
+        for root in (Path("relative-root"), self.root / "ancestor" / ".."):
+            with self.subTest(root=root):
+                with self.assertRaisesRegex(RuntimeError, "root must be absolute and canonical"):
+                    seal._read_public_source_bytes(root, relative)
+
+    def test_kotodama_is_source_without_admitting_compiled_bytecode(self) -> None:
+        self.assertIn(".ko", seal._PUBLIC_SOURCE_SUFFIXES)
+        self.assertIn(".ko", seal._CODE_SUFFIXES)
+        self.assertNotIn(".to", seal._PUBLIC_SOURCE_SUFFIXES)
+        self.assertNotIn(".to", seal._CODE_SUFFIXES)
+        for relative in (
+            "crates/ivm/fixtures/koto_v1/kotodama/064.ko",
+            "crates/kotodama_lang/src/samples/example.ko",
+            "crates/another_public_package/tests/a_new_source.ko",
+        ):
+            with self.subTest(relative=relative):
+                self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
+        for relative in (
+            "crates/ivm/fixtures/compiled.to", "crates/ivm/fixtures/example.ko.bak",
+            "crates/ivm/fixtures/example.unknown",
+        ):
+            with self.subTest(relative=relative):
+                with mock.patch.object(seal.os, "open") as open_file:
+                    with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                        seal._read_public_source_bytes(self.root, relative)
+                    open_file.assert_not_called()
+
+    def test_kotodama_source_bytes_and_tracked_deletion_change_fingerprint(self) -> None:
+        relative = "crates/ivm/fixtures/koto_v1/kotodama/064.ko"
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = b"module SourceOnlyFixture { fn value() -> int { 1 } }\n"
+        path.write_bytes(original)
+        self.git("add", relative)
+        inputs = ["crates/ivm"]
+        self.assertEqual(seal.listed_files(self.root, inputs, self.root / "Cargo.lock"), [relative])
+        self.assertEqual(seal._read_public_source_bytes(self.root, relative), original)
+        fingerprint = seal.fingerprint(self.root, inputs, self.root / "Cargo.lock")
+        path.write_bytes(original.replace(b"1", b"2"))
+        self.assertNotEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), fingerprint)
+        path.write_bytes(original)
+        self.assertEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), fingerprint)
+        path.unlink()
+        self.assertNotEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), fingerprint)
+
+    def test_kotodama_preserves_material_provider_and_canonical_path_refusal(self) -> None:
+        for relative in (
+            "credentials/public.ko", "crates/example/private/public.ko",
+            "crates/example/deploy/public.ko", "crates/example/artifacts/public.ko",
+            "crates/example/output/public.ko", "crates/example/vultr/public.ko",
+            "crates/example/sydneycreds/public.ko", "crates/example/public.ko.pem",
+            "crates/example/.env.ko",
+        ):
+            with self.subTest(relative=relative):
+                with mock.patch.object(seal.os, "open") as open_file:
+                    with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                        seal._read_public_source_bytes(self.root, relative)
+                    open_file.assert_not_called()
+        for relative in (
+            "/crates/example/public.ko", "crates/../example/public.ko",
+            "crates\\example/public.ko", "crates/example/public.ko\n",
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "not canonical"):
+                    seal._public_source_relative(relative)
+
+    def test_kotodama_preserves_no_follow_and_regular_file_custody(self) -> None:
+        relative = "crates/ivm/fixtures/koto_v1/kotodama/064.ko"
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        target = self.root / "public.txt"
+        target.write_bytes(b"module SourceOnlyFixture {}\n")
+        path.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "symlinked"):
+            seal._read_public_source_bytes(self.root, relative)
+        path.unlink()
+        os.mkfifo(path)
+        with mock.patch.object(seal.os, "open") as open_file:
+            with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+                seal._read_public_source_bytes(self.root, relative)
+            open_file.assert_not_called()
+
+    def public_role_original(self, relative: str) -> bytes:
+        # Canonical checked-in public sources, or byte-identical retained originals
+        # in a staged source-only test tree; never a proof/issuer/runtime original.
+        return (Path(__file__).parents[2] / relative).read_bytes()
+
+    def public_role_inputs(self) -> frozenset[str]:
+        return (seal._REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS
+                | seal._REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS
+                | seal._REVIEWED_PUBLIC_FIXTURE_INPUTS
+                | frozenset(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS))
+
+    def test_public_ivm_roles_match_owned_selected_catalog(self) -> None:
+        rows = [line.split("\t") for line in
+                self.public_role_original("scripts/ivm_artifacts.tsv").decode().splitlines()
+                if line and not line.startswith("#")]
+        expected = frozenset(row[2] for row in rows if row[2].startswith((
+            "crates/iroha/", "crates/ivm/", "crates/kotodama_lang/")))
+        self.assertEqual(len(expected), 45)
+        self.assertEqual(expected, seal._REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS)
+        self.assertNotIn(".to", seal._PUBLIC_SOURCE_SUFFIXES)
+        self.assertNotIn(".to", seal._CODE_SUFFIXES)
+        for owner, source, artifact in rows:
+            if artifact in expected:
+                self.assertIn(owner, ("kotodama-standard", "kotodama-zk", "predecoder"))
+                if owner.startswith("kotodama"):
+                    self.assertTrue(self.public_role_original(source))
+
+    def test_public_required_roles_are_exact_without_suffix_widening(self) -> None:
+        self.assertEqual(len(self.public_role_inputs()), 80)
+        self.assertEqual(len(seal._REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS), 10)
+        self.assertEqual(len(seal._REVIEWED_PUBLIC_FIXTURE_INPUTS), 23)
+        self.assertEqual(len(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS), 4)
+        for relative in self.public_role_inputs():
+            self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
+        for suffix in (".to", ".env", ".digest", ".tape", ".metallib", ".lex", ".m",
+                       ".norito", ".message"):
+            self.assertNotIn(suffix, seal._PUBLIC_SOURCE_SUFFIXES)
+        for relative in (
+            "crates/ivm/docs/examples/unowned.to",
+            "crates/ivm/metal/v1/unowned.metallib",
+            "crates/ivm/fuzz/corpus/numeric_v1/unowned_seed",
+            "crates/norito/tests/data/unowned.tape",
+            "crates/norito/tests/fixtures/unowned.norito",
+            "crates/kotodama_lang/grammar/other.lex",
+            "crates/norito/accelerators/jsonstage1_metal/src/other.m",
+        ):
+            with self.subTest(relative=relative), mock.patch.object(seal.os, "open") as opened:
+                with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                    seal._read_public_source_bytes(self.root, relative)
+                opened.assert_not_called()
+
+    def test_public_required_originals_full_bytes_and_deletion_are_sealed(self) -> None:
+        originals = {}
+        for relative in sorted(self.public_role_inputs()):
+            contents = self.public_role_original(relative)
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+            originals[relative] = contents
+        self.git("add", "crates")
+        inputs = sorted({"/".join(relative.split("/")[:2]) for relative in originals})
+        self.assertEqual(set(seal.listed_files(self.root, inputs, self.root / "Cargo.lock")),
+                         set(originals))
+        original = seal.fingerprint(self.root, inputs, self.root / "Cargo.lock")
+        for relative, contents in originals.items():
+            self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
+        selected = (
+            "crates/ivm/docs/examples/01_hajimari.to",
+            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+            "crates/iroha_p2p/src/peer/run/granted.rs",
+            "crates/ivm/metal/v1/ivm_kernels.metallib",
+            "crates/ivm/fuzz/corpus/numeric_v1/valid_int_seed",
+            "crates/norito/tests/data/small_a1.tape",
+            "crates/norito/tests/fixtures/sample_payload_frame.norito",
+        )
+        for relative in selected:
+            path = self.root / relative
+            path.write_bytes(originals[relative] + b"test-only source custody mutation")
+            self.assertNotEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original)
+            path.write_bytes(originals[relative])
+            self.assertEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original)
+        (self.root / selected[0]).unlink()
+        self.assertNotEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), original)
+
+    def test_public_source_folder_roles_do_not_admit_operations_or_neighbors(self) -> None:
+        for relative in (
+            "crates/iroha_core/src/sumeragi/certified_chain/artifacts/other.rs",
+            "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/unowned.bin",
+            "crates/iroha_p2p/src/peer/run/other.rs",
+            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/unowned.to",
+            "crates/ivm/tests/fixtures/predecoder/mixed/private/artifacts/unowned.to",
+            "crates/ivm/tests/fixtures/predecoder/mixed/deploy/artifacts/unowned.to",
+            "crates/iroha_p2p/src/peer/run/credentials.pem",
+        ):
+            with self.subTest(relative=relative), mock.patch.object(seal.os, "open") as opened:
+                with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                    seal._read_public_source_bytes(self.root, relative)
+                opened.assert_not_called()
+        # Even an erroneous future general role declaration cannot override custody
+        # or operational/material/provider refusal; only the exact source modules
+        # allow the two reviewed directory words.
+        for relative in ("credentials/example.to", "crates/p/deploy/a.to",
+                         "crates/p/vultr/a.to", "crates/p/sydneycreds/a.to",
+                         "crates/p/example.pem", "crates/p/.env.local"):
+            with mock.patch.object(seal, "_REVIEWED_PUBLIC_FIXTURE_INPUTS", frozenset({relative})):
+                with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                    seal._public_source_relative(relative)
+
+    def test_public_nonoperational_fixture_pins_reject_content_substitution(self) -> None:
+        self.assertEqual(seal._REVIEWED_PUBLIC_MOCK_ENV_INPUTS, frozenset({
+            "crates/iroha_config/tests/fixtures/full.env",
+            "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
+        }))
+        self.assertEqual(seal._REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS, frozenset({
+            "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt",
+            "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv",
+        }))
+        self.assertEqual(frozenset(seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS),
+                         seal._REVIEWED_PUBLIC_MOCK_ENV_INPUTS
+                         | seal._REVIEWED_PUBLIC_STATIC_CONTRACT_INPUTS)
+        for relative, (digest, size) in seal._REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS.items():
+            contents = self.public_role_original(relative)
+            self.assertEqual((seal.hashlib.sha256(contents).hexdigest(), len(contents)), (digest, size))
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+            self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
+            path.write_bytes(contents + b"test-only substitution")
+            with self.assertRaisesRegex(RuntimeError, "differs from its reviewed original"):
+                seal._read_public_source_bytes(self.root, relative)
+            path.write_bytes(contents[:-1] + bytes([contents[-1] ^ 1]))
+            with self.assertRaisesRegex(RuntimeError, "differs from its reviewed original"):
+                seal._read_public_source_bytes(self.root, relative)
+
+    def test_public_roles_keep_source_descriptor_and_root_custody(self) -> None:
+        for relative in (
+            "crates/iroha_p2p/src/peer/run/granted.rs",
+            "crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+            "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
+        ):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            contents = self.public_role_original(relative)
+            path.write_bytes(contents)
+            self.assertEqual(seal._read_public_source_bytes(self.root, relative), contents)
+            target = self.root / "public-fixture.txt"
+            target.write_bytes(contents)
+            path.unlink()
+            path.symlink_to(target)
+            with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                seal._read_public_source_bytes(self.root, relative)
+            path.unlink()
+            os.mkfifo(path)
+            with mock.patch.object(seal.os, "open") as opened:
+                with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+                    seal._read_public_source_bytes(self.root, relative)
+                opened.assert_not_called()
+            path.unlink()
+            path.write_bytes(contents)
+            parent = path.parent
+            retained = parent.with_name(parent.name + "-retained-public-fixture")
+            parent.rename(retained)
+            parent.symlink_to(retained, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                seal._read_public_source_bytes(self.root, relative)
+            parent.unlink()
+            retained.rename(parent)
+            with self.assertRaisesRegex(RuntimeError, "root must be absolute and canonical"):
+                seal._read_public_source_bytes(Path("relative-root"), relative)
+            for offered in ("/" + relative, "./" + relative, relative + "\n"):
+                with self.assertRaisesRegex(RuntimeError, "not canonical"):
+                    seal._public_source_relative(offered)
+
+    def test_public_source_owner_catalog_is_a_sealed_common_input(self) -> None:
+        self.assertIn("scripts/ivm_artifacts.tsv", seal.COMMON_ROOT_INPUTS)
+        owner = self.root / "scripts/ivm_artifacts.tsv"
+        owner.write_bytes(self.public_role_original("scripts/ivm_artifacts.tsv"))
+        inputs = self.inputs("android-armv7-diagnostic")
+        self.assertIn("scripts/ivm_artifacts.tsv", inputs)
+        before = seal.fingerprint(self.root, inputs, self.root / "Cargo.lock")
+        owner.write_bytes(owner.read_bytes() + b"# source-only catalog mutation\n")
+        self.assertNotEqual(seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"), before)
+
+    def test_unproven_env_and_operational_originals_still_refuse_before_open(self) -> None:
+        for relative in (
+            "crates/iroha_config/tests/fixtures/bad.multiple_bad_envs.env",
+            "crates/iroha_config/tests/fixtures/other.env",
+            "crates/iroha_config/tests/fixtures/full.env.key",
+            "crates/iroha_config/tests/fixtures/secret.env",
+            "crates/iroha_zkp_halo2/src/other_secret_cleanup_contracts.txt",
+            "crates/kotodama_lang/src/assets/diagnostics_v1/other_secret_reject.tsv",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.car",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.manifest.to",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.manifest.json",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.pack.json",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.plan.json",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.pin-register.response.json",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.storage-pin.0.response.json",
+            "crates/sorafs_orchestrator/.sorafs/deploy/payload.bin/payload.bin.storage-pin.1.response.json",
+        ):
+            with self.subTest(relative=relative), mock.patch.object(seal.os, "open") as opened:
+                with self.assertRaisesRegex(RuntimeError, "prohibited material or operational"):
+                    seal._read_public_source_bytes(self.root, relative)
+                opened.assert_not_called()
+        with mock.patch.object(seal.os, "open") as opened:
+            with self.assertRaisesRegex(RuntimeError, "not an admitted public filename"):
+                seal._read_public_source_bytes(self.root,
+                    "crates/iroha_core/crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest")
+            opened.assert_not_called()
+
     def write_graph_owner(self, graph: bytes) -> None:
         owner = self.root / seal.CANONICAL_CARGO_LOCK_OWNER
         owner.parent.mkdir(parents=True, exist_ok=True)
@@ -618,6 +1105,55 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def test_unknown_platform_fails_closed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unsupported source-seal platform"):
             self.inputs("windows")
+
+    def test_armv7_diagnostic_seals_only_its_dependency_target(self) -> None:
+        profile = "android-armv7-diagnostic"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()) as closure:
+            seal.seal_inputs(self.root, profile, self.root / "Cargo.lock")
+        self.assertEqual(closure.call_args.args[1], ("armv7-linux-androideabi",))
+        self.assertEqual(seal.PLATFORM_TARGETS["android"],
+                         ("aarch64-linux-android", "x86_64-linux-android"))
+        self.assertIn("scripts/inspect_android_armv7_diagnostic.py",
+                      seal.PLATFORM_ROOT_INPUTS[profile])
+
+    def test_armv7_diagnostic_closure_retains_target_specific_local_dependency(self) -> None:
+        bridge = self.root / "crates/connect_norito_bridge/Cargo.toml"
+        dependency = self.root / "crates/armv7-only/Cargo.toml"
+        document = {
+            "packages": [
+                {"id": "bridge", "name": "connect_norito_bridge", "manifest_path": str(bridge)},
+                {"id": "arm-dependency", "name": "armv7-only", "manifest_path": str(dependency)},
+                {"id": "unrelated", "name": "unrelated", "manifest_path": str(self.root / "crates/unrelated/Cargo.toml")},
+            ],
+            "resolve": {"nodes": [
+                {"id": "bridge", "deps": [{"pkg": "arm-dependency"}]},
+                {"id": "arm-dependency", "deps": []},
+                {"id": "unrelated", "deps": []},
+            ]},
+        }
+        with mock.patch.object(seal, "metadata", return_value=document) as metadata:
+            observed = seal.local_dependency_roots(self.root,
+                seal.ANDROID_ARMV7_DIAGNOSTIC_TARGETS, self.root / "Cargo.lock")
+        self.assertEqual(observed, {"crates/connect_norito_bridge", "crates/armv7-only"})
+        metadata.assert_called_once_with(self.root, "armv7-linux-androideabi", self.root / "Cargo.lock")
+
+    def test_armv7_diagnostic_snapshot_cannot_verify_as_android_release(self) -> None:
+        original = self.root / "armv7-diagnostic-seal.json"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
+            seal.verify_snapshot(self.root, "android-armv7-diagnostic", original, self.root / "Cargo.lock")
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                seal.verify_snapshot(self.root, "android", original, self.root / "Cargo.lock")
+
+    def test_armv7_inspector_mutation_invalidates_diagnostic_seal(self) -> None:
+        helper = self.root / "scripts/inspect_android_armv7_diagnostic.py"
+        helper.write_text("# original inspection recipe\n", encoding="utf-8")
+        original = self.root / "armv7-diagnostic-seal.json"
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            original.write_bytes(seal.snapshot_bytes(self.root, "android-armv7-diagnostic", self.root / "Cargo.lock"))
+            helper.write_text("# substituted inspection recipe\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "source changed"):
+                seal.verify_snapshot(self.root, "android-armv7-diagnostic", original, self.root / "Cargo.lock")
 
     def test_apple_builder_never_relies_on_the_default_seal_platform(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")

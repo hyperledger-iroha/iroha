@@ -11,3 +11,6 @@ pub mod name;
 pub mod peer;
 pub mod state_path;
 pub mod topology;
+
+#[cfg(test)]
+mod manual_decode_tests;

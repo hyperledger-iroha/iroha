@@ -19,11 +19,11 @@ mod proof_tests {
 
     /// Preserve the original Base graph and change only the RLC assignment path.
     struct StreamingCircuit<F: KagemushaPoseidonFieldV1> {
-        inner: ClaimRlcTestCircuit<F>,
+        inner: CarrierRlcTestCircuit<F>,
     }
 
     impl<F: KagemushaPoseidonFieldV1> Circuit<F> for StreamingCircuit<F> {
-        type Config = ClaimRlcTestConfig<F>;
+        type Config = CarrierRlcTestConfig<F>;
         type FloorPlanner = V1;
         type Params = BaseCircuitParams;
 
@@ -41,7 +41,7 @@ mod proof_tests {
             meta: &mut ConstraintSystem<F>,
             params: Self::Params,
         ) -> Self::Config {
-            <ClaimRlcTestCircuit<F> as Circuit<F>>::configure_with_params(meta, params)
+            <CarrierRlcTestCircuit<F> as Circuit<F>>::configure_with_params(meta, params)
         }
 
         fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
@@ -61,7 +61,7 @@ mod proof_tests {
             layouter.assign_table(
                 || "claim RLC compact test range",
                 |mut table| {
-                    // Keep the exact table from ClaimRlcTestCircuit. The production 15-bit
+                    // Keep the exact table from CarrierRlcTestCircuit. The production 15-bit
                     // table does not fit this k9 fixture and is tested separately.
                     for (row, value) in [
                         0_u64, 1, 2, 3, 4, 7, 8, 9, 18, 27, 83, 127, 255, 16_256, 32_512, 32_640,
@@ -86,7 +86,7 @@ mod proof_tests {
                 &mut layouter,
                 &self.inner.builder.core().copy_manager,
                 self.inner.builder.witness_gen_only(),
-                CLAIM_RLC_TEST_CAPACITY,
+                CARRIER_RLC_TEST_CAPACITY,
             )
         }
     }
@@ -107,22 +107,22 @@ mod proof_tests {
     macro_rules! assert_seeded_parity {
         ($curve:ty, $field:ty) => {{
             for compressed in [false, true] {
-                let params = ParamsIPA::<$curve>::new(CLAIM_RLC_TEST_K as u32);
-                let original = claim_rlc_test_circuit_v1::<$field>(false, false);
+                let params = ParamsIPA::<$curve>::new(CARRIER_RLC_TEST_K as u32);
+                let original = carrier_rlc_test_circuit_v1::<$field>(false, false);
                 let streaming = StreamingCircuit {
-                    inner: claim_rlc_test_circuit_v1::<$field>(false, false),
+                    inner: carrier_rlc_test_circuit_v1::<$field>(false, false),
                 };
                 assert!(!original.builder.witness_gen_only());
                 assert!(!streaming.inner.builder.witness_gen_only());
                 assert_eq!(
                     original
                         .machine
-                        .required_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                        .required_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                         .unwrap(),
                     72
                 );
                 let circuit_params = original.params();
-                assert_eq!(circuit_params.k, CLAIM_RLC_TEST_K);
+                assert_eq!(circuit_params.k, CARRIER_RLC_TEST_K);
                 assert_eq!(circuit_params.num_instance_columns, 0);
                 assert_same_base_params(&circuit_params, &streaming.params());
 
@@ -164,9 +164,9 @@ mod proof_tests {
                     .expect("nonzero deterministic test seed");
                 for challenges in [[2, 3], [3, 2]] {
                     let mut original_witness =
-                        claim_rlc_test_circuit_with_challenges_v1::<$field>(false, false, challenges);
+                        carrier_rlc_test_circuit_with_challenges_v1::<$field>(false, false, challenges);
                     let mut streaming_witness = StreamingCircuit {
-                        inner: claim_rlc_test_circuit_with_challenges_v1::<$field>(
+                        inner: carrier_rlc_test_circuit_with_challenges_v1::<$field>(
                             false, false, challenges,
                         ),
                     };

@@ -2,7 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
-    state::{StateReadOnly, WorldReadOnly},
+    state::WorldReadOnly,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;

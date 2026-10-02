@@ -1957,7 +1957,10 @@ pub mod query {
                 self.alias(),
                 now_ms,
             )
-            .map_err(|error| Error::Conversion(error.to_string()))?
+            .map_err(|error| match error {
+                crate::sns::SnsError::Deferred(_) => Error::GasBudgetExceeded,
+                error => Error::Conversion(error.to_string()),
+            })?
             .ok_or(Error::NotFound)?;
             let (account_id, account_value) = world
                 .accounts()
@@ -1985,6 +1988,9 @@ pub mod query {
                         now_ms,
                     )
                     .map_err(|error| {
+                        if let crate::sns::SnsError::Deferred(_) = error {
+                            return Error::GasBudgetExceeded;
+                        }
                         Error::Conversion(format!(
                             "invalid account alias dataspace filter `{dataspace}`: {error}"
                         ))
@@ -3867,6 +3873,66 @@ pub mod query {
             assert_eq!(aliases[0].dataspace, "paynet");
             assert_eq!(aliases[0].domain, None);
             assert!(!aliases[0].is_primary);
+        }
+        #[test]
+        fn sns_account_queries_defer_original_record_refusal_and_retry_without_changing_leaves() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace = iroha_model_base::topology::DataSpaceId::new(42);
+            seed_dynamic_dataspace_name_lease(&mut stx, &ALICE_ID, "paynet", dataspace);
+            let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
+            stx.world
+                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+            stx.world
+                .replace_account_rekey_record(AccountRekeyRecord::new(alias, ALICE_ID.clone()));
+            stx.apply();
+            state_block.commit_world_overlay_for_testing().unwrap();
+            let selector = crate::sns::selector_for_dataspace_alias("paynet").unwrap();
+            let key = crate::sns::record_storage_key(&selector);
+            let view = state.view();
+            let original = view
+                .world()
+                .smart_contract_state()
+                .get(&key)
+                .unwrap()
+                .clone();
+            let by_account =
+                FindAliasesByAccountId::new(ALICE_ID.clone(), Some("paynet".into()), None);
+            let by_alias = FindAccountByAlias::new(AccountAlias::domainless(
+                "merchant".parse().unwrap(),
+                dataspace,
+            ));
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            norito::with_decode_limits_scope(limits, || {
+                assert!(matches!(
+                    by_account.execute(&view),
+                    Err(Error::GasBudgetExceeded)
+                ));
+                assert!(matches!(
+                    by_alias.execute(&view),
+                    Err(Error::GasBudgetExceeded)
+                ));
+            });
+            assert_eq!(
+                view.world().smart_contract_state().get(&key),
+                Some(&original)
+            );
+            assert_eq!(by_account.execute(&view).unwrap().len(), 1);
+            assert_eq!(by_alias.execute(&view).unwrap().id(), &*ALICE_ID);
+            drop(view);
+            let mut changed = state.block(block.as_ref().header());
+            let mut tx = changed.transaction();
+            tx.world.smart_contract_state.insert(key, vec![0xff]);
+            assert!(matches!(by_account.execute(&tx), Err(Error::Conversion(_))));
+            assert!(matches!(by_alias.execute(&tx), Err(Error::Conversion(_))));
         }
         #[test]
         fn find_aliases_by_account_id_returns_empty_when_filters_do_not_match() {

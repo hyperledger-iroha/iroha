@@ -6,7 +6,7 @@ use crate::sumeragi::{
     certified_chain::{CertifiedPrefix, QcVerification},
     test_chain::{CertifiedTestChain, Signers, TestChainConfig},
 };
-use iroha_data_model::block::CommitCertificate;
+use iroha_data_model::{block::CommitCertificate, sumeragi_finality::EpochValidationScope};
 use iroha_model_base::chain::ChainId;
 use iroha_sumeragi::message::ResultWitness;
 use std::num::NonZeroUsize;
@@ -360,13 +360,11 @@ fn funded_original_result_witness_is_borrowed_without_redecoding() {
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
         panic!("actual authenticated parent authorizes the boundary");
     };
-    let config = scheduled.height_config().unwrap();
-    let authority = VerifiedAuthority::new(
-        scheduled.epoch.clone(),
-        10,
-        &mut iroha_data_model::sumeragi_finality::EpochValidationScope::new(),
-    )
-    .unwrap();
+    let mut validation = EpochValidationScope::new();
+    let config = scheduled
+        .height_config_with_validation(&mut validation)
+        .unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10, &mut validation).unwrap();
     let budget = AllocationBudget::new(1 << 26);
     let artifacts = read(Arc::clone(&original), &budget);
     let witness = artifacts
@@ -451,13 +449,11 @@ fn original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_grap
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
         panic!("authenticated predecessor authorizes H10");
     };
-    let config = scheduled.height_config().unwrap();
-    let authority = VerifiedAuthority::new(
-        scheduled.epoch.clone(),
-        10,
-        &mut iroha_data_model::sumeragi_finality::EpochValidationScope::new(),
-    )
-    .unwrap();
+    let mut validation = EpochValidationScope::new();
+    let config = scheduled
+        .height_config_with_validation(&mut validation)
+        .unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10, &mut validation).unwrap();
     let budget = AllocationBudget::new(1 << 26);
     let outcome = reader
         .verification_context()

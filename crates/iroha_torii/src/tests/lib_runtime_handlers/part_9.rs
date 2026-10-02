@@ -1190,7 +1190,8 @@ async fn app_api_get_by_id_not_found_returns_404() {
         ),
     )
     .await
-    .expect("scoped absence mapping")
+    .err()
+    .expect("missing scoped artifact must return an error")
     .into_response();
     assert_eq!(direct.status(), axum::http::StatusCode::NOT_FOUND);
     let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());

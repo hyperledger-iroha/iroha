@@ -11,14 +11,13 @@ public enum IrohaKagemushaFlowPhase: Equatable, Sendable {
     case receiving
     case redeeming
     case frozen(String)
-    case unavailable(String)
     case error(String)
 
     public var isBusy: Bool {
         switch self {
         case .toppingUp, .sendingCommitted, .receiving, .redeeming:
             return true
-        case .setupRequired, .ready, .frozen, .unavailable, .error:
+        case .setupRequired, .ready, .frozen, .error:
             return false
         }
     }
@@ -141,7 +140,7 @@ public struct IrohaKagemushaFlowView: View {
             if state.phase == .setupRequired {
                 Button("Set up KAGEMUSHA") { action(.setup) }
                     .buttonStyle(.borderedProminent)
-            } else if !isUnavailable {
+            } else {
                 HStack(spacing: 8) {
                     flowButton("Top up", .topUp)
                     flowButton("Pay", .send)
@@ -173,13 +172,6 @@ public struct IrohaKagemushaFlowView: View {
             .disabled(state.phase.isBusy)
     }
 
-    private var isUnavailable: Bool {
-        switch state.phase {
-        case .frozen, .unavailable: return true
-        default: return false
-        }
-    }
-
     private var statusTitle: String {
         switch state.phase {
         case .setupRequired: return "KAGEMUSHA setup"
@@ -189,7 +181,6 @@ public struct IrohaKagemushaFlowView: View {
         case .receiving: return "Receiving KAGEMUSHA"
         case .redeeming: return "Finalizing redemption"
         case .frozen: return "KAGEMUSHA frozen"
-        case .unavailable: return "KAGEMUSHA unavailable"
         case .error: return "KAGEMUSHA needs attention"
         }
     }
@@ -208,7 +199,7 @@ public struct IrohaKagemushaFlowView: View {
             return "Verifying and durably storing the exact peer payment."
         case .redeeming:
             return "Redemption completes only after online chain finality."
-        case let .frozen(message), let .unavailable(message), let .error(message):
+        case let .frozen(message), let .error(message):
             return message
         }
     }

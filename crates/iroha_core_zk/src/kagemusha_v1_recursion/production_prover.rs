@@ -14,8 +14,18 @@ mod native_outgoing_witness;
 mod production_incoming;
 #[path = "production_ordinary_auxiliaries.rs"]
 mod production_ordinary_auxiliaries;
+#[path = "production_ordinary_cash_terminal.rs"]
+mod production_ordinary_cash_terminal;
+pub(crate) use production_ordinary_cash_terminal::GeneratedOrdinaryCashCommitOriginalsV1;
+#[path = "production_ordinary_preparation_reservation.rs"]
+mod production_ordinary_preparation_reservation;
+pub(crate) use production_ordinary_preparation_reservation::GeneratedOrdinaryCashReservationOriginalsV1;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
+#[path = "production_ordinary_mint.rs"]
+mod production_ordinary_mint;
+#[path = "production_ordinary_padding.rs"]
+mod production_ordinary_padding;
 #[path = "production_ordinary_state.rs"]
 mod production_ordinary_state;
 pub use production_ordinary_auxiliaries::KagemushaRetainedOrdinaryBootstrapAuxiliariesV1;
@@ -1036,4 +1046,33 @@ mod tests {
         c.consume(|| Ok(7u8)).unwrap();
         assert_eq!(c.finish().unwrap(), 7);
     }
+}
+
+#[cfg(test)]
+pub(super) fn ordinary_bootstrap_padding_for_testing(
+    state: &KagemushaStateV1,
+    recipient: &iroha_data_model::account::AccountId,
+    manifest: [u8; 32],
+    genesis: [u8; 32],
+    eq_authorization: &PlonkProtocol<EqAffine>,
+    ep_authorization: &PlonkProtocol<EpAffine>,
+    eq_mint: &PlonkProtocol<EqAffine>,
+    ep_mint: &PlonkProtocol<EpAffine>,
+    eq_history: &KagemushaEqAccumulatorV1,
+    ep_history: &KagemushaEpAccumulatorV1,
+) -> Result<(KagemushaMintAuthorizationV1, KagemushaMintCreditV1), KagemushaArtifactGenerationErrorV1>
+{
+    let padding = production_ordinary_padding::bootstrap_mint_padding(
+        state,
+        recipient,
+        manifest,
+        genesis,
+        eq_authorization,
+        ep_authorization,
+        eq_mint,
+        ep_mint,
+        eq_history,
+        ep_history,
+    )?;
+    Ok((padding.authorization, padding.credit))
 }

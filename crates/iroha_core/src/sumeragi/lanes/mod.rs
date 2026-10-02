@@ -44,7 +44,7 @@ use iroha_sumeragi::{
     preimage::{InstanceKind, committee_digest_preimage, instance_id},
     types::{Committee, EpochConfig, EpochId, Hash32, HeightConfig},
 };
-use norito::codec::{Decode, DecodeAll as _, Encode};
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use super::{
@@ -60,14 +60,33 @@ pub const LANE_GENESIS_RESULT_TAG: &[u8] = b"iroha/sumeragi/lane/genesis-result/
 /// Domain tag of a lane block's result `R`.
 pub const LANE_RESULT_TAG: &[u8] = b"iroha/sumeragi/lane/result/v1";
 
-/// The committed lane policy of `world`, if the chain has one.
-#[must_use]
-pub fn lane_policy(world: &impl WorldReadOnly) -> Option<SumeragiLanePolicy> {
-    let custom = world
+/// The committed lane policy of `world`, preserving an unfinished original JSON read.
+/// Missing or completed malformed parameters retain their existing absent-policy outcome.
+pub fn lane_policy(
+    world: &impl WorldReadOnly,
+) -> Result<Option<SumeragiLanePolicy>, crate::execution_attempt::ExecutionDeferred> {
+    let Some(custom) = world
         .parameters()
         .custom()
-        .get(&SumeragiLanePolicy::parameter_id())?;
-    SumeragiLanePolicy::from_custom_parameter(custom)?.ok()
+        .get(&SumeragiLanePolicy::parameter_id())
+    else {
+        return Ok(None);
+    };
+    let policy: SumeragiLanePolicy = match norito::json::from_str(custom.payload().get()) {
+        Ok(policy) => policy,
+        Err(error) => {
+            return match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    if cfg!(all(test, sumeragi_core_mutation = "HC39")) {
+                        return Ok(None);
+                    }
+                    Err(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(()) => Ok(None),
+            };
+        }
+    };
+    Ok(policy.validate().is_ok().then_some(policy))
 }
 
 /// Genesis block hash of a lane incarnation: `H(TAG ‖ network ‖ be32(lane) ‖ incarnation)`.
@@ -205,12 +224,34 @@ impl LaneBatch {
     /// Decode canonical payload bytes; non-canonical bytes are rejected.
     ///
     /// # Errors
-    /// The bytes are not the canonical encoding of a batch.
-    pub fn from_payload(payload: &[u8]) -> Result<Self, AdmissionError> {
-        let batch = Self::decode_all(&mut &payload[..])
-            .map_err(|error| AdmissionError::Encoding(error.to_string()))?;
-        if batch.encode() != payload {
-            return Err(AdmissionError::Encoding("non-canonical batch".into()));
+    /// Non-canonical bytes, or an incomplete local attempt under the inherited decode budget.
+    pub fn from_payload(payload: &[u8]) -> Result<Self, AdmissionAttemptError> {
+        let decoded = if cfg!(all(test, sumeragi_core_mutation = "HC31")) {
+            <Self as norito::codec::DecodeAll>::decode_all(&mut &payload[..])
+        } else {
+            norito::codec::decode_adaptive::<Self>(payload)
+        };
+        let classify_error = |error: norito::Error| {
+            if !cfg!(all(test, sumeragi_core_mutation = "HC29"))
+                && let Some(
+                    refusal @ (norito::core::DecodeResourceError::TotalElementsExceeded { .. }
+                    | norito::core::DecodeResourceError::TotalAllocationExceeded {
+                        ..
+                    }
+                    | norito::core::DecodeResourceError::AllocationFailed { .. }),
+                ) = error.decode_resource_error()
+            {
+                return AdmissionAttemptError::Deferred(refusal);
+            }
+            AdmissionAttemptError::Rejected(AdmissionError::Encoding(error.to_string()))
+        };
+        let batch = decoded.map_err(&classify_error)?;
+        if cfg!(all(test, sumeragi_core_mutation = "HC31")) {
+            if batch.encode() != payload {
+                return Err(AdmissionError::Encoding("non-canonical batch".into()).into());
+            }
+        } else {
+            norito::codec::verify_exact_payload(&batch, payload).map_err(classify_error)?;
         }
         Ok(batch)
     }
@@ -293,6 +334,20 @@ pub enum Admission {
     Pending,
 }
 
+/// An incomplete local admission or a completed deterministic rejection.
+///
+/// This has no wire codec. Cumulative decode budgets and physical allocator refusals
+/// retain their exact native category and counters without allocating a diagnostic.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum AdmissionAttemptError {
+    /// Admission completed and found that the lane block is invalid.
+    #[error(transparent)]
+    Rejected(#[from] AdmissionError),
+    /// The original authenticated payload must be retried locally.
+    #[error("lane decode attempt deferred: {0:?}")]
+    Deferred(norito::core::DecodeResourceError),
+}
+
 /// Why a lane block is not admissible (`Invalid`).
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum AdmissionError {
@@ -350,7 +405,7 @@ pub trait TransactionCheck {
 /// Lane admission (§3.2): the result of a lane block with `payload`, or why it is invalid.
 ///
 /// # Errors
-/// See [`AdmissionError`].
+/// A completed [`AdmissionError`] or an unfinished local decode attempt.
 pub fn admit(
     record: &SumeragiLaneRecord,
     anchors: &impl AnchorView,
@@ -358,7 +413,7 @@ pub fn admit(
     checks: &impl TransactionCheck,
     config: &HeightConfig,
     payload: &[u8],
-) -> Result<Admission, AdmissionError> {
+) -> Result<Admission, AdmissionAttemptError> {
     let batch = LaneBatch::from_payload(payload)?;
     let Some(applied) = anchors.applied_hash(batch.anchor_height) else {
         return Ok(Admission::Pending);
@@ -366,16 +421,18 @@ pub fn admit(
     if applied != batch.anchor_hash {
         return Err(AdmissionError::AnchorMismatch {
             height: batch.anchor_height,
-        });
+        }
+        .into());
     }
     if batch.anchor_height < chain.previous_anchor {
         return Err(AdmissionError::AnchorRegressed {
             height: batch.anchor_height,
             previous: chain.previous_anchor,
-        });
+        }
+        .into());
     }
     if !record.admits_anchor(batch.anchor_height) {
-        return Err(AdmissionError::Inactive(batch.anchor_height));
+        return Err(AdmissionError::Inactive(batch.anchor_height).into());
     }
     let anchor_time_ms =
         anchors
@@ -392,7 +449,7 @@ pub fn admit(
         let hash = tx.hash_as_entrypoint();
         if chain.repeats(&hash, batch.anchor_height, record.anchor_freshness) || !seen.insert(hash)
         {
-            return Err(AdmissionError::Duplicate(index));
+            return Err(AdmissionError::Duplicate(index).into());
         }
         tx_hashes.push(hash);
     }
@@ -531,8 +588,88 @@ mod tests {
         config: &HeightConfig,
         payload: &[u8],
         chain: &LaneChainView,
-    ) -> Result<Admission, AdmissionError> {
+    ) -> Result<Admission, AdmissionAttemptError> {
         admit(record, &anchors(), chain, &AcceptAll, config, payload)
+    }
+
+    #[test]
+    fn signed_lane_batch_canonical_validation_preserves_original_bytes_without_new_allocations() {
+        // Genuine signed transactions and their exact source are prepared before
+        // the observation. This checks the canonicalization seam only; decoded
+        // graph funding and complete native finality remain separate obligations.
+        let bytes = payload(8, vec![tx(0x71), tx(0x72)]);
+        let source = (bytes.as_ptr(), bytes.len(), bytes.capacity());
+        let control = norito::codec::decode_adaptive::<LaneBatch>(&bytes)
+            .expect("original signed batch decode");
+        assert_eq!(control.to_payload(), bytes);
+        assert_eq!(LaneBatch::from_payload(&bytes).unwrap(), control);
+        let mut decoded = None;
+        let original_decode_allocations = crate::test_allocations::allocations_during(|| {
+            decoded = Some(norito::codec::decode_adaptive::<LaneBatch>(&bytes));
+        });
+        let mut validated = None;
+        let canonical_validation_allocations = crate::test_allocations::allocations_during(|| {
+            validated = Some(LaneBatch::from_payload(&bytes));
+        });
+        assert_eq!(decoded.unwrap().unwrap(), control);
+        assert_eq!(validated.unwrap().unwrap(), control);
+        assert_eq!((bytes.as_ptr(), bytes.len(), bytes.capacity()), source);
+        assert_eq!(
+            canonical_validation_allocations, original_decode_allocations,
+            "canonical validation must borrow the original bytes and must not allocate another payload"
+        );
+    }
+
+    #[test]
+    fn original_signed_batch_decode_preserves_exact_local_refusal_and_terminal_limits() {
+        use norito::core::DecodeResourceError;
+        let signed = tx(0x61);
+        let bytes = payload(8, vec![signed.clone()]);
+        let control = LaneBatch::from_payload(&bytes).expect("original canonical signed batch");
+        assert_eq!(control.transactions, vec![signed]);
+        for limits in [
+            norito::DecodeLimits::new(96, 1 << 25, usize::MAX, 0, 32),
+            norito::DecodeLimits::new(96, 1 << 25, 0, usize::MAX, 32),
+        ] {
+            let original = norito::with_decode_limits_scope(limits, || {
+                <LaneBatch as norito::codec::DecodeAll>::decode_all(&mut bytes.as_slice())
+            })
+            .expect_err("inherited native decode scope refuses locally");
+            let category = original
+                .decode_resource_error()
+                .expect("exact typed native refusal");
+            assert!(matches!(
+                category,
+                DecodeResourceError::TotalElementsExceeded { .. }
+                    | DecodeResourceError::TotalAllocationExceeded { .. }
+            ));
+            let attempt =
+                norito::with_decode_limits_scope(limits, || LaneBatch::from_payload(&bytes));
+            assert_eq!(attempt, Err(AdmissionAttemptError::Deferred(category)));
+            assert_eq!(LaneBatch::from_payload(&bytes).unwrap(), control);
+            let (record, chain) = (record(None), LaneChainView::default());
+            let config = lane_height_config(&record).unwrap();
+            assert!(matches!(
+                norito::with_decode_limits_scope(limits, || {
+                    admit(&record, &anchors(), &chain, &AcceptAll, &config, &bytes)
+                }),
+                Err(AdmissionAttemptError::Deferred(_))
+            ));
+        }
+        // Declared structural/depth limits and malformed bytes remain terminal.
+        for limits in [
+            norito::DecodeLimits::new(0, 1 << 25, usize::MAX, usize::MAX, 32),
+            norito::DecodeLimits::new(96, 1 << 25, usize::MAX, usize::MAX, 0),
+        ] {
+            assert!(matches!(
+                norito::with_decode_limits_scope(limits, || LaneBatch::from_payload(&bytes)),
+                Err(AdmissionAttemptError::Rejected(AdmissionError::Encoding(_)))
+            ));
+        }
+        assert!(matches!(
+            LaneBatch::from_payload(&[0xFF]),
+            Err(AdmissionAttemptError::Rejected(AdmissionError::Encoding(_)))
+        ));
     }
 
     #[test]
@@ -631,15 +768,17 @@ mod tests {
         .to_payload();
         assert!(matches!(
             admit(&wrong, &chain),
-            Err(AdmissionError::AnchorMismatch { .. })
+            Err(AdmissionAttemptError::Rejected(
+                AdmissionError::AnchorMismatch { .. }
+            ))
         ));
         assert!(matches!(
             admit(&payload(6, vec![tx(1)]), &LaneChainView::default()),
-            Err(AdmissionError::Inactive(6))
+            Err(AdmissionAttemptError::Rejected(AdmissionError::Inactive(6)))
         ));
         assert!(matches!(
             admit(&payload(9, vec![tx(1)]), &chain),
-            Err(AdmissionError::Inactive(9))
+            Err(AdmissionAttemptError::Rejected(AdmissionError::Inactive(9)))
         ));
         let regressed = LaneChainView {
             previous_anchor: 8,
@@ -647,17 +786,19 @@ mod tests {
         };
         assert!(matches!(
             admit(&payload(7, vec![tx(1)]), &regressed),
-            Err(AdmissionError::AnchorRegressed { .. })
+            Err(AdmissionAttemptError::Rejected(
+                AdmissionError::AnchorRegressed { .. }
+            ))
         ));
         // Duplicates within the block and against unmerged lane blocks.
         let repeated = tx(1);
         assert_eq!(
             admit(&payload(8, vec![repeated.clone(), repeated]), &chain),
-            Err(AdmissionError::Duplicate(1))
+            Err(AdmissionError::Duplicate(1).into())
         );
         assert_eq!(
             admit(&payload(8, vec![unmerged_tx.clone()]), &chain),
-            Err(AdmissionError::Duplicate(0))
+            Err(AdmissionError::Duplicate(0).into())
         );
         // Once the earlier carrier (anchor 7) is stale for the new block (7 + A < 10), the
         // transaction may be carried again.
@@ -679,7 +820,7 @@ mod tests {
         bytes.push(0);
         assert!(matches!(
             admit(&bytes, &chain),
-            Err(AdmissionError::Encoding(_))
+            Err(AdmissionAttemptError::Rejected(AdmissionError::Encoding(_)))
         ));
     }
 }

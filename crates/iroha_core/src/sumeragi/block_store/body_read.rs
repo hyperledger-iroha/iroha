@@ -1,9 +1,13 @@
 //! Source-bound Kura projection, retaining exact certificate and proposal backing on refusal.
 
-use std::{io, sync::Arc};
+use std::io;
+#[cfg(test)]
+use std::sync::Arc;
 
 use iroha_allocation::AllocationBudget;
-use iroha_data_model::{block::SignedBlock, sumeragi_finality::result_of_preimage};
+#[cfg(test)]
+use iroha_data_model::block::SignedBlock;
+use iroha_data_model::sumeragi_finality::result_of_preimage;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
     message::{ByteAdmissionError, Qc, VoteKind},
@@ -134,7 +138,7 @@ impl StoredBodyRead {
                                 )))
                             }
                             CertificateReadError::Decode(error) => {
-                                Err(BodyReadError::Decode(error))
+                                Err(BodyReadError::from_decode(error))
                             }
                             CertificateReadError::Admission(error) if error.is_local_refusal() => {
                                 Ok(StoredBodyReadPoll::Pending(error))
@@ -183,7 +187,9 @@ impl StoredBodyRead {
                             PayloadBuildError::Admission(error) => {
                                 Err(BodyReadError::Admission(error))
                             }
-                            PayloadBuildError::Encoding(error) => Err(BodyReadError::Decode(error)),
+                            PayloadBuildError::Encoding(error) => {
+                                Err(BodyReadError::from_decode(error))
+                            }
                             PayloadBuildError::TooLarge | PayloadBuildError::Poisoned => {
                                 Err(BodyReadError::Io(io::Error::new(
                                     io::ErrorKind::InvalidData,

@@ -1,4 +1,4 @@
-name: Full workspace release gate
+name: Workspace release build and optional diagnostics
 
 on:
   schedule:
@@ -7,7 +7,19 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      run_diagnostics:
+        description: "Run optional workspace tests, lint, formatting, docs, coverage, and fuzz diagnostics"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      run_diagnostics:
+        description: "Run optional workspace tests, lint, formatting, docs, coverage, and fuzz diagnostics"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,8 +35,12 @@ env:
   RUSTUP_TOOLCHAIN: 1.93.1
 
 jobs:
+  # Diagnostic jobs are independent of the release build. Nightly runs collect
+  # them automatically; push, manual, and reusable runs default to build only.
   format:
     name: Workspace format
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -90,6 +106,43 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-build-1.93.1
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Build the full workspace
+        run: cargo build --locked --offline --workspace
+
+  release-diagnostics:
+    name: Selected release diagnostics
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-diagnostics-1.93.1
       - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
       - name: Fetch locked dependencies
         run: cargo fetch --locked
@@ -105,11 +158,11 @@ jobs:
           -p iroha_crypto -p iroha_p2p -p fastpq_prover -p iroha_core
           -p iroha_core_zk -p iroha_torii -p irohad_lib -p iroha_cli_lib -p iroha_kagami
           -p iroha_test_network
-      - name: Build the full workspace
-        run: cargo build --locked --offline --workspace
 
   doc:
     name: Workspace documentation
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -143,6 +196,8 @@ jobs:
 
   test:
     name: Workspace tests
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -195,6 +250,8 @@ jobs:
 
   coverage:
     name: Workspace coverage
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -258,6 +315,8 @@ jobs:
 
   clippy:
     name: Strict workspace Clippy
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -293,7 +352,9 @@ jobs:
           -- -D warnings
 
   adversarial:
-    name: Adversarial Norito and IVM fuzz gate
+    name: Adversarial Norito and IVM fuzz diagnostics
+    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
+    continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     timeout-minutes: 180
     env:

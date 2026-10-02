@@ -9,7 +9,7 @@ use iroha_core::{
     kura::Kura,
     query,
     smartcontracts::Execute,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;

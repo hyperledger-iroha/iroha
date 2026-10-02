@@ -2020,7 +2020,10 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            if matches!(err, crate::queue::Error::Full) {
+                            if matches!(
+                                err,
+                                crate::queue::Error::Full | crate::queue::Error::Deferred(_)
+                            ) {
                                 iroha_logger::debug!(
                                     tx = %tx.hash_as_entrypoint(),
                                     "queue rejected gossiped transaction due to backpressure"
@@ -2482,7 +2485,10 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            if matches!(err, crate::queue::Error::Full) {
+                            if matches!(
+                                err,
+                                crate::queue::Error::Full | crate::queue::Error::Deferred(_)
+                            ) {
                                 iroha_logger::debug!(
                                     tx = %tx.hash_as_entrypoint(),
                                     "queue rejected gossiped transaction due to backpressure"

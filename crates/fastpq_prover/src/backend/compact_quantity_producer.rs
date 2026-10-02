@@ -42,6 +42,13 @@ use crate::{
 
 static PRODUCER: Mutex<()> = Mutex::new(());
 
+/// Hold the original producer mutex without constructing private proving work.
+#[cfg(test)]
+pub(super) fn hold_producer_for_test() -> MutexGuard<'static, ()> {
+    // As in `acquire`, this mutex protects no shared witness state.
+    PRODUCER.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 #[path = "compact_quantity_producer/decode_policy.rs"]
 mod decode_policy;
 

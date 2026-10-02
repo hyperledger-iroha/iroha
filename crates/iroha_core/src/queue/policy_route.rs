@@ -57,7 +57,7 @@ impl PhysicalExecutionPolicyRoute {
         native: RoutingDecision,
     ) -> Result<Self, PhysicalPolicyRouteRejection> {
         if self.0.dataspace_id != native.dataspace_id {
-            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch);
+            return Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into());
         }
         Ok(self)
     }
@@ -68,7 +68,8 @@ impl PhysicalExecutionPolicyRoute {
         tx: &dyn TransactionRoutingView,
         committed_height: u64,
         ledger_time_ms: u64,
-    ) -> Result<Self, PhysicalPolicyRouteRejection> {
+    ) -> Result<Self, crate::execution_attempt::ExecutionAttemptError<PhysicalPolicyRouteRejection>>
+    {
         let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
             nexus,
             tx,
@@ -77,8 +78,13 @@ impl PhysicalExecutionPolicyRoute {
             committed_height,
         )
         .and_then(|plan| resolve_plan_for_admission(plan, nexus, committed_height))
-        .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?;
-        Self::single(plan)
+        .map_err(|error| match error {
+            RoutingResolveError::Deferred(reason) => {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+            }
+            error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
+        })?;
+        Self::single(plan).map_err(Into::into)
     }
 
     /// Genesis retains bootstrap routing against its authenticated in-progress World.
@@ -89,7 +95,8 @@ impl PhysicalExecutionPolicyRoute {
         tx: &dyn TransactionRoutingView,
         ledger_time_ms: u64,
         scope: iroha_data_model::block::consensus::SumeragiRootScope,
-    ) -> Result<Self, PhysicalPolicyRouteRejection> {
+    ) -> Result<Self, crate::execution_attempt::ExecutionAttemptError<PhysicalPolicyRouteRejection>>
+    {
         if let iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
             dataspace_id,
             ..
@@ -100,7 +107,8 @@ impl PhysicalExecutionPolicyRoute {
             else {
                 return Err(PhysicalPolicyRouteRejection::Routing(
                     "private_genesis_requires_instructions",
-                ));
+                )
+                .into());
             };
             for instruction in instructions {
                 let target = private_genesis_instruction_target(
@@ -109,13 +117,18 @@ impl PhysicalExecutionPolicyRoute {
                     world,
                     ledger_time_ms,
                 )
-                .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?;
+                .map_err(|error| match error {
+                    RoutingResolveError::Deferred(reason) => {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                    }
+                    error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
+                })?;
                 if target.global
                     || target
                         .dataspace
                         .is_some_and(|target| target != dataspace_id)
                 {
-                    return Err(PhysicalPolicyRouteRejection::DataspaceMismatch);
+                    return Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into());
                 }
             }
             let route = super::resolve_routing_decision(
@@ -134,8 +147,14 @@ impl PhysicalExecutionPolicyRoute {
                 ledger_time_ms,
                 1,
             )
-            .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?,
+            .map_err(|error| match error {
+                RoutingResolveError::Deferred(reason) => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                }
+                error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
+            })?,
         )
+        .map_err(Into::into)
     }
 
     fn single(plan: RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {
@@ -238,7 +257,7 @@ mod tests {
             } else {
                 assert_eq!(
                     bootstrap,
-                    Err(PhysicalPolicyRouteRejection::DataspaceMismatch)
+                    Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into())
                 );
             }
         }
@@ -299,7 +318,7 @@ mod tests {
         );
         assert_eq!(
             route.require_dataspace(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(1))),
-            Err(PhysicalPolicyRouteRejection::DataspaceMismatch)
+            Err(PhysicalPolicyRouteRejection::DataspaceMismatch.into())
         );
     }
 }

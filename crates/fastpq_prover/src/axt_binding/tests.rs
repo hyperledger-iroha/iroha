@@ -2177,3 +2177,91 @@ fn canonical_masked_axt_proof_roundtrip_and_context_mutations() {
 
 #[path = "tests/anchored.rs"]
 mod anchored;
+
+#[test]
+fn canonical_bound_producer_reports_typed_contention_and_preserves_original_retry() {
+    use crate::offline_compact::{
+        ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits,
+        prove_quantity_axt_artifact,
+    };
+
+    let binding = transfer_binding();
+    let batch = real_transfer_claim_batch(&binding);
+    let artifact = compact::prepare(&batch, &binding).expect("original valid AXT statement");
+    let original = norito::encode_canonical(&artifact).expect("encode original public statement");
+    let expected = ExpectedStatement {
+        inputs: artifact.statement.public_inputs,
+        ordering_hash: artifact.statement.ordering_hash,
+        public_statement_digest: Hash::new(
+            norito::encode_canonical(&artifact.statement).expect("encode original statement"),
+        )
+        .into(),
+    };
+    let context = ExpectedAxtContext {
+        binding: &artifact.binding,
+        metadata: &artifact.metadata,
+        mirrors: artifact.mirrors,
+        remote_spend_claims: artifact.remote_spend_claims.as_deref(),
+    };
+    // This real caller policy deliberately forbids trace work. The producer
+    // acquires its original permit before checking that policy, so held versus
+    // released outcomes prove admission changed without generating a proof.
+    let no_trace_work = ProvingLimits {
+        max_total_trace_cells: 0,
+        ..ProvingLimits::default()
+    };
+    {
+        let _held = crate::backend::hold_quantity_producer_for_test();
+        assert!(matches!(
+            prove_axt_bound_batch(&batch, &binding),
+            Err(Error::ProducerBusy)
+        ));
+        let mut opaque = binding.clone();
+        opaque.claim_type = "authorization".into();
+        let expected_refusal = validate_axt_transfer_claim_binding(&opaque)
+            .expect_err("opaque binding cannot select the transfer producer");
+        let refused = prove_axt_bound_batch(&batch, &opaque)
+            .expect_err("semantic binding refusal must precede producer admission");
+        assert!(matches!(refused, Error::InvalidProofSemantics { .. }));
+        assert_eq!(refused.to_string(), expected_refusal.to_string());
+        assert!(matches!(
+            prove_quantity_axt_artifact(
+                &artifact.statement,
+                expected,
+                context,
+                no_trace_work,
+                VerificationLimits::default(),
+            ),
+            Err(ProvingError::Busy)
+        ));
+    }
+    let retry = loop {
+        match prove_quantity_axt_artifact(
+            &artifact.statement,
+            expected,
+            context,
+            no_trace_work,
+            VerificationLimits::default(),
+        ) {
+            Err(ProvingError::Busy) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            result => break result,
+        }
+    };
+    assert!(matches!(
+        retry,
+        Err(ProvingError::Prove(Error::VerifierLimitExceeded {
+            limit: "max_compact_prover_trace_cells",
+            actual,
+            max: 0,
+        })) if actual > 0
+    ));
+    assert_eq!(
+        norito::encode_canonical(&artifact).expect("encode retained original"),
+        original,
+    );
+    assert_eq!(
+        norito::encode_canonical(&compact::prepare(&batch, &binding).expect("retry preparation"))
+            .expect("encode retry public statement"),
+        original,
+    );
+}

@@ -200,13 +200,13 @@ pub mod public_instance {
     pub const MINT_EP_PROTOCOL_LO: usize = 42;
     /// High 128 bits of the canonical Fq Ep finalized-mint compiled-protocol identity.
     pub const MINT_EP_PROTOCOL_HI: usize = 43;
-    /// Low 128 bits of the Eq credential audit recursively accepted by GuardBundle.
+    /// Low 128 bits of the OEM Eq credential audit or fixed ordinary-State reserved commitment.
     pub const GUARD_EQ_CREDENTIAL_AUDIT_LO: usize = 44;
-    /// High 128 bits of the Eq credential audit recursively accepted by GuardBundle.
+    /// High 128 bits of the OEM Eq credential audit or fixed ordinary-State reserved commitment.
     pub const GUARD_EQ_CREDENTIAL_AUDIT_HI: usize = 45;
-    /// Low 128 bits of the Ep credential audit recursively accepted by GuardBundle.
+    /// Low 128 bits of the OEM Ep credential audit or fixed ordinary-State reserved commitment.
     pub const GUARD_EP_CREDENTIAL_AUDIT_LO: usize = 46;
-    /// High 128 bits of the Ep credential audit recursively accepted by GuardBundle.
+    /// High 128 bits of the OEM Ep credential audit or fixed ordinary-State reserved commitment.
     pub const GUARD_EP_CREDENTIAL_AUDIT_HI: usize = 47;
     /// Low 128 bits of the Eq scalar-verifier deferred-equation audit.
     pub const EQ_DEFERRED_AUDIT_LO: usize = 48;
@@ -462,9 +462,9 @@ pub struct KagemushaStateRelationPublicInputsV1 {
     pub commit_wrapper_eq_protocol_digest: DigestV1,
     /// Ep commit-wrapper protocol identity accepted by `ReceiveFold`.
     pub commit_wrapper_ep_protocol_digest: DigestV1,
-    /// Eq credential audit exposed by GuardBundle.
+    /// OEM Eq credential audit, or the fixed Eq reserved commitment for ordinary State.
     pub guard_eq_credential_audit: DigestV1,
-    /// Ep credential audit exposed by GuardBundle.
+    /// OEM Ep credential audit, or the fixed Ep reserved commitment for ordinary State.
     pub guard_ep_credential_audit: DigestV1,
     /// Eq deferred-equation audit.
     pub eq_deferred_audit: DigestV1,
@@ -533,9 +533,9 @@ pub struct KagemushaStateRelationWitnessV1 {
     pub commit_wrapper_eq_protocol_digest: DigestV1,
     /// Native Fq Poseidon identity of the exact Ep commit-wrapper protocol.
     pub commit_wrapper_ep_protocol_digest: DigestV1,
-    /// Native Fp Poseidon audit of the credential proofs accepted by GuardBundle.
+    /// Native Fp OEM credential audit, or the fixed ordinary-State reserved commitment.
     pub guard_eq_credential_audit: DigestV1,
-    /// Native Fq Poseidon audit of the credential proofs accepted by GuardBundle.
+    /// Native Fq OEM credential audit, or the fixed ordinary-State reserved commitment.
     pub guard_ep_credential_audit: DigestV1,
     /// Native Fp Poseidon audit of every Eq scalar-verifier curve equation.
     pub eq_deferred_audit: DigestV1,

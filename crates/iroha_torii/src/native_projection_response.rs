@@ -4,7 +4,7 @@ use super::*;
 use iroha_allocation::AllocationBudget;
 use norito::json::{BoundedJsonError, JsonWriteSink};
 
-fn capacity() -> Error {
+pub(crate) fn capacity() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
     ))
@@ -80,6 +80,25 @@ impl JsonWriteSink for CountJson {
         self.depth = self.depth.saturating_sub(1);
     }
 }
+pub(crate) fn encode_canonical<T: norito::core::NoritoSerialize>(
+    payload: &T,
+    limit: usize,
+    budget: &AllocationBudget,
+    unavailable: fn() -> Error,
+) -> Result<iroha_allocation::ChargedBuffer<u8>, Error> {
+    let length = norito::canonical_frame_len(payload).map_err(|_| unavailable())?;
+    if length > limit {
+        return Err(capacity());
+    }
+    let bytes = iroha_allocation::ChargedBuffer::new(length, budget).map_err(|_| capacity())?;
+    let mut writer = ChargedWriter(bytes);
+    norito::core::write_canonical_to_writer(payload, &mut writer).map_err(|_| unavailable())?;
+    if writer.0.as_slice().len() != length {
+        return Err(unavailable());
+    }
+    Ok(writer.0)
+}
+
 pub(crate) fn encode<T: norito::core::NoritoSerialize + norito::json::JsonSerialize>(
     payload: &T,
     format: ResponseFormat,
@@ -87,10 +106,8 @@ pub(crate) fn encode<T: norito::core::NoritoSerialize + norito::json::JsonSerial
     budget: &AllocationBudget,
     unavailable: fn() -> Error,
 ) -> Result<EncodedBody, Error> {
-    let length = match format {
-        ResponseFormat::Norito => {
-            norito::canonical_frame_len(payload).map_err(|_| unavailable())?
-        }
+    let bytes = match format {
+        ResponseFormat::Norito => encode_canonical(payload, limit, budget, unavailable)?,
         ResponseFormat::Json => {
             let mut count = CountJson {
                 length: 0,
@@ -100,34 +117,77 @@ pub(crate) fn encode<T: norito::core::NoritoSerialize + norito::json::JsonSerial
             payload
                 .json_serialize_to(&mut count)
                 .map_err(|_| capacity())?;
-            count.length
+            let bytes = iroha_allocation::ChargedBuffer::new(count.length, budget)
+                .map_err(|_| capacity())?;
+            let mut writer = ChargedWriter(bytes);
+            payload
+                .json_serialize_to(&mut writer)
+                .map_err(|_| unavailable())?;
+            if writer.0.as_slice().len() != count.length {
+                return Err(unavailable());
+            }
+            writer.0
         }
     };
-    if length > limit {
-        return Err(capacity());
-    }
-    let bytes = iroha_allocation::ChargedBuffer::new(length, budget).map_err(|_| capacity())?;
-    let mut writer = ChargedWriter(bytes);
-    match format {
-        ResponseFormat::Norito => norito::core::write_canonical_to_writer(payload, &mut writer)
-            .map_err(|_| unavailable())?,
-        ResponseFormat::Json => payload
-            .json_serialize_to(&mut writer)
-            .map_err(|_| unavailable())?,
-    }
-    if writer.0.as_slice().len() != length {
-        return Err(unavailable());
-    }
     Ok(EncodedBody {
-        bytes: writer.0,
+        bytes,
         memory: None,
     })
+}
+
+/// Prepay both committee vector layouts and their original key/PoP backing.
+pub(crate) fn native_committee_original_bytes<'a>(
+    expected: usize,
+    members: impl IntoIterator<Item = (&'a iroha_crypto::PublicKey, &'a [u8])>,
+) -> Result<usize, Error> {
+    // proof_committee retains a tuple Vec; build_proof collects FinalityValidator.
+    // Do not assume allocator reuse of two different element layouts. Both Vec
+    // geometries and the cloned compact key/PoP backing are prepaid before
+    // that backing moves from the intermediate tuples into the final values.
+    let tuples = std::alloc::Layout::array::<(iroha_crypto::PublicKey, Vec<u8>)>(expected)
+        .map_err(|_| capacity())?
+        .size();
+    let final_values = std::alloc::Layout::array::<
+        iroha_data_model::sumeragi_finality::FinalityValidator,
+    >(expected)
+    .map_err(|_| capacity())?
+    .size();
+    let mut bytes = tuples.checked_add(final_values).ok_or_else(capacity)?;
+    let mut seen = 0usize;
+    for (key, pop) in members {
+        seen = seen.checked_add(1).ok_or_else(capacity)?;
+        if seen > expected {
+            return Err(capacity());
+        }
+        bytes = bytes
+            .checked_add(key.retained_allocation_layout().size())
+            .and_then(|value| value.checked_add(pop.len()))
+            .ok_or_else(capacity)?;
+    }
+    if seen != expected {
+        return Err(capacity());
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn canonical_originals_preflight_length_and_keep_exact_backing_charge() {
+        let payload = 42_u64;
+        let length = norito::canonical_frame_len(&payload).unwrap();
+        let budget = AllocationBudget::new(length);
+        assert!(encode_canonical(&payload, length - 1, &budget, capacity).is_err());
+        assert_eq!(budget.reserved_bytes(), 0);
+        let bytes = encode_canonical(&payload, length, &budget, capacity).unwrap();
+        assert_eq!(bytes.as_slice().len(), length);
+        assert_eq!(budget.reserved_bytes(), length);
+        drop(bytes);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 
     #[test]
     fn charged_native_output_rejects_growth_and_refunds_only_when_backing_drops() {
@@ -182,5 +242,31 @@ mod tests {
         drop(retained);
         assert!(pool.try_acquire_parts([3]).is_some());
         assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn variable_committees_are_fully_prepaid_in_the_original_pool() {
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal);
+        let pop = iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap();
+        let bytes = native_committee_original_bytes(
+            1024,
+            std::iter::repeat_n((key.public_key(), pop.as_slice()), 1024),
+        )
+        .unwrap();
+        assert!(
+            bytes > 16 * 1024,
+            "fixed metadata overhead is insufficient for supported large committees"
+        );
+        let budget = AllocationBudget::new(16 * 1024);
+        assert!(budget.try_reserve_bytes(bytes).is_err());
+        assert_eq!(budget.reserved_bytes(), 0);
+        let budget = AllocationBudget::new(bytes);
+        let charge = budget.try_reserve_bytes(bytes).unwrap();
+        assert_eq!(budget.reserved_bytes(), bytes);
+        drop(charge);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(native_committee_original_bytes(2, [(key.public_key(), pop.as_slice())]).is_err());
+        assert!(native_committee_original_bytes(0, [(key.public_key(), pop.as_slice())]).is_err());
+        assert!(native_committee_original_bytes(usize::MAX, std::iter::empty()).is_err());
     }
 }

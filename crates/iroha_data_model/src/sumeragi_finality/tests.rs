@@ -485,6 +485,7 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
     let fixture = Fixture::new();
     let node_id = PeerId::new(fixture.keys[0].public_key().clone());
     let body = SumeragiFinalityAttestationBody {
+        observed_at_unix_ms: 1_000_000,
         challenge: [7; 32],
         network_id: fixture.network,
         node_fingerprint: Hash::new(node_id.encode()),
@@ -534,6 +535,30 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
         norito::json::from_slice::<SumeragiFinalityAttestation>(&json).unwrap(),
         attestation
     );
+    let mut zero_clock = attestation.clone();
+    zero_clock.body.observed_at_unix_ms = 0;
+    zero_clock.signature = SignatureOf::try_from_hash(
+        fixture.keys[0].private_key(),
+        zero_clock.body.signing_hash(),
+    )
+    .unwrap();
+    assert!(
+        zero_clock.verify().is_err(),
+        "an authentic signature cannot authorize an absent current clock"
+    );
+    let mut retired_json = norito::json::to_value(&attestation).unwrap();
+    retired_json
+        .as_object_mut()
+        .unwrap()
+        .get_mut("body")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("observed_at_unix_ms");
+    assert!(
+        norito::json::from_value::<SumeragiFinalityAttestation>(retired_json).is_err(),
+        "the first release has no old missing-clock decoder"
+    );
     for version in [0, 2, 4, 8, u16::MAX] {
         let mut bad = attestation.clone();
         bad.body.status.protocol_version = version;
@@ -545,13 +570,14 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
             "authentic signature cannot authorize protocol {version}"
         );
     }
-    for mutation in 0..5 {
+    for mutation in 0..6 {
         let mut bad = attestation.clone();
         match mutation {
             0 => bad.body.challenge = [0; 32],
             1 => bad.body.status.committed_height = 3,
             2 => bad.body.node_id = PeerId::new(fixture.keys[1].public_key().clone()),
             3 => bad.body.build_fingerprint = Hash::new(b"different binary"),
+            4 => bad.body.observed_at_unix_ms += 1,
             _ => bad.body.config_fingerprint = Hash::new(b"different config"),
         }
         assert!(bad.verify().is_err(), "mutation {mutation}");

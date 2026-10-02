@@ -55,6 +55,7 @@ impl KagemushaTestnetNativeStartupFreshnessProviderV1 for Freshness {
 
 fn profile() -> KagemushaRecursiveVerifierProfileV1 {
     KagemushaRecursiveVerifierProfileV1 {
+        mint_authorization_family: iroha_core_zk::kagemusha_v1_recursion::KagemushaMintAuthorizationFamilyV1::RecursiveHardware84,
         inner_state_eq: Default::default(),
         inner_state_ep: Default::default(),
         state_eq: Default::default(),

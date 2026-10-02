@@ -715,7 +715,7 @@ fn load_peer_config_source(
 /// known fixture custody. No provisional block, alternate epoch, or synthetic result enters
 /// the production native worker.
 #[cfg(test)]
-pub(crate) fn prepared_native_test_chain(
+pub fn prepared_native_test_chain(
     genesis: iroha_genesis::ValidatedGenesisBundle,
     manifest: &RawGenesisTransaction,
     config: &actual::Root,
@@ -791,9 +791,8 @@ pub(super) fn prepare_genesis_for_signing(
         genesis = genesis.clear_topology();
     }
     super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&genesis)?;
-    let mut final_topology = topology_override
-        .map(<[PeerId]>::to_vec)
-        .unwrap_or_else(|| collect_topology_peers(&genesis));
+    let mut final_topology =
+        topology_override.map_or_else(|| collect_topology_peers(&genesis), <[PeerId]>::to_vec);
     ensure_valid_genesis_committee(&final_topology)?;
     final_topology.sort();
     if topology_override.is_none() && !peer_pops.is_empty() {
@@ -1201,7 +1200,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
     hex::decode(s.strip_prefix("0x").unwrap_or(s)).wrap_err("decode PoP hex")
 }
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::genesis::CompleteTestGenesisBuilder as _;
     use iroha_crypto::{Algorithm, HashOf, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
@@ -1233,7 +1232,7 @@ pub(crate) mod tests {
         time::Duration,
     };
 
-    pub(crate) struct NativeGenesisFixture {
+    pub struct NativeGenesisFixture {
         pub(crate) config: actual::Root,
         pub(crate) manifest: RawGenesisTransaction,
         pub(crate) signed: GenesisBlock,
@@ -1242,10 +1241,13 @@ pub(crate) mod tests {
     fn native_genesis_fixture(lane_count: u32) -> NativeGenesisFixture {
         native_genesis_fixture_with_instructions(lane_count, Vec::new())
     }
-    pub(crate) fn native_genesis_fixture_with_instructions(
+    pub fn native_genesis_fixture_with_instructions(
         lane_count: u32,
         instructions: Vec<iroha_data_model::isi::InstructionBox>,
     ) -> NativeGenesisFixture {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
+        };
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/peer0.toml"));
         let key = KeyPair::try_from_seed(vec![0x7D; 32], Algorithm::Ed25519).unwrap();
@@ -1289,9 +1291,6 @@ pub(crate) mod tests {
             ))
             .build_raw()
             .expect("explicit original clock fee allocation");
-        use iroha_data_model::sumeragi_lanes::{
-            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
-        };
         let mut committee = topology
             .iter()
             .map(|entry| SumeragiLaneMember {
@@ -1470,7 +1469,8 @@ pub(crate) mod tests {
                     assert_eq!(genesis.0.hash(), fixture.signed.0.hash());
                     Ok((
                         staged.world().sumeragi_lanes().clone(),
-                        iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                        iroha_core::sumeragi::lanes::lane_policy(staged.world())
+                            .wrap_err("read committed staged native policy")?,
                     ))
                 },
             )
@@ -1642,13 +1642,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 projected.push('\n');
             }
         }
-        let table = toml::Table::from_str(&projected).unwrap_or_else(|error| {
+
+        toml::Table::from_str(&projected).unwrap_or_else(|error| {
             panic!(
                 "failed to parse consensus projection from {}: {error}",
                 path.display()
             )
-        });
-        table
+        })
     }
     fn bind_fixture_private_key(
         table: &mut toml::Table,
@@ -2106,8 +2106,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("sign the exact unbound provisional genesis");
         let provisional_error =
             staged_signed_sumeragi_context_hashes(&raw, &provisional.0, &config)
-                .err()
-                .expect("the original unbound draft must report its exact policy mismatch");
+                .expect_err("the original unbound draft must report its exact policy mismatch");
         assert!(
             matches!(
                 provisional_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
@@ -2306,7 +2305,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
     }
-    pub(crate) fn with_explicit_test_xor_allocations(
+    pub fn with_explicit_test_xor_allocations(
         manifest: RawGenesisTransaction,
         topology: &[PeerId],
     ) -> RawGenesisTransaction {
@@ -3021,10 +3020,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let prior = identity_fixture(b"required prior");
         for defect in ["stale", "missing", "symlink", "hardlink", "writable"] {
             let temp = tempfile::tempdir().unwrap();
-            let mut args = replacement_args(temp.path(), prior);
-            let signed = args.out_file.clone().unwrap();
-            let manifest = args.bound_manifest_out.clone().unwrap();
-            let identity = args.expected_hash_out.clone().unwrap();
+            let mut replacement = replacement_args(temp.path(), prior);
+            let signed = replacement.out_file.clone().unwrap();
+            let manifest = replacement.bound_manifest_out.clone().unwrap();
+            let identity = replacement.expected_hash_out.clone().unwrap();
             fs::write(&signed, b"prior signed").unwrap();
             fs::write(&manifest, b"prior manifest").unwrap();
             if defect != "missing" {
@@ -3053,10 +3052,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             // Existing but malformed key proves rejection happens before key loading.
             let key = temp.path().join("bad.key");
             fs::write(&key, b"not a key").unwrap();
-            args.private_key_file = key;
+            replacement.private_key_file = key;
             let error = format!(
                 "{:#}",
-                args.run(&mut BufWriter::new(Vec::new())).unwrap_err()
+                replacement
+                    .run(&mut BufWriter::new(Vec::new()))
+                    .unwrap_err()
             );
             assert!(!error.contains("private-key"), "{defect}: {error}");
             assert_eq!(fs::read(&signed).unwrap(), b"prior signed", "{defect}");
@@ -3080,20 +3081,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut guard = GenesisNetworkIdentityGuard::acquire(&identity)
             .unwrap()
             .unwrap();
-        for replacement in [false, true] {
-            let mut args = replacement_args(temp.path(), prior);
-            if !replacement {
-                args.replace_expected_hash = None;
+        for replace_identity in [false, true] {
+            let mut replacement = replacement_args(temp.path(), prior);
+            if !replace_identity {
+                replacement.replace_expected_hash = None;
             }
-            fs::write(args.out_file.as_ref().unwrap(), b"signed sentinel").unwrap();
+            fs::write(replacement.out_file.as_ref().unwrap(), b"signed sentinel").unwrap();
             fs::write(
-                args.bound_manifest_out.as_ref().unwrap(),
+                replacement.bound_manifest_out.as_ref().unwrap(),
                 b"manifest sentinel",
             )
             .unwrap();
             let error = format!(
                 "{:#}",
-                args.run(&mut BufWriter::new(Vec::new())).unwrap_err()
+                replacement
+                    .run(&mut BufWriter::new(Vec::new()))
+                    .unwrap_err()
             );
             assert!(error.contains("another genesis publisher"), "{error}");
             assert_eq!(
@@ -3221,13 +3224,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             }
             assert!(Args::try_parse_from(argv).is_err());
             let temp = tempfile::tempdir().unwrap();
-            let mut args = replacement_args(temp.path(), prior);
+            let mut replacement = replacement_args(temp.path(), prior);
             match omitted {
-                0 => args.expected_hash_out = None,
-                1 => args.out_file = None,
-                _ => args.bound_manifest_out = None,
+                0 => replacement.expected_hash_out = None,
+                1 => replacement.out_file = None,
+                _ => replacement.bound_manifest_out = None,
             }
-            assert!(resolve_artifact_paths(&args).is_err());
+            assert!(resolve_artifact_paths(&replacement).is_err());
         }
         let mut argv = base.to_vec();
         for (flag, value) in flags {

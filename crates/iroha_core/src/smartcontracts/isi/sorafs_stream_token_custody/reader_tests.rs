@@ -76,14 +76,7 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         .kura()
         .corrupt_commit_certificate_for_testing(
             std::num::NonZeroUsize::new(2).unwrap(),
-            Some(
-                original
-                    .block()
-                    .commit_certificate()
-                    .unwrap()
-                    .commit_qc()
-                    .to_vec(),
-            ),
+            Some(original_qc.clone()),
         )
         .unwrap();
     assert_eq!(

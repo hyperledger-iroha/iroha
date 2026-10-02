@@ -1,6 +1,7 @@
 //! Signed private-root fee currency and schedule; the parent currency is never a fallback.
 
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError;
 use iroha_data_model::block::consensus::{PrivateRootFeePolicy, SumeragiRootScope};
 
 fn invalid(reason: impl Into<String>) -> NexusFeeAdmissionError {
@@ -10,15 +11,34 @@ fn invalid(reason: impl Into<String>) -> NexusFeeAdmissionError {
 /// Read the immutable root's complete fee policy and validate its local monetary namespace.
 pub(crate) fn policy(
     world: &impl WorldReadOnly,
-) -> Result<Option<(DataSpaceId, PrivateRootFeePolicy)>, NexusFeeAdmissionError> {
-    let scope = crate::sumeragi::lanes::routing::committed_root_scope(world)
+) -> Result<
+    Option<(DataSpaceId, PrivateRootFeePolicy)>,
+    ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
+    let scope = crate::sumeragi::lanes::routing::read_routing_root_scope(world)
+        .map_err(ExecutionAttemptError::Deferred)?
         .ok_or_else(|| invalid("fee admission requires immutable root scope"))?;
     let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope else {
         return Ok(None);
     };
-    let policy = PrivateRootFeePolicy::from_parameters(world.parameters())
-        .map_err(|error| invalid(format!("invalid signed private fee policy: {error}")))?
+    let parameter_id = PrivateRootFeePolicy::parameter_id();
+    let parameter = world
+        .parameters()
+        .custom()
+        .get(&parameter_id)
         .ok_or_else(|| invalid("signed private root fee policy is absent"))?;
+    if parameter.id() != &parameter_id {
+        return Err(invalid("private root fee policy has a foreign parameter identity").into());
+    }
+    let policy: PrivateRootFeePolicy =
+        norito::json::from_str(parameter.payload().get()).map_err(|error| {
+            crate::execution_attempt::json_decode_attempt_error(error, |error| {
+                invalid(format!("invalid signed private fee policy: {error}"))
+            })
+        })?;
+    policy
+        .validate()
+        .map_err(|error| invalid(format!("invalid signed private fee policy: {error}")))?;
     let definition = world
         .asset_definition(&policy.asset_definition_id)
         .map_err(|_| invalid("private fee asset is not registered"))?;
@@ -34,9 +54,9 @@ pub(crate) fn policy(
             != Some(dataspace_id)
         || world.domain(domain).is_err()
     {
-        return Err(invalid(
-            "private fee asset must belong to the exact signed root dataspace",
-        ));
+        return Err(
+            invalid("private fee asset must belong to the exact signed root dataspace").into(),
+        );
     }
     Ok(Some((dataspace_id, policy)))
 }
@@ -44,7 +64,7 @@ pub(crate) fn policy(
 pub(super) fn effective(
     world: &impl WorldReadOnly,
     configured: &NexusFees,
-) -> Result<NexusFees, NexusFeeAdmissionError> {
+) -> Result<NexusFees, ExecutionAttemptError<NexusFeeAdmissionError>> {
     let mut fees = configured.clone();
     if let Some((_, policy)) = policy(world)? {
         fees.fee_asset_id = policy.asset_definition_id.canonical_address();
@@ -61,7 +81,10 @@ pub(super) fn currency(
     world: &impl WorldReadOnly,
     fees: &NexusFees,
     observation_time_ms: u64,
-) -> Result<AssetDefinitionId, NexusFeeAdmissionError> {
+) -> Result<
+    AssetDefinitionId,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     if let Some((_, policy)) = policy(world)? {
         return Ok(policy.asset_definition_id);
     }
@@ -70,26 +93,32 @@ pub(super) fn currency(
         &fees.fee_asset_id,
         observation_time_ms,
     )
-    .ok_or_else(|| invalid("invalid Nexus fee asset; expected the committed global XOR identity"))
+    .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
+    .ok_or_else(|| {
+        invalid("invalid Nexus fee asset; expected the committed global XOR identity").into()
+    })
 }
 
 pub(super) fn private_scope(
     world: &impl WorldReadOnly,
     route: Option<DataSpaceId>,
-) -> Result<Option<DataSpaceId>, NexusFeeAdmissionError> {
+) -> Result<Option<DataSpaceId>, ExecutionAttemptError<NexusFeeAdmissionError>> {
     let Some((dataspace, _)) = policy(world)? else {
         return Ok(None);
     };
     if route != Some(dataspace) {
-        return Err(invalid(
-            "private fee debit requires the exact captured root dataspace",
-        ));
+        return Err(invalid("private fee debit requires the exact captured root dataspace").into());
     }
     Ok(Some(dataspace))
 }
 
-pub(super) fn permits_public_exemption(world: &impl WorldReadOnly) -> bool {
-    crate::sumeragi::lanes::routing::committed_root_scope(world) == Some(SumeragiRootScope::Global)
+pub(super) fn permits_public_exemption(
+    world: &impl WorldReadOnly,
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
+    Ok(
+        crate::sumeragi::lanes::routing::read_routing_root_scope(world)?
+            == Some(SumeragiRootScope::Global),
+    )
 }
 
 #[cfg(test)]
@@ -97,7 +126,7 @@ mod tests {
     use super::*;
     use crate::{
         query::store::LiveQueryStore,
-        state::{State, StateReadOnly as _, World},
+        state::{State, World},
     };
     use iroha_data_model::{
         Registrable,
@@ -238,7 +267,39 @@ mod tests {
         );
         assert!(private_scope(view.world(), None).is_err());
         assert!(private_scope(view.world(), Some(DataSpaceId::UNIVERSAL)).is_err());
-        assert!(!permits_public_exemption(view.world()));
+        assert!(!permits_public_exemption(view.world()).unwrap());
+    }
+
+    #[test]
+    fn private_fee_readers_preserve_local_scope_decode_refusal_and_retry() {
+        let (state, ds, asset) = fixture(true, true);
+        let view = state.view();
+        let original = policy(view.world()).unwrap();
+        for reader in 0..4 {
+            let refused = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || {
+                    match reader {
+                        0 => policy(view.world()).map(|_| ()),
+                        1 => effective(view.world(), &view.nexus().fees).map(|_| ()),
+                        2 => currency(view.world(), &view.nexus().fees, 0).map(|_| ()),
+                        _ => private_scope(view.world(), Some(ds)).map(|_| ()),
+                    }
+                    .unwrap_err()
+                },
+            );
+            assert!(
+                matches!(refused, ExecutionAttemptError::Deferred(_)),
+                "reader {reader}: {refused:?}"
+            );
+        }
+        assert_eq!(policy(view.world()).unwrap(), original);
+        assert_eq!(
+            currency(view.world(), &view.nexus().fees, 0).unwrap(),
+            asset
+        );
+        assert_eq!(private_scope(view.world(), Some(ds)).unwrap(), Some(ds));
+        assert!(!permits_public_exemption(view.world()).unwrap());
     }
 
     #[test]
@@ -265,7 +326,15 @@ mod tests {
         let mut tx = block.transaction();
         tx.current_dataspace_id = Some(ds);
         tx.world.current_dataspace_id = Some(ds);
-        Executor::charge_nexus_fees(&mut tx, &ALICE_ID, &transaction, None, 0, 1, 1).unwrap();
+        // Supply the exact signed owner captured by Network execution before fee settlement.
+        tx.current_entrypoint_index = Some(0);
+        tx.current_network_entrypoint_hash = Some(transaction.hash_as_entrypoint());
+        tx.current_tx_hash = Some(transaction.hash());
+        tx.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+        let tx_bytes_len = norito::canonical_frame_len(transaction.payload()).unwrap();
+        Executor::charge_nexus_fees(&mut tx, &ALICE_ID, &transaction, None, tx_bytes_len, 1, 1)
+            .unwrap();
         let scoped = AssetId::with_scope(
             asset.clone(),
             ALICE_ID.clone(),
@@ -315,8 +384,23 @@ mod tests {
             let mut tx = block.transaction();
             tx.current_dataspace_id = Some(ds);
             tx.world.current_dataspace_id = Some(ds);
+            tx.current_entrypoint_index = Some(0);
+            tx.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+            tx.current_tx_hash = Some(signed.hash());
+            tx.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
+            tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+            let tx_bytes_len = norito::canonical_frame_len(signed.payload()).unwrap();
             assert!(
-                Executor::charge_nexus_fees(&mut tx, &ALICE_ID, &signed, None, 0, 1, gas).is_err()
+                Executor::charge_nexus_fees(
+                    &mut tx,
+                    &ALICE_ID,
+                    &signed,
+                    None,
+                    tx_bytes_len,
+                    1,
+                    gas
+                )
+                .is_err()
             );
             let scoped = AssetId::with_scope(
                 asset.clone(),
@@ -370,6 +454,7 @@ mod tests {
             NexusFeeAdmissionError::ConfigInvalid(
                 "private-root fee sponsors require a scoped vault owner".into()
             )
+            .into()
         );
     }
 

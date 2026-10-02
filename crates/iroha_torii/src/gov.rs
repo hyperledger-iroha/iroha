@@ -2364,6 +2364,16 @@ pub async fn handle_gov_contract_get(
     };
     let record =
         iroha_core::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+            .map_err(|error| match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    governed_contract_invariant(error.to_string())
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                    ))
+                }
+            })?
             .ok_or_else(|| {
                 governed_contract_invariant(
                     "active contract has incomplete code, manifest, alias, or subject bindings",

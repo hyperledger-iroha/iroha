@@ -22,6 +22,11 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
     /** Reads the exact retained wallet Ed64 without invoking a wallet signer again. */
     fun recoverOriginalAccountSignature(): ByteArray? = state.recoverSignature()
     fun signOriginalAccount(signer: KagemushaOrdinaryWalletAccountSignerV1): ByteArray = state.sign(signer)
+    /** Actual retained Native custody signs this exact retail operation. The finite selection
+     * only correlates the same coordinator/session; it cannot authorize caller messages.
+     */
+    fun signOriginalNativeAccount(selection: KagemushaNativeWalletAccountSelectionOriginalV1): ByteArray =
+        state.signNative(selection)
     fun finishRequestOriginal(): KagemushaOrdinaryIdentityHttpOriginalV1 = state.finishRequest()
     /** A protected reply remains untrusted until same-ticket Native phase12 admits the full FI original. */
     suspend fun completeOriginalEnrollment(transport: KagemushaOrdinaryIdentityOriginalTransportV1): ByteArray {
@@ -34,6 +39,8 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
     /** Detached original certificate data from the retained Native completed ceremony. */
     fun originalRetailCertificate(): ByteArray = state.certificate()
     fun cancel() = state.cancel()
+    internal fun completedOriginalBindingFor(bridge: KagemushaCoreCoordinatorBridgeV1): KagemushaNativeCompletedRetailBindingV1 =
+        state.completedBinding(bridge)
 
     internal companion object {
         fun fromNative(bridge: KagemushaCoreCoordinatorBridgeV1, attempt: ByteArray, fields: List<ByteArray>,
@@ -41,6 +48,19 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
             KagemushaNativeOrdinaryRetailEnrollmentV1(NativeRetailEnrollmentStateV1(
                 bridge, attempt, fields, pendingScope, credentialDigest, guard))
     }
+}
+
+/** Private same-coordinator FI completion; detached originals alone cannot recreate it. */
+internal class KagemushaNativeCompletedRetailBindingV1 internal constructor(credential: ByteArray, certificate: ByteArray,
+    enrollment: ByteArray,
+    private val requireOriginal: () -> Unit) {
+    private val digest = credential.copyOf()
+    private val originalCertificate = certificate.copyOf()
+    private val originalEnrollmentId = enrollment.copyOf()
+    fun credentialDigest(): ByteArray { requireOriginal(); return digest.copyOf() }
+    fun originalCertificate(): ByteArray { requireOriginal(); return originalCertificate.copyOf() }
+    fun enrollmentId(): ByteArray { requireOriginal(); return originalEnrollmentId.copyOf() }
+    fun recheck() = requireOriginal()
 }
 
 private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoordinatorBridgeV1,
@@ -54,9 +74,20 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
     private val credential = credentialDigest.copyOf()
     private var signature: ByteArray? = null
     private var certificateOriginal: ByteArray? = null
+    private var enrollmentId: ByteArray? = null
     private var unusable = false
 
     init { same(original[3], scope); same(original[4], credential); current() }
+
+    @Synchronized fun completedBinding(other: KagemushaCoreCoordinatorBridgeV1): KagemushaNativeCompletedRetailBindingV1 {
+        check(bridge === other) { "Bootstrap requires the same Native FI coordinator" }
+        val retained = certificate()
+        val enrolled = checkNotNull(enrollmentId) { "Native has not acknowledged the original FI enrollment ID" }.copyOf()
+        return KagemushaNativeCompletedRetailBindingV1(credential, retained, enrolled) {
+            same(certificate(), retained)
+            same(checkNotNull(enrollmentId), enrolled)
+        }
+    }
 
     @Synchronized fun signingBytes(): ByteArray {
         current(); return message.copyOf().also { current() }
@@ -66,6 +97,25 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
         if (recovered[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()
         return recovered[1].takeIf { it.isNotEmpty() }?.copyOf().also { current() }
     }
+    @Synchronized fun signNative(selection: KagemushaNativeWalletAccountSelectionOriginalV1): ByteArray {
+        selection.requireForCoordinator(bridge)
+        val prior = current()
+        if (prior[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()
+        try {
+            selection.requireForCoordinator(bridge)
+            val retained = invoke(10)
+            check(retained[0][0] == 2.toByte() && retained[1].size == 64) {
+                "Actual Native retained account signing is unavailable"
+            }
+            same(retained[1], checkNotNull(current()[1].takeIf { it.size == 64 }))
+            selection.requireForCoordinator(bridge)
+            return retained[1].copyOf().also { current(); selection.requireForCoordinator(bridge) }
+        } catch (failure: Throwable) {
+            unusable = true
+            throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1(failure)
+        }
+    }
+
     @Synchronized fun sign(signer: KagemushaOrdinaryWalletAccountSignerV1): ByteArray {
         val prior = current()
         if (prior[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()
@@ -109,6 +159,8 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
         same(admitted[1], scope); same(admitted[0], reply[1])
         same(current()[2], reply[0])
         request.requireCurrent()
+        enrollmentId?.let { same(it, admitted[0]) }
+        enrollmentId = admitted[0].copyOf()
         return admitted[0].copyOf()
     }
     @Synchronized fun certificate(): ByteArray {

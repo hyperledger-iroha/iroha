@@ -12,12 +12,12 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
    measure repeated accepted settlements.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts, complete the authorized
-   fresh Taira cutover, then prove readiness, paid writes, restart and DPN/contracts.
-4. Resolve the seven distinct failures in the completed integrated Core selection
-   and validate the reviewed fixture/runtime cohort through fresh workspace,
+3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
+   four-validator readiness, paid writes and rolling restart to DPN/contracts.
+4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, and resolve its time/address-space failures;
+   joint X509 relation and transcript privacy, and resolve its proving-time and
+   RSS observer failures;
    produce current q77 maximum proofs without widening resource limits.
 
 The [first-release goals](specs/first_release_completion_goals.md),
@@ -119,7 +119,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | --- | --- | --- | --- |
 | P1 | Parliament | Governance/crypto/Torii | [18-event pipeline](specs/governance_pipeline.md), atomic policy/confirmation, beacon/ballot/deadline/retry and four-peer rollback; independent review/signed API. |
 | P13 | Standalone elections | Governance/circuits/SDKs | [Full statement](specs/zk_audit_matrix.md#election-statement-completion): credentials/nullifiers, weight/re-vote, encryption/custody and sound ballot/tally; V1 keys/fixtures and restore/finality. |
-| P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 24-hour load/resilience, 17 summaries and authenticated L2. |
+| P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 17 summaries and authenticated L2. Load/resilience observations are optional diagnostics without a fixed deployment duration. |
 | P3 | Governance DAG | DAG/broker | [Two services](specs/sorafs_governance_dag_plan.md), authenticated ingress/signing/CAS, failover/recovery/corruption and five-target SBOM/L1/L2 artifacts. |
 | P4 | QUIC/relay/VPN | P2P/SoraNet/Linux | [Handshake](specs/soranet_handshake.md), bounded DATAGRAM/pre-auth/NAT and paid leases; real TUN/pidfd/DNS rollback, hostile peers/rotation/loss, fuzz/review. |
 | P5 | Musubi/contracts | Service/Core/Torii/deploy | [Publication](specs/musubi.md): lock/retention, atomic no-follow cache/recovery, memory/soak/four-peer. [Paid Taira workflow](specs/musubi_taira_workflow_goals.md): wallet/funding, immutable code, alias, Applied/readback, quote/video. |

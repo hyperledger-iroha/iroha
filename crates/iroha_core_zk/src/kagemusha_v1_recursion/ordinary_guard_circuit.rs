@@ -202,7 +202,10 @@ mod composition;
     feature = "kagemusha-production-prover",
     feature = "kagemusha-real-proof-harness"
 ))]
-pub(crate) use composition::{OrdinaryGuardWitnessV1, build_ordinary_app_guard_pair_v1};
+pub(crate) use composition::{
+    OrdinaryGuardWitnessV1, build_ordinary_app_guard_ep_v1, build_ordinary_app_guard_eq_v1,
+    build_ordinary_app_guard_pair_v1,
+};
 #[cfg(any(
     test,
     feature = "kagemusha-production-prover",

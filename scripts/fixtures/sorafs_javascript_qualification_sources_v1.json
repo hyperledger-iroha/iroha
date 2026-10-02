@@ -7,7 +7,7 @@
     },
     {
       "path": "javascript/iroha_js/test/fixtures/sorafs_native_suite_contract_v1.json",
-      "sha256": "dcd87081a7f214eb6c144a6a72b95627220dd2447f83aa35d0979f76bf6fa7bf"
+      "sha256": "70403b063eae91b9e3fbe2889d3ca525fab6bae74c1bd0ab685a0749c3bc5ee9"
     },
     {
       "path": "javascript/iroha_js/test/helpers/nativeRequirements.js",
@@ -31,7 +31,7 @@
     },
     {
       "path": "javascript/iroha_js/test/sorafsNativeSuites/sorafsOrderbookSubmission.js",
-      "sha256": "29f7e42dfac1110b8559d22124c1f80684579fc96e49372b7192e7dac5bbb2b2"
+      "sha256": "87de59ab1ebbd52224667bfe8ae2e3c587529d86869a3e0c05dbb566e08f2079"
     },
     {
       "path": "javascript/iroha_js/test/sorafsNativeSuites/sorafsPdpValidation.js",

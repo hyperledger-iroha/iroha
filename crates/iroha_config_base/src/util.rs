@@ -64,7 +64,7 @@ impl<'de> DeserializePayload<'de> for DurationMs {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let millis = <u64 as DeserializePayload>::deserialize(archived.cast());
+        let millis = <u64 as DeserializePayload>::try_deserialize(archived.cast())?;
         Ok(Self(Duration::from_millis(millis)))
     }
 }
@@ -213,6 +213,37 @@ impl<T, C> EmitterResultExt<T, C> for core::result::Result<T, Report<C>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_decode_duration_returns_missing_context_and_retries_same_payload() {
+        use norito::core::{
+            DecodeFlagsGuard, PayloadCtxGuard, archived_from_slice, serialize_to_buffer,
+        };
+        let _layout = DecodeFlagsGuard::enter(0);
+        let expected = DurationMs(Duration::from_millis(42));
+        let mut bytes = Vec::new();
+        serialize_to_buffer(&expected, &mut bytes).unwrap();
+        assert_eq!(bytes, 42_u64.to_le_bytes());
+        let archived = archived_from_slice::<u8>(&bytes).unwrap();
+        let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            DurationMs::try_deserialize(archived.archived().cast())
+        }));
+        assert!(
+            matches!(missing, Ok(Err(norito::Error::MissingPayloadContext))),
+            "fallible DurationMs decoder must return the missing-context error, not panic"
+        );
+        let decoded = {
+            let _payload = PayloadCtxGuard::enter(archived.bytes());
+            DurationMs::try_deserialize(archived.archived().cast()).unwrap()
+        };
+        assert_eq!(decoded, expected);
+        let mut repeated = Vec::new();
+        serialize_to_buffer(&decoded, &mut repeated).unwrap();
+        assert_eq!(repeated, bytes);
+        let truncated = norito::core::archived_from_slice::<u8>(&bytes[..7]).unwrap();
+        let _payload = PayloadCtxGuard::enter(truncated.bytes());
+        assert!(DurationMs::try_deserialize(truncated.archived().cast()).is_err());
+    }
 
     fn check_scalar_frame<T>(owner: &str, value: &T)
     where

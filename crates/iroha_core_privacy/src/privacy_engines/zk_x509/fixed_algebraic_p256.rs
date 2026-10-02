@@ -79,6 +79,14 @@ const P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1: [usize; 6] = [
 ];
 const P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; 6] =
     [11_563, 11_563, 28_689, 28_689, 59_556, 59_556];
+// Bind the canonical ordered child descriptors, including the distinct selected
+// input multiplicities of certificate and wallet execution. Both roles have
+// the same width and atom count, so those shape checks cannot identify them.
+const P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1: [u8; 48] = [
+    0xfb, 0x20, 0x17, 0x20, 0xf6, 0xda, 0xda, 0x59, 0xa0, 0xee, 0x68, 0x6e, 0x12, 0xc0, 0xa0, 0xc4,
+    0x18, 0xc5, 0x37, 0x6c, 0xe4, 0x4e, 0xc1, 0xb3, 0xf2, 0x1a, 0xce, 0x01, 0x59, 0x49, 0x9f, 0x35,
+    0x97, 0xd0, 0xa7, 0x5b, 0x05, 0x39, 0xcf, 0x49, 0x24, 0xd7, 0x27, 0xa8, 0xf3, 0x48, 0x5f, 0x19,
+];
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
     CERTIFICATE_ARITHMETIC_START_V1 + P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1;
@@ -2698,6 +2706,9 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
             ],
         )
         .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+        if descriptor_digest.to_bytes() != P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1 {
+            return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+        }
         Ok(Self {
             children,
             descriptor_digest,
@@ -3878,6 +3889,38 @@ mod tests {
         assert_eq!(
             ZkX509P256FixedAlgebraicScheduleV1::new_v1(malformed_width),
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+    }
+    #[test]
+    fn composite_pin_rejects_same_shape_algebraic_child_mutation() {
+        let schedule = schedule_v1();
+        assert_eq!(
+            schedule.descriptor_digest_v1().to_bytes(),
+            P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1,
+        );
+        let original = &schedule.children[0];
+        let mut atoms = original.atoms_v1().to_vec();
+        let ZkX509FixedAlgebraicAtomV1::Affine { start_value, .. } = &mut atoms[0] else {
+            panic!("the canonical arithmetic child starts with its active-row selector");
+        };
+        *start_value = start_value.add(F::ONE);
+        let changed = ZkX509FixedAlgebraicScheduleV1::new_v1(
+            original.domain_v1(),
+            original.width_v1(),
+            atoms,
+        )
+        .expect("the altered child retains canonical algebraic shape");
+        assert_eq!(changed.width_v1(), original.width_v1());
+        assert_eq!(changed.atoms_v1().len(), original.atoms_v1().len());
+        assert_ne!(
+            changed.descriptor_digest_v1(),
+            original.descriptor_digest_v1()
+        );
+        let mut substituted = schedule.children.clone();
+        substituted[0] = changed;
+        assert_eq!(
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(substituted).err(),
+            Some(ZkX509P256FixedAlgebraicErrorV1::Topology),
         );
     }
     #[test]

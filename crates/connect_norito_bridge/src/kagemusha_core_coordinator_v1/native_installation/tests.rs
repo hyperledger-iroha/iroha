@@ -16,6 +16,55 @@ use crate::kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_encode_request_v1,
 };
 
+#[test]
+fn android_ordinary_only_installation_never_calls_oem_fallback_on_absence_or_rejection() {
+    for registered in [false, true] {
+        for original_error in [Error::Unavailable, Error::Rejected] {
+            let calls = AtomicUsize::new(0);
+            assert_eq!(
+                install_with_native_target_source_policy(
+                    true,
+                    registered,
+                    || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(original_error)
+                    },
+                    || panic!("Android must never call the retained OEM installation path"),
+                ),
+                Err(original_error),
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[test]
+fn other_targets_preserve_original_native_source_selection_without_error_fallback() {
+    let calls = AtomicUsize::new(0);
+    assert_eq!(
+        install_with_native_target_source_policy(
+            false,
+            false,
+            || panic!("No ordinary source was selected"),
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Unavailable)
+            },
+        ),
+        Err(Error::Unavailable),
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        install_with_native_target_source_policy(
+            false,
+            true,
+            || Err(Error::Rejected),
+            || panic!("A rejected original ordinary source cannot select another owner"),
+        ),
+        Err(Error::Rejected),
+    );
+}
+
 #[derive(Default)]
 struct MemoryStore(Mutex<(Option<Vec<u8>>, Option<u64>)>);
 impl KagemushaEnrollmentJournalStoreV1 for MemoryStore {

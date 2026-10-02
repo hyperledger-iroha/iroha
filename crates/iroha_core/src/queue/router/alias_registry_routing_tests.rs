@@ -33,7 +33,9 @@ use iroha_data_model::{
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
     prelude::*,
 };
-use iroha_executor_data_model::permission::parameter::CanSetParameters;
+use iroha_executor_data_model::permission::{
+    governance::CanManageConsensusKeys, parameter::CanSetParameters,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::topology::LaneId;
@@ -125,18 +127,12 @@ fn fixture_config() -> (
     );
     world.account_permissions_mut_for_testing().insert(
         owner.clone(),
-        BTreeSet::from([Permission::from(CanSetParameters)]),
+        BTreeSet::from([
+            Permission::from(CanSetParameters),
+            Permission::from(CanManageConsensusKeys),
+        ]),
     );
     sns::seed_default_namespace_policies(&mut world);
-    // Paid alias operations execute on the global registry under explicit
-    // immutable genesis metadata, even before a new dataspace is catalogued.
-    {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-    }
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.fee_asset_id = payment_asset.to_string();
     // Match the standard State test fixture's zero ordinary transaction fees. The independent
@@ -225,6 +221,50 @@ fn fixture_config() -> (
     (config, signer, owner, collector, payment_asset)
 }
 
+#[test]
+fn alias_registry_fixture_consensus_registration_requires_original_signer_permission() {
+    let (mut config, _, _, _, _) = fixture_config();
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    assert!(
+        config
+            .world
+            .account_permissions
+            .view()
+            .get(&genesis_account)
+            .unwrap()
+            .contains(&Permission::from(CanManageConsensusKeys))
+    );
+    config
+        .world
+        .account_permissions_mut_for_testing()
+        .insert(genesis_account, BTreeSet::new());
+    let failure = CertifiedTestChain::prepare(config)
+        .expect_err("the actual genesis signer cannot register consensus keys without permission");
+    let crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error) =
+        &failure.error
+    else {
+        panic!("unexpected original genesis rejection: {:?}", failure.error);
+    };
+    let crate::block::BlockValidationError::InvalidGenesis(
+        crate::block::InvalidGenesisError::RejectedOutput(rejection),
+    ) = error.as_ref()
+    else {
+        panic!("expected rejected genesis output: {error:?}");
+    };
+    assert!(matches!(
+        rejection.reason.as_ref(),
+        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+            )
+        ) if message.as_ref() == "not permitted: CanManageConsensusKeys"
+    ));
+    let view = failure.state.view();
+    assert_eq!(view.height(), 0);
+    assert_eq!(view.kura().blocks_count(), 0);
+    assert!(view.world().consensus_keys().iter().next().is_none());
+}
+
 fn commit_bpng_catalog(fixture: &Fixture) {
     let before = fixture.state.nexus_snapshot();
     let network = *fixture.state.network_id_ref();
@@ -233,6 +273,11 @@ fn commit_bpng_catalog(fixture: &Fixture) {
         .genesis()
         .encode_wire()
         .expect("original signed genesis wire");
+    let committed_genesis = chain
+        .committed(1)
+        .block()
+        .encode_wire()
+        .expect("original executed genesis wire");
     let bootstrap = AliasDataspaceBootstrapGrantV1::try_new("bpng", fixture.owner.clone())
         .expect("canonical BPNG authority");
     let peers = chain
@@ -264,9 +309,18 @@ fn commit_bpng_catalog(fixture: &Fixture) {
             .expect("canonical catalog transition"),
     ))
     .into();
-    // The payer's physical policy remains private. The genuine genesis
-    // governance signer is the universal owner of this global operation.
-    let payer_signed = chain.sign(&fixture.signer, [request.clone()], 1);
+    // The payer's ordinary application policy remains private. Parameter control
+    // uses the authenticated global source even for that same account.
+    let payer_signed = chain.sign(
+        &fixture.signer,
+        [Log::new(
+            Level::DEBUG,
+            "original private account-routed work".to_owned(),
+        )
+        .into()],
+        1,
+    );
+    let payer_control = chain.sign(&fixture.signer, [request.clone()], 1);
     let signed = chain.sign(&fixture.catalog_signer, [request], 1);
     {
         let view = fixture.state.view();
@@ -291,6 +345,11 @@ fn commit_bpng_catalog(fixture: &Fixture) {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             "the actual catalog signer belongs to the authenticated global source"
         );
+        assert_eq!(
+            route(&payer_control),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            "the payer's parameter control also belongs to the authenticated global source"
+        );
     }
     let accepted = chain.commit(vec![signed]);
     let committed = chain.committed(chain.height());
@@ -310,7 +369,11 @@ fn commit_bpng_catalog(fixture: &Fixture) {
     );
     assert_eq!(chain.genesis().encode_wire().unwrap(), genesis);
     assert_eq!(*fixture.state.network_id_ref(), network);
-    assert_eq!(chain.committed(1).block().encode_wire().unwrap(), genesis);
+    assert_eq!(
+        chain.committed(1).block().encode_wire().unwrap(),
+        committed_genesis,
+        "the original executed genesis remains byte-for-byte unchanged"
+    );
     let view = fixture.state.view();
     let after = view.nexus();
     assert_eq!(
@@ -342,8 +405,9 @@ fn commit_bpng_catalog(fixture: &Fixture) {
         view.runtime_catalog_hash().unwrap().is_some(),
         "committed runtime authority exists"
     );
-    let native =
-        crate::sumeragi::lanes::lane_policy(view.world()).expect("committed native lane policy");
+    let native = crate::sumeragi::lanes::lane_policy(view.world())
+        .expect("completed original routing metadata read")
+        .expect("committed native lane policy");
     let lane = native
         .fixed_lane(BPNG_LANE)
         .expect("new lane has authenticated authority");
@@ -513,7 +577,7 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
         transaction.entrypoint().execution_call_hash(),
     ));
     assert!(
-        crate::executor::root_scope::execution_root_scope(&overlay).is_ok(),
+        crate::executor::root_scope::execution_root_scope(&mut overlay).is_ok(),
         "paid alias and refusal cases require the authenticated ordinary execution root"
     );
     overlay.current_entrypoint_index = Some(0);
@@ -527,7 +591,8 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
             &transaction,
             &overlay,
             leg.route,
-        );
+        )
+        .expect("completed original physical policy capture");
     crate::state::StateBlock::execute_accepted_transaction_in_overlay(
         transaction,
         &mut overlay,
@@ -553,6 +618,53 @@ fn bootstrap_grant(fixture: &Fixture) -> InstructionBox {
             .expect("canonical grant parameter"),
     ))
     .into()
+}
+
+#[test]
+fn parameter_control_preserves_global_physical_route_before_private_account_rule() {
+    let fixture = fixture();
+    let original_genesis = fixture.chain.borrow().genesis().encode_wire().unwrap();
+    let original_balance = balance(&fixture, &fixture.owner);
+    let parameter = bootstrap_grant(&fixture);
+    let executables = [
+        Executable::Instructions(vec![parameter.clone()].into()),
+        Executable::Batch(
+            vec![iroha_data_model::transaction::ExecutableBatchItem::Instruction(parameter)].into(),
+        ),
+    ];
+    for executable in executables {
+        let transaction = accepted_executable(&fixture, executable);
+        let view = fixture.state.view();
+        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
+        let native = snapshot
+            .inputs(view.world())
+            .execution_route(&transaction, 2)
+            .unwrap();
+        assert_eq!(
+            native,
+            Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+            "the genuine signed parameter batch already belongs to the native global source"
+        );
+        drop(view);
+        assert_universal_queue_and_block(&fixture, &transaction);
+    }
+    let application = accepted(
+        &fixture,
+        vec![Log::new(Level::DEBUG, "ordinary account-routed work".to_owned()).into()],
+    );
+    assert_eq!(
+        plans(&fixture, &application, 2)
+            .unwrap()
+            .coordinator_route(),
+        RoutingDecision::new(PRIVATE_LANE, PRIVATE_DATASPACE),
+        "the same owner's application still obeys its private account rule"
+    );
+    assert_eq!(balance(&fixture, &fixture.owner), original_balance);
+    assert_eq!(
+        fixture.chain.borrow().genesis().encode_wire().unwrap(),
+        original_genesis
+    );
+    assert_eq!(fixture.state.view().height(), 1);
 }
 
 fn ensure(fixture: &Fixture, intent: AliasIntentV1) -> EnsureAlias {
@@ -942,6 +1054,17 @@ fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_boots
     );
     assert_eq!(
         original.chain.borrow().genesis().encode_wire().unwrap(),
+        replay.chain.borrow().genesis().encode_wire().unwrap(),
+        "cold paid replay retains the same original signed genesis"
+    );
+    assert_eq!(
+        original
+            .chain
+            .borrow()
+            .committed(1)
+            .block()
+            .encode_wire()
+            .unwrap(),
         replay
             .chain
             .borrow()
@@ -949,7 +1072,7 @@ fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_boots
             .block()
             .encode_wire()
             .unwrap(),
-        "cold paid replay retains the same authentic genesis"
+        "cold paid replay retains the same authentic executed genesis"
     );
     let dataspace = ensure(&original, bpng_intent(&original.owner));
     let target = dataspace.intent.target();

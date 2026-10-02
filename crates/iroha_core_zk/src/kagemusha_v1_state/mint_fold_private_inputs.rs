@@ -33,11 +33,11 @@ pub(crate) struct KagemushaMintFoldPrivateInputsV1 {
     not(any(
         test,
         feature = "kagemusha-real-proof-harness",
-        all(unix, feature = "zk-halo2-ipa")
+        feature = "kagemusha-production-prover"
     )),
     expect(
         dead_code,
-        reason = "opening fields are consumed only by test and harness recursive witnesses"
+        reason = "retained openings are consumed by test, real-proof and production-prover witnesses"
     )
 )]
 pub(crate) struct KagemushaMintFoldOpeningWitnessV1<'a> {
@@ -106,11 +106,21 @@ impl<'a> KagemushaMintFoldOpeningWitnessV1<'a> {
     }
 
     /// Original enrolled credential; ordinary rotation does not rewrite provenance.
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     pub(crate) fn recipient_credential(self) -> &'a KagemushaHardwareCredentialV1 {
         self.recipient_credential
     }
 
     /// Private commitment openings recovered by the authenticated recipient.
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     pub(crate) fn credit_opening(self) -> &'a KagemushaCreditOpeningV1 {
         self.credit_opening
     }
@@ -177,19 +187,19 @@ impl KagemushaMintFoldPrivateInputsV1 {
     }
 
     /// Exact authorization, including the proof whose assigned bytes the circuit must hash.
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     pub(crate) fn authorization(&self) -> &KagemushaMintAuthorizationV1 {
         &self.authorization
     }
 
     /// Original enrolled credential; ordinary rotation must not rewrite committed provenance.
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     pub(crate) fn recipient_credential(&self) -> &KagemushaHardwareCredentialV1 {
         &self.recipient_credential
     }
 
     /// Plaintext commitment openings known only after authenticated recipient decryption.
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     pub(crate) fn credit_opening(&self) -> &KagemushaCreditOpeningV1 {
         &self.credit_opening
     }

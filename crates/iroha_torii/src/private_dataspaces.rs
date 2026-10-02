@@ -118,9 +118,15 @@ mod tests {
 
     #[test]
     fn parent_proofs_reject_private_and_unbound_roots() {
-        let global = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(false);
+        let global = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            false,
+        );
         require_global_parent(global.state.view().world()).expect("explicit global parent");
-        let private = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(true);
+        let private = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            true,
+        );
         assert!(require_global_parent(private.state.view().world()).is_err());
         let missing = iroha_core::state::World::new();
         assert!(require_global_parent(&missing.view()).is_err());

@@ -602,7 +602,7 @@ Alias Service
 - POST `/v1/aliases/resolve-index`
   - Request: { "index": 0 }
   - Response: { "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }
-  - Notes: Canonical request signing is required. Because the index alone does not encode a dataspace, Torii fans this lookup out across the signed caller's visible dataspace routes, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings, `403` for missing/invalid signing or inaccessible routes, `404` when reachable routes miss, and `503` when no route can be reached.
+  - Notes: Canonical request signing is required. Because the index alone does not encode a dataspace, Torii fans this lookup out across the signed caller's visible dataspace routes, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings, `401 alias_auth_required` for missing signing, `403` for partial/invalid supplied signing or inaccessible routes, `404` when reachable routes miss, and `503` when no route can be reached.
 - POST `/v1/aliases/by-account`
   - Request: { "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }
   - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }

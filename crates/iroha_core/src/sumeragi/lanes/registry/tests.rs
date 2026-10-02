@@ -1,7 +1,10 @@
 //! Actual model/BLS controls for retained registry ownership and fallible merge reads.
 
 use super::*;
-use crate::sumeragi::{crypto::KeyPairSigner, lanes::record::tests::fixture};
+use crate::sumeragi::{
+    crypto::KeyPairSigner,
+    lanes::{LaneBatch, record::tests::fixture},
+};
 use iroha_allocation::ChargedBuffer;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::sumeragi_lanes::{
@@ -38,6 +41,32 @@ struct Authorities {
     missing: AtomicBool,
     corrupt: AtomicBool,
     calls: AtomicUsize,
+}
+
+// Independent authority for the disjoint empty incarnation used below. Both schedules are
+// pinned before any decoder refusal; no bytes from the pending artifact select this authority.
+struct DisjointAuthorities {
+    first: Arc<Authorities>,
+    other_lane: LaneId,
+    other_incarnation: [u8; 32],
+    other: Arc<Schedule>,
+}
+impl LaneStoreAuthorities for DisjointAuthorities {
+    fn authority(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+        instance: Hash32,
+    ) -> io::Result<Option<LaneStoreAuthority>> {
+        if lane == self.other_lane && *incarnation == self.other_incarnation {
+            assert_eq!(instance, self.other.instance);
+            return Ok(Some(LaneStoreAuthority {
+                schedule: self.other.clone(),
+                verifier: Arc::new(NoAttestation),
+            }));
+        }
+        self.first.authority(lane, incarnation, instance)
+    }
 }
 impl LaneStoreAuthorities for Authorities {
     fn authority(
@@ -76,6 +105,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new(valid_batch: bool) -> Self {
+        Self::with_transactions(valid_batch, Vec::new())
+    }
+    fn with_transactions(
+        valid_batch: bool,
+        transactions: Vec<iroha_data_model::transaction::SignedTransaction>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (body, mut qc, old_source, budget, crypto) = fixture(1025, None);
         let crypto: SharedCrypto = Arc::new(crypto);
@@ -97,7 +132,7 @@ impl Fixture {
             let bytes = LaneBatch {
                 anchor_height: 7,
                 anchor_hash: network.into_genesis_hash(),
-                transactions: Vec::new(),
+                transactions,
             }
             .to_payload();
             let mut charged = ChargedBuffer::new(bytes.len(), &budget).unwrap();
@@ -207,6 +242,153 @@ impl Fixture {
 }
 
 #[test]
+fn authenticated_registry_batch_decode_refusal_is_retryable_not_byzantine() {
+    use iroha_data_model::{
+        Level,
+        account::AccountId,
+        isi::Log,
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    let pair = KeyPair::from_seed(vec![0x35; 32], Algorithm::Ed25519);
+    let transaction = TransactionBuilder::new(
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"registry network",
+        ))),
+        AccountId::new(pair.public_key().clone()),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "original lane transaction".into())])
+    .sign(pair.private_key());
+    let mut f = Fixture::with_transactions(true, vec![transaction.clone()]);
+    let other_lane = LaneId::new(3);
+    let other_incarnation = [0x46; 32];
+    let other = Arc::new(Schedule {
+        instance: f.stores.instance(other_lane, &other_incarnation),
+        config: f.source.config().clone(),
+    });
+    f.stores.authorities = Arc::new(DisjointAuthorities {
+        first: f.authorities.clone(),
+        other_lane,
+        other_incarnation,
+        other,
+    });
+    f.publish();
+    let store = f.stores.runtime_store(LANE, &INCARNATION).unwrap();
+    let other_store = f.stores.store(other_lane, &other_incarnation).unwrap();
+    assert_eq!(other_store.height(), 0);
+    let frame = fs::read(f.path()).unwrap();
+    // Norito uses Vec::try_reserve, whose physical minimum can exceed one element.
+    let mut destination = Vec::<iroha_data_model::transaction::SignedTransaction>::new();
+    destination.try_reserve(1).unwrap();
+    let layout = std::alloc::Layout::array::<iroha_data_model::transaction::SignedTransaction>(
+        destination.capacity(),
+    )
+    .unwrap();
+    drop(destination);
+    let (outcome, refused) = crate::test_allocations::refuse_one_layout_during(layout, || {
+        f.stores.block(LANE, &INCARNATION, 1)
+    });
+    assert!(
+        refused,
+        "the exact original batch transaction destination must be refused"
+    );
+    let error = outcome.expect_err("local decoder refusal is never a Byzantine verdict");
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert!(
+        error.get_ref().is_none(),
+        "refusal must not box a replacement diagnostic"
+    );
+    let (body_pointer, signers_pointer) = {
+        let slot = store.batch_read.lock();
+        let read = slot
+            .as_ref()
+            .expect("batch decode retains the original ready body");
+        assert_eq!(read.body.header().height, 1);
+        assert_eq!(read.body.source(), &f.source);
+        assert!(read.body.admitted_to(&f.stores.budget));
+        (
+            read.body.payload().as_slice().as_ptr(),
+            read.qc.signers.as_bytes().as_ptr(),
+        )
+    };
+    let retained = f.stores.budget.reserved_bytes();
+    // Local refusal in the first lane cannot block an authenticated disjoint incarnation.
+    let other_read = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(96, 1 << 25, usize::MAX, 0, 32),
+        || f.stores.block(other_lane, &other_incarnation, 1),
+    )
+    .expect("a disjoint empty lane does not decode the refused first-lane batch");
+    assert!(other_read.is_none());
+    assert_eq!(f.stores.budget.reserved_bytes(), retained);
+    assert_eq!(
+        store
+            .batch_read
+            .lock()
+            .as_ref()
+            .unwrap()
+            .body
+            .payload()
+            .as_slice()
+            .as_ptr(),
+        body_pointer
+    );
+    // Retirement keeps the exact historical owner, original backing and exclusive disk lock.
+    f.stores.release_retired(&SumeragiLaneState::default());
+    f.stores.release(LANE, &INCARNATION);
+    assert!(Arc::ptr_eq(
+        &store,
+        &f.stores.store(LANE, &INCARNATION).unwrap()
+    ));
+    assert!(matches!(
+        f.stores.stores.lock().get(&(LANE, INCARNATION)),
+        Some(StoreSlot::Ready(_, false))
+    ));
+    assert!(
+        FileLaneBlockStore::begin_open(
+            f.stores.root(),
+            &f.source.instance(),
+            f.stores.crypto.clone(),
+            f.stores.budget.clone(),
+            f.authorities.schedule.clone(),
+            Arc::new(NoAttestation),
+        )
+        .is_err(),
+        "retirement cannot relinquish the refused original batch's native lock"
+    );
+    // A different requested height cannot discard the earlier refused owner.
+    for height in [1, 2] {
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, 1 << 25, usize::MAX, 0, 32),
+            || f.stores.block(LANE, &INCARNATION, height),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.get_ref().is_none());
+        let slot = store.batch_read.lock();
+        let read = slot.as_ref().unwrap();
+        assert_eq!(read.body.header().height, 1);
+        assert_eq!(read.body.payload().as_slice().as_ptr(), body_pointer);
+        assert_eq!(read.qc.signers.as_bytes().as_ptr(), signers_pointer);
+        assert_eq!(f.stores.budget.reserved_bytes(), retained);
+    }
+    assert_eq!(store.height(), 1);
+    assert!(Arc::ptr_eq(
+        &store,
+        &f.stores.store(LANE, &INCARNATION).unwrap()
+    ));
+    assert_eq!(fs::read(f.path()).unwrap(), frame);
+    let completed = f.stores.block(LANE, &INCARNATION, 1).unwrap().unwrap();
+    assert_eq!(completed.block_hash, f.qc.block_hash);
+    assert_eq!(completed.result, f.qc.result);
+    assert_eq!(completed.batch.unwrap().transactions, vec![transaction]);
+    assert!(store.batch_read.lock().is_none());
+    assert!(f.stores.block(LANE, &INCARNATION, 2).unwrap().is_none());
+    drop(store);
+    f.stores.release(LANE, &INCARNATION);
+    assert!(!f.stores.stores.lock().contains_key(&(LANE, INCARNATION)));
+}
+
+#[test]
 fn complete_registry_reads_share_owner_and_preserve_valid_or_byzantine_payload_distinction() {
     for valid_batch in [false, true] {
         let f = Fixture::new(valid_batch);
@@ -238,11 +420,17 @@ fn complete_registry_reads_share_owner_and_preserve_valid_or_byzantine_payload_d
                 .unwrap()
         );
         f.stores.release(LANE, &INCARNATION);
-        assert_eq!(
-            f.stores.store(LANE, &INCARNATION).unwrap_err().kind(),
-            io::ErrorKind::WouldBlock
-        );
+        assert!(Arc::ptr_eq(
+            &a,
+            &f.stores.store(LANE, &INCARNATION).unwrap()
+        ));
+        assert!(matches!(
+            f.stores.stores.lock().get(&(LANE, INCARNATION)),
+            Some(StoreSlot::Ready(_, false))
+        ));
         drop((a, b));
+        f.stores.release(LANE, &INCARNATION);
+        assert!(!f.stores.stores.lock().contains_key(&(LANE, INCARNATION)));
         assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
     }
 }
@@ -399,7 +587,14 @@ fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
         &f.stores.store(LANE, &INCARNATION).unwrap()
     ));
     f.stores.release_retired(&SumeragiLaneState::default());
-    assert!(f.stores.stores.lock().is_empty());
+    assert!(matches!(
+        f.stores.stores.lock().get(&(LANE, INCARNATION)),
+        Some(StoreSlot::Ready(_, false))
+    ));
+    assert!(Arc::ptr_eq(
+        &reader,
+        &f.stores.store(LANE, &INCARNATION).unwrap()
+    ));
     assert!(reader.committed_body(1).unwrap().is_some());
     assert!(
         FileLaneBlockStore::begin_open(
@@ -414,6 +609,8 @@ fn retired_ready_owner_preserves_outstanding_reader_and_replay_custody() {
         "retirement must not revoke an outstanding authenticated reader's lock"
     );
     drop(reader);
+    f.stores.release(LANE, &INCARNATION);
+    assert!(f.stores.stores.lock().is_empty());
     assert_eq!(f.stores.tip(LANE, &INCARNATION).unwrap(), Some(1));
     assert!(f.stores.block(LANE, &INCARNATION, 1).unwrap().is_some());
 }

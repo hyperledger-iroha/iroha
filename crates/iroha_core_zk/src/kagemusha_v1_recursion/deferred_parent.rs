@@ -1571,9 +1571,9 @@ where
     Ok(carrier_values)
 }
 
-/// Legacy one-carrier consumer used by the two-column MintAuthorization
-/// transport. Claim proofs use [`constrain_reciprocal_native_batch_v1`] and
-/// authenticate two carrier columns with the compact common-prime binding.
+/// Canonical one-carrier consumer for the two-column MintAuthorization transport.
+/// Claim and PlatformCredential proofs use [`constrain_reciprocal_native_batch_v1`]
+/// and authenticate their two carrier columns with the common-prime binding.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn constrain_reciprocal_native_batch_with_carrier_v1<C>(
     builder: &mut BaseCircuitBuilder<C::Base>,

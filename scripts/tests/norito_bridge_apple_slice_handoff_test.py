@@ -48,8 +48,8 @@ class NoritoBridgeAppleSliceHandoffTests(unittest.TestCase):
             "source_fingerprint_sha256": digest,
             "cargo_lock_sha256": digest,
             "bridge_header_sha256": digest,
-            "privacy_production_enabled": False,
-            "cargo_features": [],
+            "privacy_production_enabled": True,
+            "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -83,6 +83,18 @@ class NoritoBridgeAppleSliceHandoffTests(unittest.TestCase):
                 "macosx_deployment_target": "12.0",
             },
         }
+
+    def test_disabled_native_support_and_missing_feature_are_rejected(self) -> None:
+        for value in (False, 0, 1, "true", None):
+            with self.subTest(value=value):
+                common = self.valid_common()
+                common["privacy_production_enabled"] = value
+                with self.assertRaisesRegex(handoff.HandoffError, "mandatory privacy support"):
+                    handoff.validate_common(common)
+        common = self.valid_common()
+        common["cargo_features"] = []
+        with self.assertRaisesRegex(handoff.HandoffError, "non-canonical Cargo feature"):
+            handoff.validate_common(common)
 
     @staticmethod
     def write_common(path: Path, common: dict[str, object]) -> None:

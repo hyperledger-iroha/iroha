@@ -619,6 +619,11 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
 
 #[test]
 fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::deserialize::decode_tests::musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world",
+    ) {
+        return;
+    }
     let (world, _, _, _) = seeded_musubi_publication_snapshot();
     let encoded = json::to_json(&world).unwrap();
     let vm = IVM::new(0);

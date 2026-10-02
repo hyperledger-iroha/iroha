@@ -154,6 +154,7 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     .expect("derive contract address");
     let direct_context = contract_permission_context(contract_address.clone(), "admin");
     let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("missing permission should reject contract entrypoint");
     assert!(matches!(
         err,
@@ -1622,6 +1623,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
                 &set_custom(id),
                 true,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("reserved governance remains closed in the genesis permission predicate");
             assert!(
                 matches!(&error, ValidationFail::NotPermitted(reason)
@@ -1822,6 +1824,7 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                     &Grant::account_permission(malformed.clone(), destination.clone()).into(),
                     true,
                 )
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("the genesis permission predicate rejects malformed marker")
             };
             assert!(
@@ -2091,4 +2094,92 @@ fn executor_idle_retention_reclamation_rejects_replaced_or_filled_returning_slot
             .is_some()
     );
     assert_eq!(pool.stats.evictions, evictions);
+}
+
+#[test]
+fn native_account_grant_reader_preserves_refusal_and_exact_token_shape() {
+    let mut world = World::with(
+        [],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [],
+    );
+    let exact: Permission = executor_permission::query::CanReadAccountData {
+        account: BOB_ID.clone(),
+    }
+    .into();
+    let read = |world: &World| {
+        super::authority_has_native_account_read_permission(&world.view(), &ALICE_ID, &BOB_ID)
+    };
+    world
+        .account_permissions
+        .insert(ALICE_ID.clone(), BTreeSet::from([exact.clone()]));
+    assert_eq!(read(&world), Ok(true));
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+        || read(&world),
+    );
+    assert!(
+        matches!(refused, Err(crate::execution_attempt::ExecutionAttemptError::Deferred(ref reason))
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity)
+    );
+    assert_eq!(read(&world), Ok(true));
+    for invalid in [
+        Permission::new("CanReadAccountData".into(), Json::new(())),
+        Permission::new("CanReadAccountData".into(), Json::new(false)),
+        Permission::new(
+            "CanReadAccountData".into(),
+            format!(r#"{{"account":"{}","unrecognized_field":null}}"#, *BOB_ID)
+                .parse::<Json>()
+                .unwrap(),
+        ),
+        executor_permission::query::CanReadAccountData {
+            account: ALICE_ID.clone(),
+        }
+        .into(),
+    ] {
+        world
+            .account_permissions
+            .insert(ALICE_ID.clone(), BTreeSet::from([invalid]));
+        assert_eq!(
+            read(&world),
+            Ok(false),
+            "only the exact canonical target grant authorizes"
+        );
+    }
+    assert!(remove_committed_storage_entry(&world.account_permissions, ALICE_ID.clone()).is_some());
+    assert_eq!(read(&world), Ok(false));
+    let role_id: RoleId = "original_account_reader".parse().unwrap();
+    world.roles.insert(
+        role_id.clone(),
+        Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([exact]),
+            permission_epochs: BTreeMap::new(),
+        },
+    );
+    world.grant_role_for_tests(ALICE_ID.clone(), role_id.clone());
+    assert_eq!(read(&world), Ok(true));
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+        || read(&world),
+    );
+    assert!(matches!(
+        refused,
+        Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+    ));
+    assert!(
+        remove_committed_storage_entry(
+            &world.account_roles,
+            crate::role::RoleIdWithOwner::new(ALICE_ID.clone(), role_id)
+        )
+        .is_some()
+    );
+    assert_eq!(
+        read(&world),
+        Ok(false),
+        "revoking the original role revokes its exact grant"
+    );
 }

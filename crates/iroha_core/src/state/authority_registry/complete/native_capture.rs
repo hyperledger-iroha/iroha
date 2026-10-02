@@ -126,6 +126,13 @@ mod tests {
 
     #[test]
     fn state_capture_defers_original_pool_refusal_without_losing_release_custody() {
+        // Other tests can retain the process-global EBR epoch for arbitrary work.
+        // The child keeps the original pin and exact refund assertions independent.
+        if crate::unit_test_support::run_in_isolated_harness(
+            "state::authority_registry::complete::native_capture::tests::state_capture_defers_original_pool_refusal_without_losing_release_custody",
+        ) {
+            return;
+        }
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),

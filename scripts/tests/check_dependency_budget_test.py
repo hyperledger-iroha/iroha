@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -604,6 +605,8 @@ def test_extracted_native_owners_remain_forbidden_from_lower_layer_selections(ow
     for selection in selections:
         root = selection["package"]
         baseline = f"0|{root} v1.0.0|\n1|norito v1.0.0|\n"
+        if selection.get("package_contracts"):
+            baseline = _native_custody_tree() + "1|norito v1.0.0|\n"
         assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
         leaked = MODULE.evaluate_boundary_tree(
             policy, selection, baseline + f"2|{owner} v1.0.0|\n",
@@ -780,3 +783,245 @@ workspace-dev-only={path="../workspace-dev-only"}
         assert report["violations"] == [{
             "package": "engine", "forbidden_layer": "node", "path": ["sdk", owner, "engine"],
         }]
+
+
+
+def _native_policy() -> dict:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    return MODULE.validate_boundary_policy(json.loads(path.read_text()))
+
+
+def _native_custody_tree() -> str:
+    """The observed Native capability, exact proof profiles and direct ownership paths."""
+
+    return (
+        "0|iroha v1.0.0|default,kagemusha-ordinary-native\n"
+        "1|iroha_core_zk v1.0.0|circuit-params,kagemusha-production-prover,"
+        "proofs-halo2,zk-halo2,zk-halo2-ipa,zk-ipa-native\n"
+        "2|iroha_zkp_halo2 v1.0.0|default,full,model-primitives,parallel\n"
+    )
+
+
+def test_native_policy_preserves_every_original_context_and_layer() -> None:
+    policy = _native_policy()
+    original = {
+        name: row for name, row in policy["configurations"].items()
+        if name != "sdk-kagemusha-ordinary-native"
+    }
+    assert len(original) == 21
+    assert hashlib.sha256(json.dumps(
+        original, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest() == "71bb4f33324d7301c90d32efdc35fd4530e70527072d1b06c58afe17d709d7dd"
+    assert hashlib.sha256(json.dumps(
+        policy["layers"], sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest() == "3cca600ca6223358c8889fe065f5d8b2a400b360e04083506dd23d2b007fb880"
+
+
+def test_native_admission_requires_exact_proof_profiles_without_dev_unification() -> None:
+    policy = _native_policy()
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    report = MODULE.evaluate_boundary_tree(policy, selection, _native_custody_tree())
+    assert report["within_boundary"]
+    assert report["violations"] == []
+    command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    assert command[command.index("--features") + 1] == "kagemusha-ordinary-native"
+    assert command[command.index("--edges") + 1] == "normal,build"
+    assert command[command.index("--target") + 1] == "all"
+    assert command.count("--package") == 1
+    assert "--locked" in command and "--offline" in command
+    assert not {"--all-features", "--workspace", "--prune", "--no-default-features"}.intersection(command)
+    # Cargo repeats a shared package's unified feature set on another path.
+    shared = _native_custody_tree() + (
+        "1|iroha_data_model v1.0.0|\n"
+        "2|iroha_zkp_halo2 v1.0.0|default,full,model-primitives,parallel (*)\n"
+    )
+    assert MODULE.evaluate_boundary_tree(policy, selection, shared)["within_boundary"]
+
+
+@pytest.mark.parametrize("package,reason", [
+    ("iroha_core", "node_execution"), ("iroha_torii", "node_execution"),
+    ("irohad", "node_execution"), ("irohad_lib", "node_execution"),
+    ("ivm", "node_execution"), ("fastpq_prover", "node_execution"),
+    ("zk_ace_prover", "node_execution"), ("iroha_core_privacy", "node_execution"),
+    ("iroha_core_timed_ovn", "node_execution"), ("iroha_config", "node_configuration"),
+    ("iroha_telemetry", "telemetry_runtime"), ("sorafs_car", "storage_runtime"),
+    ("sorafs_orchestrator", "storage_runtime"), ("iroha_p2p", None),
+    ("kotodama_lang", None), ("kotodama_toolchain", None),
+])
+def test_native_contract_cannot_admit_runtime_or_compiler_descendants(package, reason) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    tree = _native_custody_tree() + f"3|{package} v1.0.0|\n"
+    expected = {"package": package, "path": ["iroha", "iroha_core_zk", "iroha_zkp_halo2", package]}
+    expected.update({"forbidden_layer": reason} if reason else {"forbidden_package": True})
+    result = MODULE.evaluate_boundary_tree(policy, selection, tree)
+    assert not result["within_boundary"]
+    assert result["violations"] == [expected]
+
+
+def test_native_admission_does_not_exempt_future_node_execution_owners() -> None:
+    policy = _native_policy()
+    policy["layers"]["node_execution"].append("future_validator_runtime")
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    result = MODULE.evaluate_boundary_tree(
+        policy, selection, _native_custody_tree() + "3|future_validator_runtime v1.0.0|\n",
+    )
+    assert result["violations"] == [{
+        "package": "future_validator_runtime", "forbidden_layer": "node_execution",
+        "path": ["iroha", "iroha_core_zk", "iroha_zkp_halo2", "future_validator_runtime"],
+    }]
+
+
+@pytest.mark.parametrize("package,feature,operation", [
+    *[("iroha_core_zk", f, "add") for f in (
+        "default", "halo2-dev-tests", "kagemusha-real-proof-harness", "proofs-stark",
+        "test-utils", "zk-stark", "zk-tests", "unreviewed-prover",
+    )],
+    *[("iroha_core_zk", f, "remove") for f in (
+        "kagemusha-production-prover", "proofs-halo2", "zk-ipa-native",
+    )],
+    *[("iroha_zkp_halo2", f, "add") for f in (
+        "bench", "goldilocks_backend", "schema-structural", "unreviewed-backend",
+    )],
+    *[("iroha_zkp_halo2", f, "remove") for f in ("full", "parallel")],
+])
+def test_native_owner_feature_expansion_or_missing_proof_profile_fails_closed(package, feature, operation) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    profile = selection["package_contracts"][package]["features"]
+    mutated = sorted([*profile, feature] if operation == "add" else set(profile) - {feature})
+    tree = _native_custody_tree().replace("|" + ",".join(profile), "|" + ",".join(mutated))
+    assert tree != _native_custody_tree()
+    result = MODULE.evaluate_boundary_tree(policy, selection, tree)
+    assert not result["within_boundary"]
+    assert any(row["package"] == package and "owner_contract" in row for row in result["violations"])
+    # Either owner's contract failure disables both exceptions.
+    assert {"iroha_core_zk", "iroha_zkp_halo2"} <= {row["package"] for row in result["violations"]}
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing-root-capability", "missing-CoreZK", "missing-Halo2", "indirect-CoreZK",
+    "indirect-Halo2", "duplicate-inconsistent-profile", "root-dev-tools", "root-test-fixtures",
+    "root-private-settlement-evidence",
+])
+def test_native_admission_requires_capability_presence_and_direct_ownership(mutation) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    tree = _native_custody_tree()
+    if mutation == "missing-root-capability":
+        tree = tree.replace(",kagemusha-ordinary-native", "")
+    elif mutation == "missing-CoreZK":
+        tree = tree.splitlines()[0] + "\n1|iroha_zkp_halo2 v1.0.0|default,full,model-primitives,parallel\n"
+    elif mutation == "missing-Halo2":
+        tree = "\n".join(tree.splitlines()[:2]) + "\n"
+    elif mutation == "indirect-CoreZK":
+        tree = tree.replace("1|iroha_core_zk", "1|norito v1.0.0|\n2|iroha_core_zk").replace("2|iroha_zkp_halo2", "3|iroha_zkp_halo2")
+    elif mutation == "indirect-Halo2":
+        tree = tree.replace("2|iroha_zkp_halo2", "2|norito v1.0.0|\n3|iroha_zkp_halo2")
+    elif mutation == "duplicate-inconsistent-profile":
+        tree += "1|iroha_zkp_halo2 v1.0.0|model-primitives (*)\n"
+    else:
+        feature = {
+            "root-dev-tools": "dev-tools", "root-test-fixtures": "test-fixtures",
+            "root-private-settlement-evidence": "test-network-private-settlement-evidence",
+        }[mutation]
+        tree = tree.replace("|default,kagemusha-ordinary-native", f"|default,kagemusha-ordinary-native,{feature}")
+    assert tree != _native_custody_tree()
+    assert not MODULE.evaluate_boundary_tree(policy, selection, tree)["within_boundary"]
+
+
+@pytest.mark.parametrize("mutation", [
+    "normal-sdk", "dev-unification", "defaults-disabled", "extra-feature", "wrong-target",
+    "extra-owner", "different-owner-features", "different-path", "extra-permitted-feature",
+    "node_execution", "node_configuration", "telemetry_runtime", "storage_runtime",
+    "iroha_p2p", "kotodama_lang", "kotodama_toolchain", "goldilocks_backend", "full", "parallel",
+])
+def test_native_policy_cannot_expand_admission_or_remove_retained_guards(mutation) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"]["sdk-kagemusha-ordinary-native"]
+    if mutation == "normal-sdk":
+        selection["features"] = []
+    elif mutation == "dev-unification":
+        selection["include_root_dev_dependencies"] = True
+    elif mutation == "defaults-disabled":
+        selection["default_features"] = False
+    elif mutation == "extra-feature":
+        selection["features"].append("dev-tools")
+    elif mutation == "wrong-target":
+        selection["target"] = "aarch64-apple-darwin"
+    elif mutation == "extra-owner":
+        selection["package_contracts"]["iroha_core"] = {"permitted_layer": "node_execution"}
+    elif mutation == "different-owner-features":
+        selection["package_contracts"]["iroha_core_zk"]["features"].append("zk-stark")
+    elif mutation == "different-path":
+        selection["package_contracts"]["iroha_core_zk"]["required_path"].insert(1, "norito")
+    elif mutation == "extra-permitted-feature":
+        selection["package_contracts"]["iroha_zkp_halo2"]["permitted_forbidden_features"].append("goldilocks_backend")
+    elif mutation in selection["forbidden_layers"]:
+        selection["forbidden_layers"].remove(mutation)
+    elif mutation in selection["forbidden_packages"]:
+        selection["forbidden_packages"].remove(mutation)
+    else:
+        selection["forbidden_features"]["iroha_zkp_halo2"].remove(mutation)
+    with pytest.raises(ValueError):
+        MODULE.validate_boundary_policy({"architecture": policy})
+
+
+@pytest.mark.parametrize("context", ["sdk-default", "aggregate-model", "torii-wire"])
+def test_native_contract_does_not_change_other_lower_layer_contexts(context) -> None:
+    policy = _native_policy()
+    selection = policy["configurations"][context]
+    root = selection["package"]
+    tree = _native_custody_tree().replace("0|iroha ", f"0|{root} ", 1)
+    report = MODULE.evaluate_boundary_tree(policy, selection, tree)
+    assert report["violations"] == [
+        {"package": "iroha_core_zk", "forbidden_layer": "node_execution", "path": [root, "iroha_core_zk"]},
+        {"package": "iroha_zkp_halo2", "forbidden_feature": "full", "path": [root, "iroha_core_zk", "iroha_zkp_halo2"]},
+        {"package": "iroha_zkp_halo2", "forbidden_feature": "parallel", "path": [root, "iroha_core_zk", "iroha_zkp_halo2"]},
+    ]
+
+
+def test_native_boundary_mode_reports_contract_and_package_failures(tmp_path, monkeypatch, capsys) -> None:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    config = json.loads(path.read_text())
+    selection = config["architecture"]["configurations"]["sdk-kagemusha-ordinary-native"]
+    config["architecture"]["configurations"] = {"sdk-kagemusha-ordinary-native": selection}
+    config_path = tmp_path / "budget.json"
+    config_path.write_text(json.dumps(config))
+    tree = _native_custody_tree().replace(
+        "model-primitives,parallel", "goldilocks_backend,model-primitives,parallel",
+    ) + "3|iroha_p2p v1.0.0|\n"
+    commands = []
+
+    def resolve(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, tree, "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", resolve)
+    assert MODULE.main([
+        "--config", str(config_path), "--check-boundaries", "--offline", "--json-out", "-",
+    ]) == 1
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert not report["within_boundary"]
+    violations = report["configurations"]["sdk-kagemusha-ordinary-native"]["violations"]
+    assert any(row.get("owner_contract") for row in violations)
+    assert any(row.get("forbidden_package") and row["package"] == "iroha_p2p" for row in violations)
+    assert "enabled owner features differ from the exact shipping contract" in output.err
+    assert "forbidden package" in output.err
+    assert commands == [MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)]
+
+
+@pytest.mark.parametrize("metric", MODULE.METRIC_KEYS)
+def test_every_dependency_metric_still_rejects_one_unit_of_unreviewed_growth(tmp_path, metric) -> None:
+    _write_manifest_fixture(tmp_path)
+    graph = MODULE.load_manifest_graph(tmp_path / "Cargo.toml")
+    metrics, _required, _declared = MODULE.measure_scope(
+        graph, roots=["model"], include_root_dev_dependencies=False,
+    )
+    bounds = dict(metrics)
+    assert bounds[metric] > 0
+    bounds[metric] -= 1
+    report, violations = MODULE.build_source_report(graph, _config(bounds))
+    assert not report["within_budget"]
+    assert violations == [f"model: {metric} {metrics[metric]} exceeds limit {bounds[metric]}"]

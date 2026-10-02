@@ -85,7 +85,6 @@ use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
     json::{self, JsonDeserialize as JsonDeserializeTrait, JsonSerialize as JsonSerializeTrait},
-    to_bytes,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -660,7 +659,7 @@ fn validate_builtin_native_query_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     query: &QueryRequest,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     world.account(authority).map_err(|_| {
         ValidationFail::NotPermitted(format!(
             "query authority `{authority}` is not a registered account"
@@ -673,56 +672,160 @@ fn validate_builtin_native_query_permission(
         // validating and advancing this cursor. Raw public validation cannot construct Continue.
         QueryRequest::Continue(_) => return Ok(()),
     };
-    let global_permission: Permission = executor_permission::query::CanReadAllLedgerData.into();
-    let has_global = || authority_has_permission(world, authority, &global_permission);
+    let has_global = || authority_has_native_global_read_permission(world, authority);
     match access {
         NativeQueryAccess::Registered => Ok(()),
-        NativeQueryAccess::AllLedger => has_global()?.then_some(()).ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "CanReadAllLedgerData permission is required for this query".to_owned(),
-            )
-        }),
+        NativeQueryAccess::AllLedger => has_global()?
+            .then_some(())
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "CanReadAllLedgerData permission is required for this query".to_owned(),
+                )
+            })
+            .map_err(Into::into),
         NativeQueryAccess::Account(account) => {
             if account == *authority || has_global()? {
                 return Ok(());
             }
-            let permission: Permission = executor_permission::query::CanReadAccountData {
-                account: account.clone(),
-            }
-            .into();
-            authority_has_permission(world, authority, &permission)?
+            authority_has_native_account_read_permission(world, authority, &account)?
                 .then_some(())
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "exact CanReadAccountData permission is required to read account `{account}`"
                     ))
-                })
+                }).map_err(Into::into)
         }
     }
 }
+/// Borrow the exact parameterless grant without allocating a JSON token under a read budget.
+fn authority_has_native_global_read_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> Result<bool, ValidationFail> {
+    let exact = |permission: &Permission| {
+        permission.name() == "CanReadAllLedgerData" && permission.payload().get().as_str() == "null"
+    };
+    let permissions = world.account_permissions_iter(authority).map_err(|error| {
+        ValidationFail::InstructionFailed(InstructionExecutionError::Find(error))
+    })?;
+    Ok(permissions.into_iter().any(exact)
+        || world.account_roles_iter(authority).any(|role_id| {
+            world
+                .roles()
+                .get(role_id)
+                .is_some_and(|role| role.permissions().any(exact))
+        }))
+}
+
+/// Read the existing exact grant. `Json` has canonical lexical form; the strict
+/// one-field adapter and AccountId's canonical-I105 decoder preserve exact token semantics.
+/// Unlike constructing a fresh token, inherited decoder refusal remains fallible here.
+fn authority_has_native_account_read_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    target: &AccountId,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    #[derive(crate::json_macros::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct AccountReadGrant {
+        account: AccountId,
+    }
+    authority_has_borrowed_permission(world, authority, "CanReadAccountData", |permission| {
+        read_permission_payload::<AccountReadGrant>(permission)
+            .map(|grant| grant.is_some_and(|grant| grant.account == *target))
+    })
+}
+
+/// Decode only an existing exact-name grant; incomplete local inspection is not a denial.
+fn read_permission_payload<T: norito::json::JsonDeserialize>(
+    permission: &Permission,
+) -> Result<Option<T>, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    match norito::json::from_str(permission.payload().get()) {
+        Ok(grant) => Ok(Some(grant)),
+        Err(norito::json::Error::DecodeResourceLimit)
+            if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
+        {
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+            ))
+        }
+        Err(norito::json::Error::AllocationFailed)
+            if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
+        {
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            ))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+/// Preserve account existence, direct grants and assigned-role authority while inspecting
+/// canonical stored payloads without constructing a second permission token.
+fn authority_has_borrowed_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    name: &str,
+    inspect: impl Fn(
+        &Permission,
+    )
+        -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>>,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    let permissions = world.account_permissions_iter(authority).map_err(|error| {
+        ValidationFail::InstructionFailed(InstructionExecutionError::Find(error))
+    })?;
+    for permission in permissions {
+        if permission.name() == name && inspect(permission)? {
+            return Ok(true);
+        }
+    }
+    for role_id in world.account_roles_iter(authority) {
+        if let Some(role) = world.roles().get(role_id) {
+            for permission in role.permissions() {
+                if permission.name() == name && inspect(permission)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn validate_builtin_account_alias_query_permission(
     world: &impl WorldReadOnly,
     latest_block: Option<&BlockHeader>,
     authority: &AccountId,
     query: &QueryRequest,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let deny = || {
         ValidationFail::NotPermitted(
             "exact CanResolveAccountAlias permission is required for this alias query".to_owned(),
         )
     };
-    let require_alias = |alias: &iroha_data_model::account::rekey::AccountAlias| {
+    let require_alias = |alias: &iroha_data_model::account::rekey::AccountAlias| -> Result<
+        (),
+        crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+    > {
         crate::alias::authority_can_resolve_account_alias(world, authority, alias)
+            .map_err(|error| {
+                error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()))
+            })?
             .then_some(())
-            .ok_or_else(|| deny())
+            .ok_or_else(|| deny().into())
     };
     let QueryRequest::Singular(query) = query else {
         return Ok(());
     };
     match query {
-        SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
-        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
-        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => require_alias(query.alias()),
+        SingularQueryBox::FindAccountByAlias(query) => {
+            require_alias(query.alias()).map_err(Into::into)
+        }
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
+            require_alias(query.alias()).map_err(Into::into)
+        }
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
+            require_alias(query.alias()).map_err(Into::into)
+        }
         SingularQueryBox::FindAliasesByAccountId(query) => {
             let catalog = world.dataspace_catalog();
             let dataspace_filter = query
@@ -747,7 +850,7 @@ fn validate_builtin_account_alias_query_permission(
                 })
                 .transpose()?;
             if domain_filter.is_some() && dataspace_filter.is_none() {
-                return Err(deny());
+                return Err(deny().into());
             }
             if let Some(dataspace) = dataspace_filter {
                 let probe = iroha_data_model::account::rekey::AccountAlias::new(
@@ -768,7 +871,11 @@ fn validate_builtin_account_alias_query_permission(
             for alias in labels {
                 let resolved =
                     crate::sns::resolve_active_account_alias(world, catalog, &alias, now_ms)
-                        .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+                        .map_err(|error| {
+                            error.into_attempt_error(|error| {
+                                ValidationFail::InternalError(error.to_string())
+                            })
+                        })?;
                 if dataspace_filter.is_some_and(|dataspace| alias.dataspace != dataspace)
                     || domain_filter
                         .as_ref()
@@ -1239,12 +1346,28 @@ fn execute_gas_fee_transfer_instruction(
         instr.execute(authority, state_transaction)
     }
 }
-fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
-    metadata
-        .get(key)
-        .and_then(|raw| raw.try_into_any_norito::<String>().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn metadata_string(
+    metadata: &Metadata,
+    key: &str,
+) -> Result<Option<String>, crate::execution_attempt::ExecutionDeferred> {
+    let Some(raw) = metadata.get(key) else {
+        return Ok(None);
+    };
+    let mut value = match norito::json::from_str::<String>(raw.get()) {
+        Ok(value) => value,
+        Err(error) => match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                return Err(reason);
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(()) => return Ok(None),
+        },
+    };
+    // Trim in the original decoded String; no second unreserved metadata allocation.
+    let start = value.len() - value.trim_start().len();
+    let end = start + value.trim().len();
+    value.truncate(end);
+    value.drain(..start);
+    Ok((!value.is_empty()).then_some(value))
 }
 fn should_charge_pipeline_gas_asset(
     skip_nexus_fee: bool,
@@ -1273,57 +1396,60 @@ fn successful_claim_fee_exempt_instructions(
     metadata: &Metadata,
     instructions: &[InstructionBox],
     observation_time_ms: u64,
-) -> bool {
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     if !successful_claim_fee_authority_allowed(nexus, authority) {
-        return false;
+        return Ok(false);
     }
-    let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
-        return false;
+    let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY)? else {
+        return Ok(false);
     };
     if !is_sora_v2_tx_hash_literal(&claim_tx_hash) {
-        return false;
+        return Ok(false);
     }
     let Some(recipient_literal) =
-        metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
+        metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)?
     else {
-        return false;
+        return Ok(false);
     };
-    let Ok(Some(recipient)) = parse_account_id_literal(
+    let recipient = match parse_account_id_literal(
         world,
         world.dataspace_catalog(),
         &recipient_literal,
         observation_time_ms,
-    ) else {
-        return false;
+    ) {
+        Ok(Some(recipient)) => recipient,
+        Err(crate::sns::SnsError::Deferred(reason)) => return Err(reason),
+        Ok(None) | Err(_) => return Ok(false),
     };
     let Some(asset_def) = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
         observation_time_ms,
-    ) else {
-        return false;
+    )?
+    else {
+        return Ok(false);
     };
     let [instruction] = instructions else {
-        return false;
+        return Ok(false);
     };
     let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() else {
-        return false;
+        return Ok(false);
     };
-    match mint {
+    Ok(match mint {
         MintBox::Asset(mint) => {
             mint.destination.account() == &recipient
                 && mint.destination.definition() == &asset_def
                 && !mint.object.is_zero()
         }
         MintBox::TriggerRepetitions(_) => false,
-    }
+    })
 }
 fn successful_claim_fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
-) -> bool {
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     successful_claim_fee_exempt_payload(world, nexus, transaction.payload(), observation_time_ms)
 }
 fn successful_claim_fee_exempt_payload(
@@ -1331,18 +1457,22 @@ fn successful_claim_fee_exempt_payload(
     nexus: &iroha_config::parameters::actual::Nexus,
     payload: &TransactionPayload,
     observation_time_ms: u64,
-) -> bool {
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     let Executable::Instructions(instructions) = &payload.instructions else {
-        return false;
+        return Ok(false);
     };
-    successful_claim_fee_exempt_instructions(
+    let result = successful_claim_fee_exempt_instructions(
         world,
         nexus,
         &payload.authority,
         &payload.metadata,
         instructions.as_ref(),
         observation_time_ms,
-    )
+    );
+    if cfg!(all(test, sumeragi_core_mutation = "HC36")) && result.is_err() {
+        return Ok(false);
+    }
+    result
 }
 fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
@@ -1369,32 +1499,32 @@ fn fee_exempt_payload(
     nexus: &iroha_config::parameters::actual::Nexus,
     payload: &TransactionPayload,
     observation_time_ms: u64,
-) -> bool {
-    private_fees::permits_public_exemption(world)
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
+    Ok(private_fees::permits_public_exemption(world)?
         && (nexus_fee_exempt_payload(payload)
-            || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
-            || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload))
+            || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)?
+            || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)))
 }
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
-) -> bool {
+) -> Result<bool, crate::execution_attempt::ExecutionDeferred> {
     // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
     // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
-    private_fees::permits_public_exemption(world)
+    Ok(private_fees::permits_public_exemption(world)?
         && (nexus_fee_exempt_transaction(transaction)
             || successful_claim_fee_exempt_transaction(
                 world,
                 nexus,
                 transaction,
                 observation_time_ms,
-            )
+            )?
             || crate::smartcontracts::isi::sccp::fees::exempt_on_success(
                 world,
                 transaction.payload(),
-            ))
+            )))
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -2717,7 +2847,10 @@ impl ContractEntrypointAuthorizationSnapshot {
         Ok(())
     }
     /// Revalidate the captured caller permission and the exact forward/reverse live binding.
-    pub(crate) fn validate(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
+    pub(crate) fn validate(
+        &self,
+        world: &impl WorldReadOnly,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         self.validate_chain_structure(world)?;
         self.validate_live(world)
     }
@@ -2726,9 +2859,10 @@ impl ContractEntrypointAuthorizationSnapshot {
         &self,
         world: &impl WorldReadOnly,
         execution_height: u64,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         self.validate(world)?;
         self.validate_execution_allowed(world, execution_height)
+            .map_err(Into::into)
     }
     fn validate_execution_allowed(
         &self,
@@ -2741,7 +2875,10 @@ impl ContractEntrypointAuthorizationSnapshot {
         code::ensure_contract_execution_allowed(world, &self.contract_address, execution_height)
             .map_err(ValidationFail::NotPermitted)
     }
-    fn validate_live(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
+    fn validate_live(
+        &self,
+        world: &impl WorldReadOnly,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         root_scope::ensure_committed_contract_scope(world, &self.contract_address)?;
         if let Some(parent) = self.parent.as_deref() {
             parent.validate_live(world)?;
@@ -2760,7 +2897,7 @@ impl ContractEntrypointAuthorizationSnapshot {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{}` changed code binding while its call was prepared: captured `{}`, live `{}`",
                 self.contract_address, self.code_hash, live_code_hash
-            )));
+            )).into());
         }
         let live_alias_binding = world
             .contract_alias_bindings()
@@ -2770,7 +2907,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{}` changed alias binding while its call was prepared",
                 self.contract_address
-            )));
+            ))
+            .into());
         }
         let reverse_alias = live_alias_binding
             .as_ref()
@@ -2779,7 +2917,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{}` has inconsistent captured alias binding metadata",
                 self.contract_address
-            )));
+            ))
+            .into());
         }
         if let Some(alias) = self.contract_alias.as_ref()
             && world.contract_aliases().get(alias) != Some(&self.contract_address)
@@ -2787,7 +2926,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{}` has an inconsistent live alias binding",
                 self.contract_address
-            )));
+            ))
+            .into());
         }
         if world.contract_aliases().iter().any(|(alias, address)| {
             address == &self.contract_address && Some(alias) != self.contract_alias.as_ref()
@@ -2795,7 +2935,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{}` has a non-canonical forward alias binding",
                 self.contract_address
-            )));
+            ))
+            .into());
         }
         enforce_named_contract_entrypoint_permission(
             world,
@@ -2804,17 +2945,19 @@ impl ContractEntrypointAuthorizationSnapshot {
             &self.entrypoint,
             self.permission.as_deref(),
         )
+        .map_err(Into::into)
     }
     /// Validate the snapshot and require the apply-time caller to be the captured caller.
     pub(crate) fn validate_for_authority(
         &self,
         world: &impl WorldReadOnly,
         authority: &AccountId,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if authority != &self.authority {
             return Err(ValidationFail::NotPermitted(
                 "prepared contract authorization caller changed before apply".to_owned(),
-            ));
+            )
+            .into());
         }
         self.validate(world)
     }
@@ -2824,11 +2967,12 @@ impl ContractEntrypointAuthorizationSnapshot {
         world: &impl WorldReadOnly,
         authority: &AccountId,
         execution_height: u64,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if authority != &self.authority {
             return Err(ValidationFail::NotPermitted(
                 "prepared contract authorization caller changed before apply".to_owned(),
-            ));
+            )
+            .into());
         }
         self.validate_at_height(world, execution_height)
     }
@@ -4018,7 +4162,7 @@ fn authority_fee_asset_id(
     authority: &AccountId,
     route_dataspace_id: Option<DataSpaceId>,
     charge: &FeeChargeBound,
-) -> Result<AssetId, NexusFeeAdmissionError> {
+) -> Result<AssetId, crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>> {
     if charge.kind == FeeChargeKind::Nexus {
         let scope = private_fees::private_scope(world, route_dataspace_id)?
             .map_or(AssetBalanceScope::Global, AssetBalanceScope::Dataspace);
@@ -4070,7 +4214,10 @@ fn evaluate_nexus_fee_admission_payload(
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
     validate_charge_limits: bool,
-) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
+) -> Result<
+    FeeAdmissionQuote,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     require_direct_fee_settlement(nexus)?;
     let fees = private_fees::effective(world, &nexus.fees)?;
     // TODO: Private sponsorship needs vaults with exact dataspace custody. Public
@@ -4080,7 +4227,8 @@ fn evaluate_nexus_fee_admission_payload(
     {
         return Err(NexusFeeAdmissionError::ConfigInvalid(
             "private-root fee sponsors require a scoped vault owner".into(),
-        ));
+        )
+        .into());
     }
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
@@ -4141,7 +4289,7 @@ fn evaluate_nexus_fee_admission_payload(
                             "fee balance `{payer_asset}` for authority `{}` is insufficient: requires {required}, available {available}",
                             payload.authority
                         ),
-                    ));
+                    ).into());
                 }
                 authority_balances.insert(payer_asset, available);
             }
@@ -4199,9 +4347,14 @@ pub fn quote_nexus_fee_admission_payload(
     observation_time_ms: u64,
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
-) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
+) -> Result<
+    FeeAdmissionQuote,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     require_direct_fee_settlement(nexus)?;
-    if fee_exempt_payload(world, nexus, payload, observation_time_ms) {
+    if fee_exempt_payload(world, nexus, payload, observation_time_ms)
+        .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
+    {
         return Ok(fee_exempt_admission_quote(payload));
     }
     evaluate_nexus_fee_admission_payload(
@@ -4275,9 +4428,14 @@ pub fn quote_nexus_fee_admission_draft(
     observation_time_ms: u64,
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
-) -> Result<FeeAdmissionDraftQuote, NexusFeeAdmissionError> {
+) -> Result<
+    FeeAdmissionDraftQuote,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     require_direct_fee_settlement(nexus)?;
-    if fee_exempt_payload(world, nexus, payload, observation_time_ms) {
+    if fee_exempt_payload(world, nexus, payload, observation_time_ms)
+        .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
+    {
         return Ok(FeeAdmissionDraftQuote {
             quote: fee_exempt_admission_quote(payload),
             recommended_intent: fee_intent_with_exact_bounds(&payload.fee_payment, &[]),
@@ -4319,7 +4477,8 @@ pub fn quote_nexus_fee_admission_draft(
     }
     Err(NexusFeeAdmissionError::ConfigInvalid(
         "fee quote did not converge to a canonical charge-limit fixed point".to_owned(),
-    ))
+    )
+    .into())
 }
 /// Quote and validate the fee funding source selected by a signed transaction.
 ///
@@ -4333,7 +4492,10 @@ pub fn quote_nexus_fee_admission(
     observation_time_ms: u64,
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
-) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
+) -> Result<
+    FeeAdmissionQuote,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     quote_nexus_fee_admission_payload(
         world,
         nexus,
@@ -4359,8 +4521,13 @@ pub(crate) fn quote_external_nexus_fee_admission(
     observation_time_ms: u64,
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
-) -> Result<Option<FeeAdmissionQuote>, NexusFeeAdmissionError> {
-    if fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
+) -> Result<
+    Option<FeeAdmissionQuote>,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
+    if fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
+        .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?
+    {
         return Ok(None);
     }
     quote_nexus_fee_admission(
@@ -4391,6 +4558,7 @@ pub(crate) fn validate_transaction_fee_admission(
             transaction,
             state_transaction.block_unix_timestamp_ms(),
         )
+        .map_err(|reason| state_transaction.defer_execution(reason))?
     {
         return Ok(());
     }
@@ -4404,7 +4572,11 @@ pub(crate) fn validate_transaction_fee_admission(
         state_transaction.block_height(),
         state_transaction.current_dataspace_id,
     )
-    .map_err(nexus_fee_admission_error_to_validation_fail)?;
+    .map_err(|error| {
+        state_transaction.attempt_error_to_validation_fail(
+            error.map_rejection(nexus_fee_admission_error_to_validation_fail),
+        )
+    })?;
     Ok(())
 }
 #[cfg(test)]
@@ -4499,7 +4671,8 @@ fn charge_fees_for_applied_overlay_inner(
         &state_transaction.nexus,
         transaction,
         state_transaction.block_unix_timestamp_ms(),
-    );
+    )
+    .map_err(|reason| state_transaction.defer_execution(reason))?;
     // Admission captured the governed gas policy before business effects were applied.
     // Keep that immutable snapshot for settlement so this transaction cannot alter its
     // own fee asset, rate, or destination account through the overlay.
@@ -4870,7 +5043,10 @@ impl Executor {
             &state_transaction.pipeline.gas.tech_account_id,
             state_transaction.block_unix_timestamp_ms(),
         )
-        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+        .map_err(|error| {
+            let error = error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()));
+            state_transaction.attempt_error_to_validation_fail(error)
+        })?
         .ok_or_else(|| {
             ValidationFail::InternalError(
                 "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
@@ -4982,12 +5158,26 @@ impl Executor {
         require_direct_fee_settlement(&state_transaction.nexus)
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let cfg = private_fees::effective(&state_transaction.world, &state_transaction.nexus.fees)
-            .map_err(nexus_fee_admission_error_to_validation_fail)?;
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    state_transaction.defer_execution(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    nexus_fee_admission_error_to_validation_fail(error)
+                }
+            })?;
         let private_scope = private_fees::private_scope(
             &state_transaction.world,
             state_transaction.current_dataspace_id,
         )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                nexus_fee_admission_error_to_validation_fail(error)
+            }
+        })?;
         if private_scope.is_some() && sponsor.is_some() {
             return Err(ValidationFail::NotPermitted(
                 "private-root fee sponsors require a scoped vault owner".into(),
@@ -5007,7 +5197,14 @@ impl Executor {
             &cfg,
             state_transaction.block_unix_timestamp_ms(),
         )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                nexus_fee_admission_error_to_validation_fail(error)
+            }
+        })?;
         let actual_charge = FeeChargeBound {
             kind: FeeChargeKind::Nexus,
             asset_definition_id: asset_def.clone(),
@@ -5237,7 +5434,14 @@ impl Executor {
         if !is_initial_genesis_context(state_transaction) {
             state_transaction.nexus.fees =
                 private_fees::effective(&state_transaction.world, &state_transaction.nexus.fees)
-                    .map_err(nexus_fee_admission_error_to_validation_fail)?;
+                    .map_err(|error| match error {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            state_transaction.defer_execution(reason)
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            nexus_fee_admission_error_to_validation_fail(error)
+                        }
+                    })?;
         }
         state_transaction.pipeline.gas.tech_account_id = tech_account_id;
         state_transaction.pipeline.gas.accepted_assets = accepted_assets;
@@ -5622,7 +5826,9 @@ impl Executor {
                             .to_owned(),
                     ));
                 }
-                authorization.validate_for_authority(&state_transaction.world, authority)?;
+                authorization
+                    .validate_for_authority(&state_transaction.world, authority)
+                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
             }
             (Some(_), None) => {
                 return Err(ValidationFail::NotPermitted(
@@ -5651,7 +5857,8 @@ impl Executor {
                 &replay.durable_state_overlay,
                 &replay.durable_state_authorizations,
                 root,
-            )?;
+            )
+            .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         }
         let instruction_count = instructions.len();
         // 3) Execute ISIs in order.
@@ -5692,7 +5899,11 @@ impl Executor {
                                         .to_owned(),
                                 ));
                             }
-                            authorization.validate(&state_transaction.world)?;
+                            authorization
+                                .validate(&state_transaction.world)
+                                .map_err(|error| {
+                                    state_transaction.attempt_error_to_validation_fail(error)
+                                })?;
                         }
                         (Some(_), None) => {
                             return Err(ValidationFail::NotPermitted(
@@ -5715,7 +5926,11 @@ impl Executor {
                         queued.contract_runtime_context.as_ref(),
                     )?;
                     if let Some(authorization) = queued.entrypoint_authorization.as_ref() {
-                        authorization.validate(&state_transaction.world)?;
+                        authorization
+                            .validate(&state_transaction.world)
+                            .map_err(|error| {
+                                state_transaction.attempt_error_to_validation_fail(error)
+                            })?;
                     }
                 }
                 if !replay.durable_state_overlay.is_empty() {
@@ -5725,7 +5940,10 @@ impl Executor {
                                 .to_owned(),
                         )
                     })?;
-                    root.validate_for_authority(&state_transaction.world, authority)?;
+                    root.validate_for_authority(&state_transaction.world, authority)
+                        .map_err(|error| {
+                            state_transaction.attempt_error_to_validation_fail(error)
+                        })?;
                     // A queued instruction can revoke the selected permission or replace a live
                     // contract binding. Validate the complete set before recording any replay
                     // artifact or writing the first durable key, so rejection remains atomic.
@@ -5734,7 +5952,8 @@ impl Executor {
                         &replay.durable_state_overlay,
                         &replay.durable_state_authorizations,
                         root,
-                    )?;
+                    )
+                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
                 }
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                     state_transaction,
@@ -5750,7 +5969,11 @@ impl Executor {
                                 "proved durable state path `{path}` lost its authorization snapshot before apply"
                             ))
                         })?;
-                    authorization.validate(&state_transaction.world)?;
+                    authorization
+                        .validate(&state_transaction.world)
+                        .map_err(|error| {
+                            state_transaction.attempt_error_to_validation_fail(error)
+                        })?;
                     if !authorization.owns_durable_state_path(&path) {
                         return Err(ValidationFail::NotPermitted(format!(
                             "proved durable state path `{path}` does not belong to its contract authorization snapshot"
@@ -5769,7 +5992,10 @@ impl Executor {
                 for (index, isi) in instructions.into_iter().enumerate() {
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
-                            .validate_for_authority(&state_transaction.world, authority)?;
+                            .validate_for_authority(&state_transaction.world, authority)
+                            .map_err(|error| {
+                                state_transaction.attempt_error_to_validation_fail(error)
+                            })?;
                     }
                     let direct_index = Self::direct_stream_token_instruction_index(
                         state_transaction,
@@ -5837,12 +6063,17 @@ impl Executor {
                     result?;
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
-                            .validate_for_authority(&state_transaction.world, authority)?;
+                            .validate_for_authority(&state_transaction.world, authority)
+                            .map_err(|error| {
+                                state_transaction.attempt_error_to_validation_fail(error)
+                            })?;
                     }
                 }
             }
             if let Some(authorization) = entrypoint_authorization {
-                authorization.validate_for_authority(&state_transaction.world, authority)?;
+                authorization
+                    .validate_for_authority(&state_transaction.world, authority)
+                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
             }
             Ok(())
         })();
@@ -5882,7 +6113,7 @@ impl Executor {
     /// the caller releases any mutex guard used to access `ivm_cache`.
     pub(crate) fn resolve_contract_invocation(
         &self,
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
     ) -> Result<ResolvedContractInvocation, ValidationFail> {
@@ -5895,6 +6126,7 @@ impl Executor {
         .map_err(ValidationFail::NotPermitted)?;
         let identity =
             code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
+                .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract instance `{}` not found in WSV",
@@ -6040,7 +6272,8 @@ impl Executor {
             summary.prepared_contract(),
             &call.entrypoint,
             &identity,
-        )?;
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         let contract_call_context = parse_prepared_contract_invocation_execution_context(
             call,
             summary.prepared_contract(),
@@ -6321,7 +6554,8 @@ impl Executor {
                 &state_transaction.nexus,
                 &transaction,
                 state_transaction.block_unix_timestamp_ms(),
-            );
+            )
+            .map_err(|reason| state_transaction.defer_execution(reason))?;
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
         let fee_quote = if !skip_nexus_fee {
@@ -6335,7 +6569,11 @@ impl Executor {
                     state_transaction.block_height(),
                     state_transaction.current_dataspace_id,
                 )
-                .map_err(nexus_fee_admission_error_to_validation_fail)?,
+                .map_err(|error| {
+                    state_transaction.attempt_error_to_validation_fail(
+                        error.map_rejection(nexus_fee_admission_error_to_validation_fail),
+                    )
+                })?,
             )
         } else {
             None
@@ -6415,14 +6653,16 @@ impl Executor {
                 )));
             }
         }
+        let execution_dataspace = root_scope::captured_dataspace(state_transaction)?;
         enforce_transaction_contract_permission_before_proof_verification(
             state_transaction,
             authority,
             &transaction,
             ivm_cache,
             state_transaction.block_height(),
-            root_scope::captured_dataspace(state_transaction)?,
-        )?;
+            execution_dataspace,
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         #[cfg(feature = "zk-preverify")]
         {
             use iroha_data_model::proof::ProofAttachment;
@@ -6635,7 +6875,8 @@ impl Executor {
                 summary.prepared_contract(),
                 &selector,
                 &identity,
-            )?;
+            )
+            .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
             let contract_subject =
                 code::fetch_bound_contract_subject(state_transaction, &identity.contract_address)
                     .ok_or_else(|| {
@@ -6945,10 +7186,12 @@ impl Executor {
                 let summary = match admitted {
                     ExecutableProgramSummary::Contract(summary) => summary,
                     ExecutableProgramSummary::Generic(summary) => {
+                        let artifact =
+                            root_scope::captured_artifact_id(state_transaction, summary.code_hash)?;
                         crate::smartcontracts::ivm::validate_generic_execution_context(
                             &state_transaction.world,
                             &md,
-                            root_scope::captured_artifact_id(state_transaction, summary.code_hash)?,
+                            artifact,
                         )?;
                         let effective_cycles = validate_prepared_ivm_execution_policy(
                             state_transaction,
@@ -6969,7 +7212,10 @@ impl Executor {
                                 authority,
                             );
                         let bound_contract_records =
-                            code::snapshot_bound_contract_records_by_subject(state_transaction);
+                            code::snapshot_bound_contract_records_by_subject(state_transaction)
+                                .map_err(|error| {
+                                    state_transaction.attempt_error_to_validation_fail(error)
+                                })?;
                         let heap_limit = state_transaction
                             .world
                             .parameters
@@ -7126,7 +7372,8 @@ impl Executor {
                     summary.prepared_contract(),
                     &selector,
                     &runtime_identity,
-                )?;
+                )
+                .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
                 let contract_subject = code::fetch_bound_contract_subject(
                     state_transaction,
                     &runtime_identity.contract_address,
@@ -7161,7 +7408,8 @@ impl Executor {
                         &state_transaction.world,
                         authority,
                         context,
-                    )?;
+                    )
+                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
                 }
                 let heap_limit = state_transaction
                     .world
@@ -7555,13 +7803,15 @@ impl Executor {
             authority,
             instruction,
             is_genesis,
-        )?;
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         validate_initial_native_instruction_authority(
             state_transaction,
             authority,
             instruction,
             is_genesis,
-        )?;
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         if instruction
             .as_any()
             .downcast_ref::<iroha_data_model::isi::TransferAssetBatch>()
@@ -7593,7 +7843,8 @@ impl Executor {
                         state_transaction,
                         authority,
                         &normalized,
-                    )?
+                    )
+                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?
                 {
                     return Err(ValidationFail::NotPermitted(format!(
                         "Can't seed role with permission `{}`",
@@ -7781,7 +8032,8 @@ impl Executor {
                 authority,
                 &transfer_domain,
                 state_transaction.block_unix_timestamp_ms(),
-            )?
+            )
+            .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?
         {
             return Err(ValidationFail::NotPermitted(
                 "Can't transfer domain of another account".to_owned(),
@@ -10103,6 +10355,7 @@ mod tests {
         ));
     }
     include!("executor_account_lineage_tests.rs");
+    include!("executor_sns_attempt_tests.rs");
     include!("executor_raw_ivm_work_tests.rs");
     include!("executor_effect_budget_tests.rs");
     include!("executor_sorafs_repair_tests.rs");
@@ -11160,7 +11413,8 @@ mod tests {
             validate_initial_native_instruction_authority(&stx, &authority, &instruction, false)
                 .expect("self-owned lifecycle reaches Core");
             assert!(matches!(
-                validate_initial_native_instruction_authority(&stx, &intruder, &instruction, false),
+                validate_initial_native_instruction_authority(&stx, &intruder, &instruction, false)
+                    .map_err(crate::execution_attempt::expect_completed_rejection),
                 Err(ValidationFail::NotPermitted(_))
             ));
         }
@@ -12247,6 +12501,7 @@ mod tests {
                 &legitimate_root,
                 &malformed,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("malformed scoped governance payload must fail closed");
             assert!(
                 matches!(&error, ValidationFail::NotPermitted(message)
@@ -15822,7 +16077,7 @@ mod tests {
         )
         .expect_err("receipt-settled quotes must require an exact sponsor program");
         assert!(
-            matches!(error, NexusFeeAdmissionError::ConfigInvalid(reason)
+            matches!(crate::execution_attempt::expect_completed_rejection(error), NexusFeeAdmissionError::ConfigInvalid(reason)
             if reason.contains("retired lane-relay-burn fee settlement"))
         );
     }
@@ -15995,7 +16250,10 @@ mod tests {
             Some(DataSpaceId::UNIVERSAL),
         )
         .expect_err("missing conversion rate must reject the quote");
-        assert_eq!(err.code(), FeeRejectionCode::InvalidProgramConfiguration);
+        assert_eq!(
+            crate::execution_attempt::expect_completed_rejection(err).code(),
+            FeeRejectionCode::InvalidProgramConfiguration
+        );
     }
     #[test]
     fn sponsor_capacity_rejects_dataspace_scoped_fee_assets() {
@@ -20236,7 +20494,7 @@ seiyaku GuardedValue {
         )
         .expect_err("raw-IVM pre-proof admission must observe the execution block height");
         assert!(
-            matches!(preproof_held, ValidationFail::NotPermitted(ref message)
+            matches!(crate::execution_attempt::expect_completed_rejection(preproof_held.clone()), ValidationFail::NotPermitted(ref message)
                 if message.contains("held by Parliament")),
             "unexpected raw-IVM pre-proof emergency-hold error: {preproof_held}"
         );
@@ -20997,7 +21255,7 @@ seiyaku MeteredFailure {
         let resolved = {
             let mut guard = cache.lock();
             executor
-                .resolve_contract_invocation(&state_transaction, &invocation, &mut guard)
+                .resolve_contract_invocation(&mut state_transaction, &invocation, &mut guard)
                 .expect("resolve deployed contract while the cache is locked")
         };
         assert!(

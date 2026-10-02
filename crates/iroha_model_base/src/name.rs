@@ -340,7 +340,7 @@ impl<'a> norito::core::DeserializePayload<'a> for Name {
             }
             return Self::decode_wire(payload).map(|(name, _)| name);
         }
-        let string = norito::core::DeserializePayload::deserialize(archived.cast::<String>());
+        let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;
         Name::from_str(string.as_str())
             .map_err(|err| norito::core::Error::Message(err.reason().into()))
     }

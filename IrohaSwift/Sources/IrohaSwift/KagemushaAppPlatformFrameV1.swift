@@ -18,9 +18,14 @@ enum KagemushaAppPlatformFrameV1 {
         throw invalid("invalid original platform evidence")
       }
     case 8:
-      guard method == .appEnrollmentPossession, f.count == 3, ticket(f[1]),
-        (1...16384).contains(f[2].count) else {
-        throw invalid("invalid final app identity original")
+      if method == .appOperationApproval {
+        guard f.count == 2, KagemushaAppPlatformPreparedProjectionV1.digest(f[1]) else {
+          throw invalid("invalid original bootstrap operation identity")
+        }
+      } else {
+        guard f.count == 3, ticket(f[1]), (1...16384).contains(f[2].count) else {
+          throw invalid("invalid final app identity original")
+        }
       }
     case 9:
       guard method == .appEnrollmentPossession, f.count == 4, ticket(f[1]),
@@ -51,9 +56,12 @@ enum KagemushaAppPlatformFrameV1 {
     let purpose: UInt8 = method == .appOperationApproval ? 1 : 2
     switch phase(request)! {
     case 1:
-      _ = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
-        approvalID: purpose == 1 ? request[1] : nil,
-        enrollmentChallengeHash: purpose == 2 ? request[1] : nil)
+      if purpose == 1 {
+        try KagemushaAppPlatformPreparedProjectionV1.validateApprovalTransport(f, operationID: request[1])
+      } else {
+        _ = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
+          approvalID: nil, enrollmentChallengeHash: request[1])
+      }
     case 2, 5:
       guard f.count == 3, f[0].count == 1 else { throw invalid("invalid original recovery state") }
       let state = f[0][0], fence = phase(request) == 2
@@ -91,9 +99,12 @@ enum KagemushaAppPlatformFrameV1 {
     case 7:
       guard f.isEmpty else { throw invalid("cancel response carries authority") }
     case 8:
-      guard method == .appEnrollmentPossession, f.count == 2,
-        f.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
-        throw invalid("invalid retained final app identity response")
+      if method == .appOperationApproval {
+        try KagemushaAppPlatformPreparedProjectionV1.validateBootstrapTransport(f, operationID: request[1])
+      } else {
+        guard f.count == 2, f.allSatisfy(KagemushaAppPlatformPreparedProjectionV1.digest) else {
+          throw invalid("invalid retained final app identity response")
+        }
       }
     case 9:
       guard f.count == 5, ticket(f[0]), f[1] == request[2], f[2] == request[3],

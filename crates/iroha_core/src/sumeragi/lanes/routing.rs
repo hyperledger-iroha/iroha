@@ -75,14 +75,23 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
         &self,
         tx: &dyn TransactionRoutingView,
         height: u64,
-    ) -> Option<crate::queue::RoutingDecision> {
-        let lane = self.route(tx, height)?;
-        let dataspace = if lane == GLOBAL_LANE {
-            self.root_scope?.dataspace_id()
-        } else {
-            self.lanes.lane(lane)?.dataspace
+    ) -> Result<Option<crate::queue::RoutingDecision>, crate::execution_attempt::ExecutionDeferred>
+    {
+        let Some(lane) = self.route(tx, height)? else {
+            return Ok(None);
         };
-        Some(crate::queue::RoutingDecision::new(lane, dataspace))
+        let dataspace = if lane == GLOBAL_LANE {
+            let Some(scope) = self.root_scope else {
+                return Ok(None);
+            };
+            scope.dataspace_id()
+        } else {
+            let Some(record) = self.lanes.lane(lane) else {
+                return Ok(None);
+            };
+            record.dataspace
+        };
+        Ok(Some(crate::queue::RoutingDecision::new(lane, dataspace)))
     }
 
     /// The default-route lanes at `height`: lane `0` and the admitted elastic lanes, ascending.
@@ -112,14 +121,24 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
 
     /// The lane of `tx` at global height `height`. An unresolved or inactive concrete
     /// dataspace fails closed; it must never be executed in the universal dataspace.
-    #[must_use]
-    pub fn route(&self, tx: &dyn TransactionRoutingView, height: u64) -> Option<LaneId> {
-        let scope = self.root_scope?;
-        scope.validate().ok()?;
+    pub fn route(
+        &self,
+        tx: &dyn TransactionRoutingView,
+        height: u64,
+    ) -> Result<Option<LaneId>, crate::execution_attempt::ExecutionDeferred> {
+        let Some(scope) = self.root_scope.filter(|scope| scope.validate().is_ok()) else {
+            return Ok(None);
+        };
         let target =
-            native_execution_target(tx, self.dataspaces, self.world, self.ledger_time_ms).ok()?;
+            match native_execution_target(tx, self.dataspaces, self.world, self.ledger_time_ms) {
+                Ok(target) => target,
+                Err(crate::queue::RoutingResolveError::Deferred(reason)) => return Err(reason),
+                Err(_) => return Ok(None),
+            };
         if let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope {
-            self.dataspaces.by_id(dataspace_id)?;
+            if self.dataspaces.by_id(dataspace_id).is_none() {
+                return Ok(None);
+            }
             if matches!(
                 tx.executable(),
                 Some(
@@ -127,7 +146,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                         | iroha_data_model::transaction::Executable::IvmProved(_)
                 )
             ) {
-                return None;
+                return Ok(None);
             }
             // TODO: Define a typed local-control allowlist before private roots admit
             // parameter changes. Mixed batches must not disguise global control work.
@@ -136,23 +155,27 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                     .as_any()
                     .is::<iroha_data_model::isi::SetParameter>()
             });
-            return (!target.global
+            return Ok((!target.global
                 && !changes_parameters
                 && target.dataspace.is_none_or(|target| target == dataspace_id))
-            .then_some(GLOBAL_LANE);
+            .then_some(GLOBAL_LANE));
         }
         if target.global {
-            return Some(GLOBAL_LANE);
+            return Ok(Some(GLOBAL_LANE));
         }
         if let Some(dataspace) = target
             .dataspace
             .filter(|dataspace| *dataspace != iroha_model_base::topology::DataSpaceId::UNIVERSAL)
         {
-            self.dataspaces.by_id(dataspace)?;
+            if self.dataspaces.by_id(dataspace).is_none() {
+                return Ok(None);
+            }
             // Physical dataspace routing selects its first admitted fixed lane. The
             // policy binds that lane's exact committee and its record pins the scope.
-            let policy = self.policy?;
-            return policy
+            let Some(policy) = self.policy else {
+                return Ok(None);
+            };
+            return Ok(policy
                 .fixed
                 .iter()
                 .find(|fixed| {
@@ -162,10 +185,10 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                             record.dataspace == dataspace && record.committee == fixed.committee
                         })
                 })
-                .map(|fixed| fixed.lane);
+                .map(|fixed| fixed.lane));
         }
         let Some(policy) = self.policy else {
-            return Some(GLOBAL_LANE);
+            return Ok(Some(GLOBAL_LANE));
         };
         for route in &policy.routes {
             if matchers_match_with_world(
@@ -175,8 +198,8 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                 self.dataspaces,
                 self.world,
                 Some(self.ledger_time_ms),
-            ) {
-                return Some(
+            )? {
+                return Ok(Some(
                     if self.admitted(route.lane, height)
                         && target.dataspace.is_none_or(|dataspace| {
                             route.lane == GLOBAL_LANE
@@ -190,7 +213,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                     } else {
                         GLOBAL_LANE
                     },
-                );
+                ));
             }
         }
         let mut shards = self.shards(height);
@@ -204,9 +227,9 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
             });
         }
         let Some(authority) = tx.authority_opt() else {
-            return Some(GLOBAL_LANE);
+            return Ok(Some(GLOBAL_LANE));
         };
-        Some(shards[default_shard(authority, shards.len())])
+        Ok(Some(shards[default_shard(authority, shards.len())]))
     }
 }
 
@@ -222,18 +245,19 @@ pub struct RoutingSnapshot {
 
 impl RoutingSnapshot {
     /// The routing inputs of the committed state `view` (for the height after its tip).
-    #[must_use]
-    pub fn of(view: &impl StateReadOnly) -> Self {
-        Self {
-            root_scope: committed_root_scope(view.world()),
-            policy: super::lane_policy(view.world()),
+    pub fn of(
+        view: &impl StateReadOnly,
+    ) -> Result<Self, crate::execution_attempt::ExecutionDeferred> {
+        Ok(Self {
+            root_scope: read_routing_root_scope(view.world())?,
+            policy: super::lane_policy(view.world())?,
             lanes: view.world().sumeragi_lanes().clone(),
             dataspaces: view.nexus().dataspace_catalog.clone(),
             ledger_time_ms: view
                 .latest_block()
                 .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
                 .unwrap_or(0),
-        }
+        })
     }
 
     /// The committed lane policy.
@@ -265,18 +289,48 @@ impl RoutingSnapshot {
 /// Read the root scope exclusively from immutable, validated genesis metadata in World.
 /// Missing, malformed or unsupported metadata never acquires global routing authority.
 pub fn committed_root_scope(world: &impl WorldReadOnly) -> Option<SumeragiRootScope> {
-    let metadata = world
-        .parameters()
-        .custom()
-        .get(&consensus_metadata::handshake_meta_id())?
-        .payload()
-        .try_into_any::<ConsensusHandshakeMetadata>()
-        .ok()?;
-    metadata.validate().ok()?;
-    if metadata.wire_protocol_version != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION) {
-        return None;
+    read_committed_root_scope(world).ok().flatten()
+}
+
+/// Preserve original root decoding through native routing and pre-effect capture.
+/// Completed malformed metadata remains scope absence; local refusal never does.
+pub(crate) fn read_routing_root_scope(
+    world: &impl WorldReadOnly,
+) -> Result<Option<SumeragiRootScope>, crate::execution_attempt::ExecutionDeferred> {
+    match read_committed_root_scope(world) {
+        Ok(scope) => Ok(scope),
+        Err(error) => match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                if cfg!(all(test, sumeragi_core_mutation = "HC39")) {
+                    return Ok(None);
+                }
+                Err(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(()) => Ok(None),
+        },
     }
-    Some(metadata.sumeragi_context.root_scope)
+}
+
+/// Read the same immutable scope while preserving the original JSON decoder failure.
+/// Execution must retain a local refusal; a missing or malformed owner never grants scope.
+pub(crate) fn read_committed_root_scope(
+    world: &impl WorldReadOnly,
+) -> Result<Option<SumeragiRootScope>, norito::json::Error> {
+    let parameters = world.parameters();
+    let Some(metadata) = parameters
+        .custom()
+        .get(&consensus_metadata::handshake_meta_id())
+    else {
+        return Ok(None);
+    };
+    let metadata: ConsensusHandshakeMetadata =
+        norito::json::from_str(metadata.payload().get().as_str())?;
+    if metadata.validate().is_err()
+        || metadata.wire_protocol_version != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
+    {
+        return Ok(None);
+    }
+    Ok(Some(metadata.sumeragi_context.root_scope))
 }
 
 #[cfg(test)]
@@ -401,7 +455,7 @@ mod tests {
         };
         let routed = transactions
             .iter()
-            .map(|tx| inputs.route(tx, 20))
+            .map(|tx| inputs.route(tx, 20).expect("completed routing read"))
             .collect::<Vec<_>>();
         for lane in [0, 16, 17] {
             assert!(
@@ -411,20 +465,24 @@ mod tests {
         }
         // The same account always routes to the same lane.
         assert_eq!(
-            inputs.route(&transactions[2], 20),
-            inputs.route(&transactions[2], 20)
+            inputs
+                .route(&transactions[2], 20)
+                .expect("completed routing read"),
+            inputs
+                .route(&transactions[2], 20)
+                .expect("completed routing read")
         );
         // Until the global chain has applied the activation height, and from the height after
         // closing, a lane receives nothing.
         assert!(
-            transactions
-                .iter()
-                .all(|tx| inputs.route(tx, 10) == Some(GLOBAL_LANE))
+            transactions.iter().all(
+                |tx| inputs.route(tx, 10).expect("completed routing read") == Some(GLOBAL_LANE)
+            )
         );
         assert!(
-            transactions
-                .iter()
-                .any(|tx| inputs.route(tx, 11) != Some(GLOBAL_LANE))
+            transactions.iter().any(
+                |tx| inputs.route(tx, 11).expect("completed routing read") != Some(GLOBAL_LANE)
+            )
         );
         let closing = lanes(vec![record(16, 10, Some(15)), record(17, 10, Some(15))]);
         let inputs = RoutingInputs {
@@ -432,14 +490,14 @@ mod tests {
             ..inputs
         };
         assert!(
-            transactions
-                .iter()
-                .any(|tx| inputs.route(tx, 15) != Some(GLOBAL_LANE))
+            transactions.iter().any(
+                |tx| inputs.route(tx, 15).expect("completed routing read") != Some(GLOBAL_LANE)
+            )
         );
         assert!(
-            transactions
-                .iter()
-                .all(|tx| inputs.route(tx, 16) == Some(GLOBAL_LANE))
+            transactions.iter().all(
+                |tx| inputs.route(tx, 16).expect("completed routing read") == Some(GLOBAL_LANE)
+            )
         );
         // Without a policy every transaction belongs to lane 0.
         let inputs = RoutingInputs {
@@ -448,9 +506,9 @@ mod tests {
             ..inputs
         };
         assert!(
-            transactions
-                .iter()
-                .all(|tx| inputs.route(tx, 20) == Some(GLOBAL_LANE))
+            transactions.iter().all(
+                |tx| inputs.route(tx, 20).expect("completed routing read") == Some(GLOBAL_LANE)
+            )
         );
     }
 
@@ -471,6 +529,7 @@ mod tests {
                 ledger_time_ms: 0,
             }
             .route(&transaction, height)
+            .expect("completed routing read")
         };
         let to = |lane: u32, instruction: &str| SumeragiLaneRoute {
             lane: LaneId::new(lane),
@@ -515,21 +574,27 @@ mod tests {
             ledger_time_ms: 0,
         };
         assert_eq!(
-            inputs.execution_route(&tx, 6),
+            inputs
+                .execution_route(&tx, 6)
+                .expect("completed routing read"),
             Some(crate::queue::RoutingDecision::new(
                 LaneId::new(3),
                 DataSpaceId::new(7)
             ))
         );
         assert_eq!(
-            inputs.execution_route(&tx, 8),
+            inputs
+                .execution_route(&tx, 8)
+                .expect("completed routing read"),
             Some(crate::queue::RoutingDecision::new(
                 LaneId::new(3),
                 DataSpaceId::new(7)
             ))
         );
         assert_eq!(
-            inputs.execution_route(&tx, 9),
+            inputs
+                .execution_route(&tx, 9)
+                .expect("completed routing read"),
             Some(crate::queue::RoutingDecision::new(
                 GLOBAL_LANE,
                 DataSpaceId::UNIVERSAL
@@ -565,7 +630,12 @@ mod tests {
         };
         assert!(!inputs.admitted(GLOBAL_LANE, 2));
         assert!(inputs.shards(2).is_empty());
-        assert_eq!(inputs.execution_route(&tx(1), 2), None);
+        assert_eq!(
+            inputs
+                .execution_route(&tx(1), 2)
+                .expect("completed routing read"),
+            None
+        );
         let invalid = RoutingInputs {
             root_scope: Some(SumeragiRootScope::Dataspace {
                 parent_network_id: tx(1).external().unwrap().network_id().copied().unwrap(),
@@ -575,7 +645,12 @@ mod tests {
         };
         assert!(!invalid.admitted(GLOBAL_LANE, 2));
         assert!(invalid.shards(2).is_empty());
-        assert_eq!(invalid.execution_route(&tx(1), 2), None);
+        assert_eq!(
+            invalid
+                .execution_route(&tx(1), 2)
+                .expect("completed routing read"),
+            None
+        );
     }
 
     #[test]
@@ -650,7 +725,12 @@ mod tests {
             ]
             .into(),
         ));
-        assert_eq!(inputs.execution_route(&upload, 2), expected);
+        assert_eq!(
+            inputs
+                .execution_route(&upload, 2)
+                .expect("completed routing read"),
+            expected
+        );
         for (target, expected) in [
             (own, expected),
             (DataSpaceId::new(7), None),
@@ -662,7 +742,12 @@ mod tests {
                 entrypoint: "call".into(),
                 arguments: None,
             }));
-            assert_eq!(inputs.execution_route(&call, 2), expected);
+            assert_eq!(
+                inputs
+                    .execution_route(&call, 2)
+                    .expect("completed routing read"),
+                expected
+            );
         }
         let control: InstructionBox =
             SetParameter::new(test_support::metadata(SumeragiRootScope::Global)).into();
@@ -674,15 +759,26 @@ mod tests {
             ]
             .into(),
         ));
-        assert_eq!(inputs.execution_route(&control_only, 2), None);
-        assert_eq!(inputs.execution_route(&mixed, 2), None);
+        assert_eq!(
+            inputs
+                .execution_route(&control_only, 2)
+                .expect("completed routing read"),
+            None
+        );
+        assert_eq!(
+            inputs
+                .execution_route(&mixed, 2)
+                .expect("completed routing read"),
+            None
+        );
         let no_catalog = DataSpaceCatalog::default();
         assert_eq!(
             RoutingInputs {
                 dataspaces: &no_catalog,
                 ..inputs
             }
-            .execution_route(&upload, 2),
+            .execution_route(&upload, 2)
+            .expect("completed routing read"),
             None
         );
     }

@@ -69,7 +69,7 @@ impl Projection {
         &mut self,
         instruction: &InstructionBox,
         occurrence: &Value,
-        path: String,
+        path: &str,
     ) -> Result<()> {
         self.count("explicit_native_instructions");
         if let Some(isi) = instruction
@@ -93,8 +93,8 @@ impl Projection {
                     &cert.public_state,
                     norito::canonical_decode_limits(cert.public_state.len()),
                 );
-                match decoded {
-                    Ok(record) => norito::json!({
+                if let Ok(record) = decoded {
+                    norito::json!({
                         "decoded": true,
                         "network_id": (record.session.network_id.to_string()),
                         "session_id": (hex::encode(record.session.session_id)),
@@ -109,8 +109,9 @@ impl Projection {
                             && record.session.session_id == cert.session_id
                             && record.session.transcript_hash == cert.transcript_hash),
                         "public_dkg_validated": false
-                    }),
-                    Err(_) => norito::json!({"decoded": false, "public_dkg_validated": false}),
+                    })
+                } else {
+                    norito::json!({"decoded": false, "public_dkg_validated": false})
                 }
             } else {
                 Value::Null
@@ -135,14 +136,14 @@ impl Projection {
         match executable {
             Executable::Instructions(instructions) => {
                 for (index, isi) in instructions.iter().enumerate() {
-                    self.instruction(isi, occurrence, format!("instructions/{index}"))?;
+                    self.instruction(isi, occurrence, &format!("instructions/{index}"))?;
                 }
             }
             Executable::Batch(items) => {
                 for (index, item) in items.iter().enumerate() {
                     match item {
                         ExecutableBatchItem::Instruction(isi) => {
-                            self.instruction(isi, occurrence, format!("batch/{index}"))?
+                            self.instruction(isi, occurrence, &format!("batch/{index}"))?
                         }
                         ExecutableBatchItem::ContractCall(_) => {
                             self.gap("contract_calls_not_replayed")
@@ -153,7 +154,7 @@ impl Projection {
             Executable::IvmProved(proved) => {
                 self.gap("proved_ivm_runtime_not_replayed");
                 for (index, isi) in proved.overlay.iter().enumerate() {
-                    self.instruction(isi, occurrence, format!("proved_overlay/{index}"))?;
+                    self.instruction(isi, occurrence, &format!("proved_overlay/{index}"))?;
                 }
             }
             Executable::Ivm(_) => self.gap("ivm_runtime_not_replayed"),
@@ -204,7 +205,7 @@ impl Projection {
         if let Ok(steps) = result.as_ref() {
             for (step_index, step) in steps.iter().enumerate() {
                 for (index, isi) in step.instructions.iter().enumerate() {
-                    self.instruction(isi, occurrence, format!("{path}/{step_index}/{index}"))?;
+                    self.instruction(isi, occurrence, &format!("{path}/{step_index}/{index}"))?;
                 }
             }
         }
@@ -258,8 +259,10 @@ impl Projection {
         });
         self.recorded_steps(result, &occurrence, "recorded_trigger")?;
         match failure_root {
-            Some(TriggerFailureRootV1::DeclaredInstructionProjection(step))
-            | Some(TriggerFailureRootV1::ReturnedBeforeRollback(step)) => {
+            Some(
+                TriggerFailureRootV1::DeclaredInstructionProjection(step)
+                | TriggerFailureRootV1::ReturnedBeforeRollback(step),
+            ) => {
                 let path = if matches!(
                     failure_root,
                     Some(TriggerFailureRootV1::DeclaredInstructionProjection(_))
@@ -269,7 +272,7 @@ impl Projection {
                     "rolled_back_trigger"
                 };
                 for (index, isi) in step.iter().enumerate() {
-                    self.instruction(isi, &occurrence, format!("{path}/{index}"))?;
+                    self.instruction(isi, &occurrence, &format!("{path}/{index}"))?;
                 }
             }
             Some(
@@ -532,7 +535,7 @@ mod tests {
                 0,
                 BTreeMap::new(),
                 Vec::new(),
-                Default::default(),
+                iroha_data_model::nexus::AxtPolicySnapshot::default(),
                 BTreeSet::new(),
                 &ExecutionOutputLimits {
                     max_outputs: 16,
@@ -1129,7 +1132,7 @@ mod tests {
         install.certificate.public_state = b"opaque-private-sentinel".to_vec();
         let mut projection = Projection::default();
         projection
-            .instruction(&install.into(), &Value::Null, "instructions/0".to_owned())
+            .instruction(&install.into(), &Value::Null, "instructions/0")
             .expect("candidate");
         let text = json::to_json(&projection.records).expect("render projection");
         assert!(text.contains("finalize_global_beacon_key"));
@@ -1147,7 +1150,7 @@ mod tests {
             ),
         );
         projection
-            .instruction(&unrelated.into(), &Value::Null, "instructions/1".to_owned())
+            .instruction(&unrelated.into(), &Value::Null, "instructions/1")
             .expect("ignore unrelated parameter");
         assert_eq!(projection.records.len(), 1);
     }

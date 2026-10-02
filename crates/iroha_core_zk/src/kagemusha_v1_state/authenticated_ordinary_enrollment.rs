@@ -6,11 +6,8 @@
 //! and a descriptor-held native logical journal; an OEM response cannot substitute for either.
 
 use super::*;
-pub(crate) use crate::kagemusha_v1_recursion::{
-    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
-};
+#[cfg(feature = "kagemusha-production-prover")]
+pub(crate) use crate::kagemusha_v1_recursion::verify_ordinary_bootstrap_guard_v1;
 use iroha_data_model::kagemusha::{
     KagemushaVerifiedOrdinaryAppCredentialV1,
     KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
@@ -20,6 +17,19 @@ use iroha_data_model::kagemusha::{
 #[path = "authenticated_ordinary_current_publication.rs"]
 mod current_publication;
 pub use current_publication::KagemushaAuthenticatedOrdinaryCurrentPublicationV1;
+
+#[path = "authenticated_ordinary_cash_owner.rs"]
+mod cash_owner;
+pub use cash_owner::KagemushaNativeOrdinaryCashOwnerV1;
+pub(crate) use cash_owner::{
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
+};
 
 #[path = "authenticated_ordinary_logical_journal.rs"]
 mod logical_journal;
@@ -236,12 +246,12 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
         capacity: KagemushaDurableCapacityV1,
         trusted_native_now_ms: u64,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        if trusted_native_now_ms != enrollment.authenticated_at_ms() {
+        if trusted_native_now_ms < enrollment.authenticated_at_ms() {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         enrollment
             .possession()
-            .recheck_at_trusted_time(trusted_native_now_ms)
+            .recheck_at_trusted_time(enrollment.authenticated_at_ms())
             .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
         let release = admitted_release(&recursive_verifier)?;
         let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
@@ -374,6 +384,23 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
 
     /// Independently verify the real paired zero-State against the complete selected preview.
     /// The ordinary platform Guard and actual logical checkpoint remain mandatory afterward.
+    /// Copy the sole complete public original from this exact zero selection after both real
+    /// State proofs and their whole histories verify. This data grants no Anchor or money.
+    pub(crate) fn lineage_public_state_original(
+        &self,
+        proof: &KagemushaPairedProofV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.verify_state_proof(proof)?;
+        let inputs =
+            bootstrap_state_public_inputs(self.proof_release.artifacts, &self.preview, proof)?;
+        let original = crate::kagemusha_v1_recursion::KagemushaOrdinaryLineageStateOriginalV1::from_bootstrap_public_inputs(&inputs, proof)
+            .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
+            .canonical_bytes()
+            .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+        self.recheck_original_selection()?;
+        Ok(original)
+    }
+
     pub(crate) fn verify_state_proof(
         &self,
         proof: &KagemushaPairedProofV1,

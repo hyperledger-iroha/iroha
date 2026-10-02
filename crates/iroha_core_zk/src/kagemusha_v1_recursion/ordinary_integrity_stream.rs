@@ -4,12 +4,12 @@
 //! remain real constrained cells. This module grants no lease or signature authority.
 
 use super::{
-    canonical_preimage::{crc64_xz_prefix_bytes_v1, stream::KagemushaBoundedByteStreamV1},
+    canonical_preimage::stream::KagemushaBoundedByteStreamV1,
     ordinary_integrity_binding::OrdinaryIntegrityLeaseCellsV1,
 };
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
 use halo2_base::{
     AssignedValue, QuantumCell,
@@ -74,30 +74,6 @@ fn positions<F: KagemushaPoseidonFieldV1>(
     Ok(values)
 }
 
-/// Select exact grammar bytes. Common constants/cells are shared rather than repeated 65 times.
-fn select_byte<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut halo2_base::Context<F>,
-    range: &halo2_base::gates::RangeChip<F>,
-    selectors: &[AssignedValue<F>],
-    bytes: &[PastaSha256ByteV1<F>],
-) -> PastaSha256ByteV1<F> {
-    let first = bytes[0].quantum_cell();
-    let same = bytes.iter().all(|b| match (first, b.quantum_cell()) {
-        (QuantumCell::Constant(a), QuantumCell::Constant(b)) => a == b,
-        (QuantumCell::Existing(a), QuantumCell::Existing(b)) => a.cell == b.cell,
-        _ => false,
-    });
-    if same {
-        return bytes[0];
-    }
-    let byte = range.gate().inner_product(
-        ctx,
-        selectors.iter().copied(),
-        bytes.iter().map(|b| b.quantum_cell()),
-    );
-    PastaSha256ByteV1::range_checked(ctx, range, byte)
-}
-
 /// Hash one exact selected original with one fixed capacity, including its active payload CRC.
 pub(super) fn reconstruct_ordinary_integrity_stream_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
@@ -149,133 +125,41 @@ pub(super) fn reconstruct_ordinary_integrity_stream_v1<F: KagemushaPoseidonField
         .iter()
         .map(|v| positions(v, cells))
         .collect::<Result<Vec<_>, _>>()?;
-    let make_segment = |ctx: &mut halo2_base::Context<F>,
-                        prefix: bool|
-     -> Result<KagemushaBoundedByteStreamV1<F>, String> {
-        let capacity = if prefix {
-            grammar.maximum_prefix_bytes
-        } else {
-            grammar.maximum_suffix_bytes
-        };
-        let mut segment = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            let choices = grammar
-                .lengths
-                .iter()
-                .zip(&maps)
-                .map(|(v, map)| {
-                    let bytes = if prefix { &v.prefix } else { &v.suffix };
-                    let Some(template) = bytes.get(i) else {
-                        return Ok(PastaSha256ByteV1::constant(0));
-                    };
-                    let global = if prefix {
-                        i
-                    } else {
-                        v.layout.bytes.len() - v.suffix.len() + i
-                    };
-                    if let Some(&semantic) = map.get(&global) {
-                        return Ok(semantic);
-                    }
-                    if v.header_crc_bytes.contains(&global) {
-                        return Ok(PastaSha256ByteV1::constant(0));
-                    }
-                    template
-                        .map(PastaSha256ByteV1::constant)
-                        .ok_or_else(|| "ordinary lease stream has an unassigned byte".to_owned())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            segment.push(select_byte(ctx, &range, &selectors, &choices));
-        }
-        let length = range.gate().inner_product(
-            ctx,
-            selectors.iter().copied(),
-            grammar.lengths.iter().map(|v| {
-                QuantumCell::Constant(F::from(if prefix {
-                    v.prefix.len()
-                } else {
-                    v.suffix.len()
-                } as u64))
-            }),
-        );
-        KagemushaBoundedByteStreamV1::constrain(ctx, &range, segment, length)
-    };
-    let prefix = make_segment(ctx, true)?;
-    let suffix = make_segment(ctx, false)?;
-    // The model's repeated framing follows each raw byte except the last. Build all 72 units;
-    // circuit selectors keep the sole final raw byte and discard its subsequent framing.
-    let stride = grammar.repeated_der_byte_unit.len();
-    let der_capacity = 71 * stride + 1;
-    let mut der = Vec::with_capacity(der_capacity);
-    for i in 0..72 {
-        let active =
-            range.is_less_than(ctx, QuantumCell::Constant(F::from(i as u64)), der_length, 7);
-        let byte = range
-            .gate()
-            .mul(ctx, cells.possession[i].quantum_cell(), active);
-        der.push(PastaSha256ByteV1::range_checked(ctx, &range, byte));
-        if i < 71 {
-            let continues = range.is_less_than(
-                ctx,
-                QuantumCell::Constant(F::from((i + 1) as u64)),
-                der_length,
-                7,
-            );
-            for fixed in grammar.repeated_der_byte_unit.iter().skip(1) {
-                let byte = range.gate().mul(
-                    ctx,
-                    QuantumCell::Constant(F::from(u64::from(
-                        fixed.ok_or("ordinary lease DER unit differs")?,
-                    ))),
-                    continues,
-                );
-                der.push(PastaSha256ByteV1::range_checked(ctx, &range, byte));
-            }
-        }
-    }
-    let one_less = range
-        .gate()
-        .sub(ctx, der_length, QuantumCell::Constant(F::ONE));
-    let der_size = range.gate().mul_add(
-        ctx,
-        one_less,
-        QuantumCell::Constant(F::from(stride as u64)),
-        QuantumCell::Constant(F::ONE),
-    );
-    let der = KagemushaBoundedByteStreamV1::constrain(ctx, &range, der, der_size)?;
-    let stream = prefix
-        .concat(ctx, &range, &der, grammar.maximum_stream_bytes)?
-        .concat(ctx, &range, &suffix, grammar.maximum_stream_bytes)?;
-    let payload_len = range.gate().sub(
-        ctx,
-        stream.actual_len(),
-        QuantumCell::Constant(F::from(payload_start as u64)),
-    );
-    let payload = KagemushaBoundedByteStreamV1::constrain(
+    let raw = KagemushaBoundedByteStreamV1::constrain(
         ctx,
         &range,
-        stream.bytes()[payload_start..].to_vec(),
-        payload_len,
+        cells.possession.to_vec(),
+        der_length,
     )?;
-    let checksum = crc64_xz_prefix_bytes_v1(ctx, &range, payload.bytes(), payload.actual_len())?;
-    let mut message = stream.bytes().to_vec();
-    for (position, byte) in first.header_crc_bytes.iter().zip(checksum) {
-        message[*position] = byte;
-    }
-    let words = jobs.digest_bounded_constrained(ctx, &range, &message, stream.actual_len())?;
-    let mut digest = Vec::with_capacity(32);
-    for word in words {
-        let bits = PastaSha256BitV1::decompose(ctx, range.gate(), word, 32);
-        for offset in [24, 16, 8, 0] {
-            digest.push(PastaSha256ByteV1::from_bits_le(
-                ctx,
-                range.gate(),
-                &bits[offset..offset + 8],
-            ));
-        }
-    }
-    digest
-        .try_into()
-        .map_err(|_| "ordinary lease SHA width differs".into())
+    let variants = grammar
+        .lengths
+        .iter()
+        .zip(selectors)
+        .zip(maps)
+        .map(|((v, selector), semantic_bytes)| {
+            super::canonical_preimage::selected_stream::CanonicalSelectedStreamVariantV1 {
+                selector,
+                raw_length: v.der_length,
+                prefix: v.prefix.clone(),
+                suffix: v.suffix.clone(),
+                complete_length: v.layout.bytes.len(),
+                header_crc_bytes: v.header_crc_bytes,
+                archive_payload_start: v.archive_payload.start,
+                semantic_bytes,
+            }
+        })
+        .collect::<Vec<_>>();
+    super::canonical_preimage::selected_stream::reconstruct_selected_canonical_stream_v1(
+        builder,
+        jobs,
+        &variants,
+        &grammar.repeated_der_byte_unit,
+        grammar.maximum_prefix_bytes,
+        grammar.maximum_suffix_bytes,
+        grammar.maximum_stream_bytes,
+        &raw,
+        7,
+    )
 }
 
 #[cfg(test)]

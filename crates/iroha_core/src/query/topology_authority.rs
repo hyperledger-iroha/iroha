@@ -573,10 +573,10 @@ mod tests {
                     deployment_id: "production-primary".into(),
                     control: TopologyHeadV1::EMPTY,
                     operations: first.operations,
-                    action: TopologyActionV1::Expire(TopologyExpireV1 {
+                    action: TopologyActionV1::Expire(Box::new(TopologyExpireV1 {
                         operation_id: id,
                         reservation,
-                    }),
+                    })),
                 },
                 context: TopologyContextClaimV1 {
                     execution: execution_at(3),

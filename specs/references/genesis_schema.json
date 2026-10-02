@@ -1449,6 +1449,10 @@
         "type": "FastpqSourceLimitsV1"
       },
       {
+        "name": "max_native_maintenance_invocations",
+        "type": "u32"
+      },
+      {
         "name": "mandatory",
         "type": "FastpqMandatorySourcePolicyV1"
       }

@@ -11,18 +11,15 @@ import java.security.MessageDigest
  * multi-credit inbox, trusted clock, exact-next counter, hardware-epoch rotation, or authenticated
  * payment outbox required by KAGEMUSHA V1. This bridge therefore becomes available only when
  * the loaded native bridge exposes the complete hardware capability frame. Missing symbols,
- * partial capabilities, malformed replies, and every native failure leave the wallet online-only.
+ * partial capabilities, malformed replies, and native failures prevent provider admission.
  * There is no software backend or downgrade path.
  */
 class KagemushaDeviceLifecycleBridgeV1 private constructor(
-    private val endpoint: Endpoint?,
-    private val acceptedCapabilities: Capabilities?,
+    private val endpoint: Endpoint,
+    private val acceptedCapabilities: Capabilities,
 ) {
     /** Whether this device may execute the complete KAGEMUSHA lifecycle. */
     enum class Availability {
-        /** No qualifying secure backend is present; ordinary online wallet use remains valid. */
-        ONLINE_ONLY,
-
         /** The exact native secure-backend capability contract matched structurally. */
         AVAILABLE,
     }
@@ -135,16 +132,9 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         fun canonicalResponseFrame(): ByteArray = responseFrameBytes.copyOf()
     }
 
-    /** Stable local mode. Unsupported devices are intentionally not exceptional at discovery. */
-    val availability: Availability =
-        if (endpoint != null && acceptedCapabilities != null) {
-            Availability.AVAILABLE
-        } else {
-            Availability.ONLINE_ONLY
-        }
-
-    /** The accepted hardware policy, or `null` while the device is online-only. */
-    fun capabilities(): Capabilities? = acceptedCapabilities
+    /** Every constructed bridge carries the exact structurally admitted capability contract. */
+    val availability: Availability = Availability.AVAILABLE
+    fun capabilities(): Capabilities = acceptedCapabilities
 
     /**
      * Execute one exact canonical Core command.
@@ -164,7 +154,6 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         acceptedDevicePublicKey: ByteArray?,
     ): Result {
         val nativeEndpoint = endpoint
-            ?: throw IllegalStateException(ONLINE_ONLY_MESSAGE)
         val responseKey = when (operation) {
             Operation.READ_ACTIVE_HARDWARE_CREDENTIAL -> {
                 require(acceptedDevicePublicKey == null) {
@@ -260,23 +249,18 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         private val REQUIRED_FEATURES = Capability.values().fold(0) { mask, capability ->
             mask or capability.mask
         }
-        private const val ONLINE_ONLY_MESSAGE =
-            "KAGEMUSHA V1 requires a rollback-resistant secure journal/outbox backend; this device remains online-only"
-
-        /** Discover the optional native secure backend without permitting a software fallback. */
+        /** Open the mandatory native backend and admit its complete capability frame. */
         @JvmStatic
         fun production(): KagemushaDeviceLifecycleBridgeV1 {
-            val nativeEndpoint = NativeEndpoint.create() ?: return onlineOnly()
-            val capabilities = runCatching {
+            val nativeEndpoint = NativeEndpoint.create()
+                ?: throw IllegalStateException("Qualified KAGEMUSHA native provider is required")
+            val capabilities = try {
                 Codec.decodeCapabilities(nativeEndpoint.capabilities(), ANDROID_PLATFORM_CODE)
-            }.getOrNull() ?: return onlineOnly()
+            } catch (failure: RuntimeException) {
+                throw IllegalStateException("KAGEMUSHA native capability qualification failed", failure)
+            }
             return KagemushaDeviceLifecycleBridgeV1(nativeEndpoint, capabilities)
         }
-
-        /** Explicit online-only instance for products that do not ship a qualifying backend. */
-        @JvmStatic
-        fun onlineOnly(): KagemushaDeviceLifecycleBridgeV1 =
-            KagemushaDeviceLifecycleBridgeV1(null, null)
 
         /**
          * Return the native library's canonical Norito contract vector, when linked.

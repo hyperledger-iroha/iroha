@@ -60,19 +60,21 @@ use super::{
     KagemushaPastaParityV1,
     canonical_preimage::assemble_canonical_preimage_v1,
     deferred_parent::{
-        DeferredAccumulator, KagemushaNativeDeferredBatchV1, accumulator_limb_count,
-        bind_accumulator_limbs, constrain_reciprocal_native_batch_with_carrier_v1,
-        deferred_field_chips_v1, deferred_loader_v1,
-        derive_native_deferred_batch_with_u128_binding_v1, kagemusha_protocol_structure_digest_v1,
-        load_and_constrain_parent_protocol_v1, load_native_accumulator,
-        native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1, verify_fold,
-        verify_ordinary_proof_v1, verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
+        KagemushaNativeDeferredBatchV1, accumulator_limb_count, bind_accumulator_limbs,
+        constrain_reciprocal_native_batch_with_carrier_v1, deferred_field_chips_v1,
+        deferred_loader_v1, derive_native_deferred_batch_with_u128_binding_v1,
+        kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_v1,
+        load_native_accumulator, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
+        verify_fold, verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
     },
     guard_bundle::{
         AssignedCredentialV1, KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
         KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
         KagemushaPlatformCredentialStatementV1, assert_digest_nonzero, assign_bytes,
-        assign_credential_statement_v1, bind_equal_digest, constant_bytes,
+        assign_credential_statement_v1, bind_equal_digest,
+        canonical_platform_credential_carrier_binding_tail_v1, constant_bytes,
         constrain_enabled_hardware_profile_membership_v1, constrain_platform_guarantees_v1,
         device_authority_commitment_v1, digest_limbs_assigned, hash,
         platform_credential_public_instance,
@@ -107,6 +109,10 @@ const HARDWARE_AUTHORIZATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-hardwa
 const MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1: u32 = 5;
 const MINT_AUTHORIZATION_HASH_CLAIM_EQUATION_TAG_V1: u32 = 14;
 const _: () = assert!(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 == 14);
+const MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1: usize = 14;
+const MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1: usize =
+    KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+        + MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1;
 
 fn require_mint_assertion_fold_v1(
     platform_class: KagemushaHardwarePlatformClassV1,
@@ -684,12 +690,14 @@ fn validate_credential_public_instances_v1<F: KagemushaPoseidonFieldV1>(
     instances: &[Vec<F>],
     credential_digest: DigestV1,
     carried_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-) -> Result<(), String> {
-    if instances.len() != 1
-        || instances[0].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+) -> Result<[u128; MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1], String> {
+    if instances.len() != 3
+        || instances[0].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || instances[1].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1
+        || instances[2].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1
     {
         return Err(format!(
-            "{parity:?} mint-authorization credential public shape is not exactly one-by-{KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1}"
+            "{parity:?} mint-authorization credential public shape is not exactly [{KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1}, {KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1}, {KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1}]"
         ));
     }
     let column = &instances[0];
@@ -711,14 +719,43 @@ fn validate_credential_public_instances_v1<F: KagemushaPoseidonFieldV1>(
         })
         .collect::<Vec<_>>();
     if expected_history.len() != accumulator_limb_count()
-        || column.get(platform_credential_public_instance::HISTORY_START..)
-            != Some(expected_history.as_slice())
+        || column.get(
+            platform_credential_public_instance::HISTORY_START
+                ..KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+        ) != Some(expected_history.as_slice())
     {
         return Err(format!(
             "{parity:?} mint-authorization carried claim history does not match credential public rows 8..42"
         ));
     }
-    Ok(())
+    canonical_platform_credential_carrier_binding_tail_v1(instances).map_err(|error| {
+        format!("{parity:?} mint-authorization credential carrier binding is invalid: {error}")
+    })
+}
+
+fn validate_credential_public_pair_v1(
+    credential_digest: DigestV1,
+    eq_instances: &[Vec<Fp>],
+    eq_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    ep_instances: &[Vec<Fq>],
+    ep_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<[u128; MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1], String> {
+    let eq_tail = validate_credential_public_instances_v1(
+        KagemushaPastaParityV1::Eq,
+        eq_instances,
+        credential_digest,
+        eq_history,
+    )?;
+    let ep_tail = validate_credential_public_instances_v1(
+        KagemushaPastaParityV1::Ep,
+        ep_instances,
+        credential_digest,
+        ep_history,
+    )?;
+    if eq_tail != ep_tail {
+        return Err("mint-authorization Eq/Ep credential carrier bindings do not match".to_owned());
+    }
+    Ok(eq_tail)
 }
 
 fn validate_hash_claim_public_instances_v1<F: KagemushaPoseidonFieldV1>(
@@ -802,16 +839,11 @@ fn validate_recursive_witness_v1(
         );
     }
     let credential_digest = witness.relation.platform_credential.canonical_digest();
-    validate_credential_public_instances_v1(
-        KagemushaPastaParityV1::Eq,
+    validate_credential_public_pair_v1(
+        credential_digest,
         witness.eq_credential_instances,
-        credential_digest,
         witness.eq_credential_claim_history.as_bytes(),
-    )?;
-    validate_credential_public_instances_v1(
-        KagemushaPastaParityV1::Ep,
         witness.ep_credential_instances,
-        credential_digest,
         witness.ep_credential_claim_history.as_bytes(),
     )?;
     let eq_hash_claim_carrier_binding = validate_hash_claim_public_instances_v1(
@@ -920,12 +952,14 @@ pub(crate) fn derive_kagemusha_mint_authorization_deferred_audits_v1(
         witness.ep_deferred_audit,
         None,
     )?;
-    if eq_output.bound_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
-        || eq_output.bound_u128_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
-        || ep_output.bound_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
-        || ep_output.bound_u128_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+    if eq_output.bound_values.len() != MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1
+        || eq_output.bound_u128_values.len()
+            != MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1
+        || ep_output.bound_values.len() != MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1
+        || ep_output.bound_u128_values.len()
+            != MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1
     {
-        return Err("mint-authorization hash-claim carrier binding count drifted".to_owned());
+        return Err("mint-authorization credential/Claim carrier binding count drifted".to_owned());
     }
     super::base_packing::finalize_base_params_v1(&mut ep_builder, MINIMUM_UNUSABLE_ROWS)?;
     let ep_digest = super::composite::assigned_digest_bytes(&ep_output.challenge_limbs)?;
@@ -1189,13 +1223,16 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    if credential_protocol.num_instance != [KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1]
-        || credential_public_instances.len() != 1
-        || credential_public_instances[0].len()
-            != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+    if credential_protocol.num_instance
+        != [
+            KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+            KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        ]
     {
-        return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
+        return Err("mint-authorization credential proof has wrong fixed hybrid shape".to_owned());
     }
+    canonical_platform_credential_carrier_binding_tail_v1(credential_public_instances)?;
     if hash_claim_protocol.num_instance
         != [
             KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
@@ -1218,7 +1255,9 @@ where
         .map_err(|error| {
             format!("mint-authorization credential proof profile is invalid: {error}")
         })?
-        .byte_len;
+        .byte_len
+        .checked_add(64)
+        .ok_or_else(|| "mint-authorization credential proof framing overflows".to_owned())?;
     if credential_proof.len() != credential_proof_len {
         return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
     }
@@ -1275,18 +1314,13 @@ where
         &expected_credential_protocol,
     )
     .map_err(|error| format!("mint-authorization credential protocol binding failed: {error:?}"))?;
-    let credential_instances = credential_public_instances
+    // Only the complete small semantic column enters Base. Both full carriers are authenticated
+    // by the actual hybrid ordinary reader and its proof-supplied instance commitments.
+    let credential_semantic = credential_public_instances[0]
         .iter()
-        .map(|column| {
-            column
-                .iter()
-                .map(|value| loader.assign_scalar(*value))
-                .collect::<Vec<_>>()
-        })
+        .map(|value| loader.assign_scalar(*value))
         .collect::<Vec<_>>();
-    let credential_column = credential_instances
-        .first()
-        .ok_or_else(|| "mint-authorization credential public column is absent".to_owned())?;
+    let credential_column = &credential_semantic;
     for (actual, expected) in credential_column
         .get(
             platform_credential_public_instance::CREDENTIAL_LO
@@ -1301,14 +1335,47 @@ where
             .main()
             .constrain_equal(&actual.assigned(), &expected);
     }
-    let credential_accumulator: DeferredAccumulator<'_, C> = verify_ordinary_proof_v1(
+    let credential_current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
         &loader,
         succinct_vk,
         &loaded_protocol.protocol,
-        &credential_instances,
+        &credential_semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    platform_credential_public_instance::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    platform_credential_public_instance::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    platform_credential_public_instance::EQ_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    platform_credential_public_instance::EQ_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    platform_credential_public_instance::EP_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    platform_credential_public_instance::EP_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    platform_credential_public_instance::EP_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    platform_credential_public_instance::EP_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+        },
         credential_proof,
     )
     .map_err(|error| format!("mint-authorization credential verifier failed: {error:?}"))?;
+    let credential_accumulator = credential_current.accumulator;
+    drop(credential_current.loaded_stream);
+    let credential_carrier_binding = credential_semantic
+        .get(KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1..)
+        .ok_or_else(|| "mint-authorization credential carrier binding is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    if credential_carrier_binding.len() != MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1 {
+        return Err("mint-authorization credential carrier binding shape drifted".to_owned());
+    }
     let credential_proof_equation_count = loader.ecc_chip().equation_count();
     if credential_proof_equation_count == 0 {
         return Err("mint-authorization credential verifier emitted no equations".to_owned());
@@ -1316,7 +1383,10 @@ where
     let carried_history = load_native_accumulator(&loader, credential_claim_history)
         .map_err(|error| format!("mint-authorization claim history load failed: {error:?}"))?;
     let carried_history_cells = credential_column
-        .get(platform_credential_public_instance::HISTORY_START..)
+        .get(
+            platform_credential_public_instance::HISTORY_START
+                ..KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+        )
         .ok_or_else(|| "mint-authorization credential claim-history rows are absent".to_owned())?
         .iter()
         .map(|value| *value.assigned())
@@ -1324,7 +1394,7 @@ where
     bind_accumulator_limbs(&loader, &carried_history, &carried_history_cells)
         .map_err(|error| format!("mint-authorization claim history binding failed: {error:?}"))?;
     drop(carried_history_cells);
-    drop(credential_instances);
+    drop(credential_semantic);
     let credential_complete = verify_fold(
         &loader,
         succinct_vk,
@@ -1482,12 +1552,19 @@ where
     let assigned_selectors = (0..equation_count)
         .map(|_| loader.ctx_mut().main().load_constant(C::ScalarExt::ONE))
         .collect::<Vec<_>>();
+    // Preserve the original Claim14 bound prefix, then bind every Credential14 cell once.
+    // These same cells enter both the complete audit challenge and reciprocal carrier equality.
+    let mut recursive_carrier_binding = hash_claim_carrier_binding;
+    recursive_carrier_binding.extend(credential_carrier_binding);
+    if recursive_carrier_binding.len() != MINT_AUTHORIZATION_RECURSIVE_CARRIER_BINDING_COUNT_V1 {
+        return Err("mint-authorization complete carrier binding count drifted".to_owned());
+    }
     let output = derive_native_deferred_batch_with_u128_binding_v1(
         &mut builder,
         loader,
         equation_tags,
         assigned_selectors,
-        &hash_claim_carrier_binding,
+        &recursive_carrier_binding,
     )
     .map_err(|error| format!("mint-authorization recursive audit failed: {error:?}"))?;
     let expected_offset = match parity {
@@ -2443,6 +2520,100 @@ mod canonical_tests;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn mint_credential_hybrid_data_admission_retains_complete_tail_and_exact_history() {
+        // Structural data only: these columns are not fabricated proofs or Native credentials.
+        fn columns<F: KagemushaPoseidonFieldV1>(
+            digest: DigestV1,
+            history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+        ) -> Vec<Vec<F>> {
+            let mut semantic =
+                vec![F::ZERO; KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1];
+            semantic[..2].copy_from_slice(&digest_limbs::<F>(digest));
+            for (cell, bytes) in semantic[platform_credential_public_instance::HISTORY_START
+                ..KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1]
+                .iter_mut()
+                .zip(history.chunks_exact(16))
+            {
+                *cell = F::from_u128(u128::from_le_bytes(bytes.try_into().unwrap()));
+            }
+            for (index, cell) in semantic[KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1..]
+                .iter_mut()
+                .enumerate()
+            {
+                *cell = F::from_u128(index as u128 + 1);
+            }
+            vec![
+                semantic,
+                vec![F::ZERO; KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1],
+                vec![F::ZERO; KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1],
+            ]
+        }
+        let digest = [0x27; 32];
+        let history = [0x35; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
+        let eq = columns::<Fp>(digest, &history);
+        let ep = columns::<Fq>(digest, &history);
+        let expected = std::array::from_fn(|index| index as u128 + 1);
+        assert_eq!(
+            validate_credential_public_pair_v1(digest, &eq, &history, &ep, &history).unwrap(),
+            expected
+        );
+        for index in 0..MINT_AUTHORIZATION_CREDENTIAL_CARRIER_BINDING_COUNT_V1 {
+            let mut changed = ep.clone();
+            changed[0][KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + index] += Fq::ONE;
+            assert!(
+                validate_credential_public_pair_v1(digest, &eq, &history, &changed, &history)
+                    .is_err()
+            );
+        }
+        for column in 0..3 {
+            let mut changed = eq.clone();
+            changed[column].pop();
+            assert!(
+                validate_credential_public_pair_v1(digest, &changed, &history, &ep, &history)
+                    .is_err()
+            );
+            let mut changed = ep.clone();
+            changed[column].push(Fq::ZERO);
+            assert!(
+                validate_credential_public_pair_v1(digest, &eq, &history, &changed, &history)
+                    .is_err()
+            );
+        }
+        let retired =
+            vec![eq[0][..KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1].to_vec()];
+        assert!(
+            validate_credential_public_pair_v1(digest, &retired, &history, &ep, &history).is_err()
+        );
+        let mut extra = ep.clone();
+        extra.push(vec![]);
+        assert!(
+            validate_credential_public_pair_v1(digest, &eq, &history, &extra, &history).is_err()
+        );
+        let mut wrong_history = history;
+        wrong_history[0] ^= 1;
+        assert!(
+            validate_credential_public_pair_v1(digest, &eq, &wrong_history, &ep, &history).is_err()
+        );
+        let mut wrong_digest = digest;
+        wrong_digest[0] ^= 1;
+        assert!(
+            validate_credential_public_pair_v1(wrong_digest, &eq, &history, &ep, &history).is_err()
+        );
+        let mut changed = eq.clone();
+        changed[0][KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1] =
+            Fp::from_u128(u128::MAX) + Fp::ONE;
+        assert!(
+            validate_credential_public_pair_v1(digest, &changed, &history, &ep, &history).is_err()
+        );
+        let mut changed = ep.clone();
+        changed[0][KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1] =
+            Fq::from_u128(u128::MAX) + Fq::ONE;
+        assert!(
+            validate_credential_public_pair_v1(digest, &eq, &history, &changed, &history).is_err()
+        );
+    }
     #[test]
     fn mint_host_keeps_oem_corridor_open_and_fails_closed_for_both_app_modes() {
         for class in [

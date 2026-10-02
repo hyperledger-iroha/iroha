@@ -67,10 +67,10 @@ MAX_OBSERVATION_RSS_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JSONL_ROWS = 5_000_000
 
 PAIRED_PROOF_MAX_BYTES = 6_528
-# Internal helper proofs are not wire payloads. This artifact-sized resource
-# ceiling limits filesystem work only; their admissible lengths come from the
-# authenticated compiled-protocol profile and are checked exactly below.
-INTERNAL_PROOF_RESOURCE_MAX_BYTES = MAX_ARTIFACT_BYTES
+# Internal helper proofs are not wire payloads. Each parity is bounded by the
+# canonical Rust release model's 64-MiB limit, and its exact length must match
+# the authenticated compiled-protocol profile checked below.
+INTERNAL_PROOF_RESOURCE_MAX_BYTES = 64 * 1024 * 1024
 RAW_COMPLETE_EXCHANGE_MAX_BYTES = 9_211
 TEXT_COMPLETE_EXCHANGE_MAX_BYTES = 12_288
 PROCESS_RSS_MAX_BYTES = 128 * 1024 * 1024
@@ -162,7 +162,13 @@ HELPERS = (
 )
 
 INTERNAL_PROOF_HELPERS = frozenset(
-    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim", "ordinary_app_guard"}
+    {
+        "platform_credential",
+        "guard_bundle",
+        "mint_hash_shard",
+        "mint_hash_claim",
+        "ordinary_app_guard",
+    }
 )
 
 ACCEPTANCE_CASES = (
@@ -2244,11 +2250,13 @@ class EvidenceVerifier:
                     or ep_proof_bytes == 0
                     or eq_proof_bytes % 32 != 0
                     or ep_proof_bytes % 32 != 0
+                    or eq_proof_bytes > INTERNAL_PROOF_RESOURCE_MAX_BYTES
+                    or ep_proof_bytes > INTERNAL_PROOF_RESOURCE_MAX_BYTES
                     or eq_proof_bytes + ep_proof_bytes > (1 << 32) - 1
                 ):
                     _fail(
                         f"{expected_helper} exact internal proof lengths must be "
-                        "nonzero 32-byte multiples with a bounded sum"
+                        "nonzero 32-byte multiples of at most 64 MiB each with a bounded sum"
                     )
             elif eq_proof_bytes != 0 or ep_proof_bytes != 0:
                 _fail(

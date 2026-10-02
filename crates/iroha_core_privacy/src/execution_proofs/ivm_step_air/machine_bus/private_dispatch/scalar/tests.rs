@@ -50,7 +50,7 @@ impl ScalarFixture {
         carries(
             &mut fixture.row[CARRIES..CARRIES + 4],
             record.before.gas_remaining,
-            1,
+            1 + u64::from(is_rotate(instruction)),
             true,
         );
         carries(
@@ -97,18 +97,23 @@ impl ScalarFixture {
                 false,
             );
         }
-        let left = wide::rs1(instruction);
-        let right = wide::rs2(instruction);
+        let left = left_register(instruction);
+        let right = right_register(instruction);
         let destination = wide::rd(instruction);
         for (slot, register, enabled, write) in [
             (SCALAR_LEFT, left, true, false),
             (
                 SCALAR_RIGHT,
                 right,
-                immediate_operand(instruction).is_none(),
+                right_immediate(instruction).is_none(),
                 false,
             ),
-            (SCALAR_DESTINATION, destination, destination != 0, true),
+            (
+                SCALAR_DESTINATION,
+                destination,
+                has_destination(instruction),
+                true,
+            ),
         ] {
             if enabled {
                 fixture.packets.fields[slot] = event(
@@ -133,7 +138,7 @@ impl ScalarFixture {
             }
         }
         let left = record.before.registers[left];
-        let right = immediate_operand(instruction).unwrap_or(record.before.registers[right]);
+        let right = right_immediate(instruction).unwrap_or(record.before.registers[right]);
         fixture.row[SCALAR..SCALAR + ALU].copy_from_slice(&word::witness(left, right));
         fixture.row[SCALAR + ALU..SCALAR + COMPARE].copy_from_slice(&alu::witness(
             if is_alu(instruction) {
@@ -154,8 +159,17 @@ impl ScalarFixture {
                 wide::control::BGEU,
             ][index]
         });
-        fixture.row[SCALAR + COMPARE..super::super::WIDTH]
+        fixture.row[SCALAR + COMPARE..SCALAR + SHIFT]
             .copy_from_slice(&branch::bank_witness(predicate, left, right));
+        fixture.row[SCALAR + SHIFT..super::super::WIDTH].copy_from_slice(&shift::bank_witness(
+            if shift_kind(instruction).is_some() {
+                wide::opcode(instruction)
+            } else {
+                wide::arithmetic::SLL
+            },
+            left,
+            right,
+        ));
         Self(fixture)
     }
     fn accepts(&self, program: &Program) -> bool {
@@ -183,7 +197,11 @@ fn native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFi
         .first()
         .expect("actual native scalar attempt");
     assert_eq!(record.instruction, Some(instruction));
-    assert_eq!(record.opcode_gas, Some(1));
+    if is_rotate(instruction) {
+        assert_eq!(record.opcode_gas, Some(2));
+    } else {
+        assert_eq!(record.opcode_gas, Some(1));
+    }
     let fixture = ScalarFixture::from_record(&program, record);
     assert!(fixture.accepts(&program));
     (program, fixture)
@@ -296,7 +314,7 @@ fn every_scalar_original_field_and_workspace_mutation_rejects_except_prior_desti
                 let free = slot == SCALAR_DESTINATION
                     && wide::rd(instruction) != 0
                     && wide::rd(instruction) != wide::rs1(instruction)
-                    && (immediate_operand(instruction).is_some()
+                    && (right_immediate(instruction).is_some()
                         || wide::rd(instruction) != wide::rs2(instruction))
                     && ((BEFORE..BEFORE + 4).contains(&column) || column == BEFORE_TAG);
                 if !free {
@@ -349,6 +367,19 @@ fn composed_private_scalar_polynomials_have_degree_four() {
             enc::encode_rr(wide::arithmetic::SEQ, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::SNE, 4, 2, 3),
             enc::encode_ri(wide::arithmetic::ADDI, 4, 2, -1),
+            enc::encode_branch(wide::control::BEQ, 2, 3, -1),
+            enc::encode_branch(wide::control::BNE, 2, 3, 1),
+            enc::encode_branch(wide::control::BLT, 2, 3, -2),
+            enc::encode_branch(wide::control::BGE, 2, 3, 2),
+            enc::encode_branch(wide::control::BLTU, 2, 3, -3),
+            enc::encode_branch(wide::control::BGEU, 2, 3, 3),
+            enc::encode_rr(wide::arithmetic::SLL, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::SRL, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::SRA, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::ROTL, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::ROTR, 4, 2, 3),
+            enc::encode_ri(wide::arithmetic::ROTL_IMM, 4, 2, i8::MIN),
+            enc::encode_ri(wide::arithmetic::ROTR_IMM, 4, 2, -1),
         ],
         1_000,
         ivm::ivm_mode::ZK,
@@ -526,6 +557,70 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
             assert!(!accepts(&fixture, Some((slot, true))));
         }
     }
+    for opcode in [
+        wide::arithmetic::SLL,
+        wide::arithmetic::SRL,
+        wide::arithmetic::SRA,
+        wide::arithmetic::ROTL,
+        wide::arithmetic::ROTR,
+    ] {
+        let (_, fixture) = native(
+            enc::encode_rr(opcode, 4, 2, 3),
+            &[(2, u64::MAX, true), (3, 63, true)],
+        );
+        assert!(accepts(&fixture, None));
+        for slot in [SCALAR_LEFT, SCALAR_RIGHT, SCALAR_DESTINATION] {
+            assert!(!accepts(&fixture, Some((slot, false))));
+            assert!(!accepts(&fixture, Some((slot, true))));
+        }
+    }
+    for opcode in [wide::arithmetic::ROTL_IMM, wide::arithmetic::ROTR_IMM] {
+        let (_, fixture) = native(
+            enc::encode_ri(opcode, 4, 2, -1),
+            &[(2, u64::MAX, true), (255, 17, false)],
+        );
+        assert!(accepts(&fixture, None));
+        assert!(
+            fixture.0.packets.fields[SCALAR_RIGHT]
+                .iter()
+                .all(|cell| *cell == F::ZERO)
+        );
+        for slot in [SCALAR_LEFT, SCALAR_DESTINATION] {
+            assert!(!accepts(&fixture, Some((slot, false))));
+            assert!(!accepts(&fixture, Some((slot, true))));
+        }
+    }
+    let body = shifts::mixed_body();
+    let (program, recorder, _later_outcome) = shifts::capture(&body, &[], 64, 64);
+    for record in &recorder.records()[..body.len()] {
+        let fixture = ScalarFixture::from_record(&program, record);
+        assert!(fixture.accepts(&program));
+        assert!(accepts(&fixture, None));
+        for slot in [SCALAR_LEFT, SCALAR_RIGHT, SCALAR_DESTINATION] {
+            if fixture.0.packets.fields[slot][ENABLED] == F::ONE {
+                assert!(!accepts(&fixture, Some((slot, false))));
+                assert!(!accepts(&fixture, Some((slot, true))));
+            }
+        }
+    }
+    for opcode in [
+        wide::control::BEQ,
+        wide::control::BNE,
+        wide::control::BLT,
+        wide::control::BGE,
+        wide::control::BLTU,
+        wide::control::BGEU,
+    ] {
+        let (_, fixture) = native(
+            enc::encode_branch(opcode, 2, 3, 2),
+            &[(2, u64::MAX, false), (3, 0, false)],
+        );
+        assert!(accepts(&fixture, None));
+        for slot in [SCALAR_LEFT, SCALAR_RIGHT] {
+            assert!(!accepts(&fixture, Some((slot, false))));
+            assert!(!accepts(&fixture, Some((slot, true))));
+        }
+    }
 }
 
 #[test]
@@ -644,7 +739,7 @@ fn comparison_fetch_sign_predicate_result_and_modular_alias_forgery_reject() {
     );
     // A complete, internally coherent comparison workspace for equal reduced
     // words still cannot replace the original canonical register operands.
-    reduced.0.row[SCALAR + COMPARE..super::super::WIDTH].copy_from_slice(&branch::bank_witness(
+    reduced.0.row[SCALAR + COMPARE..SCALAR + SHIFT].copy_from_slice(&branch::bank_witness(
         wide::control::BEQ,
         0,
         0,
@@ -662,7 +757,7 @@ fn comparison_workspace_remains_canonical_on_alu_and_padding_rows() {
     let padding = ScalarFixture(Fixture::padding());
     assert!(padding.accepts(&program));
     for original in [fixture, padding] {
-        for column in SCALAR + COMPARE..super::super::WIDTH {
+        for column in SCALAR + COMPARE..SCALAR + SHIFT {
             let mut changed = original.clone();
             changed.0.row[column] = changed.0.row[column].add(F::ONE);
             assert!(
@@ -672,3 +767,6 @@ fn comparison_workspace_remains_canonical_on_alu_and_padding_rows() {
         }
     }
 }
+
+mod branches;
+mod shifts;

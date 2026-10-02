@@ -322,7 +322,7 @@ fn rfc_auxiliary_batch_matches_independent_scalar_for_all_280_columns() {
     let der = der_challenges_v1();
     let challenges = challenges_v1();
     let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
-    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+    let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
         &material,
         der,
         challenges,

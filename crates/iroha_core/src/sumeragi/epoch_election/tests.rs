@@ -652,6 +652,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
 
 #[test]
 fn restore_installs_exact_current_and_undo_graph_owners_without_deep_cloning() {
+    if crate::unit_test_support::run_in_isolated_harness(
+        "sumeragi::epoch_election::tests::restore_installs_exact_current_and_undo_graph_owners_without_deep_cloning",
+    ) {
+        return;
+    }
     use crate::sumeragi::schedule::{
         ChainParamsRecord, ConsensusSchedule, RetainedConsensusSchedule,
     };

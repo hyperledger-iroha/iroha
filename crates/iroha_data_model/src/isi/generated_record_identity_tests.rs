@@ -121,7 +121,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "31db89431c26825ce5a05eecb298618201265189b8c1891959c0c5ba29ef8923",
+                "4de5be96e0a1e11b767d2b806201da24cc9fe777a41c04320628fa9867ba3813",
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -350,9 +350,8 @@ fn print_contract_artifact_record_fixture_rows() {
         hex(abi_hash.as_ref()),
         "18b2577f70fcf90193eff287aacd10b76dd36b99c0f5935fdcc67443f8bc148d"
     );
-    // These populated codec fixtures previously implied the universal dataspace.
-    // Preserve the original hash and data while supplying that exact current field.
-    let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+    // Match the selected full-width dataspace in the current populated capture.
+    let artifact_id = ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash);
     let values = vec![
         capture(CancelSmartContractCodeUpload { artifact_id }),
         capture(FinalizeSmartContractCodeUpload {

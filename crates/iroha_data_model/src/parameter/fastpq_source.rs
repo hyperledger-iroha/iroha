@@ -211,7 +211,7 @@ impl FastpqMandatorySourcePolicyV1 {
 /// Nominal consensus source profile for one immutable first-release genesis policy.
 ///
 /// Intrinsic entry ceilings include every retained business/penalty/fee fragment.
-/// Block ceilings include the separately reserved mandatory source pool. No local
+/// Block ceilings include separately reserved native and mandatory source pools. No local
 /// construction budget or verifier setting can substitute for this policy.
 #[derive(
     Debug,
@@ -236,13 +236,18 @@ impl FastpqMandatorySourcePolicyV1 {
 pub struct FastpqSourcePolicyV1 {
     /// Exact finite per-logical-entry source ceilings.
     pub intrinsic: FastpqSourceLimitsV1,
-    /// Exact finite total block source ceilings, including the mandatory pool.
+    /// Exact finite total block source ceilings, including native and mandatory pools.
     pub block: FastpqSourceLimitsV1,
+    /// Separately reserved optional native-maintenance entries per block.
+    /// Each entry uses the intrinsic limits and cannot borrow trigger or governance capacity.
+    pub max_native_maintenance_invocations: u32,
     /// Reserved source capacity for every retained mandatory obligation.
     pub mandatory: FastpqMandatorySourcePolicyV1,
 }
 
 impl FastpqSourcePolicyV1 {
+    /// Supported bounded SNS auto-renew sweep in the first-release source policy.
+    pub const NATIVE_MAINTENANCE_INVOCATIONS: u32 = 64;
     /// Supported bootstrap Network count, including generated four-validator
     /// genesis with its optional executor and committee-key transaction groups.
     /// This is a finite supported corpus, not a universal genesis size bound.
@@ -252,7 +257,8 @@ impl FastpqSourcePolicyV1 {
     ///
     /// Eleven full Network plans reserve 256 Pipeline invocations per input
     /// plus the final Pipeline group and 512 Time invocations, along with 64
-    /// globally retained mandatory obligations. Intrinsic byte ceilings
+    /// globally retained mandatory obligations and 64 separately reserved native
+    /// maintenance entries. Intrinsic byte ceilings
     /// cover the measured sixteen-singleton ML-DSA entry and the measured
     /// sixteen-member ML-DSA singleton, with maximum legal quantities and the
     /// empty original paths emitted by execution. These are supported corpus
@@ -270,13 +276,14 @@ impl FastpqSourcePolicyV1 {
                 max_total_statement_bytes: 272_175,
             },
             block: FastpqSourceLimitsV1 {
-                max_executed_entries: 3_659,
-                max_transcripts: 57_584,
-                max_deltas: 57_584,
-                max_input_transcript_bytes: 501_314_448,
+                max_executed_entries: 3_723,
+                max_transcripts: 58_608,
+                max_deltas: 58_608,
+                max_input_transcript_bytes: 510_095_248,
                 max_statement_bytes: 272_175,
-                max_total_statement_bytes: 994_636_613,
+                max_total_statement_bytes: 1_012_055_813,
             },
+            max_native_maintenance_invocations: Self::NATIVE_MAINTENANCE_INVOCATIONS,
             mandatory: FastpqMandatorySourcePolicyV1 {
                 max_retained_obligations: 64,
                 per_obligation: FastpqSourceLimitsV1 {
@@ -313,13 +320,16 @@ impl FastpqSourcePolicyV1 {
         {
             return Err("FASTPQ sizing needs an intrinsic-covered mandatory entry and feasible Network input".into());
         }
-        let count = invocation_count(output, network_inputs)?;
+        let count = invocation_count(output, network_inputs)?
+            .checked_add(Self::NATIVE_MAINTENANCE_INVOCATIONS)
+            .ok_or("FASTPQ native invocation count overflows u32")?;
         let block = intrinsic
             .checked_repeat_entries(count)?
             .checked_add_entries(reserve)?;
         let profile = Self {
             intrinsic,
             block,
+            max_native_maintenance_invocations: Self::NATIVE_MAINTENANCE_INVOCATIONS,
             mandatory,
         };
         profile.validate(output)?;
@@ -354,10 +364,12 @@ impl FastpqSourcePolicyV1 {
             return Err("FASTPQ source policy does not cover intrinsic/mandatory entries".into());
         }
         let terminal = output.maximum_terminal_network_inputs()?;
+        let native = self.native_maintenance_reservation()?;
         let base = self
             .intrinsic
             .checked_repeat_entries(invocation_count(output, 0)?)?
-            .checked_add_entries(reserve)?;
+            .checked_add_entries(reserve)?
+            .checked_add_entries(native)?;
         if !base.fits_within(self.block) {
             return Err("FASTPQ block source capacity omits its internal/mandatory base".into());
         }
@@ -405,6 +417,18 @@ impl FastpqSourcePolicyV1 {
         let frame = norito::encode_canonical(&self).map_err(|error| error.to_string())?;
         Ok(Hash::new(frame))
     }
+
+    /// Exact disjoint native-maintenance reservation under this committed policy.
+    /// # Errors
+    /// Rejects zero or overflowing native capacity before execution.
+    pub fn native_maintenance_reservation(self) -> Result<FastpqSourceLimitsV1, String> {
+        self.intrinsic.validate_single_entry()?;
+        if self.max_native_maintenance_invocations == 0 {
+            return Err("FASTPQ native maintenance capacity must be positive".into());
+        }
+        self.intrinsic
+            .checked_repeat_entries(self.max_native_maintenance_invocations)
+    }
 }
 
 fn invocation_count(output: ExecutionOutputPolicyV1, network: u32) -> Result<u32, String> {
@@ -420,8 +444,8 @@ impl core::fmt::Display for FastpqSourcePolicyV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:?},{:?},{:?}_FASTPQ_SOURCE",
-            self.intrinsic, self.block, self.mandatory
+            "{:?},{:?},{},{:?}_FASTPQ_SOURCE",
+            self.intrinsic, self.block, self.max_native_maintenance_invocations, self.mandatory
         )
     }
 }

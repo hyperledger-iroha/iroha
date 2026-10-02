@@ -30,10 +30,9 @@ use super::super::{
 };
 use super::{KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1};
 use crate::{
-    kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
+    kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128},
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
-use ff::Field as _;
 use halo2_base::{
     AssignedValue,
     gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
@@ -71,42 +70,79 @@ pub(crate) fn build_ordinary_app_guard_pair_v1(
     ),
     String,
 > {
+    let eq = build_ordinary_app_guard_eq_v1(
+        eq_parameters,
+        &witness,
+        provider_policy_root,
+        issuer_table,
+    )?;
+    let ep = build_ordinary_app_guard_ep_v1(
+        ep_parameters,
+        &witness,
+        provider_policy_root,
+        issuer_table,
+    )?;
+    Ok((eq, ep))
+}
+
+// The release generator consumes one complete graph before allocating the next parity.
+// Both factories use the same complete build_half relation as the paired prover.
+pub(crate) fn build_ordinary_app_guard_eq_v1(
+    parameters: &ParamsIPA<EqAffine>,
+    witness: &OrdinaryGuardWitnessV1<'_>,
+    provider_policy_root: DigestV1,
+    issuer_table: &OrdinaryIssuerTableV1,
+) -> Result<KagemushaOrdinaryAppGuardEqCircuitV1, String> {
+    require_provider(witness, provider_policy_root)?;
+    let history = initial_kagemusha_eq_accumulator_v1(parameters).map_err(|e| e.to_string())?;
+    let issuer_index = issuer_table.selected(witness.credential.subject.hardware_profile_id)?;
+    let (builder, jobs, provider_cells, issuer_cells, profile_cells) =
+        build_half::<Fp>(witness, history.as_bytes(), issuer_table)?;
+    Ok(KagemushaOrdinaryAppGuardEqCircuitV1 {
+        builder,
+        jobs,
+        provider_policy_root,
+        provider_cells,
+        issuer_table: issuer_table.clone(),
+        issuer_index,
+        issuer_cells,
+        profile_cells,
+    })
+}
+
+pub(crate) fn build_ordinary_app_guard_ep_v1(
+    parameters: &ParamsIPA<EpAffine>,
+    witness: &OrdinaryGuardWitnessV1<'_>,
+    provider_policy_root: DigestV1,
+    issuer_table: &OrdinaryIssuerTableV1,
+) -> Result<KagemushaOrdinaryAppGuardEpCircuitV1, String> {
+    require_provider(witness, provider_policy_root)?;
+    let history = initial_kagemusha_ep_accumulator_v1(parameters).map_err(|e| e.to_string())?;
+    let issuer_index = issuer_table.selected(witness.credential.subject.hardware_profile_id)?;
+    let (builder, jobs, provider_cells, issuer_cells, profile_cells) =
+        build_half::<Fq>(witness, history.as_bytes(), issuer_table)?;
+    Ok(KagemushaOrdinaryAppGuardEpCircuitV1 {
+        builder,
+        jobs,
+        provider_policy_root,
+        provider_cells,
+        issuer_table: issuer_table.clone(),
+        issuer_index,
+        issuer_cells,
+        profile_cells,
+    })
+}
+
+fn require_provider(
+    witness: &OrdinaryGuardWitnessV1<'_>,
+    provider_policy_root: DigestV1,
+) -> Result<(), String> {
     if provider_policy_root == [0; 32]
         || witness.relation.statement.successor_hardware_policy_id != provider_policy_root
     {
         return Err("ordinary Guard provider policy differs".into());
     }
-    let eq_history =
-        initial_kagemusha_eq_accumulator_v1(eq_parameters).map_err(|e| e.to_string())?;
-    let ep_history =
-        initial_kagemusha_ep_accumulator_v1(ep_parameters).map_err(|e| e.to_string())?;
-    let issuer_index = issuer_table.selected(witness.credential.subject.hardware_profile_id)?;
-    let (eq_builder, eq_jobs, eq_provider, eq_issuer, eq_profile) =
-        build_half::<Fp>(&witness, eq_history.as_bytes(), issuer_table)?;
-    let (ep_builder, ep_jobs, ep_provider, ep_issuer, ep_profile) =
-        build_half::<Fq>(&witness, ep_history.as_bytes(), issuer_table)?;
-    Ok((
-        KagemushaOrdinaryAppGuardEqCircuitV1 {
-            builder: eq_builder,
-            jobs: eq_jobs,
-            provider_policy_root,
-            provider_cells: eq_provider,
-            issuer_table: issuer_table.clone(),
-            issuer_index,
-            issuer_cells: eq_issuer,
-            profile_cells: eq_profile,
-        },
-        KagemushaOrdinaryAppGuardEpCircuitV1 {
-            builder: ep_builder,
-            jobs: ep_jobs,
-            provider_policy_root,
-            provider_cells: ep_provider,
-            issuer_table: issuer_table.clone(),
-            issuer_index,
-            issuer_cells: ep_issuer,
-            profile_cells: ep_profile,
-        },
-    ))
+    Ok(())
 }
 
 fn equal_bytes<F: KagemushaPoseidonFieldV1>(
@@ -414,12 +450,13 @@ pub(crate) fn bind_subject<F: KagemushaPoseidonFieldV1>(
         (S::POLICY_EPOCH, g.policy_epoch, 64),
         (S::HARDWARE_EPOCH_GENERATION, g.successor_generation, 64),
         (S::OPERATION_TAG, g.operation, 8),
-        (S::SECURE_INDEX_BEFORE, g.predecessor_sequence, 128),
-        (S::SECURE_INDEX_AFTER, g.successor_sequence, 128),
     ] {
         let bytes = assigned_uint_bytes_v1(ctx, range.gate(), value, bits);
         bind_slot(ctx, range, s, slot, bytes)?;
     }
+    // Financial secure indexes are independent of the normalized Guard logical sequence.
+    // Rotate resets the latter. The complete State/terminal consumer must join S indexes
+    // to its actual assigned State; an original Guard proof alone supplies no financial grant.
     // The native selected holder independently rederives the complete transition/candidate/body
     // digest. It compares SHA(fullS); the wrapper also signs this complete normalized Guard,
     // whose amount, operation and predecessor/successor fields are constrained above.

@@ -36,11 +36,79 @@ impl KagemushaExperimentalReleaseFixtureV1 {
         network_id: NetworkId,
         scope: KagemushaTestnetExperimentScopeV1,
     ) -> Self {
+        Self::new_with_evidence(artifacts, network_id, scope, |binding| binding)
+    }
+
+    /// Build a test release whose structural reports bind caller-owned evidence bytes.
+    ///
+    /// The callback replaces each required evidence binding. Hardware profile identities,
+    /// qualification digests, provider signatures and the release approvals are regenerated
+    /// together using deterministic public test keys. These synthetic reports do not qualify
+    /// hardware, proofs or a production release.
+    ///
+    /// # Panics
+    /// Panics when artifacts, callback bindings, network or scope violate V1 invariants.
+    #[must_use]
+    pub fn new_with_evidence(
+        artifacts: Vec<KagemushaArtifactBindingV1>,
+        network_id: NetworkId,
+        scope: KagemushaTestnetExperimentScopeV1,
+        mut bind: impl FnMut(KagemushaEvidenceFileV1) -> KagemushaEvidenceFileV1,
+    ) -> Self {
         let mut receipt = receipt(&artifacts);
         let mut manifest = manifest(artifacts, &receipt);
         reduce_to_experimental_receipt(&mut receipt);
+        receipt.evidence_closure.evidence_manifest =
+            bind(receipt.evidence_closure.evidence_manifest);
+        receipt.evidence_closure.observer_policy = bind(receipt.evidence_closure.observer_policy);
+        receipt.circuit_shape_report = bind(receipt.circuit_shape_report);
+        for qualification in &mut receipt.profile_qualifications {
+            qualification.profile.qualification_report =
+                bind(qualification.profile.qualification_report);
+            qualification
+                .profile
+                .hardware_profile
+                .qualification_report_digest = qualification.profile.qualification_report.sha256;
+            qualification.profile.hardware_profile = qualification
+                .profile
+                .hardware_profile
+                .seal_hardware_profile_id()
+                .expect("seal fixture report-bound profile");
+            qualification.profile.hardware_profile_id =
+                qualification.profile.hardware_profile.hardware_profile_id;
+            for row in &mut qualification.relations {
+                row.report = bind(row.report);
+            }
+            for row in &mut qualification.helper_circuits {
+                row.report = bind(row.report);
+            }
+            *qualification = qualification
+                .clone()
+                .seal_qualification_digest()
+                .expect("seal fixture report-bound qualification");
+        }
+        receipt
+            .profile_qualifications
+            .sort_by_key(|row| row.profile.hardware_profile_id);
+        let profiles: Vec<_> = receipt
+            .profile_qualifications
+            .iter()
+            .map(|row| row.profile)
+            .collect();
+        receipt.hardware_policy_digest = kagemusha_hardware_policy_digest_v1(&profiles).unwrap();
+        receipt.provider_policy = provider_policy(&profiles);
+        receipt.provider_policy_root =
+            kagemusha_provider_policy_root_v1(&profiles, &receipt.provider_policy).unwrap();
+        receipt.profile_digest = kagemusha_release_profile_digest_v1(
+            receipt.circuit_shape_report,
+            receipt.eq_protocol_digest,
+            receipt.ep_protocol_digest,
+            &receipt.helper_protocols,
+        )
+        .unwrap();
         manifest.network_id = network_id;
         manifest.purpose = KagemushaReleasePurposeV1::TestnetExperiment(scope);
+        manifest.profile_digest = receipt.profile_digest;
         manifest.hardware_policy_digest = receipt.hardware_policy_digest;
         manifest.validation_receipt_digest = receipt.canonical_experimental_digest().unwrap();
         manifest.enabled_profiles = receipt
@@ -80,6 +148,63 @@ impl KagemushaExperimentalReleaseFixtureV1 {
     }
 }
 
+#[cfg(test)]
+mod evidence_binding_tests {
+    use super::*;
+
+    #[test]
+    fn rebound_evidence_is_authenticated_with_its_new_hardware_profile() {
+        let fixture = KagemushaExperimentalReleaseFixtureV1::new_with_evidence(
+            artifacts(),
+            release_network(0x73),
+            KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [0x31; 32],
+                asset_incarnation: [0x32; 32],
+                asset_scale: 2,
+                liability_pool_id: [0x33; 32],
+            },
+            |original| KagemushaEvidenceFileV1 {
+                sha256: iroha_crypto::sha256(original.sha256),
+                byte_len: 32,
+            },
+        );
+        assert_eq!(
+            fixture.receipt.circuit_shape_report.sha256,
+            iroha_crypto::sha256([5; 32])
+        );
+        for row in &fixture.receipt.profile_qualifications {
+            assert_eq!(
+                row.profile.qualification_report.sha256,
+                row.profile.hardware_profile.qualification_report_digest
+            );
+            row.profile.hardware_profile.validate().unwrap();
+        }
+        fixture
+            .manifest
+            .authenticate_experimental(
+                &fixture.receipt,
+                &fixture.authority_policy,
+                &fixture.attestation,
+            )
+            .unwrap();
+        let mut substituted = fixture.receipt.clone();
+        substituted.profile_qualifications[0]
+            .profile
+            .qualification_report
+            .sha256 = [0x91; 32];
+        assert!(
+            fixture
+                .manifest
+                .authenticate_experimental(
+                    &substituted,
+                    &fixture.authority_policy,
+                    &fixture.attestation,
+                )
+                .is_err()
+        );
+    }
+}
+
 pub const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
 pub const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
 pub const TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
@@ -94,14 +219,22 @@ pub const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 pub const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
 pub const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
 pub const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
-pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
-pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
-pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
-pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
+// Synthetic compiled-protocol identities must still be canonical Pasta scalars.
+// Keep each tag distinct below 2^248, before the receipt and release are signed.
+const fn canonical_fixture_protocol_digest(tag: u8) -> [u8; 32] {
+    let mut digest = [tag; 32];
+    digest[31] = 0;
+    digest
+}
+
+pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x41);
+pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x42);
+pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x43);
+pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x44);
 /// Deterministic EQ protocol tag for the synthetic ordinary-app guard fixture.
-pub const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x45; 32];
+pub const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x45);
 /// Deterministic EP protocol tag for the synthetic ordinary-app guard fixture.
-pub const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x46; 32];
+pub const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x46);
 pub const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 pub const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 pub const GUARD_EQ_PROOF_BYTES: u32 = 12_000;

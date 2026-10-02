@@ -6,23 +6,26 @@ those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 11 populated families, each as root, Vec, Some and BTreeMap: 44 frames | `df37ff7fa0f1a2ed003ad34f7271401a14fb726bd635240d1d334dda0db341ca` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `609a71f1cd38dd9b421b187cca8caaf6b38a533e0e2cf74b0d9e667f056d8cb5` |
-| `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
+| `model_concrete_identity_frames.json` | 11 populated families, each as root, Vec, Some and BTreeMap: 44 frames | `b6d3930c4993338de7f58f259377877f739f557b82a9bc2527fb7274e07c9292` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `dabcc4eeb99658dac1000f835a761d14a53ef50b0591284543a46fd1a8f7cd01` |
+| `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `dda98fd79ef7371d004bb16c3d9d513004e45dc5ce1b243fc4ae853b6437432f` |
 
 The five concrete owners are Action, DataEvent, ExecutorContext,
 BlockSubscriptionRequest and BlockMessage.
 Actions cover schedules with and without retry and explicit execution. Data events
 cover peer addition, account metadata, GameSession and Governance. The executor
 context contains populated authority/header values. Stream cases cover two
-requested heights and a deterministic signed block with transaction results.
+requested heights and a deterministic signed block with transaction results. The block uses the
+current external transaction intent and complete typed network output, including
+the explicit absent Nexus fee receipt. Retired transaction admission intent and
+lane finality result fields are absent from its sole canonical layout.
 
 `actual_type_name` retains the compiler name observed before declaration, including
 private model scopes. The permanent tests compare each declared nominal name to
 that saved name, both codec directions to the declared frame hash, and every bare
 payload, complete frame, frame digest and header flag to the original record.
 Roundtrips, incorrect schema headers and truncated frames are also checked.
-Temporary capture writers have been removed.
+Explicitly ignored native fixture producers retain capture provenance; ordinary tests compare against the checked-in frames.
 
 The context and signed genesis fixture builders share explicit pins for all five
 confidential-feature fields. The policy hash is fixed codec input, independent of

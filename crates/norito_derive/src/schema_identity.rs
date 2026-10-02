@@ -117,6 +117,19 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
             }
         }
     });
+    // The root frame may have its own explicit projection. Borrow only that
+    // exact declaration or a complete literal nominal identity; never drop
+    // generic or erased lifetime arguments to manufacture a frame name.
+    let static_frame_identity = frame
+        .as_ref()
+        .or_else(|| arguments.is_empty().then_some(&name));
+    let static_frame = static_frame_identity.map(|identity| {
+        quote! {
+            fn static_frame_name() -> ::core::option::Option<&'static str> {
+                ::core::option::Option::Some(#identity)
+            }
+        }
+    });
     let projection = frame.map(|frame| {
         quote! {
             fn frame_name() -> ::std::string::String { ::std::string::String::from(#frame) }
@@ -131,6 +144,7 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
                 ::norito::schema::identity::generic_name(#name, &[#(#arguments),*])
             }
             #static_nominal
+            #static_frame
             #projection
         }
     })
@@ -250,6 +264,74 @@ mod tests {
         ] {
             let expanded = expand(syn::parse2(input).unwrap()).unwrap().to_string();
             assert!(!expanded.contains("fn static_nominal_name"));
+        }
+    }
+
+    #[test]
+    fn static_frame_names_preserve_exact_root_declarations() {
+        for (input, expected) in [
+            (
+                quote!(
+                    #[norito_schema(name = "example::Plain")]
+                    struct Plain;
+                ),
+                Some("example::Plain"),
+            ),
+            (
+                quote!(
+                    #[norito_schema(name = "example::Projected", frame = "wire::Projected")]
+                    struct Projected;
+                ),
+                Some("wire::Projected"),
+            ),
+            (
+                quote!(
+                    #[norito_schema(name = "example::Borrowed", frame = "wire::Borrowed")]
+                    struct Borrowed<'a>(&'a str);
+                ),
+                Some("wire::Borrowed"),
+            ),
+            (
+                quote!(
+                    #[norito_schema(name = "example::Type")]
+                    struct Type<T>(T);
+                ),
+                None,
+            ),
+            (
+                quote!(
+                    #[norito_schema(name = "example::Lifetime")]
+                    struct Lifetime<'a>(&'a str);
+                ),
+                None,
+            ),
+            (
+                quote!(
+                    #[norito_schema(name = "example::Const")]
+                    struct Const<const N: usize>;
+                ),
+                None,
+            ),
+        ] {
+            let expanded: syn::ItemImpl =
+                syn::parse2(expand(syn::parse2(input).unwrap()).unwrap()).unwrap();
+            let body = expanded.items.iter().find_map(|item| match item {
+                syn::ImplItem::Fn(method) if method.sig.ident == "static_frame_name" => {
+                    Some(&method.block)
+                }
+                _ => None,
+            });
+            match expected {
+                Some(identity) => {
+                    let expected_body: syn::Block =
+                        parse_quote!({ ::core::option::Option::Some(#identity) });
+                    assert_eq!(
+                        quote!(#body).to_string(),
+                        quote!(#expected_body).to_string()
+                    );
+                }
+                None => assert!(body.is_none()),
+            }
         }
     }
 

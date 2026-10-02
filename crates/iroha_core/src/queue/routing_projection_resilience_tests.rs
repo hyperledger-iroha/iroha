@@ -104,9 +104,12 @@ async fn push_records_teu_from_ivm_metadata() {
 #[test]
 fn expired_event_uses_the_authoritative_full_plan() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+    let mut nexus = test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]);
+    nexus.routing_policy.default_lane = expected.lane_id;
+    nexus.routing_policy.default_dataspace = expected.dataspace_id;
     let state = State::new_with_nexus_for_testing(
         world_with_test_domains(),
-        test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]),
+        nexus,
         LiveQueryStore::start_test(),
     );
     let state = Arc::new(state);
@@ -114,6 +117,7 @@ fn expired_event_uses_the_authoritative_full_plan() {
     let mut queue = Queue::test_with_router_for_routes(
         Config {
             transaction_time_to_live: Duration::from_millis(10),
+            expired_cull_interval: Duration::ZERO,
             ..config_factory()
         },
         &time_source,
@@ -123,12 +127,34 @@ fn expired_event_uses_the_authoritative_full_plan() {
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);
-    let tx = accepted_tx_by_someone(&time_source);
+    let tx = accepted_tx_with(
+        AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+        &ALICE_KEYPAIR,
+        &time_source,
+        vec![Log::new(Level::INFO, "expire original routed input".into()).into()],
+        Metadata::default(),
+    );
     let signed_hash = tx.as_ref().hash();
     let hash = tx.as_ref().hash_as_entrypoint();
+    let original = tx.clone();
     queue.push(tx, state.view()).expect("push tx");
+    assert_eq!(
+        queue.routing_plan_hint(&hash),
+        Some(RoutingPlan::single(expected))
+    );
     while event_receiver.try_recv().is_ok() {}
     time_handle.advance(Duration::from_millis(11));
+    assert!(
+        queue.is_expired(&original),
+        "the original ten-millisecond TTL has elapsed"
+    );
+    assert_eq!(
+        queue.cull_expired_entries_if_due(),
+        0,
+        "the maintenance interval has not elapsed"
+    );
+    assert_eq!(queue.active_len(), 1);
+    time_handle.advance(queue.expired_cull_interval);
     let guards = queue
         .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
         .unwrap();

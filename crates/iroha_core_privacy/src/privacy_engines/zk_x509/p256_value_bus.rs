@@ -3329,6 +3329,7 @@ pub(crate) fn p256_value_bus_terminal_columns_v1() -> [usize; P256_VALUE_BUS_LAN
     })
 }
 /// Project the terminal product from one verifier-fixed native-row opening.
+#[cfg(test)]
 pub(crate) fn p256_value_bus_stark_opened_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
 ) -> [A; P256_VALUE_BUS_LANES_V1] {
@@ -3347,6 +3348,7 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_openings_v1(
     core::array::from_fn(|lane| execution[lane].sub(sorted[lane]))
 }
 /// Verifier-preprocessed selector for the final shared native-domain row.
+#[cfg(test)]
 pub(crate) fn p256_value_bus_stark_last_domain_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
 ) -> A {

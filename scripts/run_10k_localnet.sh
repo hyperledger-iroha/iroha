@@ -287,7 +287,6 @@ run_mode() {
     --base-api-port "$base_api_port"
     --base-p2p-port "$base_p2p_port"
     --force
-    --skip-asset-register
     "${DEPLOY_ARGS[@]}"
   )
   if [[ ${#PROFILE_ARGS[@]} -gt 0 ]]; then

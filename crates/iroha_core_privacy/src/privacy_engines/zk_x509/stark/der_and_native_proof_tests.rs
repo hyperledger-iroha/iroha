@@ -1485,3 +1485,117 @@ fn main_key_join_opening_codec_is_canonical_exact_and_roundtrips() {
     trailing.push(0);
     assert!(decode_zk_x509_main_proof_envelope_v1(&trailing).is_err());
 }
+
+#[test]
+fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
+    let values = core::array::from_fn(|index| {
+        E::canonical(core::array::from_fn(|limb| (4 * index + limb + 1) as u64)).unwrap()
+    });
+    let aggregate = b"X5S1ordered-opening-fixture";
+    let encoded = encode_zk_x509_main_proof_envelope_v1(&values, aggregate).unwrap();
+    assert_eq!(
+        MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 - MAIN_PROOF_KEY_OPENINGS_OFFSET_V1,
+        31 * 32
+    );
+    for (index, value) in values.iter().enumerate() {
+        for (limb, coefficient) in value.coefficients().iter().enumerate() {
+            let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index + 8 * limb;
+            assert_eq!(&encoded[offset..offset + 8], &coefficient.0.to_be_bytes());
+        }
+    }
+    assert_eq!(
+        decode_zk_x509_main_proof_envelope_v1(&encoded)
+            .unwrap()
+            .key_openings,
+        values
+    );
+    for index in 0..30 {
+        let mut swapped = encoded.clone();
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        swapped[offset..offset + 64].rotate_left(32);
+        let mut expected = values;
+        expected.swap(index, index + 1);
+        let decoded = decode_zk_x509_main_proof_envelope_v1(&swapped).unwrap();
+        assert_eq!(decoded.key_openings, expected);
+        assert_ne!(decoded.key_openings, values);
+        assert_eq!(
+            encode_zk_x509_main_proof_envelope_v1(
+                &decoded.key_openings,
+                decoded.aggregate_proof
+            )
+            .unwrap(),
+            swapped
+        );
+    }
+    for index in 0..31 {
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        let mut missing = encoded.clone();
+        missing.drain(offset..offset + 32);
+        assert!(decode_zk_x509_main_proof_envelope_v1(&missing).is_err());
+        let mut duplicate = encoded.clone();
+        duplicate.splice(offset..offset, encoded[offset..offset + 32].iter().copied());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&duplicate).is_err());
+    }
+}
+
+#[test]
+fn main_claim_free_partition_is_exact_and_rejects_retired_terminal_frames() {
+    assert_eq!(MAIN_KEY_OPENING_COUNT_V1, 31);
+    assert_eq!(
+        MAIN_KEY_OPENING_COUNT_V1,
+        main_aggregate::main_key_joins::OPENINGS_V1
+    );
+    assert_eq!(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1, 6);
+    assert_eq!(MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1, 998);
+    assert_eq!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1, 1_002);
+    let aggregate = b"X5S1public partition";
+    let values = [E::ZERO; 31];
+    let encoded = encode_zk_x509_main_proof_envelope_v1(&values, aggregate).unwrap();
+    assert_eq!(encoded.len(), 1_002 + aggregate.len());
+    let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).unwrap();
+    assert_eq!(decoded.key_openings, values);
+    assert_eq!(decoded.aggregate_proof, aggregate);
+    assert_eq!(
+        encode_zk_x509_main_proof_envelope_v1(&decoded.key_openings, decoded.aggregate_proof)
+            .unwrap(),
+        encoded
+    );
+
+    // Frozen obsolete framing is rejection input only. No retired terminal codec
+    // or intermediate product acceptance path is retained in the implementation.
+    let mut retired_fields = vec![0; 2 + 76 + 3_340];
+    retired_fields[..2].copy_from_slice(&2_u16.to_be_bytes());
+    retired_fields[2..6].copy_from_slice(b"X5R1");
+    retired_fields[6..8].copy_from_slice(&1_u16.to_be_bytes());
+    retired_fields[12..14].copy_from_slice(&4_u16.to_be_bytes());
+    retired_fields[78..82].copy_from_slice(b"X5Q1");
+    retired_fields[82..84].copy_from_slice(&1_u16.to_be_bytes());
+    retired_fields[88..90].copy_from_slice(&208_u16.to_be_bytes());
+    let mut retired = encoded.clone();
+    retired.splice(6..6, retired_fields);
+    assert_eq!(retired.len(), 4_420 + aggregate.len());
+    assert!(decode_zk_x509_main_proof_envelope_v1(&retired).is_err());
+    for (frame, counts) in [
+        (8, [0_u16, 3, 4, 5, 80, u16::MAX]),
+        (84, [0_u16, 207, 208, 209, 304, u16::MAX]),
+    ] {
+        for count in counts {
+            let mut wrong = retired.clone();
+            wrong[frame + 10..frame + 12].copy_from_slice(&count.to_be_bytes());
+            assert!(
+                decode_zk_x509_main_proof_envelope_v1(&wrong).is_err(),
+                "retired frame {frame}, count {count}"
+            );
+        }
+    }
+    for lane in 0..4 {
+        let record = 8 + 12 + lane * 16;
+        let mut exposed = retired.clone();
+        exposed[record + 8..record + 16]
+            .copy_from_slice(&[2_u64, 3, 5, 7][lane].to_be_bytes());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&exposed).is_err());
+        let wrong_lane = u16::try_from((lane + 1) % 4).expect("four governed lanes fit u16");
+        exposed[record + 4..record + 6].copy_from_slice(&wrong_lane.to_be_bytes());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&exposed).is_err());
+    }
+}

@@ -133,19 +133,33 @@ impl StateBlock<'_> {
         source: &SignedBlock,
         inspect: impl FnOnce(&mut Self, &OwnedExecutionSources) -> Result<(), String>,
     ) -> Result<(), String> {
+        // The inspection owns the actual retained capsule while deriving a
+        // source projection. Inspecting refuses capture and publication; every
+        // exit, including unwinding, consumes the inspection into Poisoned.
+        struct SourceInspectionOwner<'owner, 'state> {
+            state: &'owner mut StateBlock<'state>,
+        }
+        impl Drop for SourceInspectionOwner<'_, '_> {
+            fn drop(&mut self) {
+                self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            }
+        }
+
         let Some(ExecutionOutputPlanState::Retained(retained)) = self
             .execution_output_plan
-            .replace(ExecutionOutputPlanState::Poisoned)
+            .replace(ExecutionOutputPlanState::Inspecting)
         else {
+            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
             return Err("inspection requires completed actual execution".into());
         };
-        if retained.proposal != source.hash() || self._curr_block != source.header() {
+        let owner = SourceInspectionOwner { state: self };
+        if retained.proposal != source.hash() || owner.state._curr_block != source.header() {
             return Err("inspection source differs from its actual execution".into());
         }
         let sources = retained
             .sources
             .ok_or("inspection requires all actual phases")?;
-        inspect(self, &sources)
+        inspect(&mut *owner.state, &sources)
     }
 
     /// Move the existing ordinary plan into exactly one borrowing continuation.

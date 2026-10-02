@@ -5,7 +5,7 @@
 
 use super::super::ordinary_credential_union::assign_ordinary_credential_union_v1;
 use super::*;
-use halo2_base::gates::{GateInstructions as _, circuit::builder::BaseCircuitBuilder};
+use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
 use halo2_proofs::{
     dev::MockProver,
     halo2curves::pasta::{Fp, Fq},

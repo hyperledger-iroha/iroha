@@ -28,6 +28,7 @@ struct Record {
     version: u16,
     published_at_ms: u64,
     approval_captured_at_ms: u64,
+    publication_intent_digest: DigestV1,
     initial_state: KagemushaStateV1,
     statement: BootstrapStatementV1,
     retail_certificate_original: Vec<u8>,
@@ -93,6 +94,229 @@ impl PublishedGuard {
 }
 
 impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
+    // Only the genuine consuming cash owner can borrow these retained holders. There is no
+    // public financial-secret projection, serialized capability or replacement-owner path.
+    pub(super) fn cash_financial(&self) -> &KagemushaOrdinaryEnrolledFinancialOwnerV1 {
+        &self.financial
+    }
+
+    pub(super) fn cash_approvals(&self) -> &KagemushaOrdinaryLogicalApprovalJournalV1 {
+        &self.approvals
+    }
+
+    /// Private retained proving custody only. This never samples or lends a current clock/FI
+    /// grant, and cannot authorize State CAS or exposure. The cash actor first requires its
+    /// actual process-marked current-control proof capture; live effects separately recheck all
+    /// current financial, policy/revocation, FI, PI and clock originals.
+    pub(super) fn recheck_historical_cash_custody(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.current
+            .require_single_record(&self.canonical)
+            .map_err(storage)?;
+        if decode_record(&self.canonical)? != self.record {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.financial
+            .recheck_historical_proof_custody()
+            .map_err(material)?;
+        self.financial
+            .recheck_historical_release(self.approvals.retained_release())
+            .map_err(material)?;
+        if !Arc::ptr_eq(
+            self.financial.enrollment(),
+            self.approvals.retained_enrollment(),
+        ) || self
+            .financial
+            .historical_financial_authority_commitment()
+            .map_err(material)?
+            != self
+                .approvals
+                .retained_enrollment()
+                .app_credential()
+                .subject()
+                .financial_authority_commitment
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        match (
+            self.financial.retained_integrity_lease(),
+            self.approvals.retained_integrity_lease(),
+        ) {
+            (None, None) => {}
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => {}
+            _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        }
+        let (intent_digest, intent_created_at, captured_at) =
+            self.approvals.historical_initial_publication_intent()?;
+        if intent_digest != self.record.publication_intent_digest
+            || captured_at != self.record.approval_captured_at_ms
+            || intent_created_at > self.record.published_at_ms
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.verified_guard
+            .require_approval_admission_time(captured_at)?;
+        let approval = self.approvals.historical_bootstrap_approval()?;
+        if approval.retained_capture_time_ms() != self.record.approval_captured_at_ms {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        approval.recheck_retained_capture_custody()?;
+        if self.verified_guard.digests()
+            != [
+                self.record.normalized_guard_digest,
+                self.approvals
+                    .retained_enrollment()
+                    .app_credential()
+                    .digest(),
+                self.record.authorization_transcript_digest,
+                self.record.subject_signing_digest,
+                self.approvals.retained_release().provider_policy_root(),
+            ]
+            || self.verified_guard.original() != self.record.paired_ordinary_guard_original
+            || approval.original() != self.record.approval_original
+            || approval.authorization_binding_digest()?
+                != self.record.authorization_transcript_digest
+            || approval.challenge().subject_signing_digest != self.record.subject_signing_digest
+            || self.approvals.bootstrap_preview().state != self.record.initial_state
+            || self.approvals.bootstrap_preview().statement != self.record.statement
+            || self
+                .approvals
+                .retained_enrollment()
+                .certificate()
+                .canonical_bytes()
+                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
+                != self.record.retail_certificate_original
+            || self
+                .approvals
+                .retained_enrollment()
+                .app_credential()
+                .original()
+                != self.record.app_credential_original
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.current
+            .require_single_record(&self.canonical)
+            .map_err(storage)
+    }
+    /// Full public zero-State/Guard originals selected from this held immutable publication.
+    /// This supplies only data to separate genuine Core Anchor admission and global CAS.
+    pub(super) fn lineage_anchor_public_originals(
+        &self,
+        verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
+        capacity: KagemushaDurableCapacityV1,
+    ) -> Result<
+        (
+            iroha_data_model::kagemusha::KagemushaOrdinaryLineageAnchorV1,
+            Vec<u8>,
+        ),
+        KagemushaStateErrorV1,
+    > {
+        use crate::kagemusha_v1_recursion::{
+            KagemushaOrdinaryLineageStateProofBundleV1, KagemushaOrdinaryLineageStatementOriginalV1,
+        };
+        use iroha_data_model::kagemusha::{
+            KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryFinancialLineageV1,
+            KagemushaOrdinaryLineageAnchorV1, kagemusha_ordinary_financial_epoch_id_v1,
+        };
+        self.recheck_historical_cash_custody()?;
+        let approval = self.approvals.historical_bootstrap_approval()?;
+        let enrollment = self.approvals.retained_enrollment();
+        let original_lease = approval.original_approval_integrity_lease();
+        let at = self.record.approval_captured_at_ms;
+        let selection = match original_lease {
+            Some(lease) => KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1::from_verified_enrollment_with_current_integrity_lease(
+                enrollment, verifier, self.record.statement.state_nonce_commitment, capacity, lease, at),
+            None => KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1::from_verified_enrollment(
+                enrollment, verifier, self.record.statement.state_nonce_commitment, capacity, at),
+        }?;
+        if !Arc::ptr_eq(
+            &selection.authenticated_release()?,
+            self.approvals.retained_release(),
+        ) || selection.preview()?.state != self.record.initial_state
+            || selection.preview()?.statement != self.record.statement
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let state_original = selection.lineage_public_state_original(&self.record.state_proof)?;
+        let lineage = KagemushaOrdinaryFinancialLineageV1 {
+            version: 1,
+            owner: enrollment.certificate().subject.owner.clone(),
+            financial_epoch_id: kagemusha_ordinary_financial_epoch_id_v1(
+                enrollment.app_credential().subject(),
+            )
+            .map_err(material)?,
+            financial_authority_commitment: enrollment
+                .app_credential()
+                .subject()
+                .financial_authority_commitment,
+        };
+        let initial_head = KagemushaOrdinaryFinancialHeadV1 {
+            state_commitment: self.record.initial_state.state_commitment,
+            logical_sequence: self.record.initial_state.logical_sequence,
+            state_original_sha256: Sha256::digest(&state_original).into(),
+        };
+        let bundle = KagemushaOrdinaryLineageStateProofBundleV1::from_public_parts(
+            self.approvals
+                .bootstrap_preview()
+                .normalized_guard_statement,
+            KagemushaOrdinaryLineageStatementOriginalV1::Zero(Box::new(
+                self.record.statement.clone(),
+            )),
+            state_original,
+            self.record.app_credential_original.clone(),
+            self.record.approval_original.clone(),
+            original_lease.map(|lease| lease.original().to_vec()),
+            self.record.paired_ordinary_guard_original.clone(),
+            None,
+            None,
+        )
+        .map_err(material)?
+        .canonical_bytes()
+        .map_err(material)?;
+        let anchor = KagemushaOrdinaryLineageAnchorV1 {
+            lineage,
+            initial_head,
+            proof_bundle_original_sha256: Sha256::digest(&bundle).into(),
+        };
+        anchor.validate_shape().map_err(material)?;
+        self.recheck_historical_cash_custody()?;
+        Ok((anchor, bundle))
+    }
+
+    /// Actual original zero-State, available only to the private genuine cash actor for proving.
+    pub(super) fn historical_initial_state(
+        &self,
+    ) -> Result<&KagemushaStateV1, KagemushaStateErrorV1> {
+        self.recheck_historical_cash_custody()?;
+        Ok(&self.record.initial_state)
+    }
+    /// Full original commitments after historical custody checks; these data create no authority.
+    pub(super) fn historical_original_commitments(
+        &self,
+    ) -> Result<[DigestV1; 8], KagemushaStateErrorV1> {
+        self.recheck_historical_cash_custody()?;
+        let state = norito::encode_canonical(&self.record.initial_state).map_err(material)?;
+        let proof = norito::encode_canonical(&self.record.state_proof).map_err(material)?;
+        let result = detached_original_commitments(
+            self.approvals
+                .retained_enrollment()
+                .certificate()
+                .subject
+                .enrollment_id,
+            [
+                &self.canonical,
+                &self.record.retail_certificate_original,
+                &self.record.app_credential_original,
+                &self.record.approval_original,
+                &state,
+                &proof,
+                &self.record.paired_ordinary_guard_original,
+            ],
+        )?;
+        self.recheck_historical_cash_custody()?;
+        Ok(result)
+    }
+
     /// Verify both genuine State parities and the distinct compiled ordinary Guard, then fsync
     /// the complete initial publication before returning its retained owner. Existing paths are
     /// never reset. The proof must open the independent financial commitment; app key custody
@@ -153,6 +377,8 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             version: 1,
             published_at_ms,
             approval_captured_at_ms: approval.captured_at_ms(),
+            publication_intent_digest: approvals
+                .initial_publication_intent_digest(published_at_ms)?,
             initial_state: preview.state.clone(),
             statement: preview.statement.clone(),
             retail_certificate_original: selection
@@ -214,6 +440,9 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
         current.require_single_record(&canonical).map_err(storage)?;
         let record = decode_record(&canonical)?;
         let now = financial.trusted_time_ms().map_err(material)?;
+        if approvals.initial_publication_intent_digest(now)? != record.publication_intent_digest {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         if now < record.published_at_ms {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
@@ -259,6 +488,11 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         self.approvals.recheck_at_trusted_time(now)?;
+        if self.approvals.initial_publication_intent_digest(now)?
+            != self.record.publication_intent_digest
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         require_financial_custody(&self.financial, &self.approvals)?;
         self.current
             .require_single_record(&self.canonical)
@@ -307,11 +541,68 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             .map_err(storage)
     }
 
+    /// Project the retained bootstrap originals from the real published owner. This only
+    /// acknowledges its historic capture and current custody; it creates no fresh W or money.
+    pub(in crate::kagemusha_v1_state::authenticated_core_owner) fn retained_bootstrap_platform_originals(
+        &self,
+    ) -> Result<
+        (
+            iroha_data_model::kagemusha::KagemushaAppOperationApprovalChallengeV1,
+            Vec<u8>,
+            Option<u32>,
+        ),
+        KagemushaStateErrorV1,
+    > {
+        self.recheck()?;
+        let now = self.financial.trusted_time_ms().map_err(material)?;
+        let retained = self
+            .approvals
+            .approved_at_original_capture_time(self.record.approval_captured_at_ms, now)?;
+        if retained.original() != self.record.approval_original {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let result = (
+            *retained.challenge(),
+            retained.original().to_vec(),
+            retained.app_attest_counter(),
+        );
+        self.recheck()?;
+        Ok(result)
+    }
+
     /// Pure initial-state projection after the retained actual owner rechecks.
     /// It does not expose a mutable machine or create an outgoing/mint/terminal authorization.
     pub fn initial_state(&self) -> Result<&KagemushaStateV1, KagemushaStateErrorV1> {
         self.recheck()?;
         Ok(&self.record.initial_state)
+    }
+
+    /// Detached commitments to exact retained originals, after current custody rechecks.
+    /// These bytes cannot reconstruct this owner or authorize a subsequent financial operation.
+    /// Order: enrollment ID, publication, FI certificate, credential, full signed W, State,
+    /// paired State proof, paired ordinary Guard. Each digest hashes the full canonical original.
+    pub fn original_commitments(&self) -> Result<[DigestV1; 8], KagemushaStateErrorV1> {
+        self.recheck()?;
+        let state = norito::encode_canonical(&self.record.initial_state).map_err(material)?;
+        let proof = norito::encode_canonical(&self.record.state_proof).map_err(material)?;
+        let result = detached_original_commitments(
+            self.approvals
+                .retained_enrollment()
+                .certificate()
+                .subject
+                .enrollment_id,
+            [
+                &self.canonical,
+                &self.record.retail_certificate_original,
+                &self.record.app_credential_original,
+                &self.record.approval_original,
+                &state,
+                &proof,
+                &self.record.paired_ordinary_guard_original,
+            ],
+        )?;
+        self.recheck()?;
+        Ok(result)
     }
 
     /// Retain one genuine current Integrity lease without replacing the original FI credential,
@@ -351,6 +642,54 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             .select_verified_integrity_lease(selected)
             .map_err(material)?;
         self.recheck()
+    }
+}
+
+fn detached_original_commitments(
+    enrollment_id: DigestV1,
+    originals: [&[u8]; 7],
+) -> Result<[DigestV1; 8], KagemushaStateErrorV1> {
+    if enrollment_id == [0; 32] || originals.iter().any(|original| original.is_empty()) {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    let mut result = [[0; 32]; 8];
+    result[0] = enrollment_id;
+    for (destination, original) in result[1..].iter_mut().zip(originals) {
+        *destination = Sha256::digest(original).into();
+        if *destination == [0; 32] {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod commitment_tests {
+    use super::*;
+
+    #[test]
+    fn detached_commitments_hash_complete_originals_in_order_without_creating_authority() {
+        let originals = [
+            b"publication".as_slice(),
+            b"FI",
+            b"credential",
+            b"W and its signature",
+            b"State",
+            b"paired State",
+            b"paired ordinary Guard",
+        ];
+        let result = detached_original_commitments([7; 32], originals).unwrap();
+        assert_eq!(result[0], [7; 32]);
+        for (digest, original) in result[1..].iter().zip(originals) {
+            assert_eq!(*digest, <DigestV1>::from(Sha256::digest(original)));
+        }
+        assert_ne!(result[4], <DigestV1>::from(Sha256::digest(b"W")));
+        assert!(detached_original_commitments([0; 32], originals).is_err());
+        for index in 0..originals.len() {
+            let mut missing = originals;
+            missing[index] = b"";
+            assert!(detached_original_commitments([7; 32], missing).is_err());
+        }
     }
 }
 
@@ -432,6 +771,7 @@ fn decode_record(bytes: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
         || record.published_at_ms == 0
         || record.approval_captured_at_ms == 0
         || record.approval_captured_at_ms > record.published_at_ms
+        || record.publication_intent_digest == [0; 32]
         || record.retail_certificate_original.is_empty()
         || record.retail_certificate_original.len()
             > KAGEMUSHA_ORDINARY_RETAIL_ENROLLMENT_MAX_BYTES_V1

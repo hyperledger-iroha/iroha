@@ -791,7 +791,17 @@ fn validate_fx_settlement_preconditions(
             stx.block_unix_timestamp_ms(),
         )
         .map_err(|error| {
-            invalid_fx_parameter(format!("invalid FX recipient SNS alias state: {error}"))
+            match error.into_attempt_error(|error| {
+                invalid_fx_parameter(format!("invalid FX recipient SNS alias state: {error}"))
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    let _ = stx.defer_execution(reason);
+                    InstructionExecutionError::InvariantViolation(
+                        "local SNS execution did not complete".into(),
+                    )
+                }
+            }
         })?;
         if resolved.as_ref() != Some(&instruction.recipient)
             || alias.dataspace != policy.destination_dataspace

@@ -61,6 +61,20 @@ pub enum BodyReadError {
     Completed,
 }
 
+impl BodyReadError {
+    /// Preserve physical decoder refusal as local I/O progress without allocating a diagnostic.
+    /// Deterministic wire and decode-limit errors retain their original terminal typed cause.
+    pub(super) fn from_decode(error: norito::Error) -> Self {
+        if matches!(&error, norito::Error::AllocationFailed { .. })
+            && !cfg!(all(test, sumeragi_core_mutation = "HC25"))
+        {
+            Self::Io(io::ErrorKind::WouldBlock.into())
+        } else {
+            Self::Decode(error)
+        }
+    }
+}
+
 impl std::fmt::Display for BodyReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -155,7 +169,9 @@ impl BodyReadJob for FileBodyRead {
                         self.state = ReadState::Decoding(decode);
                         return match error {
                             BodyDecodeError::ForeignBudget => Err(BodyReadError::ForeignBudget),
-                            BodyDecodeError::Decode(error) => Err(BodyReadError::Decode(error)),
+                            BodyDecodeError::Decode(error) => {
+                                Err(BodyReadError::from_decode(error))
+                            }
                             BodyDecodeError::Bytes(error) if error.is_local_refusal() => {
                                 Ok(BodyReadPoll::Pending(error))
                             }
@@ -165,6 +181,41 @@ impl BodyReadJob for FileBodyRead {
                 },
                 ReadState::Consumed => return Err(BodyReadError::Completed),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod decode_refusal_tests {
+    use super::*;
+    #[test]
+    fn physical_decode_refusal_is_operational_but_declared_limits_remain_terminal() {
+        let error = BodyReadError::from_decode(norito::Error::AllocationFailed { bytes: 123 });
+        let BodyReadError::Io(error) = error else {
+            panic!("physical allocator refusal remains retryable");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.get_ref().is_none());
+        for error in [
+            norito::Error::LengthMismatch,
+            norito::Error::SchemaMismatch,
+            norito::Error::FieldLengthExceeded {
+                length: 2,
+                limit: 1,
+            },
+            norito::Error::TotalAllocationExceeded {
+                attempted: 2,
+                limit: 1,
+            },
+            norito::Error::TotalElementsExceeded {
+                attempted: 2,
+                limit: 1,
+            },
+        ] {
+            assert!(
+                matches!(BodyReadError::from_decode(error), BodyReadError::Decode(_)),
+                "static wire/decoder policy errors cannot become resource retries"
+            );
         }
     }
 }

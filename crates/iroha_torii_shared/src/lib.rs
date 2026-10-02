@@ -39,6 +39,8 @@ pub mod kagemusha_api;
 pub mod kagemusha_state;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
+/// Actual signed account-scoped ordinary current-wallet original wire.
+pub mod ordinary_wallet_current;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.

@@ -1548,6 +1548,12 @@ fn artifact_registry_instructions_bind_full_width_dataspace_without_hash_only_al
         fields.remove("artifact_id");
         fields.insert("code_hash".into(), json::to_value(&code_hash).unwrap());
         assert_strict_rejection(&object([(name.as_str(), hash_only)]));
+        let mut extra_payload = payload.clone();
+        extra_payload
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), Value::Null);
+        assert_strict_rejection(&object([(name.as_str(), extra_payload)]));
         let mut extra = value.clone();
         extra
             .as_object_mut()

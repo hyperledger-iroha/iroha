@@ -21,3 +21,8 @@
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaTestnetNativeStartupJniV1 {
     native <methods>;
 }
+
+# Exact shared ordinary startup/current-FI JNI names are native-only custody entrypoints.
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryRuntimeJniV1 {
+    native <methods>;
+}

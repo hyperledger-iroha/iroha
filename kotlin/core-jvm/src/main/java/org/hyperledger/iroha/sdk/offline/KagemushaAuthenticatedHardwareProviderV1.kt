@@ -555,20 +555,13 @@ internal class AuthenticatedCall(
 class KagemushaAuthenticatedHardwareProviderV1(
     private val client: KagemushaAuthenticatedDeviceClientV1,
     private val authorizeBootstrap: () -> Unit,
-    private val incomingEvidence: KagemushaIncomingFoldEvidenceProviderV1? = null,
+    private val incomingEvidence: KagemushaIncomingFoldEvidenceProviderV1,
 ) : KagemushaHardwareProviderV1 {
     private val lock = client.intents.lock
 
-    constructor(
-        transport: KagemushaNativeAuthenticatedDeviceTransportV1,
-        core: KagemushaNativeCoreCoordinatorV1,
-        intentStore: KagemushaOperationIntentStoreV1,
-        authorizeBootstrap: () -> Unit,
-    ) : this(KagemushaAuthenticatedDeviceClientV1(transport, core, intentStore), authorizeBootstrap)
-
     constructor(transport: KagemushaNativeAuthenticatedDeviceTransportV1, core: KagemushaNativeCoreCoordinatorV1,
         intentStore: KagemushaOperationIntentStoreV1, authorizeBootstrap: () -> Unit,
-        incomingEvidence: KagemushaIncomingFoldEvidenceProviderV1?) :
+        incomingEvidence: KagemushaIncomingFoldEvidenceProviderV1) :
         this(KagemushaAuthenticatedDeviceClientV1(transport, core, intentStore), authorizeBootstrap, incomingEvidence)
 
     override fun qualification(): KagemushaHardwareQualificationV1 = client.qualification()
@@ -758,7 +751,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
     override fun foldPendingCredit(
         selector: KagemushaPendingCreditSelectorV1,
     ): KagemushaHardwareReceiveFoldV1 = lock.withLock {
-        val physical = incomingEvidence ?: throw KagemushaIncomingFoldEvidenceUnavailableV1()
+        val physical = incomingEvidence
         val id = authenticatedDigest(selector.creditId(), "creditId")
         val credential = qualification().credential
         val prepared = client.core.prepareIncomingFold(selector)

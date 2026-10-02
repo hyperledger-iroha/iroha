@@ -15053,7 +15053,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional KAGEMUSHA V1 command-submission authority for app API endpoints.
+    /// Optional KAGEMUSHA V1 command capacity and redemption authority customization.
+    /// Command admission remains active with bounded defaults when absent.
     pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -19193,7 +19194,8 @@ impl ToriiFaucet {
 }
 /// KAGEMUSHA V1 command-admission configuration for app-facing KAGEMUSHA V1 routes.
 ///
-/// The whole table is optional. When present, every capacity field is required.
+/// The whole table customizes mandatory command admission. Absence uses bounded defaults;
+/// when present, every capacity field is required.
 /// The redemption signer fields are an optional all-or-none group; payer-signed top-ups do not
 /// require Torii to hold an issuer key.
 #[derive(Debug, Clone, norito::JsonDeserialize)]

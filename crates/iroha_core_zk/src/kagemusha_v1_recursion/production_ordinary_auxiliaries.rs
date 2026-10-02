@@ -68,8 +68,9 @@ impl IncomingEp {
 
 /// Immutable public bootstrap proof originals, retained by the actual Native installer.
 /// Construction grants no proof admission or financial authority. Callers obtain the opaque
-/// SHA artifacts from the authenticated release loader and supply original valid padding proofs;
-/// all actual protocols and proofs are consumed by the Native circuit, never a callback verifier.
+/// SHA artifacts from the authenticated release loader. Native construction supplies inactive
+/// parser operands for zero-State slots; these grant no mint or incoming payment authority.
+/// The Native circuit consumes the actual protocols and independently verified original Guard.
 pub struct KagemushaRetainedOrdinaryBootstrapAuxiliariesV1 {
     paired_guard_original: Vec<u8>,
     eq_hash: KagemushaLoadedEqMintHashArtifactsV1,

@@ -3191,6 +3191,7 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 
 Every artifact helper requires an explicit `{ dataspaceId, codeHash }` identity;
 use a canonical decimal string for the full unsigned 64-bit dataspace range.
+The same code hash in two dataspaces identifies two separately authorized artifacts.
 Manifest registration also requires its `code_hash` to match that identity.
 The local builder checks lifecycle kinds and permissions, unique declarations,
 local callback targets, access-hint completeness and exact schema bindings before
@@ -3200,8 +3201,6 @@ hashes without the Iroha marker bit are rejected. Native Norito encoding retains
 authoritative. Bytecode helpers accept `Buffer`, typed arrays, or base64 strings.
 `buildRemoveSmartContractBytesInstruction/Transaction` rejects empty reason strings.
 
-Artifact instructions require `artifactId: { dataspaceId, codeHash }`; the
-same code hash in two dataspaces identifies two separately authorized artifacts.
 Use `deploySmartContractBrowser` for the alias-first upload, manifest, and binding
 workflow. Its authenticated deployment state supplies the dataspace ID.
 `getContractManifest` and `getContractCodeBytes` take that explicit artifact ID

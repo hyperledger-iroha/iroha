@@ -163,11 +163,12 @@ This post-execution construction budget has no Norito/wire identity and is not a
 execution-admission token or authenticated policy. The existing test-only D7
 preparer exercises it. Production `StateBlock::capture_exec_witness` still requires
 an authenticated source policy and atomic D7 insertion/retained-context validation.
-`StateTransaction::apply` still merges applied whole-entry transcripts without
-these runtime quotas. TODO: supply authenticated intrinsic/block ceilings,
-transaction/savepoint ownership, mandatory fee/penalty/time-work reservations and
-deterministic proposal-packing behavior before wiring admission there. Existing
-test-only occurrence/prefix helpers do not authorize fragment sums for M or S.
+Runtime admission uses the independently frozen policy and the original
+producer's ordinary invocation owners, native sweep capabilities and retained
+governance obligations. Their quota journals apply or drop with the matching
+State transaction. Current-source execution, complete final capture and replay
+qualification remain required. Existing test-only occurrence/prefix helpers do
+not authorize fragment sums for M or S.
 The test-only complete-entry reservation adapter now replaces one contribution
 from the complete borrowed, finalized transcript bundle. Reopening an entry hash
 across physical fee fragments retains E=1. Its journal restores both accounting
@@ -232,7 +233,7 @@ membership and direct permissions are not proved by the role-table root.
 
 The September 26 candidate now freezes the required on-chain source policy before
 block-start work, retains ordinary entry ownership before attempts, and keeps
-ordinary and mandatory reservation journals inside the disposable State/witness
+ordinary, native-maintenance and mandatory reservation journals inside the disposable State/witness
 transaction. Complete entry framing is charged before transfer mutation; intrinsic
 refusals roll back business effects and retain one rejected invocation. Fee and
 ballot-penalty tail shapes are checked before execution, and proposal packing uses
@@ -245,15 +246,37 @@ confidential parameters share one global metadata input after authored instructi
 In-genesis parameter
 changes cannot enlarge that carrier's pre-frozen capacity.
 
-Final inventory construction now retains the original ordinary and mandatory
+Final inventory construction now retains the original ordinary, native-maintenance and mandatory
 quota journal identities with their frozen policies, exact six-dimensional usage
 and last applied transaction generations. Capture, extraction and commit require
-that same inventory allocation and both original journals. Discarded speculative
+that same inventory allocation and all three original journals. Discarded speculative
 children and empty commits preserve the seal; a nonempty applied journal changes
 it even when a later replacement restores all public counts. Reconstructing an
 equal journal does not restore custody, and an observed mismatch remains latched.
 The receipt shares existing allocation owners without adding backing storage;
 it does not complete original inventory or serialization-scratch accounting.
+
+SNS auto-renew runs only inside the original applying Time-phase output owner.
+`FastpqSourcePolicyV1.max_native_maintenance_invocations` reserves a disjoint
+finite native pool using the complete intrinsic entry ceiling; the bootstrap
+profile reserves 64 entries, independently of Network/Pipeline/Time invocations
+and retained governance obligations. The supported eleven Network inputs are
+unchanged. The combined bootstrap ceiling is E=3723, T=D=58608,
+I=510095248, M=272175 and S=1012055813; checked policy arithmetic includes all
+three pools before proposal admission. Missing native policy fields are refused.
+
+The sweep issues a move-only capability for the exact network, proposal,
+direct-execution slot, persisted storage key, revision and canonical enabled
+configuration. The charge rereads the live owner, expiry and exact quote before
+consuming it. Only an actual nonempty numeric transcript opens a native source E
+inside the same disposable State/source journal. A free quote or self-collector
+renewal advances the lease without inventing a transcript or source entry.
+Payment failure drops all movement/source effects before persisting deterministic
+retry metadata in its separate transaction. Native intrinsic/capacity refusals
+cannot borrow ordinary or governance reservations; authority/capture failures
+invalidate the carrier. Final inventory reconciliation authenticates every
+ProtocolPurpose against exactly one native or governance journal and compares
+all E/T/D/I/M/S totals. The public kind alone confers no source authority.
 
 TODO: complete current-source Core execution and genesis qualification, then bind
 these journals to atomic D7 publication. The combined implementation is applied;

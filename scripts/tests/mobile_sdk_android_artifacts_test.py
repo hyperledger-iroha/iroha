@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -34,15 +35,64 @@ class AndroidArtifactOwnerTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def pom(self, module, version="1.2.3"):
+        dependency = {"core-jvm": "", "client-android": "core-jvm",
+                      "kagemusha-wallet-android": "client-android"}[module]
+        deps = (f"<dependencies><dependency><groupId>org.hyperledger.iroha.sdk</groupId>"
+                f"<artifactId>{dependency}</artifactId><version>{version}</version>"
+                "</dependency></dependencies>") if dependency else ""
+        packaging = "jar" if module == "core-jvm" else "aar"
+        return (f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>'
+                f'<groupId>org.hyperledger.iroha.sdk</groupId><artifactId>{module}</artifactId>'
+                f'<version>{version}</version><packaging>{packaging}</packaging>{deps}</project>')
+
     def outputs(self, external=True):
-        core = self.build / "core-jvm" if external else self.repo / "kotlin/core-jvm/build"
-        client = self.build / "client-android" if external else self.repo / "kotlin/client-android/build"
-        jar = core / "libs/core-jvm-1.2.3.jar"
-        aar = client / "outputs/aar/client-android-release.aar"
-        for path in (jar, aar):
+        builds = {module: self.build / module if external else self.repo / "kotlin" / module / "build"
+                  for module in MODULE.SDK_MODULES}
+        paths = (builds["core-jvm"] / "libs/core-jvm-1.2.3.jar",
+                 builds["client-android"] / "outputs/aar/client-android-release.aar",
+                 builds["kagemusha-wallet-android"] / "outputs/aar/kagemusha-wallet-android-release.aar")
+        for module, path in zip(MODULE.SDK_MODULES, paths, strict=True):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"fresh external" if external else b"stale source")
-        return jar, aar
+            pom = builds[module] / "publications/release/pom-default.xml"
+            pom.parent.mkdir(parents=True, exist_ok=True)
+            pom.write_text(self.pom(module))
+        return paths
+
+    def maven(self):
+        outputs = self.outputs()
+        maven = self.external / "maven"
+        for module, output in zip(MODULE.SDK_MODULES, outputs, strict=True):
+            directory = maven / "org/hyperledger/iroha/sdk" / module / "1.2.3"
+            directory.mkdir(parents=True)
+            extension = "jar" if module == "core-jvm" else "aar"
+            (directory / f"{module}-1.2.3.{extension}").write_bytes(output.read_bytes())
+            (directory / f"{module}-1.2.3.pom").write_text(self.pom(module))
+            self.module_metadata(module, directory / f"{module}-1.2.3.{extension}")
+        return maven
+
+    def module_metadata(self, module, artifact):
+        dependency = {"core-jvm": "", "client-android": "core-jvm",
+                      "kagemusha-wallet-android": "client-android"}[module]
+        variants = []
+        for usage in ("java-api", "java-runtime"):
+            attributes = {"org.gradle.category": "library", "org.gradle.dependency.bundling": "external",
+                          "org.gradle.libraryelements": "jar" if module == "core-jvm" else "aar",
+                          "org.gradle.usage": usage}
+            if module == "core-jvm":
+                attributes.update({"org.gradle.jvm.version": 8, "org.gradle.jvm.environment": "standard-jvm"})
+            dependencies = ([{"group": "org.hyperledger.iroha.sdk", "module": dependency,
+                              "version": {"requires": "1.2.3"}}] if dependency else [])
+            variants.append({"name": "apiElements" if usage == "java-api" else "runtimeElements",
+                             "attributes": attributes, "dependencies": dependencies,
+                             "files": [{"name": artifact.name, "url": artifact.name, "size": artifact.stat().st_size,
+                                        **{algorithm: hashlib.new(algorithm, artifact.read_bytes()).hexdigest()
+                                           for algorithm in ("sha256", "sha512", "sha1", "md5")}}]})
+        path = artifact.with_suffix(".module")
+        path.write_text(json.dumps({"formatVersion": "1.1", "component": {
+            "group": "org.hyperledger.iroha.sdk", "module": module, "version": "1.2.3"}, "variants": variants}))
+        return path
 
     def sboms(self):
         for name in MODULE.SDK_MODULES:
@@ -173,19 +223,19 @@ class AndroidArtifactOwnerTests(unittest.TestCase):
             MODULE.built_artifacts(self.repo, str(self.external))
 
     def test_multiple_runtime_jars_are_not_silently_selected(self):
-        jar, _ = self.outputs()
+        jar, _, _ = self.outputs()
         jar.with_name("core-jvm-old.jar").write_bytes(b"old")
         with self.assertRaises(ValueError):
             MODULE.built_artifacts(self.repo, str(self.external))
 
     def test_source_and_javadoc_jars_do_not_replace_runtime_jar(self):
-        jar, aar = self.outputs()
+        jar, aar, wallet = self.outputs()
         for suffix in ("sources", "javadoc"):
             jar.with_name(f"core-jvm-1.2.3-{suffix}.jar").write_bytes(b"documentation")
-        self.assertEqual(MODULE.built_artifacts(self.repo, str(self.external)), (jar, aar))
+        self.assertEqual(MODULE.built_artifacts(self.repo, str(self.external)), (jar, aar, wallet))
 
     def test_linked_or_empty_artifact_is_rejected(self):
-        jar, aar = self.outputs()
+        jar, aar, wallet = self.outputs()
         substitute = self.directory / "substitute.jar"
         jar.rename(substitute)
         jar.symlink_to(substitute)
@@ -200,6 +250,118 @@ class AndroidArtifactOwnerTests(unittest.TestCase):
         aar.write_bytes(b"")
         with self.assertRaises(ValueError):
             MODULE.built_artifacts(self.repo, str(self.external))
+
+    def test_missing_wallet_and_version_substitution_refuse(self):
+        outputs = self.outputs()
+        outputs[2].unlink()
+        with self.assertRaises(FileNotFoundError):
+            MODULE.built_artifacts(self.repo, str(self.external))
+        self.outputs()
+        with self.assertRaisesRegex(ValueError, "requested SDK version"):
+            MODULE.built_artifacts(self.repo, str(self.external), version="1.2.4")
+        pom = self.build / "kagemusha-wallet-android/publications/release/pom-default.xml"
+        pom.write_text(self.pom("kagemusha-wallet-android", "1.2.4"))
+        with self.assertRaisesRegex(ValueError, "POM version"):
+            MODULE.built_artifacts(self.repo, str(self.external))
+
+    def test_pom_dependency_version_and_retired_identity_cannot_mix_graph(self):
+        self.outputs()
+        pom = self.build / "client-android/publications/release/pom-default.xml"
+        original = pom.read_text()
+        for content in [original.replace('<version>1.2.3</version></dependency>', '<version>old</version></dependency>'),
+                        original.replace('<artifactId>core-jvm</artifactId>', '<artifactId>iroha-android</artifactId>'),
+                        original.replace('<artifactId>core-jvm</artifactId>', '<artifactId>client-android</artifactId>')]:
+            with self.subTest(content=content):
+                pom.write_text(content)
+                with self.assertRaises(ValueError):
+                    MODULE.built_artifacts(self.repo, str(self.external))
+        pom.write_text(original)
+        self.assertEqual(len(MODULE.built_artifacts(self.repo, str(self.external))), 3)
+
+    def test_complete_maven_graph_binds_same_version_and_original_build_bytes(self):
+        maven = self.maven()
+        admitted = MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+        self.assertEqual(len(admitted), 9)
+        wallet = maven / "org/hyperledger/iroha/sdk/kagemusha-wallet-android/1.2.3/kagemusha-wallet-android-1.2.3.aar"
+        wallet.write_bytes(b"stale Maven wallet")
+        with self.assertRaisesRegex(ValueError, "differs"):
+            MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+        wallet.unlink()
+        with self.assertRaises(FileNotFoundError):
+            MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+
+    def test_maven_metadata_cannot_override_exact_version_or_add_old_coordinate(self):
+        maven = self.maven()
+        directory = maven / "org/hyperledger/iroha/sdk/client-android/1.2.3"
+        metadata = directory / "client-android-1.2.3.module"
+        document = json.loads(metadata.read_text())
+        document["variants"][0]["dependencies"] = [{"group": "org.hyperledger.iroha.sdk", "module": "core-jvm", "version": {"requires": "old"}}]
+        metadata.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, "exactly the same"):
+            MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+        document["variants"][0]["dependencies"] = [{"group": "org.hyperledger.iroha.sdk", "module": "core-jvm", "version": {"requires": "1.2.3"}}]
+        metadata.write_text(json.dumps(document))
+        old = maven / "org/hyperledger/iroha/sdk/core-jvm/old/core-jvm-old.jar"
+        old.parent.mkdir()
+        old.write_bytes(b"older version")
+        with self.assertRaisesRegex(ValueError, "another SDK version"):
+            MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+
+    def test_module_omission_duplicate_extra_and_old_dependency_refuse(self):
+        maven = self.maven()
+        for module, dependency in [("client-android", "core-jvm"), ("kagemusha-wallet-android", "client-android")]:
+            path = maven / "org/hyperledger/iroha/sdk" / module / "1.2.3" / f"{module}-1.2.3.module"
+            original = json.loads(path.read_text())
+            exact = original["variants"][0]["dependencies"][0]
+            for dependencies in ([], [exact, exact], [exact, {**exact, "module": module}],
+                                 [{**exact, "version": {"requires": "old"}}]):
+                changed = json.loads(json.dumps(original))
+                changed["variants"][0]["dependencies"] = dependencies
+                path.write_text(json.dumps(changed))
+                with self.subTest(module=module, dependencies=dependencies), self.assertRaises(ValueError):
+                    MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+            path.write_text(json.dumps(original))
+        self.assertEqual(len(MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")), 9)
+
+    def test_module_runtime_redirect_size_and_checksum_substitution_refuse(self):
+        maven = self.maven()
+        path = maven / "org/hyperledger/iroha/sdk/client-android/1.2.3/client-android-1.2.3.module"
+        original = json.loads(path.read_text())
+        for key, value in [("url", "https://foreign.invalid/client.aar"), ("name", "foreign.aar"),
+                           ("size", 1), ("sha256", "0" * 64), ("sha512", "0" * 128)]:
+            changed = json.loads(json.dumps(original))
+            changed["variants"][1]["files"][0][key] = value
+            path.write_text(json.dumps(changed))
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+        changed = json.loads(json.dumps(original))
+        changed["variants"] = changed["variants"][:1]
+        path.write_text(json.dumps(changed))
+        with self.assertRaisesRegex(ValueError, "missing a canonical"):
+            MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")
+
+    def test_module_preserves_real_sources_variant_with_original_file_binding(self):
+        maven = self.maven()
+        path = maven / "org/hyperledger/iroha/sdk/client-android/1.2.3/client-android-1.2.3.module"
+        source = path.parent / "client-android-1.2.3-sources.jar"
+        source.write_bytes(b"source original")
+        document = json.loads(path.read_text())
+        document["variants"].append({"name": "releaseVariantReleaseSourcePublication",
+            "attributes": {"org.gradle.category": "documentation", "org.gradle.docstype": "sources",
+                           "org.gradle.dependency.bundling": "external", "org.gradle.usage": "java-runtime"},
+            "files": [{"name": source.name, "url": source.name, "size": source.stat().st_size,
+                       "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}]})
+        path.write_text(json.dumps(document))
+        self.assertEqual(len(MODULE.maven_artifacts(self.repo, str(self.external), maven, "1.2.3")), 9)
+
+    def test_duplicate_version_or_entity_pom_is_refused(self):
+        self.outputs()
+        pom = self.build / "core-jvm/publications/release/pom-default.xml"
+        for content in [self.pom("core-jvm").replace('<version>1.2.3</version>', '<version>1.2.3</version><version>old</version>'),
+                        '<!DOCTYPE project [<!ENTITY x "1.2.3">]>' + self.pom("core-jvm")]:
+            pom.write_text(content)
+            with self.assertRaises(ValueError):
+                MODULE.built_artifacts(self.repo, str(self.external))
 
     def test_all_three_canonical_sboms_are_collected(self):
         self.sboms()

@@ -47,46 +47,14 @@ fn fixture_with_fee_asset(
         if let Some(asset) = fee_asset {
             use iroha_data_model::{
                 asset::{AssetBalancePolicy, AssetDefinition, AssetId},
-                domain::Domain,
                 isi::Mint,
             };
             use iroha_primitives::numeric::Quantity;
             Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut transaction)
                 .unwrap();
-            let domain = DomainId::try_new("network-fee", "universal").unwrap();
-            // This component starts after real genesis, so domain registration must
-            // consume an active canonical lease owned by its registered authority.
-            let selector = crate::sns::selector_for_domain(&domain).expect("domain selector");
-            let address = iroha_data_model::account::AccountAddress::from_account_id(&ALICE_ID)
-                .expect("registered authority address");
-            let record = iroha_data_model::sns::NameRecordV1::new(
-                selector.clone(),
-                ALICE_ID.clone(),
-                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                0,
-                0,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                iroha_model_base::metadata::Metadata::default(),
-            );
-            transaction.world.smart_contract_state.insert(
-                crate::sns::record_storage_key(&selector),
-                norito::codec::Encode::encode(&record),
-            );
-            assert_eq!(
-                crate::sns::active_domain_owner(
-                    &transaction.world,
-                    &domain,
-                    transaction.block_unix_timestamp_ms()
-                )
-                .expect("canonical active domain lease"),
-                Some(ALICE_ID.clone()),
-            );
-            Register::domain(Domain::new(domain))
-                .execute(&ALICE_ID, &mut transaction)
-                .unwrap();
+            // Global fee assets have no owning domain or alias; their custody
+            // uses universal accounts and the exact canonical asset definition.
             Register::asset_definition(AssetDefinition::numeric(
                 asset.clone(),
                 "Network fee".to_owned(),
@@ -250,7 +218,8 @@ fn output_fixture_retains_original_genesis_and_successor_source() {
         0,
     ));
     assert!(
-        crate::executor::root_scope::execution_root_scope(&unprepared_block.transaction()).is_err()
+        crate::executor::root_scope::execution_root_scope(&mut unprepared_block.transaction())
+            .is_err()
     );
     drop(unprepared_block);
     let state = fixture(65_536, Some(1024));
@@ -274,7 +243,7 @@ fn output_fixture_retains_original_genesis_and_successor_source() {
     assert_eq!(source.header().prev_block_hash(), Some(parent));
     assert!(source.header().creation_time() > output_fixture_input_time(&state));
     let (mut block, _recording) = recorded_network_block(&state, &source);
-    assert!(crate::executor::root_scope::execution_root_scope(&block.transaction()).is_ok());
+    assert!(crate::executor::root_scope::execution_root_scope(&mut block.transaction()).is_ok());
     drop(block);
     drop(_recording);
     assert_eq!(state.view().latest_block_hash(), Some(parent));

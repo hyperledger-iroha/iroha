@@ -70,13 +70,7 @@ pub(super) fn inspect(
             .push(Arc::clone(&block))
             .wrap_err_with(|| format!("invalid native finality successor at {current}"))?
             .into_parts();
-        committee = verified
-            .committed()
-            .commitment()
-            .schedule
-            .current
-            .committee
-            .clone();
+        committee.clone_from(&verified.committed().commitment().schedule.current.committee);
         selected = block;
     }
     let proof = SumeragiFinalityProof {

@@ -134,11 +134,17 @@ mod tests {
 
     #[test]
     fn export_requires_private_scope_and_an_actual_owner_token() {
-        let global = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(false);
+        let global = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            false,
+        );
         assert!(require_private_root(global.state.view().world()).is_err());
         assert!(owner_principal(&global, &axum::http::HeaderMap::new()).is_err());
         assert!(require_private_root(&iroha_core::state::World::new().view()).is_err());
-        let mut private = crate::tests_runtime_handlers::app_with_root_scope_for_token_test(true);
+        let mut private = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+            iroha_core::state::World::new(),
+            true,
+        );
         require_private_root(private.state.view().world()).unwrap();
         let app = Arc::get_mut(&mut private).unwrap();
         app.require_api_token = false;

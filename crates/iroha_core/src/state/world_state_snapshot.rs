@@ -7,6 +7,8 @@
 //! complete reconstructed root/count must match certified R; current typed targets
 //! that changed in the tail are refused. Decoded restoration requires native replay.
 
+#[path = "world_state_snapshot/ordinary_wallet.rs"]
+mod ordinary_wallet;
 use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{
@@ -749,7 +751,6 @@ fn stream_token_originals<'a>(
     ))?;
     Ok(Some((head, record)))
 }
-
 #[path = "world_state_snapshot/authority_originals.rs"]
 mod authority_originals;
 

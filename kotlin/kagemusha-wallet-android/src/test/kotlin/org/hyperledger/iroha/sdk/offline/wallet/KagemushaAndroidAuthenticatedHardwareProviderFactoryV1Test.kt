@@ -48,7 +48,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         val original = coordinatorProxy()
         val selected = object : KagemushaNativeCoreCoordinatorFactoryV1 {
             override fun create() = original
-            override fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1? =
+            override fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1 =
                 error("original physical custody changed")
         }
         assertFailsWith<IllegalStateException> { factoryWith(selected).open(availableBridge(),
@@ -60,7 +60,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         var creations = 0
         val core = coordinatorProxy()
         val factory = factoryWith(
-            KagemushaNativeCoreCoordinatorFactoryV1 {
+            requiredCoordinatorFactory {
                 creations += 1
                 core
             },
@@ -80,7 +80,7 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         assertTrue(missing.message!!.contains("none was installed"))
 
         var creations = 0
-        fun candidate() = KagemushaNativeCoreCoordinatorFactoryV1 {
+        fun candidate() = requiredCoordinatorFactory {
             creations += 1
             coordinatorProxy()
         }
@@ -91,24 +91,38 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
         assertEquals(0, creations)
     }
 
+
+
     @Test
-    fun `unavailable bridge fails before loading native Core services`() {
+    fun `failed lifecycle discovery cannot load native Core services`() {
         var discoveryCalls = 0
-        val factory = KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 {
+        var providerCalls = 0
+        val native = KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 {
             discoveryCalls += 1
             emptyList<KagemushaNativeCoreCoordinatorFactoryV1>().iterator()
         }
-
-        assertFailsWith<IllegalStateException> {
-            factory.open(KagemushaDeviceLifecycleBridgeV1.onlineOnly(), org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
+        val discovery = object : KagemushaAndroidHardwareProviderFactoryV1 {
+            override fun deviceLifecycleBridge(): KagemushaDeviceLifecycleBridgeV1 =
+                throw IllegalStateException("required native capability frame unavailable")
+            override fun open(bridge: KagemushaDeviceLifecycleBridgeV1,
+                intentStore: org.hyperledger.iroha.sdk.offline.KagemushaOperationIntentStoreV1,
+                authorizeBootstrap: () -> Unit): org.hyperledger.iroha.sdk.offline.KagemushaHardwareProviderV1 {
+                providerCalls += 1
+                return native.open(bridge, intentStore, authorizeBootstrap)
+            }
         }
+        assertFailsWith<IllegalStateException> {
+            KagemushaAndroidWalletV1.openProduction(discovery,
+                org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {})
+        }
+        assertEquals(0, providerCalls)
         assertEquals(0, discoveryCalls)
     }
 
     @Test
     fun `coordinator construction failure cannot expose a provider`() {
         val factory = factoryWith(
-            KagemushaNativeCoreCoordinatorFactoryV1 {
+            requiredCoordinatorFactory {
                 throw IllegalArgumentException("qualified runtime rejected startup")
             },
         )
@@ -182,4 +196,11 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
             .apply { isAccessible = true }
             .newInstance(endpoint, capabilities) as KagemushaDeviceLifecycleBridgeV1
     }
+    private fun requiredCoordinatorFactory(construct: () -> KagemushaNativeCoreCoordinatorV1): KagemushaNativeCoreCoordinatorFactoryV1 =
+        object : KagemushaNativeCoreCoordinatorFactoryV1 {
+            override fun create(): KagemushaNativeCoreCoordinatorV1 = construct()
+            override fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1 =
+                org.hyperledger.iroha.sdk.offline.TestOnlyRequiredIncomingEvidenceOwnerV1()
+        }
+
 }

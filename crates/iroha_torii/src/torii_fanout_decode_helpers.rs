@@ -1206,7 +1206,6 @@ async fn acquire_app_routed_read_http_memory(
     .map_err(|_| unavailable())?;
     Ok(QueryFanoutMemoryReservation::new(acquired))
 }
-#[cfg(any(feature = "connect", feature = "app_api"))]
 fn hold_query_fanout_memory_in_response_body(
     response: Response,
     reservation: QueryFanoutMemoryReservation,
@@ -1261,7 +1260,6 @@ fn take_ordinary_query_memory_reservation(
         .extensions_mut()
         .remove::<OrdinaryQueryResponseMemory>()
 }
-#[cfg(any(feature = "connect", feature = "app_api"))]
 fn hold_query_fanout_memory_reservation_in_response_body(
     mut response: Response,
     reservation: QueryFanoutMemoryReservation,

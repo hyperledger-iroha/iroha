@@ -2974,11 +2974,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     upstream_task.abort();
 }
 
-pub(super) fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
-    app_with_root_scope_for_handler_test(World::new(), private)
-}
-
-fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
+pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
         parameter::{

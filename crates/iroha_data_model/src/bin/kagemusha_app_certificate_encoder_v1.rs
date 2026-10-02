@@ -31,16 +31,11 @@ fn fail(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+#[path = "private_signer_process.rs"]
+mod private_signer_process;
+
 fn protect_private_process() -> io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        use rustix::process::{DumpableBehavior, dumpable_behavior, set_dumpable_behavior};
-        set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
-        if dumpable_behavior()? != DumpableBehavior::NotDumpable {
-            return Err(fail("private signer process protection unavailable"));
-        }
-    }
-    Ok(())
+    private_signer_process::protect()
 }
 
 // dup validates the offered descriptor and creates a new owned descriptor.
@@ -261,7 +256,7 @@ fn read_seed(key_file: &std::fs::File) -> io::Result<SecretSeed> {
 }
 
 fn main() -> io::Result<()> {
-    // exec resets Linux dumpability; protect this image before reading secrets.
+    // exec resets inherited protection; observe this image before reading secrets.
     protect_private_process()?;
     let mut arguments = std::env::args();
     if arguments.next().is_none() || arguments.next().as_deref() != Some("--key-fd") {

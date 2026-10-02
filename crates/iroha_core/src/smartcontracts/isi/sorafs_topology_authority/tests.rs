@@ -213,10 +213,10 @@ fn action_cases(operator: AccountId) -> [(Capability, TopologyActionV1); 7] {
         ),
         (
             Capability::Operate,
-            TopologyActionV1::Expire(TopologyExpireV1 {
+            TopologyActionV1::Expire(Box::new(TopologyExpireV1 {
                 operation_id: request.operation_id,
                 reservation,
-            }),
+            })),
         ),
         (
             Capability::Check,

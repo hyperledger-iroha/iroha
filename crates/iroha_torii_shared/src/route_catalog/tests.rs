@@ -181,7 +181,6 @@ mod tests {
             application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
             application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
             aliases::RESOLVE,
-            aliases::RESOLVE_INDEX,
             aliases::BY_ACCOUNT,
         ] {
             assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
@@ -244,6 +243,29 @@ mod tests {
     }
 
     #[test]
+    fn signed_alias_enumeration_retains_dataspace_visibility_and_requires_account_authentication() {
+        let route = aliases::RESOLVE_INDEX;
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+        assert!(route.requires_private_no_store());
+        assert_eq!(validate_catalog(&[route]), Ok(()));
+        for authentication in [
+            AuthenticationPolicy::Unauthenticated,
+            AuthenticationPolicy::ToriiDefault,
+            AuthenticationPolicy::OperatorSignature,
+            AuthenticationPolicy::CanonicalSignedBody,
+            AuthenticationPolicy::ProtocolHandshake,
+        ] {
+            let errors =
+                validate_catalog(&[route.with_authentication(authentication)]).unwrap_err();
+            assert!(errors.iter().any(|error| error.kind
+                == CatalogValidationErrorKind::DataspaceVisibleRequiresAccountAuthentication));
+        }
+    }
+    #[test]
     fn dataspace_admission_rejects_a_hollow_authentication_witness() {
         let route = RouteDescriptor::new(
             "test.dataspace_without_optional_auth",
@@ -256,7 +278,7 @@ mod tests {
         );
         let errors = validate_catalog(&[route]).expect_err("missing optional auth must fail");
         assert!(errors.iter().any(|error| {
-            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresOptionalAuthentication
+            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresAccountAuthentication
         }));
     }
     #[test]
@@ -355,9 +377,8 @@ mod tests {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn kagemusha_routes_are_universal_for_app_api_with_exact_mcp_projection() {
+    fn kagemusha_routes_are_mandatory_without_features_and_project_to_mcp() {
         let catalog = RouteCatalog::new(kagemusha::ROUTES);
-        let enabled = EnabledFeatures::new(&["app_api"]);
         let complete = BTreeSet::from([
             "kagemusha.readiness",
             "kagemusha.top_up",
@@ -366,18 +387,26 @@ mod tests {
             "kagemusha.authority_state",
             "ledger.resource_names_state",
             "ledger.authority_originals",
+            "kagemusha.ordinary_wallet_current",
         ]);
-        for projection in [CatalogProjection::Mounted, CatalogProjection::OpenApi] {
-            let projected = catalog.project(projection, enabled);
-            assert_eq!(projected.len(), complete.len());
-            assert_eq!(
-                projected
-                    .iter()
-                    .map(|route| route.stable_route_id())
-                    .collect::<BTreeSet<_>>(),
-                complete,
-                "every app-api node and authored OpenAPI contract must expose the five native KAGEMUSHA routes and exact authenticated names/authority routes"
-            );
+        assert_eq!(complete.len(), 8);
+        for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
+            for projection in [
+                CatalogProjection::Mounted,
+                CatalogProjection::OpenApi,
+                CatalogProjection::Sdk,
+            ] {
+                let projected = catalog.project(projection, enabled);
+                assert_eq!(projected.len(), complete.len());
+                assert_eq!(
+                    projected
+                        .iter()
+                        .map(|route| route.stable_route_id())
+                        .collect::<BTreeSet<_>>(),
+                    complete,
+                    "every node and authored client surface must expose all eight native KAGEMUSHA and original-carrier routes"
+                );
+            }
         }
         assert_eq!(
             kagemusha::RESOURCE_NAMES_STATE.admission(),
@@ -392,11 +421,48 @@ mod tests {
             RouteEffect::ReadOnly
         );
         assert_eq!(kagemusha::AUTHORITY_ORIGINALS.method(), HttpMethod::Post);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.admission(), AdmissionPolicy::AuthenticatedAccount);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.authentication(), AuthenticationPolicy::CanonicalAccountSignature);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.effect(), RouteEffect::ReadOnly);
-        let mcp = catalog.project(CatalogProjection::Mcp, enabled);
-        assert_eq!(mcp.len(), 4);
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.effect(),
+            RouteEffect::ReadOnly
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.path(),
+            "/v1/kagemusha/ordinary/current-wallet"
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.feature_gate(),
+            FeatureGate::Always
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.projections(),
+            RouteProjections::OPENAPI_AND_SDK
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.method(),
+            HttpMethod::Post
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.effect(),
+            RouteEffect::ReadOnly
+        );
+        let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());
+        assert_eq!(mcp.len(), 5);
         assert_eq!(
             mcp.iter()
                 .map(|route| route.stable_route_id())
@@ -406,10 +472,12 @@ mod tests {
                 "kagemusha.top_up",
                 "kagemusha.redeem",
                 "kagemusha.operation",
+                "kagemusha.authority_state",
             ]),
-            "complete native authority/name carriers have no MCP projection"
+            "signed original-carrier endpoints are available through their native SDK transport"
         );
     }
+
     #[test]
     fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
         assert!(
@@ -1032,11 +1100,7 @@ mod tests {
     }
     #[test]
     fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
-        for route in [
-            aliases::RESOLVE,
-            aliases::RESOLVE_INDEX,
-            aliases::BY_ACCOUNT,
-        ] {
+        for route in [aliases::RESOLVE, aliases::BY_ACCOUNT] {
             assert_eq!(
                 route.authentication(),
                 AuthenticationPolicy::OptionalCanonicalAccountSignature,

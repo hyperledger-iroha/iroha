@@ -29,6 +29,17 @@ plus expected-current-expiry compare-and-set semantics.
 No client-supplied receipt or off-chain settlement assertion can authorize a
 lease. Native execution and the committed world state are authoritative.
 
+Enabled auto-renew records are processed by the bounded native Time-phase sweep.
+Its move-only charge capability binds the original applying network/proposal,
+direct slot, storage key, revision and enabled configuration; execution rereads
+the exact owner, current expiry and quote. The committed FASTPQ source policy
+reserves native maintenance separately from trigger calls and mandatory
+governance work. Payment and source accounting apply in the same disposable
+transaction as the lease change. Failed payment retains only deterministic
+retry metadata; free or self-collector renewals emit no numeric source entry.
+This source integration still requires current compiled tests and replay
+qualification; it does not itself establish release or settlement readiness.
+
 ## Reconciliation evidence
 
 Treasury and governance reporting should derive evidence from canonical

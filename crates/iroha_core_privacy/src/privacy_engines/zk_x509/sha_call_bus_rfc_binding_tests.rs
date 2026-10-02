@@ -152,13 +152,45 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
     assert_ne!(binding.rfc5280(), changed_ca.rfc5280());
     assert_ne!(binding.sha(), changed_ca.sha());
     assert_ne!(binding.sha_word(), changed_ca.sha_word());
-    let rfc = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
-        &assembly.rfc_base,
-        binding.main_post_base().der(),
-        binding.rfc5280(),
-crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1::identity_fixture_v1(),
-)
-    .unwrap();
+    let mut original_sources = Vec::new();
+    for segment in 0..4 {
+        let mut base = ZkX509ShaBatchSegmentBaseSourceV1::new_v1(
+            &assembly.sha_schedule,
+            &assembly.sha_witnesses,
+            segment,
+        )
+        .unwrap();
+        original_sources.push(base.bind_v1(binding).unwrap());
+    }
+    let original_sources: [ZkX509ShaBatchSegmentAuxSourceV1<'_>; 4] = original_sources
+        .try_into()
+        .unwrap_or_else(|_| panic!("four actual SHA source owners"));
+    use crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1;
+    assert!(ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, changed_ca).is_err());
+    assert!(
+        original_sources[1]
+            .rfc_union_air_terminals_v1(binding, 0)
+            .is_err()
+    );
+    let (wrong_provider_centers, _) =
+        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, binding).unwrap();
+    assert!(
+        ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+            &assembly.rfc_base,
+            changed_ca,
+            wrong_provider_centers,
+        )
+        .is_err(),
+        "the consuming provider independently rejects a genuine owner from a different X5B1 phase"
+    );
+    // A rejected owner is consumed and cleared. Recover the positive path from
+    // the actual retained original sources, never by cloning or forging centers.
+    let (centers, original_ca) =
+        ZkX509ShaUnionCentersV1::from_bound_sources_v1(&original_sources, binding).unwrap();
+    // Provider consumes an owner from this exact opaque X5B1 phase, never a
+    // public endpoint tuple or test-only fixture centers.
+    let rfc =
+        ZkX509Rfc5280StarkColumnProviderV1::new_v1(&assembly.rfc_base, binding, centers).unwrap();
     let roles = [
         ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
         ZkX509Rfc5280OutputRoleV1::CrlTbsP256Message,
@@ -186,7 +218,7 @@ crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1::identit
             *product = product.mul(factor);
         }
     }
-    let (_, consumer_columns) =
+    let (bridge_columns, consumer_columns) =
         crate::privacy_engines::zk_x509::rfc5280_stark::zk_x509_rfc_sha_union_columns_v1();
     for ((role, products), columns) in roles.into_iter().zip(role_products).zip(consumer_columns) {
         for lane in 0..4 {
@@ -278,6 +310,33 @@ crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1::identit
             .validate_identity_v1(index)
             .expect("canonical compact-CA call identity and field products");
     }
+    assert_eq!(ca_calls, original_ca);
+    let mut has_nontrivial_original_center = false;
+    for (segment_index, original) in segments.iter().enumerate() {
+        for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
+            // Fold each of the four actual RFC stream families independently of
+            // the private owner constructor and its combined-product helper.
+            let expected = original
+                .rfc_stream_products
+                .iter()
+                .fold(F::ONE, |product, stream| product.mul(stream[lane]));
+            assert!(F::canonical(expected.0).is_some());
+            has_nontrivial_original_center |= expected != F::ZERO && expected != F::ONE;
+            let values = zeroize::Zeroizing::new(
+                rfc.build_aux_column_v1(bridge_columns[segment_index][lane])
+                    .unwrap(),
+            );
+            assert_eq!(values.len(), ZK_X509_SHA_SEGMENT_ROWS_V1);
+            assert!(
+                values.iter().all(|value| *value == expected),
+                "actual original SHA streams bind every RFC bridge row for segment {segment_index}, lane {lane}"
+            );
+        }
+    }
+    assert!(
+        has_nontrivial_original_center,
+        "the actual maximum fixture must test original products beyond zero or identity placeholders"
+    );
     for (segment, rows) in boundary_rows.iter().enumerate() {
         assert_actual_sha_cyclic_boundaries_v1(segment, rows, binding, segment as u8, &ca_calls);
     }

@@ -40,6 +40,9 @@ def test_current_source_complete_relation_exact_wire_bound() -> None:
     assert result["implemented_paired_fri_saving_bytes"] == 867_456
     assert result["current_main_inner_max_bytes"] == 7_908_768
     assert result["current_ca_inner_max_bytes"] == 1_498_816
+    assert result["main_frame_bytes"] == 10 + 31 * 32 == 1_002
+    assert result["ca_frame_bytes"] == 10
+    assert result["public_terminal_product_fields"] == 0
 
 
 def test_closed_frontier_bound_matches_exhaustive_small_trees() -> None:

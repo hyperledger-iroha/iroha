@@ -1,7 +1,7 @@
 //! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
 
 use super::*;
-use crate::state::{State, StateBlock, StateReadOnly, World};
+use crate::state::{State, StateBlock, World};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
@@ -34,11 +34,12 @@ fn owner(index: u16) -> AccountId {
     )
 }
 
-fn expected_transcript(instruction: &SettleAtomic, sponsor: &AccountId) -> TransferTranscript {
+fn expected_transcript(
+    movements: &[AtomicSettlementMovement],
+    sponsor: &AccountId,
+) -> TransferTranscript {
     let mut received = Quantity::zero();
-    let deltas = instruction
-        .movements()
-        .as_slice()
+    let deltas = movements
         .iter()
         .map(|movement| {
             let before = received.clone();
@@ -69,36 +70,66 @@ fn expected_transcript(instruction: &SettleAtomic, sponsor: &AccountId) -> Trans
     }
 }
 
-/// Freeze a finite component corpus bound through the same governed source policy.
+/// Freeze exact finite corpus framing through the governed source policy.
 fn set_source_delta_limit(
     world: &World,
     max_deltas: u32,
-) -> iroha_data_model::parameter::FastpqSourcePolicyV1 {
+    transcript: &TransferTranscript,
+) -> FastpqSourcePolicyV1 {
+    // Size the complete original occurrence before authenticated genesis installs
+    // the policy. Both 254 and 255 delta ceilings use this same 255-movement byte
+    // envelope, so the capacity regression isolates the D limit.
+    let measured =
+        crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage(
+            transcript.batch_hash,
+            [transcript],
+            crate::fastpq::FastpqSourceStatementBuildLimits {
+                max_executed_entries: 1,
+                max_transcripts: 1,
+                max_deltas: transcript.deltas.len(),
+                max_input_transcript_bytes: 4 * 1024 * 1024,
+                max_statement_bytes: 4 * 1024 * 1024,
+                max_total_statement_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .expect("exact atomic fixture fits its bounded sizing corpus");
+    assert_eq!(measured.deltas, transcript.deltas.len());
     let mut parameters = world.parameters.block();
-    let previous = parameters.get().block().fastpq_source();
-    let mut intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
-    // Every complete transcript also owns its canonical input and statement bytes.
-    // Scale those finite corpus bounds together; changing only D leaves I/M/S at
-    // the sixteen-transfer bootstrap size. Both 254 and 255 use the same byte
-    // envelope, so the one-delta-short regression isolates the D limit.
-    let chunks = u64::from(max_deltas.div_ceil(intrinsic.max_deltas).max(1));
+    let baseline = parameters.get().block().fastpq_source();
+    let mut intrinsic = baseline.intrinsic;
+    intrinsic.max_transcripts = intrinsic
+        .max_transcripts
+        .max(u32::try_from(measured.transcripts).expect("bounded transcript count"));
     intrinsic.max_deltas = max_deltas;
     intrinsic.max_input_transcript_bytes = intrinsic
         .max_input_transcript_bytes
-        .checked_mul(chunks)
-        .expect("bounded input corpus");
+        .max(u64::try_from(measured.input_transcript_bytes).expect("bounded input corpus"));
     intrinsic.max_statement_bytes = intrinsic
         .max_statement_bytes
-        .checked_mul(chunks)
-        .expect("bounded statement corpus");
-    intrinsic.max_total_statement_bytes = intrinsic.max_statement_bytes;
+        .max(u64::try_from(measured.max_statement_bytes).expect("bounded statement corpus"));
+    intrinsic.max_total_statement_bytes = intrinsic.max_total_statement_bytes.max(
+        u64::try_from(measured.total_statement_bytes).expect("bounded total statement corpus"),
+    );
     let profile = FastpqSourcePolicyV1::from_sizing(
         parameters.get().block().execution_output(),
         intrinsic,
-        previous.mandatory,
+        baseline.mandatory,
         FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
     )
-    .expect("explicit finite source profile fits the component corpus");
+    .expect("explicit finite source profile fits the signed genesis and component corpus");
+    assert!(u32::try_from(measured.transcripts).unwrap() <= profile.intrinsic.max_transcripts);
+    assert!(
+        u64::try_from(measured.input_transcript_bytes).unwrap()
+            <= profile.intrinsic.max_input_transcript_bytes
+    );
+    assert!(
+        u64::try_from(measured.max_statement_bytes).unwrap()
+            <= profile.intrinsic.max_statement_bytes
+    );
+    assert!(
+        u64::try_from(measured.total_statement_bytes).unwrap()
+            <= profile.intrinsic.max_total_statement_bytes
+    );
     parameters
         .get_mut()
         .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
@@ -190,7 +221,8 @@ fn fixture_with_source_delta_limit(
     );
     // The 255-movement corpus exceeds bootstrap's sixteen transfer deltas.
     // Reserve its deltas and complete framing before StateBlock freezes its source owner.
-    let source_policy = set_source_delta_limit(&world, max_deltas);
+    let transcript = expected_transcript(&movements, &sponsor);
+    let source_policy = set_source_delta_limit(&world, max_deltas, &transcript);
     let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
     // Genesis installs its signed parameter snapshot. Carry this finite corpus
     // policy in that snapshot so bootstrap defaults cannot replace its owner.
@@ -207,43 +239,6 @@ fn fixture_with_source_delta_limit(
         AtomicSettlementMovements::try_from(movements).expect("canonical full vector"),
         nonzero!(100_u64),
         Metadata::default(),
-    );
-    // This exact fixture corpus includes 255 transfers with fixed Ed25519 owners
-    // and prefunded quantities. Measure its complete canonical transcript/statement
-    // under a finite local construction cap, then check the byte dimensions signed into genesis
-    // before block admission. Raising D alone leaves I/M/S at the bootstrap corpus.
-    // The successful test compares this sizing input against the actual emitted
-    // transcript; it does not replace execution, source ownership or quota checks.
-    let transcript = expected_transcript(&instruction, &sponsor);
-    let measured =
-        crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage(
-            transcript.batch_hash,
-            [&transcript],
-            crate::fastpq::FastpqSourceStatementBuildLimits {
-                max_executed_entries: 1,
-                max_transcripts: 1,
-                max_deltas: count,
-                max_input_transcript_bytes: 4 * 1024 * 1024,
-                max_statement_bytes: 4 * 1024 * 1024,
-                max_total_statement_bytes: 4 * 1024 * 1024,
-            },
-        )
-        .expect("exact atomic fixture fits its bounded sizing corpus");
-    assert_eq!(measured.deltas, count);
-    assert!(
-        u32::try_from(measured.transcripts).unwrap() <= source_policy.intrinsic.max_transcripts
-    );
-    assert!(
-        u64::try_from(measured.input_transcript_bytes).unwrap()
-            <= source_policy.intrinsic.max_input_transcript_bytes
-    );
-    assert!(
-        u64::try_from(measured.max_statement_bytes).unwrap()
-            <= source_policy.intrinsic.max_statement_bytes
-    );
-    assert!(
-        u64::try_from(measured.total_statement_bytes).unwrap()
-            <= source_policy.intrinsic.max_total_statement_bytes
     );
     (chain, instruction, sponsor)
 }
@@ -431,7 +426,7 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
                 instruction.intent_hash().expect("full intent")
             );
             state_tx.apply();
-            let expected = expected_transcript(&instruction, &sponsor);
+            let expected = expected_transcript(instruction.movements().as_slice(), &sponsor);
             assert_eq!(
                 block
                     .drain_transfer_transcripts()

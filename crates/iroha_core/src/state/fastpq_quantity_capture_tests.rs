@@ -1,7 +1,10 @@
 //! Actual owner capture, rollback and explicit refusal of incomplete quantity coverage.
 
 use super::*;
-use crate::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute};
+use crate::{
+    execution_attempt::ExecutionAttemptError, kura::Kura, query::store::LiveQueryStore,
+    smartcontracts::Execute,
+};
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
@@ -153,10 +156,12 @@ fn quantity_execution_context(
     let accepted =
         crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(transaction));
     let view = state.view();
-    let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view);
+    let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view)
+        .expect("quantity fixture reads its original committed routing");
     let native = snapshot
         .inputs(view.world())
         .execution_route(&accepted, header.height().get())
+        .expect("quantity fixture completes its committed routing read")
         .expect("quantity input retains its exact committed native route");
     ExternalExecutionContext::new(
         accepted.hash_as_entrypoint(),
@@ -286,6 +291,7 @@ fn classified_original_world_child_keeps_metadata_rollback_and_restored_raw_writ
 #[test]
 fn signed_quantity_source_without_execution_context_is_rejected_before_execution() {
     let (state, alice, bob) = fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let (valid, _) = source(
         &state,
         vec![Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone()).into()],
@@ -298,7 +304,8 @@ fn signed_quantity_source_without_execution_context_is_rejected_before_execution
     assert!(missing.execution_context().is_none());
     assert!(missing.header().execution_context_hash().is_none());
     assert_eq!(missing.external_transactions().next().unwrap(), original);
-    let (mut block, _recording) = state
+    assert_ne!(valid.hash(), missing.hash());
+    let (mut block, recording) = state
         .block_with_recorded_pristine_carrier_stage(
             &missing,
             |_| Ok::<(), String>(()),
@@ -310,10 +317,8 @@ fn signed_quantity_source_without_execution_context_is_rejected_before_execution
     let error = block
         .execute_ordinary_output_plan(&missing, None)
         .unwrap_err();
-    assert!(
-        matches!(error, crate::execution_attempt::ExecutionAttemptError::Rejected(reason)
-            if reason == "Network source has an invalid execution context")
-    );
+    assert!(matches!(error, ExecutionAttemptError::Rejected(reason)
+            if reason == "Network source has an invalid execution context"));
     assert_eq!(block.committed_fragment_count(), fragments);
     assert_eq!(
         block.world.assets.get(&alice).unwrap().as_ref(),
@@ -321,6 +326,21 @@ fn signed_quantity_source_without_execution_context_is_rejected_before_execution
     );
     assert!(block.world.assets.get(&bob).is_none());
     assert!(block.fastpq_quantity_candidate.entries.is_empty());
+    assert!(block.retained_execution_outputs_for_test().is_err());
+    drop(block);
+    drop(recording);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before,
+    );
+    let view = state.view();
+    assert_eq!(view.height(), 1);
+    assert_eq!(view.kura().blocks_count(), 1);
+    assert_eq!(
+        view.world.assets.get(&alice).unwrap().as_ref(),
+        &Quantity::from(10_u32)
+    );
+    assert!(view.world.assets.get(&bob).is_none());
 }
 
 #[test]
@@ -908,7 +928,8 @@ fn sponsored_burn_fixture() -> (
                         .as_millis()
                 )
                 .unwrap(),
-            ),
+            )
+            .expect("committed fee registry read completes"),
             Some(custody.definition().clone()),
         );
     }

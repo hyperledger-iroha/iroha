@@ -24,25 +24,25 @@ PROTECTED_FUNCTION_SHA256 = {
     'native_stark_test_digest': 'e6ec9288e3475cafacb4b50bf4ffdd6119d16672449f62ea37669150158088b7',
     'mutate_native_stark_digest': 'c9eb54e4251c4130ea6c930d3ddfe31d013594b7a58a74787c41b83f2d698268',
     "checkpoint_soracloud_training_job_updates_authoritative_state":
-        "8f2790e5ead5698a23bb77c9e9478f2040d77c1f0672c9d8b186a34f6d9aed29",
+        "9ebb255475759c34895fa822d62fbb72daa8520ba4d8a71060eb3615c54a8bdb",
     "deploy_uploaded_model_service":
         "71d348dedc8b2d537a51d470149bd32150d50468a18d05de61bf925a13144188",
     "load_soracloud_fhe_inputs_rejects_bounded_noise_public_key_digest_mismatch":
         "16dad0e126951b8e2a2733c75802c8b0b29208b1d8f0017d3f0e88b985199e2a",
     "model_weight_lifecycle_updates_authoritative_registry_state":
-        "d441d849f2eb8fc19da6a40dc66a7647e03c0bfeb370e0e23279e493ab2c47e8",
+        "3ba1b0fbba0b10fbff02539efe0085e4fa0d35257f27a2d451909421bb5d13d4",
     "mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof":
-        "28206ebfce1b3833fbbf3c691479997b786653ee176bbbc5c16b8318971d1bc5",
+        "0aaa3f85863cdc9ad6013251eba144ffffab1923d8e73818a1457aa7cba342f3",
     "mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof":
-        "b138eb3732230f903b7ce680c6b16c5d45b5ff90e4eb1f46d8ff555f261165f6",
+        "2be6e9831317d668ee36da57fd995cf2727ed95d06190b4bf971878169e3b3d3",
     "mutate_soracloud_state_rejects_malformed_fhe_payload_without_optional_proof":
         "0220d563651d448d16042fb042a26938e654b90b5346601095614380c53fc38c",
     "register_soracloud_model_artifact_records_authoritative_state":
-        "6c3e2c57c2abacb486d7b2234985b8ff93dbfda7571e50b2b10cd711e0e768c6",
+        "d1e73c76b9c3cf9fb9802d863c910a9c92073cd453f1ffc794284799f9ee8c24",
     "retry_soracloud_training_job_records_retry_pending_state":
-        "40b7520a53b85e7a41e84cfcc71c6c8141008d221d6b86f6b73227026ce02eff",
+        "512f9fd350de0a48b59e67d1c7992868dce3d00084d373de805c1225e682141a",
     "run_fhe_input_admission_rejection_cases":
-        "6805df9a3c4ddb06bbb269de2419ecca90a7815fdadc48a5189418fe523e9287",
+        "876ce1e27e115775d3f6ea2a2f8ad4307ba731a3b6ef3318390f770d547b61bc",
     "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_bounded_add_output":
         "5288fca1ff5a2d0361eb6352441c0f91cad356d1ae9ecaa6c11dd980d8fa6efa",
     "run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add_outputs":
@@ -64,11 +64,17 @@ PROTECTED_FUNCTION_SHA256 = {
     "run_soracloud_fhe_job_rejects_persisted_fhe_input_without_bound_mode":
         "ed5d92bda94a56bccb50647e839ce2768fdd8604854e7fc98fa4c2f456252dc0",
     "start_soracloud_training_job_records_authoritative_job_state":
-        "9d0acc1ddb6919e3f53b8022a3d913f592d2114b25880541196065ce157d5924",
+        "352aefb253823874cf903232ca1849871b010ee9db4ad56a5d514ed21a679318",
+}
+
+PROTECTED_INITIAL_FUNCTION_SHA256 = {
+    'state_with_initial_soracloud_permission': '5fc77a55a18d1b9b5beb86f03105f1a5d44e6fe77880f23810a41f806c778963',
+    'initial_soracloud_header': '16fe1749ae84ccd93c527fcf764e560a6a4c2ba70470a70d232456a16d8c6852',
+    'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission': 'e3347a08d70dd328e38447e22d32e87cdf968373f23564116a40bff05cb5c6d2',
 }
 
 FIXTURE_CORRIDORS = (
-    ('permissioned fixture macros', 'macro_rules! permissioned_soracloud_state {', 'macro_rules! full_bootstrap_execution_case {', '2a7dac6ff71e348d212313741057a5e698c36095c680c1e070ce0ef527b930c1'),
+    ('permissioned fixture macros', 'macro_rules! permissioned_soracloud_state {', 'macro_rules! full_bootstrap_execution_case {', '7937e8283b65208350ab755441c88b5baf337833389241634e54a5477f2a2cfe'),
     ('training fixture', 'struct TrainingStartFixture {', '#[test]\nfn training_start_rejects_signed_model_and_job_text_aliases_before_mutation', 'e74c18caad6aaa28e88dc601a5dde96d0fb3eef21ddf62f54250968f6e99af08'),
 )
 
@@ -78,6 +84,7 @@ EXPECTED_TEST_INVENTORY = (
     (('#[test]',), 'checked_keypair_helper_preserves_default_algorithm'),
     (('#[test]',), 'checked_keypair_helper_is_deterministic_per_call_site'),
     (('#[test]',), 'soracloud_provenance_rejects_multisig_authority_without_panicking'),
+    (('#[test]',), 'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission'),
     (('#[test]',), 'soracloud_permission_allows_granted_authority'),
     (('#[test]',), 'soracloud_permission_rejects_ungranted_taira_testnet_authority'),
     (('#[test]',), 'soracloud_permission_rejects_ungranted_authority'),
@@ -93,6 +100,7 @@ EXPECTED_TEST_INVENTORY = (
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_proof_families_reject_alternate_native_envelope_layout'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_proof_families_reject_alternate_verifier_key_layouts'),
     (('#[test]',), 'governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layout'),
+    (('#[test]',), 'soracloud_placeholder_marker_cache_uses_one_canonical_owner_across_native_paths'),
     (('#[test]',), 'soracloud_fhe_stark_native_envelope_preflight_rejects_text_placeholders'),
     (('#[test]',), 'projected_binding_state_total_bytes_rejects_inconsistent_or_overflowing_totals'),
     (('#[test]',), 'fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape'),
@@ -528,6 +536,9 @@ def validate_source(source: str, initial_fixture: str) -> None:
     for name, expected in PROTECTED_FUNCTION_SHA256.items():
         if _normalized_hash(_function(source, name)) != expected:
             raise GuardError(f"{name}: protected operation/assertion sequence changed")
+    for name, expected in PROTECTED_INITIAL_FUNCTION_SHA256.items():
+        if _normalized_hash(_function(initial_fixture, name)) != expected:
+            raise GuardError(f"{name}: original genesis fixture ownership changed")
 
 
 class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
@@ -631,6 +642,23 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
         with self.subTest(digest=_sha256(mutated_initial_fixture)[:12]):
             with self.assertRaises(GuardError):
                 validate_source(source, mutated_initial_fixture)
+
+
+    def test_original_genesis_fixture_owner_mutations_fail_closed(self) -> None:
+        source = SOURCE.read_text()
+        initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
+        for name, old, new, occurrences in (
+            ("state_with_initial_soracloud_permission", "Arc::try_unwrap(prepared.state)", "Arc::clone(&prepared.state)", 1),
+            ("state_with_initial_soracloud_permission", "startup::apply_genesis(", "startup::discard_genesis(", 1),
+            ("initial_soracloud_header", "state.view().latest_block_hash()", "None", 1),
+            ("initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission", "require_soracloud_permission(&ALICE_ID, &transaction)?;", "// permission assertion removed", 2),
+        ):
+            original = _function(initial_fixture, name)
+            self.assertEqual(original.count(old), occurrences)
+            mutated = initial_fixture.replace(original, original.replace(old, new, 1), 1)
+            self.assertNotEqual(mutated, initial_fixture)
+            with self.subTest(target=old), self.assertRaisesRegex(GuardError, "original genesis fixture ownership"):
+                validate_source(source, mutated)
 
 
 if __name__ == "__main__":

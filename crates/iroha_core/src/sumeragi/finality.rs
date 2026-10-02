@@ -172,6 +172,9 @@ pub enum AttestationBuildError {
     /// The final exact body failed consistency validation.
     #[error(transparent)]
     InvalidBody(FinalityError),
+    /// The current installed node wall clock is before the Unix epoch, zero or overflowing.
+    #[error("current node Unix clock is unavailable")]
+    ClockUnavailable,
     /// Signing failed.
     #[error("node signing failed: {0}")]
     Signing(String),
@@ -242,8 +245,15 @@ pub fn build_attestation(
     if status.applied_height != committed || status.committed_height != committed {
         return Err(Error::StatusHeightMismatch);
     }
+    let observed_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|reading| u64::try_from(reading.as_millis()).ok())
+        .filter(|reading| *reading != 0)
+        .ok_or(Error::ClockUnavailable)?;
     let body = SumeragiFinalityAttestationBody {
         challenge,
+        observed_at_unix_ms,
         network_id: *view.network_id(),
         node_id: identity.node_id.clone(),
         node_fingerprint: Hash::new(identity.node_id.encode()),
@@ -321,5 +331,71 @@ mod tests {
         let proof = build_proof(&chain.state().view(), 10).unwrap();
         assert_eq!(proof.height(), 10);
         assert!(proof.decode_checked().is_ok());
+    }
+
+    #[test]
+    fn native_attestation_signs_actual_current_unix_reading_separately_from_block_time() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
+        chain.commit_at(20_000, Vec::new());
+        let signer = KeyPair::from_seed(vec![0xC1; 32], Algorithm::BlsNormal);
+        let identity = NodeIdentity {
+            node_id: iroha_model_base::peer::PeerId::new(signer.public_key().clone()),
+            config_fingerprint: Hash::new(b"actual test native configuration"),
+        };
+        let status = SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: identity.config_fingerprint,
+            beacon_horizon: None,
+            instance: chain.instance().0,
+            height: 3,
+            view: 0,
+            stage: 0,
+            leader: None,
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 100,
+            committed_height: 2,
+            applied_height: 2,
+            awaiting: false,
+            signer: Some(signer.public_key().clone()),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
+        };
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let original = build_attestation(
+            &chain.state().view(),
+            status,
+            &identity,
+            Hash::new(b"actual test native executable"),
+            2,
+            [41; 32],
+            &signer,
+        )
+        .unwrap();
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let observed = u128::from(original.body.observed_at_unix_ms);
+        assert!(observed >= before && observed <= after);
+        assert_ne!(
+            original.body.observed_at_unix_ms,
+            original.body.finality_proof.block_header.creation_time_ms
+        );
+        original.verify().unwrap();
+        let mut changed = original;
+        changed.body.observed_at_unix_ms += 1;
+        assert!(
+            changed.verify().is_err(),
+            "the exact current reading belongs to the node's signature"
+        );
     }
 }

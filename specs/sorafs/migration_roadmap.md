@@ -48,8 +48,9 @@ lane keeps the aggregate gate blocked.
 
 ### Release and SDK guards
 
-- Run `ci/check_sorafs_cli_release.sh` for formatting, strict Clippy, focused
-  crate suites, FFI-header parity, and adversarial release-helper coverage.
+- Run `ci/check_sorafs_cli_release.sh` for source integrity. Explicit
+  `--diagnostics` adds optional formatting, strict Clippy, focused crate suites,
+  FFI-header parity, and adversarial release-helper coverage.
 - Run `.github/workflows/pr_sorafs_pin_register_sdk.yml` or the corresponding
   `ci/check_sorafs_pin_register_*_sdk.sh` scripts for Swift, JVM/Java,
   JavaScript, C#, and Python parity.

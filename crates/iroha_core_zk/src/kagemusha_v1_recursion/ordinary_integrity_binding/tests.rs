@@ -1,6 +1,7 @@
 //! Numeric reconstruction tests for exact canonical Integrity lease originals.
 //! These test data identity and rejection; they grant no authenticated lease authority.
 
+use super::super::{DigestV1, guard_bundle::assign_bytes};
 use super::*;
 use crate::pasta_sha256::PastaSha256ConfigV1;
 use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig};
@@ -11,6 +12,7 @@ use halo2_proofs::{
     plonk::{Circuit, ConstraintSystem, Error},
 };
 use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1;
+use sha2::{Digest as _, Sha256};
 #[test]
 fn private_current_lease_uses_one_union_entry_point_in_both_fields() {
     let _ = super::super::ordinary_integrity_union::constrain_ordinary_integrity_union_v1::<Fp>;

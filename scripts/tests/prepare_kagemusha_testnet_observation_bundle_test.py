@@ -15,6 +15,9 @@ from unittest import mock
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "prepare_kagemusha_testnet_observation_bundle.py"
+sys.path.insert(0, str(SOURCE.parent))
+from verify_kagemusha_v1_release_evidence import ARTIFACT_ROLES
+
 SPEC = importlib.util.spec_from_file_location("prepare_kagemusha_testnet_observation_bundle", SOURCE)
 assert SPEC is not None and SPEC.loader is not None
 BUNDLE = importlib.util.module_from_spec(SPEC)
@@ -90,6 +93,28 @@ class TestnetBundleTests(unittest.TestCase):
         rows[1] = dict(rows[1], sha256=rows[0]["sha256"])
         with self.assertRaises(BUNDLE.BundleError):
             BUNDLE.verify_report(dict(report, artifacts=rows), args)
+
+    def test_report_requires_every_ordinary_app_guard_role_in_canonical_order(self) -> None:
+        args = argparse.Namespace(
+            release_id="1" * 64,
+            attestation_digest="2" * 64,
+            authority_review_projection_sha256="3" * 64,
+            native_artifact_manifest_sha256="4" * 64,
+        )
+        report = self.report(args)
+        self.assertEqual(len(ARTIFACT_ROLES), 54)
+        with self.assertRaises(BUNDLE.BundleError):
+            BUNDLE.verify_report(dict(report, artifacts=report["artifacts"][:50]), args)
+        for index in range(50, 54):
+            with self.subTest(role=ARTIFACT_ROLES[index]):
+                rows = list(report["artifacts"])
+                rows[index] = dict(rows[index], role=ARTIFACT_ROLES[0])
+                with self.assertRaises(BUNDLE.BundleError):
+                    BUNDLE.verify_report(dict(report, artifacts=rows), args)
+                rows = list(report["artifacts"])
+                rows[index], rows[0] = rows[0], rows[index]
+                with self.assertRaises(BUNDLE.BundleError):
+                    BUNDLE.verify_report(dict(report, artifacts=rows), args)
 
     def test_artifact_copy_hashes_and_exclusive_json_writer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -306,8 +331,8 @@ class TestnetBundleTests(unittest.TestCase):
             "approved_signers": ["authority-a", "authority-b"],
             "artifact_set_digest": "a" * 64,
             "artifacts": [
-                {"role": f"role-{index}", "sha256": digest(bytes([index + 1])), "byte_len": 1}
-                for index in range(54)
+                {"role": role, "sha256": digest(bytes([index + 1])), "byte_len": 1}
+                for index, role in enumerate(ARTIFACT_ROLES)
             ],
         }
 

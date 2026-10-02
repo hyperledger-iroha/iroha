@@ -40,6 +40,7 @@ INTERNAL_HELPER_PROOF_LENGTHS = {
     "guard_bundle": (12_000, 12_032),
     "mint_hash_shard": (8_064, 8_096),
     "mint_hash_claim": (12_064, 12_096),
+    # Synthetic exact-length evidence exercises projection, never proof qualification.
     "ordinary_app_guard": (12_128, 12_160),
 }
 
@@ -438,8 +439,8 @@ def _fixture(
         helper_protocols.append(
             {
                 "helper": helper,
-                "eq_protocol_digest": _digest(5 + index * 2),
-                "ep_protocol_digest": _digest(6 + index * 2),
+                "eq_protocol_digest": _digest(19 if helper == "ordinary_app_guard" else 5 + index * 2),
+                "ep_protocol_digest": _digest(20 if helper == "ordinary_app_guard" else 6 + index * 2),
                 "eq_proof_bytes": eq_proof_bytes,
                 "ep_proof_bytes": ep_proof_bytes,
             }
@@ -449,8 +450,8 @@ def _fixture(
         "state_ep_protocol_digest": state_ep,
         "terminal_authorization_eq_protocol_digest": _digest(3),
         "terminal_authorization_ep_protocol_digest": _digest(4),
-        "commit_wrapper_eq_protocol_digest": _digest(5 + 2 * len(VERIFIER.HELPERS)),
-        "commit_wrapper_ep_protocol_digest": _digest(6 + 2 * len(VERIFIER.HELPERS)),
+        "commit_wrapper_eq_protocol_digest": _digest(17),
+        "commit_wrapper_ep_protocol_digest": _digest(18),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -925,6 +926,24 @@ def _fixture(
     return fixture
 
 
+def test_synthetic_release_protocol_roles_have_distinct_digests(tmp_path: Path) -> None:
+    """New helper roles cannot silently reuse a terminal or wrapper protocol tag."""
+    capture: list[dict[str, Any]] = []
+    fixture = _fixture(tmp_path, sender_fixture_input_capture=capture)
+    protocols = fixture.manifest["protocols"]
+    digests = [
+        value for name, value in protocols.items()
+        if name.endswith("_protocol_digest")
+    ]
+    digests.extend(
+        row[f"{parity}_protocol_digest"]
+        for row in protocols["helper_protocols"]
+        for parity in ("eq", "ep")
+    )
+    assert len(digests) == 6 + 2 * len(VERIFIER.HELPERS)
+    assert len(set(digests)) == len(digests)
+
+
 def _run(fixture: EvidenceFixture, digest: str | None = None) -> subprocess.CompletedProcess[str]:
     expected = digest or _sha256(fixture.manifest_path.read_bytes())
     return subprocess.run(
@@ -1200,6 +1219,35 @@ def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
     assert "artifact inventory is not in the canonical V1 role order" in result.stderr
 
 
+@pytest.mark.parametrize("replacement", ["guard_bundle_vk_eq", "ordinary_app_guard_vk_ep"])
+def test_release_rejects_ordinary_guard_artifact_role_substitution(
+    tmp_path: Path, replacement: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["artifacts"][51]["role"] = replacement
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory is not in the canonical V1 role order" in result.stderr
+
+
+def test_internal_helper_classification_matches_current_rust_model() -> None:
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    helper_impl = source.split("impl KagemushaQualifiedHelperCircuitV1 {", 1)[1]
+    internal = helper_impl.split("const fn uses_internal_proof_evidence(self) -> bool {", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    rust_names = re.findall(r"Self::([A-Za-z0-9]+)", internal)
+    python_names = [
+        "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        for name in VERIFIER.HELPERS if name in VERIFIER.INTERNAL_PROOF_HELPERS
+    ]
+    assert python_names == rust_names
+    assert "ordinary_app_guard" in VERIFIER.INTERNAL_PROOF_HELPERS
+
+
 def test_public_message_inventory_matches_current_rust_exchange() -> None:
     source = (
         ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs"
@@ -1371,6 +1419,10 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "ordinary_app_guard_pk_ep",
         "ordinary_app_guard_vk_ep",
     ]
+    ordinary = profile["helper_circuits"][-1]
+    assert ordinary["helper"] == "ordinary_app_guard"
+    assert ordinary["eq_verifying_key"]["role"] == "ordinary_app_guard_vk_eq"
+    assert ordinary["ep_verifying_key"]["role"] == "ordinary_app_guard_vk_ep"
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
         "candidate_context_digest"
@@ -1538,6 +1590,38 @@ def test_internal_helper_proof_evidence_must_match_each_pinned_parity(
     result = _run(fixture)
     assert result.returncode == 1
     assert "release-pinned per-parity lengths" in result.stderr
+
+
+@pytest.mark.parametrize("helper", sorted(VERIFIER.INTERNAL_PROOF_HELPERS))
+@pytest.mark.parametrize("parity", ["eq", "ep"])
+@pytest.mark.parametrize("excess", [0, 32])
+def test_internal_helper_protocol_enforces_each_native_resource_bound(
+    helper: str, parity: str, excess: int
+) -> None:
+    # Parse public protocol metadata directly, before reading or allocating proof files.
+    protocols = {
+        name: _digest(index)
+        for index, name in enumerate((
+            "state_eq_protocol_digest", "state_ep_protocol_digest",
+            "terminal_authorization_eq_protocol_digest", "terminal_authorization_ep_protocol_digest",
+            "commit_wrapper_eq_protocol_digest", "commit_wrapper_ep_protocol_digest",
+        ), start=1)
+    }
+    protocols["helper_protocols"] = [
+        {"helper": name, "eq_protocol_digest": _digest(7 + index * 2),
+         "ep_protocol_digest": _digest(8 + index * 2),
+         "eq_proof_bytes": 32 if name in VERIFIER.INTERNAL_PROOF_HELPERS else 0,
+         "ep_proof_bytes": 64 if name in VERIFIER.INTERNAL_PROOF_HELPERS else 0}
+        for index, name in enumerate(VERIFIER.HELPERS)
+    ]
+    row = next(row for row in protocols["helper_protocols"] if row["helper"] == helper)
+    row[f"{parity}_proof_bytes"] = VERIFIER.INTERNAL_PROOF_RESOURCE_MAX_BYTES + excess
+    parser = object.__new__(VERIFIER.EvidenceVerifier)
+    if excess:
+        with pytest.raises(VERIFIER.KagemushaEvidenceError, match="at most 64 MiB each"):
+            parser._verify_protocols(protocols)
+    else:
+        assert parser._verify_protocols(protocols) == protocols
 
 
 @pytest.mark.parametrize("bad_length", [0, 8_001])

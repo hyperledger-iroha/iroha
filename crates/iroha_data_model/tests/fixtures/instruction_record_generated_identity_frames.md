@@ -6,7 +6,7 @@ type rows preserve 373 populated values and 1,492 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`31db89431c26825ce5a05eecb298618201265189b8c1891959c0c5ba29ef8923`.
+`4de5be96e0a1e11b767d2b806201da24cc9fe777a41c04320628fa9867ba3813`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -132,6 +132,14 @@ and anchor records. `print_scoped_artifact_instruction_identity_frames` produces
 all eight typed rows and verifies their root, vector, option and map roundtrips.
 Private-root payloads in this structural codec fixture are opaque sample bytes;
 authentication is covered by the separate native registration and anchor tests.
+
+The current `SetSorafsReputationJournalAuthorityPolicy` capture includes the governed
+`stream_token_delivery` template. The maintained
+`isi::sorafs::tests::print_reputation_policy_record_fixture_row` producer constructs
+the typed policy and verifies all four current codec frame roundtrips before printing.
+Its nominal and directional identities, all other captured record bytes, and the
+331-type, 373-case inventory remain unchanged. This structural codec capture grants
+no governed publication or release authority.
 
 The merged capture retains both existing typed frame cases for each of the six
 artifact lifecycle records: the full-width dataspace and the explicit universal

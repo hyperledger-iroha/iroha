@@ -15,6 +15,20 @@ class DeployLocalnetShellSafetyTest(unittest.TestCase):
     def test_script_parses(self) -> None:
         subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
+    def test_builtin_kagemusha_asset_verification_cannot_be_skipped(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("SKIP_ASSET_CHECK", text)
+        self.assertIn("Verifying built-in KAGEMUSHA V1 alias", text)
+        for flag in ("--skip-asset-check", "--skip-asset-register"):
+            self.assertNotIn(flag, text)
+            rejected = subprocess.run(
+                ["bash", str(SCRIPT), flag], capture_output=True, text=True, timeout=10
+            )
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn(f"Unknown option: {flag}", rejected.stderr)
+        for helper in ("run_10k_localnet.sh", "run_100tps_profile_localnet.sh", "run_localnet_memory_guard.py"):
+            self.assertNotIn("--skip-asset-register", (REPO_ROOT / "scripts" / helper).read_text(encoding="utf-8"))
+
     def test_force_cleanup_uses_guarded_pid_ownership_checks(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("pid_matches_localnet_peer()", text)

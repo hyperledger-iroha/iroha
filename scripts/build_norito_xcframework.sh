@@ -109,17 +109,18 @@ run_python312_clean() {
 #   rustup executable when the canonical home-local proxy is unavailable.
 #
 # Usage:
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock"
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --bridge-version 1.0.0
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --archive-output /absolute/NoritoBridge.xcframework.zip
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled --allow-dirty-source
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled --local-integration --allow-dirty-source
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-apple-slice aarch64-apple-ios
-#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only \
+#   # Normal and CI builds select the reviewed external read-only graph.
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE"
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --bridge-version 1.0.0
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --archive-output /absolute/NoritoBridge.xcframework.zip
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --allow-dirty-source
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --ci-handoff-only
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --ci-apple-slice aarch64-apple-ios
+#   scripts/build_norito_xcframework.sh --lockfile-path "$MOBILE_SDK_CARGO_LOCKFILE" --ci-handoff-only \
 #     --ci-assemble-apple-slices /absolute/download/root \
 #     --ci-apple-slice-sha256 aarch64-apple-ios=<sha256> [...]
+#   # The explicitly local integration corridor selects the source-root lock.
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source
 #
 # NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
 # cache roots by default. Explicit --local-integration admits only the fixed
@@ -375,7 +376,6 @@ export MACOSX_DEPLOYMENT_TARGET
 
 BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
-PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
 CI_HANDOFF_ONLY=0
 CI_APPLE_SLICE=""
@@ -417,9 +417,6 @@ while [[ $# -gt 0 ]]; do
         echo "[-] --archive-output requires a value" >&2
         exit 1
       fi
-      ;;
-    --privacy-production-enabled)
-      PRIVACY_PRODUCTION_ENABLED=1
       ;;
     --local-integration) ;;
     --allow-dirty-source)
@@ -475,7 +472,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 --lockfile-path <absolute-path> [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--local-integration] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
+      echo "    Usage: $0 --lockfile-path <absolute-path> [--bridge-version <version>] [--archive-output <absolute-path>] [--allow-dirty-source] [--local-integration] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
       exit 1
       ;;
   esac
@@ -648,14 +645,8 @@ PY
 )" || exit 1
 fi
 
-CARGO_FEATURE_ARGS=()
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
-  CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)
-  echo "[+] Enabling the audited privacy production bridge feature for every Apple slice" >&2
-else
-  echo "[+] Privacy proof dispatch remains fail-closed (default bridge build)" >&2
-fi
-
+# The bridge support and its provenance profile are mandatory for every slice.
+CARGO_FEATURE_ARGS=(--features privacy-production-enabled)
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 CARGO_GRAPH_OWNER="$ROOT_DIR/ci/privacy_sdk_cargo_lockfile.sh"
@@ -811,7 +802,7 @@ run_isolated_python() {
 }
 
 selected_cargo_lock_sha256() {
-  run_isolated_python - "$SOURCE_SEAL_SCRIPT" "$CARGO_LOCKFILE" "$PRIVACY_PRODUCTION_ENABLED" "$LOCAL_INTEGRATION" "$ROOT_DIR" <<'PY_LOCK'
+  run_isolated_python - "$SOURCE_SEAL_SCRIPT" "$CARGO_LOCKFILE" "$LOCAL_INTEGRATION" "$ROOT_DIR" <<'PY_LOCK'
 import importlib.util
 from pathlib import Path
 import sys
@@ -822,13 +813,13 @@ if spec is None or spec.loader is None:
 owner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner)
 try:
-    selected = owner.selected_lockfile_path(Path(sys.argv[5]), Path(sys.argv[2]))
+    selected = owner.selected_lockfile_path(Path(sys.argv[4]), Path(sys.argv[2]))
     identity = owner.lockfile_identity(selected)
 except RuntimeError as error:
     raise SystemExit(str(error)) from error
-if sys.argv[4] == "1" and selected != Path(sys.argv[5]) / "Cargo.lock":
+if sys.argv[3] == "1" and selected != Path(sys.argv[4]) / "Cargo.lock":
     raise SystemExit("local integration requires the explicitly selected root Cargo.lock")
-if sys.argv[3] == "1" and sys.argv[4] != "1" and identity[2] & 0o222:
+if sys.argv[3] != "1" and identity[2] & 0o222:
     raise SystemExit("privacy production selected Cargo lock must be read-only")
 print(identity[-1])
 PY_LOCK
@@ -836,7 +827,7 @@ PY_LOCK
 
 CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
 source "$CARGO_GRAPH_OWNER"
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "$LOCAL_INTEGRATION" != "1" \
+if [[ "$LOCAL_INTEGRATION" != "1" \
       && "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" ]]; then
   echo "[-] Privacy production builds require an explicit external canonical graph snapshot" >&2
   exit 1
@@ -896,12 +887,7 @@ if [[ -n "$SOURCE_STATUS_START" ]]; then
   SOURCE_TREE_DIRTY=true
 fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
-PRIVACY_PRODUCTION_JSON=false
-CARGO_FEATURES_JSON='[]'
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
-  PRIVACY_PRODUCTION_JSON=true
-  CARGO_FEATURES_JSON='["privacy-production-enabled"]'
-fi
+CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 
 assert_bridge_source_seal() {
   local phase="$1"
@@ -1172,7 +1158,7 @@ if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
   "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
   "bridge_header_sha256": "$HEADER_HASH",
-  "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "privacy_production_enabled": true,
   "cargo_features": $CARGO_FEATURES_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
@@ -1704,9 +1690,7 @@ fi
 assert_bridge_source_seal "XCFramework packaging"
 
 echo "[+] XCFramework staged: $PUBLISH_XCFRAMEWORK" >&2
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
-  touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
-fi
+touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
@@ -1765,7 +1749,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
 {
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
-  "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "privacy_production_enabled": true,
   "cargo_features": $CARGO_FEATURES_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
@@ -1893,6 +1877,8 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_account_read_permission_multisig_payload_hash",
+    "connect_norito_account_read_permission_multisig_finalize",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
     "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
@@ -2154,10 +2140,9 @@ expected_top_level = {
     *expected_slices,
 }
 privacy_marker = xcframework / ".privacy-production-enabled"
-if manifest.get("privacy_production_enabled") is True:
-    expected_top_level.add(privacy_marker.name)
-elif manifest.get("privacy_production_enabled") is not False:
-    raise SystemExit("staged NoritoBridge manifest has a non-boolean privacy mode")
+if manifest.get("privacy_production_enabled") is not True:
+    raise SystemExit("staged NoritoBridge must include mandatory privacy support")
+expected_top_level.add(privacy_marker.name)
 test_only_marker = xcframework / ".test-only-prebuilt-slices"
 if "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
     raise SystemExit("release staged NoritoBridge contains test-only prebuilt slices")

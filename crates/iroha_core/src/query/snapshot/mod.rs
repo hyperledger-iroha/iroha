@@ -407,6 +407,7 @@ fn run_on_snapshot_with_mode_arc_inner(
         CursorMode::Ephemeral => validated
             .execute_ephemeral_with_stats(live_query_store, &view, authority, execution_budget)
             .map(|(response, _)| response)
+            .map_err(crate::smartcontracts::isi::query::query_transport_error)
             .map_err(SnapshotQueryError::Execution)?,
         CursorMode::Stored => validated
             .execute_with_replay_state_and_start_budget(

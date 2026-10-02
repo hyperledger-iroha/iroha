@@ -21,7 +21,7 @@
 //!   the core's explicit recipients). The envelope is built once per frame and shared by every
 //!   recipient.
 //! - **Ingress.** The frames arrive on the driver's own P2P FIFOs — one per class on
-//!   `SubscriberRoute::Sumeragi` ([`subscribe`]) — and [`SumeragiIngress`] hands each to the
+//!   `SubscriberRoute::Sumeragi` ([`P2pNet::subscribe`]) — and [`SumeragiIngress`] hands each to the
 //!   driver of its instance (the driver's ingress is bounded per peer and class, O6), dropping
 //!   the P2P retention at once so credits never stall.
 
@@ -674,27 +674,33 @@ pub fn subscription_filters() -> [(TrafficClass, SubscriberFilter); 3] {
 #[error("the P2P network refused the sumeragi subscription (shut down or queue full)")]
 pub struct SubscribeError;
 
-/// Subscribe the driver to its three FIFOs on `network`, each holding up to `capacity`
-/// messages (the P2P layer bounds them further by bytes and credits).
-///
-/// # Errors
-/// The network actor is shut down or its registration queue is full.
-pub fn subscribe(
-    network: &IrohaNetwork,
-    capacity: usize,
-) -> Result<SumeragiSubscription, SubscribeError> {
-    let [control, proposal, bulk] = subscription_filters().map(|(_, filter)| {
-        let (tx, rx) = mpsc::channel(capacity.max(1));
-        network
-            .subscribe_to_peers_messages_with_filter(tx, filter)
-            .map(|()| rx)
-            .map_err(|_| SubscribeError)
-    });
-    Ok(SumeragiSubscription {
-        control: control?,
-        proposal: proposal?,
-        bulk: bulk?,
-    })
+impl P2pNet<IrohaNetwork> {
+    /// Subscribe the driver to its three FIFOs on this transport's retained actor,
+    /// each holding up to `capacity` messages. P2P further bounds bytes and credits.
+    ///
+    /// Send and receive custody always belong to the same actor. No independent
+    /// network handle can replace the inbound owner at node startup.
+    ///
+    /// # Errors
+    /// The retained actor is shut down or its registration queue is full.
+    pub fn subscribe(&self, capacity: usize) -> Result<SumeragiSubscription, SubscribeError> {
+        let [control, proposal, bulk] = subscription_filters().map(|(_, filter)| {
+            let (tx, rx) = mpsc::channel(capacity.max(1));
+            let result = self
+                .transport
+                .subscribe_to_peers_messages_with_filter(tx, filter);
+            if result.is_ok() || cfg!(all(test, sumeragi_core_mutation = "HC23")) {
+                Ok(rx)
+            } else {
+                Err(SubscribeError)
+            }
+        });
+        Ok(SumeragiSubscription {
+            control: control?,
+            proposal: proposal?,
+            bulk: bulk?,
+        })
+    }
 }
 
 /// Drain `subscription` into `ingress` on a dedicated thread (decoding stays off the async

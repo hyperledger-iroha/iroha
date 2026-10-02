@@ -54,6 +54,8 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
     .unwrap();
 
     let prover = MainLog19ProverConstraintSourceV1::for_main_v1(&layout, &source).unwrap();
+    let observation =
+        crate::privacy_engines::zk_x509::prover_observation::ObservationV1::begin_v1();
     let mut checked = 0;
     for registration in source.registrations.iter().copied() {
         if registration.segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
@@ -74,4 +76,14 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
         checked += 1;
     }
     assert_eq!(checked, 5);
+    let receipt = observation.finish_v1().public_text_v1();
+    for phase in [
+        "CompositionArithmeticFixedRows",
+        "CompositionArithmeticFixedInverseTransform",
+    ] {
+        assert!(receipt.contains(&format!(
+            "phase={phase} calls=5 completed=5 interrupted=0 unwound=0"
+        )));
+    }
+    eprintln!("{receipt}");
 }

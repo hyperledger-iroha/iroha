@@ -55,6 +55,7 @@ class OrdinaryIssuanceTests(unittest.TestCase):
         self.run_openssl('pkey','-inform','DER','-in','issuer.der','-pubout','-outform','DER','-out','public.der')
         self.public = (self.directory/'public.der').read_bytes()[-32:]
         fixture = SignedEnvelope(self.directory, self.openssl)
+        self.fixture = fixture
         selected = OrdinaryPlatformEvidenceChallenge(self.subject, bytes(32))
         leaf, root = fixture.sign('1.3.6.1.4.1.11129.2.1.17', keymint_description(selected,
             'org.example.wallet',28,b'\x22'*32,security_level=2,keymint_security_level=2))
@@ -182,6 +183,30 @@ class OrdinaryIssuanceTests(unittest.TestCase):
             held.close()
         with self.assertRaises(OSError):
             os.fstat(duplicate)
+
+    def test_raw_provider_accepts_original_legacy_tee_only_under_selected_policy_and_revocation(self):
+        selected = OrdinaryPlatformEvidenceChallenge(self.subject, bytes(32))
+        for version, keymaster in ((2, 3), (3, 4), (4, 41)):
+            with self.subTest(version=version, keymaster=keymaster):
+                leaf, root = self.fixture.sign('1.3.6.1.4.1.11129.2.1.17',
+                    keymint_description(selected, 'org.example.wallet', 28, b'\x22'*32,
+                        attestation_version=version, keymaster_version=keymaster,
+                        security_level=1, keymint_security_level=1,
+                        verified_boot_hash=None if version == 2 else b'\x52'*32))
+                self.raw = encode_android_chain([leaf, root])
+                self.now = int(time.time()*1000)
+                request = replace(self.request, raw_attestation=self.raw).raw_request()
+                checked = self.provider.prepare_raw(request, fresh=True)
+                self.assertEqual(checked.raw_proof.android_security_level, 1)
+                self.assertEqual(checked.raw_proof.attested_public_key_sec1, self.point)
+                self.assertEqual(checked.raw_proof.evidence_sha256, hashlib.sha256(self.raw).digest())
+                strongbox = replace(self.platform, allowed_security_levels=frozenset({2}))
+                with self.assertRaises(AttestationRejected):
+                    self.make_provider(replace(self.policy, platform_policy=strongbox)).prepare_raw(request, fresh=True)
+                self.revocation_clear = False
+                with self.assertRaisesRegex(AttestationRejected, 'revocation'):
+                    self.provider.prepare_raw(request, fresh=True)
+                self.revocation_clear = True
 
     def test_raw_provider_requires_full_original_without_possession_or_final_credential(self):
         raw=self.provider.prepare_raw(self.request.raw_request(),fresh=True)

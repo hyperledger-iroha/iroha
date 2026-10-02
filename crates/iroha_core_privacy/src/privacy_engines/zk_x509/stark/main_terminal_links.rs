@@ -33,6 +33,7 @@ pub(super) struct MainTerminalLinkPlanV1 {
 
 impl MainTerminalLinkPlanV1 {
     /// Conservative public stack/heap charge retained during all MAIN device phases.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + 64
@@ -282,13 +283,19 @@ impl MainTerminalLinkPlanV1 {
         point: F,
         alphas: &[E],
     ) -> Result<E, ZkX509StarkErrorV1> {
+        if !point.is_canonical() {
+            return Err(ZkX509StarkErrorV1::ConstraintOpening);
+        }
         self.evaluate_with_v1(E::from_base(point), alphas, |column| {
-            groups
+            let value = groups
                 .get(column.group)
                 .and_then(|group| group.aux_current.get(column.column))
                 .copied()
-                .map(E::from_base)
-                .ok_or(ZkX509StarkErrorV1::ConstraintOpening)
+                .ok_or(ZkX509StarkErrorV1::ConstraintOpening)?;
+            if !value.is_canonical() {
+                return Err(ZkX509StarkErrorV1::ConstraintOpening);
+            }
+            Ok(E::from_base(value))
         })
     }
     fn evaluate_with_v1(
@@ -451,6 +458,9 @@ impl MainTerminalLinkPlanV1 {
                     || replay[0].len() > difference.len()
                 {
                     return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                if replay[0].iter().any(|value| !value.is_canonical()) {
+                    return Err(ZkX509StarkErrorV1::NonCanonicalField);
                 }
                 for (target, value) in difference.iter_mut().zip(replay[0].iter()) {
                     *target = if subtract {
@@ -658,23 +668,43 @@ mod tests {
         );
         assert_eq!(calls.get(), 0);
         let mut malformed = alphas;
-        malformed[191] = E::from_base(F(u64::MAX));
+        malformed[191] = E::noncanonical_fixture_v1();
         assert!(
             plan.evaluate_with_v1(E::from_base(F(7)), &malformed, |_| Ok(E::ONE))
                 .is_err()
         );
         assert!(
-            plan.evaluate_with_v1(E::from_base(F(u64::MAX)), &alphas, |_| Ok(E::ONE))
+            plan.evaluate_with_v1(E::noncanonical_fixture_v1(), &alphas, |_| Ok(E::ONE))
                 .is_err()
         );
         assert!(
-            plan.evaluate_with_v1(E::from_base(F(7)), &alphas, |_| Ok(E::from_base(F(
-                u64::MAX
-            ))))
+            plan.evaluate_with_v1(E::from_base(F(7)), &alphas, |_| Ok(
+                E::noncanonical_fixture_v1()
+            ))
             .is_err()
         );
         assert!(plan.evaluate_v1(&[], E::from_base(F(7)), &alphas).is_err());
         assert!(plan.evaluate_base_v1(&[], F(7), &alphas).is_err());
+        let base_plan = small_plan_v1();
+        let mut base_groups = [aggregate::AggregateOpenedTraceGroupV1 {
+            base_current: Vec::new(),
+            base_next: Vec::new(),
+            aux_current: vec![F::ONE; 2],
+            aux_next: Vec::new(),
+        }];
+        assert_eq!(
+            base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
+            Ok(E::ZERO)
+        );
+        assert_eq!(
+            base_plan.evaluate_base_v1(&base_groups, F(u64::MAX), &alphas),
+            Err(ZkX509StarkErrorV1::ConstraintOpening)
+        );
+        base_groups[0].aux_current[0] = F(u64::MAX);
+        assert_eq!(
+            base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
+            Err(ZkX509StarkErrorV1::ConstraintOpening)
+        );
         for point in plan
             .links
             .iter()

@@ -548,6 +548,22 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("source seal is missing", result.stderr)
 
+    def test_armv7_diagnostic_source_seal_is_not_an_admitted_android_release(self) -> None:
+        self.source_seal["platform"] = "android-armv7-diagnostic"
+        self.source_seal["targets"] = ["armv7-linux-androideabi"]
+        self.source_seal_path.write_bytes(self.seal_bytes())
+        result = self.verify(self.write_app_archive("apk"), "apk")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("source seal disagrees", result.stderr)
+
+    def test_armv7_diagnostic_inventory_cannot_widen_release_abis(self) -> None:
+        archive = self.write_app_archive("apk")
+        with zipfile.ZipFile(archive, "a") as output:
+            output.writestr("lib/armeabi-v7a/" + LIBRARY_NAME, b"diagnostic ELF32")
+        result = self.verify(archive, "apk")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("ABI directory inventory is not exact", result.stderr)
+
     def test_rejects_stale_cargo_lock_or_live_source_verification(self) -> None:
         self.cargo_lock.write_bytes(b"# changed Cargo.lock\n")
         result = self.verify(self.write_app_archive("aab"), "aab")

@@ -419,7 +419,6 @@ mod tests {
         },
         sorafs::capacity::ProviderId,
     };
-    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
 
     fn account(seed: &[u8]) -> AccountId {

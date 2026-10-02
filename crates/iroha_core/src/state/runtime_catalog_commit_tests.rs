@@ -1,5 +1,19 @@
-fn catalog_test_header() -> BlockHeader {
-    BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0)
+fn catalog_test_header(state: &State) -> BlockHeader {
+    let original = state
+        .kura_handle()
+        .get_block(std::num::NonZeroUsize::new(1).unwrap())
+        .expect("catalog components retain their actual original signed genesis");
+    let time_ms = u64::try_from(original.header().creation_time().as_millis())
+        .unwrap()
+        .checked_add(1)
+        .expect("fixture parent time has a successor");
+    BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(original.hash()),
+        None,
+        time_ms,
+        0,
+    )
 }
 
 fn staged_catalog_fixture(
@@ -10,7 +24,7 @@ fn staged_catalog_fixture(
     PendingAutoscaleLaneLifecycle,
 ) {
     let payload = catalog_payload(state, keys);
-    let mut block = state.block(catalog_test_header());
+    let mut block = state.block(catalog_test_header(state));
     let mut transaction = block.transaction();
     transaction
         .stage_consensus_catalog_transition(&payload)
@@ -39,7 +53,7 @@ fn runtime_catalog_readback_tracks_committed_state_and_rejects_malformed_paramet
         assert_eq!(state.view().runtime_catalog_hash().unwrap(), None);
         let payload = catalog_payload(&state, &keys);
         let (runtime, retained_runtime) = {
-            let mut block = state.block(catalog_test_header());
+            let mut block = state.block(catalog_test_header(&state));
             let mut transaction = block.transaction();
             transaction
                 .stage_consensus_catalog_transition(&payload)
@@ -149,14 +163,14 @@ fn runtime_catalog_readback_binds_next_transition_and_rejects_stale_root() {
         for stale in [None, Some(Hash::new(b"stale runtime overlay"))] {
             let mut invalid = payload.clone();
             invalid.expected_runtime_catalog_hash = stale;
-            let mut block = state.block(catalog_test_header());
+            let mut block = state.block(catalog_test_header(&state));
             let mut transaction = block.transaction();
             let error = transaction
                 .stage_consensus_catalog_transition(&invalid)
                 .expect_err("stale overlay guard must reject a second transition");
             assert!(error.to_string().contains("expected runtime catalog root"));
         }
-        let mut block = state.block(catalog_test_header());
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -182,7 +196,7 @@ fn runtime_catalog_final_overlay_rejects_unstaged_changed_and_removed_parameter(
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
-        let mut block = state.block(catalog_test_header());
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -251,7 +265,7 @@ fn runtime_catalog_applied_transaction_publishes_manifest_to_next_transaction() 
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
-        let mut block = state.block(catalog_test_header());
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -318,7 +332,7 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
         for case in 0..5 {
             let (state, keys) = catalog_fixture(InvalidMember::None);
             let payload = catalog_payload(&state, &keys);
-            let mut block = state.block(catalog_test_header());
+            let mut block = state.block(catalog_test_header(&state));
             let mut transaction = block.transaction();
             transaction
                 .stage_consensus_catalog_transition(&payload)
@@ -641,7 +655,7 @@ fn runtime_catalog_owned_overlay_ignores_later_policy_cache_mutation() {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let original = state.nexus_snapshot();
-        let mut block = state.block(catalog_test_header());
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -676,7 +690,7 @@ fn runtime_catalog_merge_validation_owns_its_captured_policy() {
         let payload = catalog_payload(&state, &keys);
         let original_nexus = state.nexus_snapshot();
         let original_manifests = Arc::clone(&state.lane_manifests.read());
-        let mut block = state.block(catalog_test_header());
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -719,7 +733,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let (runtime, owner) = {
-            let mut block = state.block(catalog_test_header());
+            let mut block = state.block(catalog_test_header(&state));
             let mut transaction = block.transaction();
             transaction
                 .stage_consensus_catalog_transition(&payload)
@@ -738,7 +752,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
         *published_runtime.get_mut() = owner;
         published_runtime.commit();
         let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
-        let mut replacement = state.block_and_revert(catalog_test_header());
+        let mut replacement = state.block_and_revert(catalog_test_header(&state));
         assert!(
             runtime_catalog_from_world(&replacement.world)
                 .unwrap()

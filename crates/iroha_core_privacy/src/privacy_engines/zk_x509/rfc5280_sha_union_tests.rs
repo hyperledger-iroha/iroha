@@ -90,7 +90,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
         });
         centers.install_segment_v1(segment, &streams).unwrap();
     }
-    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+    let provider = ZkX509Rfc5280StarkColumnProviderV1::with_centers_v1(
         &material,
         der_challenges_v1(),
         challenges_v1(),
@@ -123,11 +123,15 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
                 480287,
                 521951,
                 ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 2,
+                ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1,
             ] {
                 let current = provider.base_row_v1(row).unwrap();
-                let next = provider.base_row_v1(row + 1).unwrap();
+                let next = provider
+                    .base_row_v1((row + 1) % ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
+                    .unwrap();
                 let fixed = provider.fixed_row_v1(row).unwrap();
-                assert_eq!(fixed[FIX_CONTINUE], F::ONE);
+                let continue_gate = F(u64::from(row + 1 != ZK_X509_RFC5280_STARK_TRACE_SIZE_V1));
+                assert_eq!(fixed[FIX_CONTINUE], continue_gate);
                 let mut aux = neutral_aux_v1();
                 for (segment, values) in provider.sha_union_centers_v1().iter().enumerate() {
                     aux[AUX_SHA_UNION_CENTERS + 4 * segment
@@ -151,7 +155,7 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
                 let mut changed = aux;
                 changed[AUX_SHA_UNION_CENTERS + local] =
                     changed[AUX_SHA_UNION_CENTERS + local].add(F::ONE);
-                assert_eq!(evaluate(&changed), F::ONE);
+                assert_eq!(evaluate(&changed), continue_gate);
             }
         }
     }

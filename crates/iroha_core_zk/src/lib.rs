@@ -80,8 +80,8 @@ compile_error!(
 compile_error!(
     "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"
 );
-/// Qualified-provider encryption for Kagemusha V1 credit openings.
-#[cfg(test)]
+/// Maintained typed credit encryption used by the actual Native ordinary cash owner.
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 mod kagemusha_v1_crypto;
 /// Deterministic Kagemusha V1 fixtures shared by Core and Sumeragi tests.
 #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
@@ -126,7 +126,11 @@ mod halo2_backend;
 /// and synthetic circuit fixtures remain confined to the module's test-only helpers.
 #[cfg(all(
     feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
+    any(
+        test,
+        feature = "kagemusha-production-prover",
+        feature = "kagemusha-real-proof-harness"
+    )
 ))]
 pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.

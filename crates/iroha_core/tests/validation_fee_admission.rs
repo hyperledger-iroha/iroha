@@ -7,7 +7,7 @@ use iroha_core::{
     },
     smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
-    state::{State, StateReadOnly, StateTransaction, World, WorldReadOnly},
+    state::{State, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};

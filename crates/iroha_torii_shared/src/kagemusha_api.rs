@@ -59,7 +59,7 @@ pub const KAGEMUSHA_READINESS_MAX_BYTES_V1: usize = 4 * 1024;
 /// HTTP body is a versioned [`SignedTransaction`] and therefore uses Torii's
 /// normal signed-transaction ingress limit rather than this inner-request cap.
 pub const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1: usize = 16 * 1024;
-/// Minimum Torii signed-transaction ingress capacity when KAGEMUSHA commands are enabled.
+/// Minimum Torii signed-transaction ingress capacity for mandatory KAGEMUSHA commands.
 ///
 /// This provisioning floor leaves a full 16 KiB of framing headroom around a
 /// maximum-shape embedded top-up request. It is not a protocol maximum; nodes

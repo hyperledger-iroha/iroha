@@ -7,6 +7,7 @@ fn fixture() -> (
     KagemushaRecoveryCheckpointStatementV1,
 ) {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"checkpoint-register-release", 0),
         digest(b"vk-set", 0),
         digest(b"checkpoint-register-manifest", 0),
@@ -55,6 +56,7 @@ fn retain(
 #[test]
 fn simulated_checkpoint_enrollment_pins_recipient_and_complete_runtime() {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"checkpoint-enrollment-release", 0),
         digest(b"vk-set", 0),
         digest(b"checkpoint-enrollment-manifest", 0),
@@ -112,6 +114,7 @@ fn simulated_checkpoint_enrollment_pins_recipient_and_complete_runtime() {
 #[test]
 fn simulated_checkpoint_pins_original_governed_credential_and_policy() {
     let material = core_bound_mint_recipient_material(
+        0,
         digest(b"checkpoint-identity-release", 0),
         digest(b"vk-set", 0),
         digest(b"checkpoint-identity-manifest", 0),

@@ -164,7 +164,6 @@ public enum IrohaPeerNfcCoreNFCErrorV1: Error, Equatable, LocalizedError, Sendab
     case cardSessionSystemUnavailable
     case cardSessionAccessNotAccepted
     case cardSessionRadioDisabled
-    case runtimeDisabled
     case invalidTag
     case cancelled
     case operationInProgress
@@ -190,8 +189,6 @@ public enum IrohaPeerNfcCoreNFCErrorV1: Error, Equatable, LocalizedError, Sendab
             return "iOS did not grant this app access to NFC card emulation."
         case .cardSessionRadioDisabled:
             return "The NFC radio is disabled."
-        case .runtimeDisabled:
-            return "NFC card emulation is disabled by application policy."
         case .invalidTag:
             return "The detected NFC tag is not an Iroha peer V1 endpoint."
         case .cancelled:
@@ -346,7 +343,7 @@ public enum IrohaPeerNfcCoreNFCAdapterV1 {
     }
 }
 
-/// App-owned presentation strings and the explicit CardSession runtime gate.
+/// App-owned presentation strings and bounded CardSession deadlines.
 /// The AID is deliberately not configurable: every V1 implementation uses
 /// `IrohaPeerNfcV1.applicationIdentifier` and fails closed on entitlement or
 /// provisioning mismatches.
@@ -355,7 +352,6 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
     public static let maximumReaderOperationTimeoutMilliseconds: UInt64 = 60_000
     public static let maximumPlatformCallTimeoutMilliseconds: UInt64 = 10_000
     public static let maximumCardSessionStartupTimeoutMilliseconds: UInt64 = 15_000
-    public let cardSessionRuntimeEnabled: Bool
     public let cardAlertMessage: String
     public let readerAlertMessage: String
     public let completionAlertMessage: String
@@ -365,7 +361,6 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
     public let cardSessionStartupTimeoutMilliseconds: UInt64
 
     public init(
-        cardSessionRuntimeEnabled: Bool,
         cardAlertMessage: String,
         readerAlertMessage: String,
         completionAlertMessage: String,
@@ -380,7 +375,6 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
         precondition(Self.isValidCardSessionStartupTimeout(
             cardSessionStartupTimeoutMilliseconds
         ))
-        self.cardSessionRuntimeEnabled = cardSessionRuntimeEnabled
         self.cardAlertMessage = cardAlertMessage
         self.readerAlertMessage = readerAlertMessage
         self.completionAlertMessage = completionAlertMessage
@@ -422,7 +416,6 @@ public struct IrohaPeerNfcCoreNFCConfigurationV1: Equatable, Sendable {
 public enum IrohaPeerNfcCardAvailabilityV1: Equatable, Sendable {
     case available
     case unavailable
-    case runtimeDisabled
     case unsupported
     case ineligible
 }
@@ -479,8 +472,6 @@ public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
             return .available
         } catch let error as IrohaPeerNfcCoreNFCErrorV1 {
             switch error {
-            case .runtimeDisabled:
-                return .runtimeDisabled
             case .cardEmulationUnavailable:
                 return CardSession.isSupported ? .unavailable : .unsupported
             case .cardEmulationIneligible, .presentmentIntentFailed:
@@ -580,9 +571,6 @@ public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
         configuration: IrohaPeerNfcCoreNFCConfigurationV1,
         budget: IrohaPeerNfcDeadlineBudgetV1
     ) async throws {
-        guard configuration.cardSessionRuntimeEnabled else {
-            throw IrohaPeerNfcCoreNFCErrorV1.runtimeDisabled
-        }
         guard NFCReaderSession.readingAvailable else {
             throw IrohaPeerNfcCoreNFCErrorV1.unavailable
         }

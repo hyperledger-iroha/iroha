@@ -215,6 +215,16 @@ coordinator adapter fixtures that require the canonical Rust address validator.
 The adapter's scripted endpoints remain mapping controls, not native coordinator
 or hardware qualification.
 
+The separate `:kagemusha-wallet-android:testDebugHostNative` task uses the wallet's
+main JNI implementation and the same explicit canonical host-library directory.
+It checks ABI 25, signer contract 7, actual initial startup phase 1 and selection
+revocation phase 5 against an absent independently registered Native root.
+Missing symbols or libraries fail; phase 6 is not exercised after phase 1 refuses.
+A later Core-open assertion checks the managed startup fence. The task excludes
+scripted client test JNI classes, disables result reuse, and is excluded from
+ordinary managed tests through its `host-native` tag. It creates no account,
+release, monetary or hardware authority and grants no device qualification.
+
 ### Java transaction metadata
 
 `JsonValue` is one immutable Kotlin-owned type for both JVM languages. Its
@@ -475,7 +485,7 @@ proof unchanged and independently verifies those originals before publishing fun
 Exact retries recover the same history identity, proof and physical evidence; host
 operation storage, generic device operation 17 and Core/software signatures cannot
 substitute. A fresh authenticated wallet observation follows native completion.
-The current closed schema-2 inventory contains all 18 coordinator methods.
+The current closed schema-2 inventory contains all 21 coordinator methods.
 Method 18 reads the installed native release ID, hardware-policy digest and provider
 policy registry root from the original selected Core owner under its observation
 lease. The policy digest remains bound to qualification signatures; aggregate state
@@ -485,7 +495,71 @@ wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiv
 codec handles bounded canonical preparation, candidate, recovery, and redemption
 receipt projections. The adapter checks public-input digests, operation identities,
 qualified creation context, retained recovery scope, and installed aggregate scope.
-The same adapter exposes `initialEnrollment()` for the bounded method-12 ceremony.
+`KagemushaAndroidOrdinaryEnrollmentV1` composes the same adapter's Native C21
+reservation, authenticated signed preparation, persistent generated hardware
+P-256 key, raw admission, E20 possession, governed Play Integrity request and
+credential admission. Native C20 phases 9–14 then retain the FI challenge,
+wallet invocation and exact original wallet signature before the protected FI
+finish request. The wallet signer remains separate from the platform app key.
+Explicit retries reuse the same complete Google and wallet originals; a retained
+wallet invocation without a signature requires Native recovery. The explicit
+Google invalid-provider error permits a new warmup only on the next user action.
+`beginOrResumeBootstrapApproval()` first completes that same FI ceremony, then
+uses the separate method-19 phase-8 Bootstrap capability bound to the original C, enrolled
+alias/key and retained FI credential. Its selector is SHA-256 of ASCII
+`iroha:kagemusha:v1:ordinary-bootstrap-operation-id` followed by a NUL byte and
+the complete original FI certificate bytes. Native independently checks that
+selector before preparing the zero-index S and exact W. The platform signs only
+after the Native durable fence; retries consume retained DER or recover the exact
+original receipt without signing again. Generic monetary approval still rejects
+Bootstrap. Returned enrollment and approval originals grant no money permission;
+genuine State/Guard publication and the ordinary Native monetary owner remain
+separate requirements.
+`beginOrResumeInitialStatePublication()` then uses that same captured Bootstrap
+ticket with method-19 phase 9. Native selects the authenticated initial-proof
+profile and artifact resolver from its already installed source. Before any
+Guard or State proof work, the original logical journal fsyncs an initial
+publication intent bound to the same ticket, FI, credential and complete signed
+Bootstrap approval. Its single-use Native permit checks the exact owned journal
+prefix. Cold replay retains the intent without creating another permit. A cold
+captured approval without an intent may resume its first publication; a surviving
+intent selects only exact original publication recovery. A missing or damaged
+publication after that intent freezes, with no fresh-proof fallback. Recovery
+across every interruption cut remains unfinished.
+The request carries only the phase and original ticket; no host proof, verifier,
+profile or resolver can be admitted through the frame. Phase 10 only recovers and
+rechecks an existing publication and never generates another proof or signature.
+Both phases return the ticket, enrollment ID and SHA-256 digests of the complete
+canonical publication, FI certificate, app credential, signed Bootstrap approval,
+initial State, paired State proof and paired ordinary Guard. The managed holder
+binds these to its original FI completion, app credential and ticket, and requires
+every retained commitment to remain unchanged on recovery. A lost Native return
+freezes the old holder; only actual Native original recovery in a fresh holder can
+continue. `KagemushaOrdinaryInitialStatePublicationOriginalsV1` is detached
+acknowledgement data with defensive copies and no monetary capability. Missing
+authentic proof material remains unavailable, and ordinary monetary operations
+still require their separate verified Native provider.
+`KagemushaOrdinaryCashApprovalProjectionV1` checks copied public W325/S460 originals
+through separate preparation and terminal entry points. Preparation requires signed
+purpose 2 and zero candidate/body commitments; terminal requires signed purpose 1
+and both commitments exactly for send/redemption. Both require exact-next unsigned
+128-bit logical indices and SHA-256 of the complete original S460 bytes, including
+its existing domain and length once. Retained ordinary public bindings must match
+the full S and original operation/account/authority/key/credential/Guard fields;
+S's credential ID must equal W's enrollment digest. These projections authenticate
+no issuer, platform signature, current lease, State/Guard proof or monetary owner.
+The ordinary cash method-19 producer and current-money holder remain separate work;
+the projection does not reuse the Bootstrap capability or OEM enrollment.
+`KagemushaOrdinaryTransitionStatementProjectionV1` accepts the existing full model
+digest preimage: BE64(40), its NUL-terminated transition domain, BE64(1089), and
+the 1089-byte body with little-endian integers. It hashes all 1145 original bytes
+once, matches S's transition digest and operation, and correlates common release,
+network/lane/profile/policy scope. It provides no alternate encoder or reconstruction
+from the recursive State's 93 public cells; Native must supply the complete retained
+model original and authenticate both State/Guard parities and current custody.
+The product supplies protected HTTP and wallet signing after the trusted Native
+account/release source is installed. An applet is not an enrollment prerequisite.
+The adapter also exposes `initialEnrollment()` for the bounded OEM method-12 ceremony.
 It retains one phase-1 selection only in the original process. Phase-7 rechecks
 that exact selection, and phase-4 reads its original possession proof, while the
 same native owner remains live. A failed dispatch or response publication revokes
@@ -813,18 +887,10 @@ malformed provenance, extra native file (including another Rust `cdylib`), or
 any size/hash difference among raw cargo-ndk output, generated stripped output,
 provenance, and the AAR.
 
-Debug/JVM unit-test compilation deliberately does not register the shipping JNI
-and provenance directories, so it never launches Cargo/NDK merely to compile
-tests. An actual Debug app or instrumentation run that needs native calls must
-pass `-PirohaDebugNativeBridge=true` with the same external artifact root and
-authenticated NDK configuration. This registers the maintained generated JNI
-and provenance outputs for the Debug AAR; it does not copy source-tree libraries,
-enable native proving, or qualify an Offline device provider. Only exact `true`
-and `false` property values are accepted. For example:
-
-```bash
-./gradlew :client-android:assembleDebug -PirohaDebugNativeBridge=true
-```
+Every app and instrumentation variant includes the sealed native bridge and its
+provenance. Ordinary JVM unit-test compilation uses its compiler task graph and
+does not launch Cargo or the Android NDK. The `irohaDebugNativeBridge` selector
+has been removed; native packaging has no opt-out.
 
 For local device integration inside this checkout, create the ignored
 `dist/norito-bridge-android-local` directory with mode `0700` and set
@@ -839,15 +905,15 @@ that scope, including when the source is clean. It supplies local test evidence,
 not release or physical-device qualification by itself. Ordinary release output
 continues to require the external artifact root.
 
-The property also applies to this SDK when an Android app includes it as a
-composite build. Release packaging always includes the bridge independently of
-this Debug property. An unchanged raw build is reusable only while its saved source seal still
-matches the live checkout; release packaging always re-runs the inexpensive
-strip/provenance phase and its final seal check.
+This also applies to an Android app consuming the SDK as a composite build.
+An unchanged raw build is reusable only while its saved source seal still
+matches the live checkout; packaging re-runs stripping, provenance generation
+and the final seal check.
 
-The production-gated form passes `--features privacy-production-enabled` to
-`connect_norito_bridge`; the default form intentionally omits that feature so
-unaudited native proving remains disabled.
+Every native build includes KAGEMUSHA and privacy support. The fixed
+`privacy-production-enabled` Cargo feature records the sole build recipe; it is
+an empty provenance marker and grants no provider, proving, hardware or release
+qualification. The `privacyProductionEnabled` property has been removed.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
 executables from exact Rust 1.93.1. It requires one job, incremental compilation
@@ -874,9 +940,7 @@ state remains disabled.
 | arm64-v8a | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
 | x86_64 | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
 
-`<mode>` is `default` unless the property is exactly
-`-PprivacyProductionEnabled=true`, in which case it is `production`. Any value
-other than the exact strings `true` and `false` is rejected.
+`<mode>` is always `production`. There is no disabled native profile.
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 

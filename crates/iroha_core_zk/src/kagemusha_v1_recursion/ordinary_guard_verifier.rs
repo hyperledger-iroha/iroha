@@ -1,4 +1,4 @@
-//! Actual paired ordinary Guard verification under a genuine Native bootstrap selection.
+//! Actual paired ordinary Guard verification under genuine Native selections.
 //!
 //! Signature admission remains in the descriptor-held logical journal. This boundary derives
 //! every public column from that journal and the actual financial preview, verifies both real IPA
@@ -29,6 +29,20 @@ use iroha_data_model::kagemusha::KagemushaReleasePurposeV1;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use snark_verifier::verifier::plonk::PlonkProtocol;
+
+#[path = "ordinary_cash_guard_verifier.rs"]
+mod cash_guard;
+pub(super) use cash_guard::preparation_digests;
+pub(crate) use cash_guard::{
+    KagemushaAuthenticatedOrdinaryPreparationGuardV1, verify_ordinary_preparation_guard_v1,
+};
+
+#[path = "ordinary_cash_terminal_guard_verifier.rs"]
+mod terminal_guard;
+pub(super) use terminal_guard::terminal_digests;
+pub(crate) use terminal_guard::{
+    KagemushaAuthenticatedOrdinaryTerminalGuardV1, verify_ordinary_terminal_guard_v1,
+};
 
 type History = [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
 type Result<T> = core::result::Result<T, KagemushaStateErrorV1>;
@@ -74,8 +88,6 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
     approval: DigestV1,
     subject: DigestV1,
     provider: DigestV1,
-    eq_history: History,
-    ep_history: History,
     original: Vec<u8>,
 }
 impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
@@ -93,12 +105,6 @@ impl KagemushaAuthenticatedOrdinaryBootstrapGuardV1 {
     }
     pub(crate) fn provider_policy_root(&self) -> DigestV1 {
         self.provider
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        &self.eq_history
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        &self.ep_history
     }
     pub(crate) fn original(&self) -> &[u8] {
         &self.original
@@ -152,12 +158,6 @@ impl KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1 {
     }
     pub(crate) fn provider_policy_root(&self) -> DigestV1 {
         self.verified.provider_policy_root()
-    }
-    pub(crate) fn eq_history(&self) -> &History {
-        self.verified.eq_history()
-    }
-    pub(crate) fn ep_history(&self) -> &History {
-        self.verified.ep_history()
     }
     pub(crate) fn original(&self) -> &[u8] {
         self.verified.original()
@@ -267,10 +267,31 @@ fn verify_selected_original(
         approval: expected[2],
         subject: expected[3],
         provider: expected[4],
-        eq_history: wire.eq_history,
-        ep_history: wire.ep_history,
         original: paired_guard.to_vec(),
     })
+}
+
+/// Mathematical original verification only; no historical/current Native loan is produced.
+pub(super) fn verify_stateless_original_v1(
+    original: &[u8],
+    material: &OrdinaryGuardMaterialV1<'_>,
+    expected: [DigestV1; 5],
+) -> Result<()> {
+    if expected.contains(&[0; 32]) {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    let wire = decode_exact(original, material)?;
+    if [
+        wire.normalized_guard_digest,
+        wire.credential_digest,
+        wire.authorization_transcript_digest,
+        wire.subject_signing_digest,
+        wire.provider_policy_root,
+    ] != expected
+    {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    verify_wire(&wire, material)
 }
 
 fn decode_exact(

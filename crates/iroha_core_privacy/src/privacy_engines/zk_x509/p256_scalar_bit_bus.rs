@@ -596,6 +596,7 @@ pub(crate) fn p256_scalar_bit_bus_stark_fixed_row_v1(
 }
 /// Project the verifier-preprocessed selector for the final active packed-bus
 /// row at an arbitrary aggregate-domain opening.
+#[cfg(test)]
 pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1<A: PolynomialAirFieldV1>(
     fixed: &[A; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
 ) -> A {
@@ -1415,6 +1416,7 @@ pub(crate) fn p256_scalar_bit_bus_terminal_columns_v1() -> [[usize; P256_SCALAR_
 ///
 /// The aggregate verifier opens this projection at the verifier-fixed final logical row; no
 /// proof-supplied row index is accepted by the terminal registration.
+#[cfg(test)]
 pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
 ) -> [[A; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {

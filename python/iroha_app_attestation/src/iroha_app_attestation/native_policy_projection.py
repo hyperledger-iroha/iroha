@@ -46,6 +46,40 @@ class NativePolicyProjection:
     google_public_originals: tuple[tuple[PlayIntegrityPolicy, bytes], ...]
     original_sha256: bytes
 
+    def require_preparation_issuer_join(self, *,
+            native_issuer_pins: tuple[tuple[bytes, bytes, bytes], ...]) -> None:
+        """Join every served profile to its actual Native issuer original.
+
+        Each immutable pin is (profile ID, canonical issuer-policy digest,
+        issuer Ed public key). The genuine Native parent must derive them from
+        independently admitted Rust issuer originals before starting this worker.
+        This data consistency check grants no custody and cannot construct that parent.
+        FD12 app-authority or P256 circuit authority must never fill a missing C pin.
+        Different governed profiles may select different issuer policies/keys, and
+        governed originals may use an Ed key in multiple separately held roles.
+        """
+        require(type(native_issuer_pins) is tuple and 0 < len(native_issuer_pins) <= 64,
+                "Native preparation issuer pins absent")
+        selected = {}
+        for entry in native_issuer_pins:
+            require(type(entry) is tuple and len(entry) == 3
+                    and all(type(field) is bytes and len(field) == 32 and any(field)
+                            for field in entry), "Native preparation issuer pin differs")
+            profile_id, policy_digest, issuer_key = entry
+            require(profile_id not in selected, "ambiguous Native preparation issuer pin")
+            selected[profile_id] = (policy_digest, issuer_key)
+        require(type(self.policies) is tuple and 0 < len(self.policies) <= 64,
+                "Native preparation issuer profiles absent")
+        served = set()
+        for policy in self.policies:
+            policy.validate()
+            require(policy.hardware_profile_id not in served
+                    and selected.get(policy.hardware_profile_id) ==
+                        (policy.issuer_policy_digest, policy.core_preparation_public_key),
+                    "Core preparation projection differs from Native issuer original")
+            served.add(policy.hardware_profile_id)
+        require(served == selected.keys(), "Native preparation issuer pin coverage differs")
+
 
 def decode_native_policy_projection(original: bytes) -> NativePolicyProjection:
     value = _json(original, 3*1024*1024, "Native app policy projection")

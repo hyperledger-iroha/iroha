@@ -558,10 +558,7 @@ impl KagemushaPlayIntegrityRefreshLeaseV1 {
         }
         match app_possession {
             KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der }
-                if (8..=72).contains(&signature_der.len()) =>
-            {
-                ()
-            }
+                if (8..=72).contains(&signature_der.len()) => {}
             _ => return Err("Integrity Ed original possession shape differs".into()),
         }
         norito::encode_canonical(&LeaseEdOriginal {
@@ -1486,7 +1483,7 @@ impl KagemushaPlayIntegrityRefreshLeaseV1 {
                 return Err("lease stream header framing differs".into());
             }
             let archive_payload = frame_start + norito::core::Header::SIZE..layout.original.end;
-            if header.length as usize != archive_payload.len() {
+            if usize::try_from(header.length).ok() != Some(archive_payload.len()) {
                 return Err("lease stream header payload width differs".into());
             }
             lengths.push(KagemushaPlayIntegrityRefreshLeaseStreamLengthV1 {

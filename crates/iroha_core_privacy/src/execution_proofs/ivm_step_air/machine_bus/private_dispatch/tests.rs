@@ -130,8 +130,13 @@ impl Fixture {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
         let schedule = Schedule::new(7, clocks).unwrap();
         let mut row = [F::ZERO; WIDTH];
-        row[SCALAR + scalar::COMPARE..]
+        row[SCALAR + scalar::COMPARE..SCALAR + scalar::SHIFT]
             .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
+        row[SCALAR + scalar::SHIFT..].copy_from_slice(&super::super::super::shift::bank_witness(
+            wide::arithmetic::SLL,
+            0,
+            0,
+        ));
         let mut p = [[F::ZERO; packet::WIDTH]; PORTS];
         let w = program.words[slot];
         let role = role(w).unwrap();
@@ -424,8 +429,11 @@ impl Fixture {
             schedule: Schedule::new(7, clocks).unwrap(),
             row: {
                 let mut row = [F::ZERO; WIDTH];
-                row[SCALAR + scalar::COMPARE..]
+                row[SCALAR + scalar::COMPARE..SCALAR + scalar::SHIFT]
                     .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
+                row[SCALAR + scalar::SHIFT..].copy_from_slice(
+                    &super::super::super::shift::bank_witness(wide::arithmetic::SLL, 0, 0),
+                );
                 row
             },
             packets: OriginalPackets::candidate(packets),
@@ -764,7 +772,7 @@ fn dispatcher_witness_tail_uses_its_own_width_and_constrains_both_alignment_bits
     let program = program();
     for delta in 0..4 {
         let fixture = Fixture::new(&program, 3, false, delta);
-        assert_eq!(fixture.row.get(RETURN_DELTA..WIDTH).unwrap().len(), 2);
+        assert_eq!(fixture.row.get(RETURN_DELTA..SCALAR).unwrap().len(), 2);
         assert!(RETURN_DELTA > packet::WIDTH);
         assert!(fixture.accepts(&program));
         for index in RETURN_DELTA..WIDTH {

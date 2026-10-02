@@ -131,6 +131,8 @@ def screen(
     ca_section_cap = _asserted_value(
         accumulator, "ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1"
     )
+    if main_frame != _asserted_value(stark, "ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1"):
+        raise GeometryError("MAIN frame disagrees with independent native codec accounting")
     if (
         outer != 4348
         or proof_instance_bytes != 32
@@ -223,6 +225,8 @@ def screen(
         "current_main_inner_max_bytes": wide_main,
         "current_ca_inner_max_bytes": ca_inner,
         "main_section_cap_bytes": main_section_cap,
+        "main_frame_bytes": main_frame,
+        "ca_frame_bytes": ca_frame,
         "current_trace_columns": columns,
         "current_trace_opening_bytes": trace_bytes,
         "complete_deep_opening_bytes": deep,

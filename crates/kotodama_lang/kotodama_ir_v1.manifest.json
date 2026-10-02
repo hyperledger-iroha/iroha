@@ -407,6 +407,7 @@
     "require_lowers_declared_error_code_into_abort_ir",
     "entrypoint_reads_only_the_prepared_host_argument_table",
     "single_json_entrypoint_uses_the_same_prepared_argument_table",
+    "recovery_syscalls_lower_generation_as_checked_unsigned_scalar",
     "nested_aggregate_returns_use_every_flattened_abi_word",
     "inactive_sum_has_no_payload_construction_or_store",
     "tail_expression_lowers_identically_to_explicit_return",
@@ -438,6 +439,7 @@
     "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
     "actor_helpers_lower_to_test_host_intrinsics",
     "lower_if",
+    "conditional_environment_joins_copy_each_arm_to_the_returned_value",
     "logical_operators_lower_to_short_circuit_cfg",
     "lower_bounded_range_loop",
     "bounded_loop_only_materializes_live_mutated_phi_slots",
@@ -507,6 +509,7 @@
     "require_lowers_declared_error_code_into_abort_ir",
     "entrypoint_reads_only_the_prepared_host_argument_table",
     "single_json_entrypoint_uses_the_same_prepared_argument_table",
+    "recovery_syscalls_lower_generation_as_checked_unsigned_scalar",
     "public_entrypoint_loads_one_prepared_table_word_per_parameter",
     "public_aggregate_arguments_cross_internal_calls_as_flat_words",
     "nested_aggregate_returns_use_every_flattened_abi_word",
@@ -540,6 +543,7 @@
     "invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic",
     "actor_helpers_lower_to_test_host_intrinsics",
     "lower_if",
+    "conditional_environment_joins_copy_each_arm_to_the_returned_value",
     "logical_operators_lower_to_short_circuit_cfg",
     "lower_bounded_range_loop",
     "bounded_loop_only_materializes_live_mutated_phi_slots",
@@ -636,6 +640,12 @@
       "owner": "crates/kotodama_lang/src/ir.rs",
       "bytes": 132,
       "sha256": "9a3ac807e37e5a55c991bd1df07d7541b7853a39bc1e451371e40e5bed93f250"
+    },
+    {
+      "path": "crates/kotodama_lang/src/ir/test_sources/recovery_syscalls_lower_generation_as_checked_unsigned_scalar_1.ko",
+      "owner": "crates/kotodama_lang/src/ir.rs",
+      "bytes": 533,
+      "sha256": "402c668ab2b12fc1a50cea0d41a88154b50ecbc019febad2ea69d900a88034aa"
     },
     {
       "path": "crates/kotodama_lang/src/ir/fixtures/v1/i007.ko",
@@ -1916,7 +1926,7 @@
   ],
   "take2_routing_sha256": "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14",
   "source": {
-    "bytes": 401259,
-    "sha256": "89ffb75ad4f5f85fc3f87b12750ce03d83b373d80d7259181acfc261a57653a7"
+    "bytes": 406905,
+    "sha256": "abd38288f28ccc615dfc49563cad4db3da55dbd90762986a4ea9e8c508fdc8ce"
   }
 }

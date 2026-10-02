@@ -46,7 +46,10 @@ implemented by this runtime and are rejected. The in-process native test now
 passes paid catalog/bootstrap/namespace execution and a real three-of-four BLS
 private-lane certificate through production storage and global merge. The focused
 CLI dataspace suite passes 111 tests; the four-daemon deployment rehearsal
-remains a qualification gate. This source change performs no live deployment.
+is an optional engineering diagnostic, never a signing or deployment prerequisite
+for Taira or production. Full regression suites and fixed-duration fault runs,
+including 24-hour tests, are likewise optional. This source change performs no
+live deployment.
 The rest of this design includes planned network rendering, owner committees
 and teardown work.
 
@@ -104,7 +107,7 @@ It carries separate consensus and policy digests.
 
 One `iroha3d` binary replaces `iroha3d_taira`, the FD 198/199/200 transport and the inline-Python launcher. It reads owner-only files from `<data_dir>/secrets/`.
 
-Deploys never build and never run tests. CI produces a signed release bundle, gated by `cargo nextest --profile release-gate` and a real four-peer run of the same engine. That run crosses a mandatory beacon pulse and restarts every validator from a snapshot.
+Deploys never build and never run regression suites. CI produces a signed release bundle from authenticated source and exact built artifacts. Regression suites and four-peer fault rehearsals are optional diagnostics and never prerequisites for signing or deploying a release. On-chain governance owns deployment policy for testnet and production.
 
 **Guarantees.** Protocol-level guarantees are unchanged: signatures, 2f+1 finality over exact 3f+1 committees, pinned peer and network identity, permissions, revocation, and replay protection. Deploy-time ceremony that had no live-safety value is deleted: the owner-signed authorization envelope and its 15-minute window, the dispatcher, the guards and the dispatcher transition, the source closures, the receipt chains, and transcribed hashes.
 
@@ -1183,14 +1186,14 @@ manifest.sig = Ed25519("iroha.release.v1\0" || canonical Norito(manifest))
 - G1 checks the fingerprint, commit, features and target;
 - xtask refuses a set of binaries whose commits differ.
 
-**Where tests gate.** Everything runs in CI before the CI key signs:
+**Optional engineering diagnostics.** These run independently of release signing and deployment:
 1. `cargo nextest run --profile release-gate`. Filtersets in `.config/nextest.toml` replace the 1,211 hand-listed names in `taira_release_check.py`.
 2. **Engine self-test** on the artifacts: `iroha network up networks/ci.toml --release ./dist/iroha-<v>.tar && iroha network verify ci --full && iroha network down ci`. That is a real 4-peer `sora-nexus-v1-qual` network with the beacon, snapshot-restore restarts, a pulse crossing and an epoch boundary.
 3. **Upgrade job:** `up` on the previous release, then `apply --release <new>`, then verify. It exercises the strategy decision, `--check-storage` and the prefix-hash comparison.
 4. **Container job:** regenerate `defaults/docker-compose.yml` and require byte equality, then boot it.
 5. An aarch64 KVM runner with `--inrou`, triggered by Inrou paths and nightly.
 
-**Restore path.** Until P4, the maintainer runs `cargo xtask release … --signing-key ~/.iroha/keys/maintainer-release.key` and runs the self-test by hand. This is how Taira is restored.
+**Restore path.** Until P4, the maintainer runs `cargo xtask release … --signing-key ~/.iroha/keys/maintainer-release.key`. The self-test is optional and does not block restoring Taira.
 
 `scripts/run_release_pipeline.py` (2,169 lines, the image and bundle publisher) stays. TODO(P8): make it consume the xtask bundle.
 
@@ -1431,7 +1434,7 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 | `xtask/src/kagami_profiles.rs` + dir, `defaults/kagami/{iroha3-dev,iroha3-nexus}`, `scripts/kagami_profile_owner.py` | 3,891 + ~150 | Profiles, `networks/*.toml` | P8 |
 | `configs/soranexus/taira/*` (config, genesis template, roster example, dns, explorer runtime config, canary client, sorafs sites, install script + mock test, explorer nginx, `__pycache__`); README 815 → ~60 | 3,976 + 755 | Profile, definition, `render::edge`, card | P8 |
 | `scripts/taira_devnet.py`, `taira_retry.py`, `taira_update.py`, `taira_update_guest.py` | 8,399 + 5,608 + 584 + 1,516 | `up`/`verify`/`down`; resume; `apply --release` | P8 |
-| `scripts/taira_release.py`, `taira_release_check.py`, `taira_cargo_cache.py`, `taira_cargo_artifact.py`, `taira_source_observation.py`, `check_taira_initial_executor.py` | 7,401 | `cargo xtask release`; nextest `release-gate` (CI switched in P0) | P8 |
+| `scripts/taira_release.py`, `taira_release_check.py`, `taira_cargo_cache.py`, `taira_cargo_artifact.py`, `taira_source_observation.py`, `check_taira_initial_executor.py` | 7,401 | `cargo xtask release`; optional nextest diagnostics (CI switched in P0) | P8 |
 | `scripts/taira_release_transfer.py`, `taira_source_capture.py`, `taira_retained_release.py`, `taira_retained_source.py`, `taira_seed_observation.py`, `taira_disk_capacity.py`, `taira_nginx_logrotate.py` | 5,288 | Upload, GC, G0/G11, G1, logrotate | P8 |
 | `scripts/taira_validator_unit.py` (+ `include_str!` at `taira_public_reset_validator_units.rs:11-12`), `taira_constants.py`, `render_taira_edge_nginx_conf.py` | 209 + 64 + 1,143 | `render::{unit, edge}`, card | P8 |
 | Python tests for all of the above | 28,462 | Rust tests in `iroha_deploy` | P8 |
@@ -1500,7 +1503,7 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
 - `crates/iroha_deploy` with crate docs, the network and dataspace definition parsers, and their tests.
 - The finality verifier is copied into `iroha_deploy::verify::finality` and generalized: N = 3f+1, 2f+1 attestations, checkpoint. The frozen `iroha_cli` originals stay until P8.
 - Shared genesis fixtures are not moved in P0: they are rebuilt from the P1 profiles, so they move to profile fixtures in P2 (§12 porting list).
-- A nextest `release-gate` profile. `workspace_release.yml` and its test are re-pointed.
+- An optional nextest diagnostic profile. `workspace_release.yml` and its source guard keep diagnostics independent of release builds.
 - `status.md:59` is fixed.
 - Exit: CI runs no Python census.
 
@@ -1554,9 +1557,8 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
 
 **P4. Signed CI release pipeline** (~1.0k).
 - `.github/workflows/release.yml`, containing:
-  - the release-gate job;
-  - the engine self-test;
-  - the upgrade and container jobs;
+  - authenticated source and build checks;
+  - optional engine self-test, upgrade and container diagnostic jobs that do not gate signing or deployment;
   - controller builds, including musubi;
   - the Inrou asset job;
   - CI-key signing.
