@@ -264,12 +264,12 @@ FAMILIES = {
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_subscription_mutation": "68947e4ed41a19abd272c78f0aa36e7155064773b2d22242651dcfaec36803ee",
-    "catalog_route_policy": "4d08cd3741b5fba7bb81c791a1188229a0f3db6a1e6ee9e77a2a358201e0882f",
+    "catalog_route_policy": "3c5d167f1473d8c6b72fd10bd5080253025ca44fcd6bcbffcd1b47733655048b",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 569
-ROUTE_TUPLE_SHA256 = "3fa65bc2f86f7f68fe9228727323fa141b1457dc8f5a060aae5e6881401b0a83"
+ROUTE_ROW_COUNT = 576
+ROUTE_TUPLE_SHA256 = "b0a3005f7cfd2e945d9dd10936121da92a2e02c32b06e45b9784c196f57a4382"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -842,6 +842,7 @@ def _route_semantics(policy: str, arguments: list[str]) -> tuple[str, str, str]:
                 "canonical_signed": "handler:CanonicalSignedBody",
                 "protocol_handshake": "handler:ProtocolHandshake",
                 "operator_credential": "handler:OperatorCredentialExchange",
+                "private_root_owner": "handler:PrivateRootOwnerToken",
                 "onboarding": "onboarding",
             }[stem]
         except KeyError as error:
@@ -1226,6 +1227,37 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 self.assertIn(old, self.source)
                 with self.assertRaises(GuardError):
                     validate_source(self.source.replace(old, new, 1))
+
+    def test_universal_kagemusha_mounts_preserve_signed_wallet_read_policy(self) -> None:
+        """Reject feature gating, removal, or weakened authentication on required routes."""
+        rows = [row for row in _route_table_rows(self.source)
+                if row[2].startswith("route_catalog::kagemusha::")]
+        self.assertEqual([row[2].rsplit("::", 1)[1] for row in rows], [
+            "READINESS", "TOP_UP", "REDEEM", "OPERATION", "AUTHORITY_STATE",
+            "RESOURCE_NAMES_STATE", "AUTHORITY_ORIGINALS", "ORDINARY_WALLET_CURRENT",
+        ])
+        self.assertTrue(all(row[0] == "always" for row in rows))
+        self.assertEqual(rows[-1], (
+            "always", "POST", "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT",
+            "ordinary_wallet_current::handler",
+            "max(iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1)",
+            "handler:CanonicalAccountSignature",
+        ))
+        mount = "ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);"
+        for old, new in (
+            ("    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)",
+             '    #[cfg(feature = "app_api")]\n    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)'),
+            (mount, ""),
+            (mount, mount.replace("limited_canonical_signature_post", "limited_post", 1)),
+            (mount, mount.replace("ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1", "NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1", 1)),
+            (mount, mount.replace("ORDINARY_WALLET_CURRENT =>", "AUTHORITY_ORIGINALS =>", 1)),
+        ):
+            with self.subTest(target=old, changed=new):
+                self.assertEqual(self.source.count(old), 1)
+                changed = self.source.replace(old, new, 1)
+                self.assertNotEqual(changed, self.source)
+                with self.assertRaises(GuardError):
+                    validate_source(changed)
 
     def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
         mutations = (

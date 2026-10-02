@@ -54,6 +54,21 @@ struct KagemushaRedemptionIssuer {
     minimum_xor_balance: Quantity,
 }
 
+impl Default for KagemushaCommandRuntime {
+    fn default() -> Self {
+        use iroha_config::parameters::defaults::torii::kagemusha_v1_commands as defaults;
+        Self::from_config(actual::ToriiKagemushaV1Commands {
+            redemption_issuer: None,
+            operation_registry_max_entries: NonZeroUsize::new(
+                defaults::OPERATION_REGISTRY_MAX_ENTRIES,
+            )
+            .expect("positive registry capacity"),
+            operation_registry_max_bytes: NonZeroUsize::new(defaults::OPERATION_REGISTRY_MAX_BYTES)
+                .expect("positive registry capacity"),
+        })
+    }
+}
+
 impl KagemushaCommandRuntime {
     pub(crate) fn from_config(config: actual::ToriiKagemushaV1Commands) -> Self {
         Self {
@@ -916,13 +931,7 @@ fn validate_live_asset_scale(
 }
 
 fn require_command_runtime(app: &AppState) -> Result<Arc<KagemushaCommandRuntime>, Error> {
-    app.kagemusha_commands
-        .clone()
-        .ok_or_else(|| Error::AppServiceUnavailable {
-            code: "kagemusha_service_unavailable",
-            message: "KAGEMUSHA V1 operation admission is not configured on this Torii node."
-                .to_owned(),
-        })
+    Ok(Arc::clone(&app.kagemusha_commands))
 }
 
 fn ensure_kagemusha_command_authority_ready(
@@ -1115,6 +1124,24 @@ mod tests {
     use iroha_data_model::{Level, block::BlockHeader, isi::Log, transaction::FeePaymentIntent};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
+    #[test]
+    fn default_command_runtime_is_bounded_without_inventing_redemption_authority() {
+        use iroha_config::parameters::defaults::torii::kagemusha_v1_commands as defaults;
+        let runtime = KagemushaCommandRuntime::default();
+        assert!(runtime.redemption_issuer.is_none());
+        let registry = runtime.registry.lock();
+        assert_eq!(
+            registry.max_entries.get(),
+            defaults::OPERATION_REGISTRY_MAX_ENTRIES
+        );
+        assert_eq!(
+            registry.max_accounted_bytes.get(),
+            defaults::OPERATION_REGISTRY_MAX_BYTES
+        );
+        assert!(registry.entries.is_empty());
+        assert!(registry.has_capacity_for_new_operation());
+    }
+
     #[tokio::test]
     async fn missing_monetary_asset_releases_reservations_without_pending_inputs() {
         use crate::utils::extractors::tests::{
@@ -1162,7 +1189,7 @@ mod tests {
                 app.state.chain_id_ref().clone(),
                 top_up.network_id,
             ));
-            app.kagemusha_commands = Some(runtime.clone());
+            app.kagemusha_commands = runtime.clone();
         }
         let headers = |operation_id: [u8; 32]| {
             let mut headers = HeaderMap::new();

@@ -213,13 +213,15 @@ pub(super) fn reconstruct_ordinary_credential_union_v1<F: KagemushaPoseidonField
         specimen.subject.security_level =
             KagemushaAppKeySecurityLevelV1::TrustedExecutionEnvironment;
     }
+    // Only codec metadata is borrowed from these inert specimens. The actual assigned
+    // selectors, Ed digest and issuer signature supply every semantic byte and the CRC.
     let none_layout = if full {
-        none.original_preimage_layout()?
+        none.original_preimage_layout_for_specimen()?
     } else {
         none.ed_only_preimage_layout()?
     };
     let some_layout = if full {
-        some.original_preimage_layout()?
+        some.original_preimage_layout_for_specimen()?
     } else {
         some.ed_only_preimage_layout()?
     };
@@ -246,25 +248,19 @@ mod tests {
     fn shape<F: KagemushaPoseidonFieldV1>(
         apple: bool,
         pi: bool,
-    ) -> (Vec<usize>, Vec<usize>, usize, usize) {
-        let f = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+    ) -> (Vec<usize>, Vec<usize>, usize, usize, usize) {
+        let f = if pi {
+            assert!(!apple, "Integrity belongs to the Android fixture");
+            KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity()
+        } else {
+            KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple)
+        };
         let token = f.verify(300).unwrap();
-        let mut raw = KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(
+        let raw = KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(
             token.app_credential().original(),
         )
         .unwrap();
-        // Structural option-branch specimen only; a forged option cannot pass the issuer equation.
-        raw.subject.play_integrity = if pi {
-            Some(KagemushaPlayIntegrityBindingV1 {
-                request_hash: [3; 32],
-                evidence_digest: [4; 32],
-                policy_digest: [5; 32],
-                verified_at_ms: 10,
-                refresh_before_ms: 100,
-            })
-        } else {
-            None
-        };
+        assert_eq!(raw.subject.play_integrity.is_some(), pi);
         let mut builder = BaseCircuitBuilder::<F>::new(false)
             .use_k(17)
             .use_lookup_bits(16)
@@ -290,14 +286,50 @@ mod tests {
             .unwrap();
         builder.calculate_params(Some(9));
         let params = builder.config_params;
-        let (blocks, rows, _) = jobs.capacity_profile().unwrap();
+        let (job_count, compression_blocks, required_rows) = jobs.capacity_profile().unwrap();
         (
             params.num_advice_per_phase,
             params.num_lookup_advice_per_phase,
-            blocks,
-            rows,
+            job_count,
+            compression_blocks,
+            required_rows,
         )
     }
+    #[test]
+    fn specimen_layout_does_not_bypass_strict_actual_credential_assignment() {
+        for apple in [false, true] {
+            let f = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+            let token = f.verify(300).unwrap();
+            let raw = KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(
+                token.app_credential().original(),
+            )
+            .unwrap();
+            let mut specimen = raw.clone();
+            specimen.subject.play_integrity = Some(KagemushaPlayIntegrityBindingV1 {
+                request_hash: [3; 32],
+                evidence_digest: [4; 32],
+                policy_digest: [5; 32],
+                verified_at_ms: 10,
+                refresh_before_ms: 100,
+            });
+            specimen.original_preimage_layout_for_specimen().unwrap();
+            assert!(specimen.canonical_bytes().is_err());
+            let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+                .use_k(17)
+                .use_lookup_bits(16);
+            assert_eq!(
+                assign_ordinary_credential_union_v1(&mut builder, &specimen)
+                    .err()
+                    .unwrap(),
+                "ordinary issuer admission original differs"
+            );
+            assert_eq!(
+                raw.canonical_bytes().unwrap(),
+                token.app_credential().original()
+            );
+        }
+    }
+
     #[test]
     fn android_apple_and_integrity_option_frames_share_one_fixed_graph() {
         for apple in [false, true] {

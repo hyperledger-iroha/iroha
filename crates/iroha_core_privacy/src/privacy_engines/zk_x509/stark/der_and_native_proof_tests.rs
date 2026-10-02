@@ -845,18 +845,14 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
 }
 #[test]
 fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
-    let mut sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
-    for segment in &mut sha.segments {
-        for stream in &mut segment.rfc_stream_products {
-            stream.fill(F::ONE);
-        }
-    }
+    let sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
     let claims = ZkX509MainTerminalClaimsV1 {
         rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
         sha,
     };
     let aggregate = b"X5S1aggregate";
-    let encoded = encode_zk_x509_main_proof_envelope_v1(claims, aggregate).expect("canonical X5M1");
+    let encoded = encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], aggregate)
+        .expect("canonical X5M1");
     assert_eq!(&encoded[..4], b"X5M1");
     assert_eq!(
         encoded.len(),
@@ -865,9 +861,33 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
     let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).expect("decode canonical X5M1");
     assert_eq!(decoded.claims, claims);
     assert_eq!(decoded.aggregate_proof, aggregate);
+    assert_eq!(decoded.key_openings, [E::ZERO; 31]);
+    let nonzero = core::array::from_fn(|i| E::canonical([i as u64 + 1, 2, 3, 4]).unwrap());
+    let nonzero_wire = encode_zk_x509_main_proof_envelope_v1(claims, &nonzero, aggregate).unwrap();
     assert_eq!(
-        encode_zk_x509_main_proof_envelope_v1(decoded.claims, decoded.aggregate_proof)
-            .expect("canonical re-encode"),
+        decode_zk_x509_main_proof_envelope_v1(&nonzero_wire)
+            .unwrap()
+            .key_openings,
+        nonzero
+    );
+    for index in 0..31 {
+        for limb in 0..4 {
+            let mut bad = nonzero_wire.clone();
+            let start = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index + 8 * limb;
+            bad[start..start + 8].copy_from_slice(&0xffff_ffff_0000_0001_u64.to_be_bytes());
+            assert!(matches!(
+                decode_zk_x509_main_proof_envelope_v1(&bad),
+                Err(ZkX509StarkErrorV1::NonCanonicalField)
+            ));
+        }
+    }
+    assert_eq!(
+        encode_zk_x509_main_proof_envelope_v1(
+            decoded.claims,
+            &decoded.key_openings,
+            decoded.aggregate_proof
+        )
+        .expect("canonical re-encode"),
         encoded
     );
     assert!(
@@ -879,7 +899,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         .expect("MAIN partition accommodates its fixed envelope");
     let mut exact_aggregate = vec![0_u8; exact_aggregate_len];
     exact_aggregate[..PROOF_MAGIC_V1.len()].copy_from_slice(&PROOF_MAGIC_V1);
-    let exact_cap = encode_zk_x509_main_proof_envelope_v1(claims, &exact_aggregate)
+    let exact_cap = encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], &exact_aggregate)
         .expect("exact MAIN aggregate partition boundary");
     assert_eq!(exact_cap.len(), ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1);
     assert!(
@@ -889,7 +909,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
     drop(exact_cap);
     exact_aggregate.push(0);
     assert!(matches!(
-        encode_zk_x509_main_proof_envelope_v1(claims, &exact_aggregate),
+        encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], &exact_aggregate),
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
     let oversized_wire = vec![0_u8; ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 + 1];
@@ -933,165 +953,55 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
     }
     // Private DER/P-256 endpoint tampering is checked through the closed
     // masked-polynomial link tests; it has no scalar transcript slot.
-    // X5R1 encodes two aggregate output products first. Keep its
-    // aggregate consumer relation consistent while corrupting each of the
-    // four RFC roles consumed by SHA. The nested frame must remain valid;
-    // only the cross-adapter MAIN equality may reject it.
-    const RFC_AGGREGATE_RECORDS_V1: usize = 2 * ZK_X509_DER_STARK_BUS_LANES_V1;
-    const RFC_AGGREGATE_CONSUMER_RELATION_V1: usize = 1;
-    const RFC_OUTPUT_ENDPOINTS_V1: usize = 2;
-    const RFC_CONSUMER_ENDPOINT_V1: usize = 1;
-    for role in MAIN_RFC_SHA_CONSUMER_ROLES_V1 {
-        let role_index = role as usize - 1;
-        for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
+    // All 80 removed private endpoints are tested through the 20 original-
+    // polynomial equations and complete OOD recomposition, including every
+    // source coordinate and alpha. No retired scalar layout is accepted.
+    for (offset, removed_bytes) in [
+        (MAIN_PROOF_SHA_OFFSET_V1, 16 * 16),
+        (MAIN_PROOF_KEY_OPENINGS_OFFSET_V1, 64 * 16),
+    ] {
+        let mut retired = encoded.clone();
+        retired.splice(offset..offset, vec![0_u8; removed_bytes]);
+        assert!(decode_zk_x509_main_proof_envelope_v1(&retired).is_err());
+    }
+    // The four governed-root and 208 compact-CA fields remain independently
+    // canonical and transcript-bound. Their arithmetic joins are checked by AIR.
+    for (frame_offset, records) in [
+        (MAIN_PROOF_RFC_OFFSET_V1, 4),
+        (MAIN_PROOF_SHA_OFFSET_V1, 208),
+    ] {
+        for record in 0..records {
             let mut changed = encoded.clone();
-            let aggregate_record =
-                RFC_AGGREGATE_CONSUMER_RELATION_V1 * ZK_X509_DER_STARK_BUS_LANES_V1 + lane;
-            let role_consumer_record = RFC_AGGREGATE_RECORDS_V1
-                + role_index * RFC_OUTPUT_ENDPOINTS_V1 * ZK_X509_DER_STARK_BUS_LANES_V1
-                + RFC_CONSUMER_ENDPOINT_V1 * ZK_X509_DER_STARK_BUS_LANES_V1
-                + lane;
-            overwrite_main_terminal_record_value_v1(
-                &mut changed,
-                MAIN_PROOF_RFC_OFFSET_V1,
-                aggregate_record,
-                F(2),
-            );
-            overwrite_main_terminal_record_value_v1(
-                &mut changed,
-                MAIN_PROOF_RFC_OFFSET_V1,
-                role_consumer_record,
-                F(2),
-            );
-            let rfc_end = MAIN_PROOF_RFC_OFFSET_V1 + ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1;
-            let changed_rfc = ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(
-                &changed[MAIN_PROOF_RFC_OFFSET_V1..rfc_end],
-            )
-            .expect("internally consistent changed X5R1");
-            let mut changed_claims = claims;
-            changed_claims.rfc5280 = changed_rfc;
-            assert!(
-                matches!(
-                    encode_zk_x509_main_proof_envelope_v1(changed_claims, aggregate),
-                    Err(ZkX509StarkErrorV1::InternalInvariant)
-                ),
-                "RFC role {role:?} lane {lane} escaped MAIN encoding"
-            );
-            let mut transcript =
-                new_transcript_v1(&test_stark_digest_v1(0x91)).expect("MAIN transcript fixture");
-            let transcript_before = transcript;
-            assert!(
-                matches!(
-                    absorb_zk_x509_main_terminal_claims_v1(&mut transcript, changed_claims,),
-                    Err(ZkX509StarkErrorV1::InvalidStatement)
-                ),
-                "RFC role {role:?} lane {lane} escaped pre-alpha validation"
+            overwrite_main_terminal_record_value_v1(&mut changed, frame_offset, record, F(2));
+            let changed_claims = decode_zk_x509_main_proof_envelope_v1(&changed)
+                .unwrap()
+                .claims;
+            assert_ne!(
+                terminal_challenge(changed_claims),
+                canonical_terminal_challenge
             );
             assert_eq!(
-                transcript, transcript_before,
-                "failed RFC/SHA equality must not mutate the transcript"
-            );
-            assert!(
-                matches!(
-                    decode_zk_x509_main_proof_envelope_v1(&changed),
-                    Err(ZkX509StarkErrorV1::MalformedProof)
-                ),
-                "RFC role {role:?} lane {lane} escaped MAIN decoding"
+                encode_zk_x509_main_proof_envelope_v1(changed_claims, &[E::ZERO; 31], aggregate)
+                    .unwrap(),
+                changed
             );
         }
     }
-    // X5Q1 orders two call-bus products followed by four RFC streams for
-    // each of four physical segments. Exercise every one of those 64
-    // stream terminals while preserving a canonical standalone X5Q1.
-    let sha_streams = claims.sha.segments[0].rfc_stream_products.len();
-    let sha_lanes = claims.sha.segments[0].rfc_stream_products[0].len();
-    let sha_records_per_segment = (2 + sha_streams) * sha_lanes;
-    for segment in 0..claims.sha.segments.len() {
-        for stream in 0..sha_streams {
-            for lane in 0..sha_lanes {
-                let mut changed = encoded.clone();
-                let record = segment * sha_records_per_segment + (2 + stream) * sha_lanes + lane;
-                overwrite_main_terminal_record_value_v1(
-                    &mut changed,
-                    MAIN_PROOF_SHA_OFFSET_V1,
-                    record,
-                    F(2),
-                );
-                let sha_end =
-                    MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
-                let changed_sha = ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(
-                    &changed[MAIN_PROOF_SHA_OFFSET_V1..sha_end],
-                )
-                .expect("canonical changed X5Q1");
-                let mut changed_claims = claims;
-                changed_claims.sha = changed_sha;
-                assert!(
-                    matches!(
-                        encode_zk_x509_main_proof_envelope_v1(changed_claims, aggregate),
-                        Err(ZkX509StarkErrorV1::InternalInvariant)
-                    ),
-                    "SHA segment {segment} stream {stream} lane {lane} escaped MAIN encoding"
-                );
-                let mut transcript = new_transcript_v1(&test_stark_digest_v1(0x91))
-                    .expect("MAIN transcript fixture");
-                let transcript_before = transcript;
-                assert!(
-                    matches!(
-                        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, changed_claims,),
-                        Err(ZkX509StarkErrorV1::InvalidStatement)
-                    ),
-                    "SHA segment {segment} stream {stream} lane {lane} escaped pre-alpha validation"
-                );
-                assert_eq!(
-                    transcript, transcript_before,
-                    "failed RFC/SHA equality must not mutate the transcript"
-                );
-                assert!(
-                    matches!(
-                        decode_zk_x509_main_proof_envelope_v1(&changed),
-                        Err(ZkX509StarkErrorV1::MalformedProof)
-                    ),
-                    "SHA segment {segment} stream {stream} lane {lane} escaped MAIN decoding"
-                );
-            }
-        }
-    }
-    // Omitting a complete stream contribution by replacing its four
-    // terminals with zero remains a canonical X5Q1 frame, but cannot
-    // satisfy the RFC union equality.
-    let mut omitted_stream = encoded.clone();
-    for lane in 0..sha_lanes {
-        overwrite_main_terminal_record_value_v1(
-            &mut omitted_stream,
-            MAIN_PROOF_SHA_OFFSET_V1,
-            2 * sha_lanes + lane,
-            F::ZERO,
+    // Moving the complete first compact-CA call record set still fails typed
+    // canonical decoding before any arithmetic check.
+    let mut swapped_segments = encoded.clone();
+    let sha_records_start = MAIN_PROOF_SHA_OFFSET_V1 + TERMINAL_TEST_HEADER_BYTES_V1;
+    let call_record_bytes = 16 * TERMINAL_TEST_RECORD_BYTES_V1;
+    for offset in 0..call_record_bytes {
+        swapped_segments.swap(
+            sha_records_start + offset,
+            sha_records_start + call_record_bytes + offset,
         );
     }
     let sha_end = MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
-    ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(
-        &omitted_stream[MAIN_PROOF_SHA_OFFSET_V1..sha_end],
-    )
-    .expect("zeroed stream is a canonical standalone X5Q1");
-    assert!(matches!(
-        decode_zk_x509_main_proof_envelope_v1(&omitted_stream),
-        Err(ZkX509StarkErrorV1::MalformedProof)
-    ));
-    // Segment records are address-ordered. Moving a complete segment
-    // block, including its addresses, must fail the nested canonical
-    // decoder before MAIN can consider product equality.
-    let mut swapped_segments = encoded.clone();
-    let sha_segment_record_bytes = sha_records_per_segment * TERMINAL_TEST_RECORD_BYTES_V1;
-    let sha_records_start = MAIN_PROOF_SHA_OFFSET_V1 + TERMINAL_TEST_HEADER_BYTES_V1;
-    for offset in 0..sha_segment_record_bytes {
-        swapped_segments.swap(
-            sha_records_start + offset,
-            sha_records_start + sha_segment_record_bytes + offset,
-        );
-    }
     assert!(
         ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(
-            &swapped_segments[MAIN_PROOF_SHA_OFFSET_V1..sha_end],
+            &swapped_segments[MAIN_PROOF_SHA_OFFSET_V1..sha_end]
         )
         .is_err()
     );
@@ -1100,7 +1010,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
     overwrite_main_terminal_record_value_v1(
         &mut noncanonical_sha,
         MAIN_PROOF_SHA_OFFSET_V1,
-        2 * sha_lanes,
+        0,
         F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1),
     );
     assert!(
@@ -1170,7 +1080,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         decode_zk_x509_main_proof_envelope_v1(&legacy_sidecar_wire).is_err(),
         "legacy X5F1 sidecar wire accepted"
     );
-    assert!(encode_zk_x509_main_proof_envelope_v1(claims, b"X5F1").is_err());
+    assert!(encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], b"X5F1").is_err());
 }
 #[test]
 fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
@@ -1696,5 +1606,169 @@ fn der_retained_prover_resource_plan_and_production_source_exclude_trace_scratch
             builder.contains(required),
             "production DER builder must contain `{required}`"
         );
+    }
+}
+#[test]
+fn main_key_join_opening_codec_is_canonical_exact_and_roundtrips() {
+    let claims = main_log19_terminal_claims_fixture_v1();
+    let values = core::array::from_fn(|i| E::canonical([i as u64 + 1, 2, 3, 4]).unwrap());
+    let wire =
+        encode_zk_x509_main_proof_envelope_v1(claims, &values, b"X5S1public-fixture").unwrap();
+    let decoded = decode_zk_x509_main_proof_envelope_v1(&wire).unwrap();
+    assert_eq!(decoded.key_openings, values);
+    assert_eq!(
+        encode_zk_x509_main_proof_envelope_v1(
+            decoded.claims,
+            &decoded.key_openings,
+            decoded.aggregate_proof
+        )
+        .unwrap(),
+        wire
+    );
+    for i in 0..31 {
+        for j in 0..4 {
+            let mut changed = wire.clone();
+            let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * i + 8 * j;
+            changed[offset..offset + 8].copy_from_slice(
+                &crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_be_bytes(),
+            );
+            assert!(decode_zk_x509_main_proof_envelope_v1(&changed).is_err());
+        }
+    }
+    for cut in 0..=31 * 32 {
+        let mut changed = wire.clone();
+        changed.drain(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1..MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + cut);
+        assert_eq!(
+            decode_zk_x509_main_proof_envelope_v1(&changed).is_ok(),
+            cut == 0
+        );
+    }
+    let mut trailing = wire;
+    trailing.push(0);
+    assert!(decode_zk_x509_main_proof_envelope_v1(&trailing).is_err());
+}
+
+#[test]
+fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
+    let claims = main_log19_terminal_claims_fixture_v1();
+    let values = core::array::from_fn(|index| {
+        E::canonical(core::array::from_fn(|limb| (4 * index + limb + 1) as u64)).unwrap()
+    });
+    let aggregate = b"X5S1ordered-opening-fixture";
+    let encoded = encode_zk_x509_main_proof_envelope_v1(claims, &values, aggregate).unwrap();
+    assert_eq!(
+        MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 - MAIN_PROOF_KEY_OPENINGS_OFFSET_V1,
+        31 * 32
+    );
+    for (index, value) in values.iter().enumerate() {
+        for (limb, coefficient) in value.coefficients().iter().enumerate() {
+            let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index + 8 * limb;
+            assert_eq!(&encoded[offset..offset + 8], &coefficient.0.to_be_bytes());
+        }
+    }
+    assert_eq!(
+        decode_zk_x509_main_proof_envelope_v1(&encoded)
+            .unwrap()
+            .key_openings,
+        values
+    );
+    for index in 0..30 {
+        let mut swapped = encoded.clone();
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        swapped[offset..offset + 64].rotate_left(32);
+        let mut expected = values;
+        expected.swap(index, index + 1);
+        let decoded = decode_zk_x509_main_proof_envelope_v1(&swapped).unwrap();
+        assert_eq!(decoded.key_openings, expected);
+        assert_ne!(decoded.key_openings, values);
+        assert_eq!(
+            encode_zk_x509_main_proof_envelope_v1(
+                decoded.claims,
+                &decoded.key_openings,
+                decoded.aggregate_proof
+            )
+            .unwrap(),
+            swapped
+        );
+    }
+    for index in 0..31 {
+        let offset = MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + 32 * index;
+        let mut missing = encoded.clone();
+        missing.drain(offset..offset + 32);
+        assert!(decode_zk_x509_main_proof_envelope_v1(&missing).is_err());
+        let mut duplicate = encoded.clone();
+        duplicate.splice(offset..offset, encoded[offset..offset + 32].iter().copied());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&duplicate).is_err());
+    }
+}
+
+#[test]
+fn main_public_partition_binds_each_governed_lane_and_exact_current_counts() {
+    assert_eq!(ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, 76);
+    assert_eq!(ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, 3_340);
+    assert_eq!(MAIN_KEY_OPENING_COUNT_V1, 31);
+    assert_eq!(
+        MAIN_KEY_OPENING_COUNT_V1,
+        main_aggregate::main_key_joins::OPENINGS_V1
+    );
+    assert_eq!(MAIN_PROOF_RFC_OFFSET_V1, 8);
+    assert_eq!(MAIN_PROOF_SHA_OFFSET_V1, 84);
+    assert_eq!(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1, 3_424);
+    assert_eq!(MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1, 4_416);
+    assert_eq!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1, 4_420);
+    let claims = ZkX509MainTerminalClaimsV1 {
+        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
+        sha: ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1(),
+    };
+    let aggregate = b"X5S1public partition";
+    let mut encoded =
+        encode_zk_x509_main_proof_envelope_v1(claims, &[E::ZERO; 31], aggregate).unwrap();
+    let products = [F(2), F(3), F(5), F(7)];
+    for (lane, product) in products.into_iter().enumerate() {
+        overwrite_main_terminal_record_value_v1(
+            &mut encoded,
+            MAIN_PROOF_RFC_OFFSET_V1,
+            lane,
+            product,
+        );
+    }
+    let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).unwrap();
+    assert_eq!(
+        decoded.claims.rfc5280.governed_trust_anchor_products_v1(),
+        products
+    );
+    assert_eq!(decoded.claims.sha, claims.sha);
+    assert_eq!(decoded.key_openings, [E::ZERO; 31]);
+    assert_eq!(decoded.aggregate_proof, aggregate);
+    assert_eq!(
+        encode_zk_x509_main_proof_envelope_v1(
+            decoded.claims,
+            &decoded.key_openings,
+            decoded.aggregate_proof
+        )
+        .unwrap(),
+        encoded
+    );
+    for (frame, counts) in [
+        (MAIN_PROOF_RFC_OFFSET_V1, [0_u16, 3, 5, 80, u16::MAX]),
+        (MAIN_PROOF_SHA_OFFSET_V1, [0_u16, 207, 209, 304, u16::MAX]),
+    ] {
+        for count in counts {
+            let mut wrong = encoded.clone();
+            wrong[frame + 10..frame + 12].copy_from_slice(&count.to_be_bytes());
+            assert!(
+                decode_zk_x509_main_proof_envelope_v1(&wrong).is_err(),
+                "frame {frame}, count {count}"
+            );
+        }
+    }
+    for lane in 0..4 {
+        let mut reordered = encoded.clone();
+        let record = MAIN_PROOF_RFC_OFFSET_V1
+            + TERMINAL_TEST_HEADER_BYTES_V1
+            + lane * TERMINAL_TEST_RECORD_BYTES_V1;
+        let wrong_lane = u16::try_from((lane + 1) % 4).expect("four governed lanes fit u16");
+        reordered[record + 4..record + 6].copy_from_slice(&wrong_lane.to_be_bytes());
+        assert!(decode_zk_x509_main_proof_envelope_v1(&reordered).is_err());
     }
 }

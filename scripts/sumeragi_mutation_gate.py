@@ -517,9 +517,9 @@ CORE_MUTATIONS = [
     m("HC37", "fee selector: turn canonical account or NPoS currency read refusal into absence",
       ["block::original_canonical_account_refusal_does_not_fall_through_to_alias_absence",
        "executor::tests::original_network_xor_pin_refusal_defers_quote_and_retries_same_parameter"]),
-    m("HC34", "SNS maintenance: omit retained future Time obligations from the original mandatory corpus",
-      ['smartcontracts::isi::sns::tests::sns_configuration_keeps_consumed_governance_capacity_until_the_original_time_sweep',
-       'state::fastpq_governance_source::runtime_tests::sns_restore_admits_original_current_and_undo_obligations_without_erasing_refusal']),
+    m("HC34", "native maintenance: omit applied native transcripts from dedicated pool accounting",
+      ['fastpq::source_reservation::admission::tests::native_authorization_has_no_entry_until_an_applied_transcript_and_drops_atomically',
+       'fastpq::source_reservation::admission::tests::native_pool_overflow_cannot_borrow_ordinary_or_governance_reservations']),
 
 
     m("HC38", "routing: publish an original SNS read refusal as a completed route error",

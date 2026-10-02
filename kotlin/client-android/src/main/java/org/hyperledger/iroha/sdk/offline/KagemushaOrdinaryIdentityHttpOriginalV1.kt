@@ -23,7 +23,7 @@ class KagemushaOrdinaryIdentityHttpOriginalV1 private constructor(
         fun preparation(fields: List<ByteArray>, guard: () -> Unit): KagemushaOrdinaryIdentityHttpOriginalV1 {
             guard()
             return KagemushaOrdinaryIdentityHttpOriginalV1(fields[7].toString(Charsets.US_ASCII),
-                "/v1/offline/enrollment/ordinary/prepare", KagemushaOrdinaryIdentityHttpCodecV1.preparationBody(fields), guard)
+                "/v1/kagemusha/enrollment/ordinary/prepare", KagemushaOrdinaryIdentityHttpCodecV1.preparationBody(fields), guard)
                 .also { guard() }
         }
         fun rawAttestation(signedC: ByteArray, point: ByteArray, raw: ByteArray,
@@ -32,18 +32,18 @@ class KagemushaOrdinaryIdentityHttpOriginalV1 private constructor(
             val c = KagemushaOrdinaryAppEnrollmentPreparationV1.parseOriginal(signedC)
             return KagemushaOrdinaryIdentityHttpOriginalV1(
                 KagemushaOrdinaryIdentityHttpCodecV1.rawAttestationRequestId(c.attestationChallenge()),
-                "/v1/offline/enrollment/ordinary/raw-attestation",
+                "/v1/kagemusha/enrollment/ordinary/raw-attestation",
                 KagemushaOrdinaryIdentityHttpCodecV1.rawAttestationBody(signedC, point, raw), guard).also { guard() }
         }
         fun certificate(attempt: ByteArray, body: ByteArray, guard: () -> Unit): KagemushaOrdinaryIdentityHttpOriginalV1 {
             guard()
             return KagemushaOrdinaryIdentityHttpOriginalV1(KagemushaOrdinaryIdentityHttpCodecV1.certificateRequestId(attempt),
-                "/v1/offline/enrollment/ordinary/certificate", body, guard).also { guard() }
+                "/v1/kagemusha/enrollment/ordinary/certificate", body, guard).also { guard() }
         }
         fun retail(attempt: ByteArray, kind: String, body: ByteArray, guard: () -> Unit): KagemushaOrdinaryIdentityHttpOriginalV1 {
             guard()
             return KagemushaOrdinaryIdentityHttpOriginalV1(KagemushaOrdinaryIdentityHttpCodecV1.retailRequestId(attempt, kind),
-                "/v1/offline/enrollment/ordinary/$kind", body, guard).also { guard() }
+                "/v1/kagemusha/enrollment/ordinary/$kind", body, guard).also { guard() }
         }
     }
 }

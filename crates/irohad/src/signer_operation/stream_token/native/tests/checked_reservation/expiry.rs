@@ -9,16 +9,17 @@ use iroha_data_model::{
 use sorafs_manifest::signer::custody::{SignerCustodyErrorV1, SignerCustodyRecordV1};
 use std::time::Instant;
 
-const RECORD_LIFETIME_MS: u64 = 8_000;
+const POSITIVE_RECORD_LIFETIME_MS: u64 = 45_000;
+const EXPIRING_RECORD_LIFETIME_MS: u64 = 8_000;
 const ATTEMPT_BOUND: Duration = Duration::from_secs(35);
 
-fn enroll_short_record(fixture: &mut Fixture) -> u64 {
+fn enroll_record_with_lifetime(fixture: &mut Fixture, lifetime_ms: u64) -> u64 {
     let current =
         capture_stream_token_authority_v1(&fixture.state.view(), &fixture.policy.binding, [0; 32])
             .unwrap();
     let mut record: SignerCustodyRecordV1 = norito::decode_canonical(&fixture.record).unwrap();
     let issued = now_ms();
-    let expiry = issued.checked_add(RECORD_LIFETIME_MS).unwrap();
+    let expiry = issued.checked_add(lifetime_ms).unwrap();
     record.statement.anchor = current.anchor;
     record.statement.sequence = current.control.next_sequence;
     record.statement.predecessor_digest = current.control.predecessor_digest;
@@ -49,11 +50,18 @@ fn enroll_short_record(fixture: &mut Fixture) -> u64 {
     expiry
 }
 
-fn short_record_attempt(delay_before_provider: bool) {
+fn renewal_record_attempt(delay_before_provider: bool) {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
     let (_directory, _) = config(&fixture);
     let queue = queue();
-    let expiry = enroll_short_record(&mut fixture);
+    // Successful renewal covers enrollment and all three finalized native transactions.
+    // Only the negative case deliberately expires its genuine enrolled record mid-attempt.
+    let lifetime_ms = if delay_before_provider {
+        EXPIRING_RECORD_LIFETIME_MS
+    } else {
+        POSITIVE_RECORD_LIFETIME_MS
+    };
+    let expiry = enroll_record_with_lifetime(&mut fixture, lifetime_ms);
     // The existing native reservation controls use this same original ten-second timeout.
     // It is fixed before preparing any Check; no deadline or capability is modified.
     let source = source_with_timeout(&fixture, queue.clone(), Duration::from_secs(10));
@@ -138,7 +146,7 @@ fn short_record_attempt(delay_before_provider: bool) {
     let [
         (Action::Check(current), _, _),
         (Action::Reserve(reserved), _, _),
-        (Action::Check(before), before_commit, _),
+        (Action::Check(before), before_commit, before_finalized),
     ] = actions.as_slice()
     else {
         panic!("exactly Current, Reserve and BeforeProvider must successfully finalize");
@@ -165,7 +173,12 @@ fn short_record_attempt(delay_before_provider: bool) {
             ))
         ));
     } else {
-        assert!(returned_at < expiry);
+        assert!(
+            returned_at < expiry,
+            "renewal expired before return: lifetime_ms={lifetime_ms}, expiry={expiry}, \
+             before_commit={before_commit}, before_finalized={before_finalized}, \
+             returned_at={returned_at}, result={result:?}"
+        );
         assert_eq!(result.unwrap(), row.operation.reservation);
     }
     let retained = capture_stream_token_authority_v1(
@@ -185,10 +198,10 @@ fn short_record_attempt(delay_before_provider: bool) {
 
 #[test]
 fn signed_renewal_remains_usable_when_before_provider_finishes_before_expiry() {
-    short_record_attempt(false);
+    renewal_record_attempt(false);
 }
 
 #[test]
 fn expired_local_record_rejects_after_successful_finalized_before_provider() {
-    short_record_attempt(true);
+    renewal_record_attempt(true);
 }

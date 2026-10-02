@@ -919,7 +919,7 @@ mod tests {
                     &plan.links[..1],
                     &alphas,
                     MASK_DEGREE + 1,
-                    main_bounded_transform::MainBoundedTransformPolicyV1::for_test_v1(1 << 20, 8),
+                    main_bounded_transform::MainBoundedTransformPolicyV1::for_test_v1(1 << 19, 8),
                     if device { &mut actual } else { &mut expected },
                     |column| Ok(native_v1(&plan, column)),
                     |column| Ok(&masks[column.column]),

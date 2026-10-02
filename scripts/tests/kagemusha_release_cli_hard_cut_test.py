@@ -11,6 +11,8 @@ import re
 import unittest
 from pathlib import Path
 
+from zk_source_tokens import rust_tokens
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MAIN = ROOT / "crates/iroha_kagami/src/main.rs"
@@ -19,6 +21,39 @@ HELP = ROOT / "crates/iroha_kagami/CommandLineHelp.md"
 RELEASE_MODEL = (
     ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
 )
+
+
+def _artifact_role_identities_v1(model_source: str) -> list[tuple[str, int]]:
+    """Read the closed unit-variant enum, honoring Rust implicit discriminants."""
+    tokens = rust_tokens(model_source)
+    header = ("pub", "enum", "KagemushaArtifactRoleV1", "{")
+    starts = [index for index in range(len(tokens) - len(header) + 1)
+              if tokens[index:index + len(header)] == header]
+    if len(starts) != 1:
+        raise AssertionError("artifact role enum is missing or duplicated")
+    cursor = starts[0] + len(header)
+    result = []
+    next_identity = 0
+    while cursor < len(tokens) and tokens[cursor] != "}":
+        name = tokens[cursor]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name) is None:
+            raise AssertionError("artifact role is not a unit variant")
+        cursor += 1
+        identity = next_identity
+        if cursor < len(tokens) and tokens[cursor] == "=":
+            cursor += 1
+            if cursor >= len(tokens) or re.fullmatch(r"[0-9]+", tokens[cursor]) is None:
+                raise AssertionError("artifact role discriminant is not a decimal identity")
+            identity = int(tokens[cursor])
+            cursor += 1
+        if cursor >= len(tokens) or tokens[cursor] != ",":
+            raise AssertionError("artifact role declaration is malformed")
+        result.append((name, identity))
+        next_identity = identity + 1
+        cursor += 1
+    if cursor >= len(tokens):
+        raise AssertionError("artifact role enum is unterminated")
+    return result
 
 
 class KagemushaReleaseCliHardCutTests(unittest.TestCase):
@@ -171,6 +206,46 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         self.assertIsNotNone(all_match)
         assert all_match is not None
         self.assertEqual(len(re.findall(r"\bSelf::[A-Za-z0-9_]+", all_match.group(1))), 54)
+        roles = re.findall(r"\bSelf::([A-Za-z0-9_]+)", all_match.group(1))
+        self.assertEqual(len(set(roles)), 54)
+        self.assertEqual(roles[-4:], [
+            "OrdinaryAppGuardPkEq", "OrdinaryAppGuardVkEq",
+            "OrdinaryAppGuardPkEp", "OrdinaryAppGuardVkEp",
+        ])
+        identities = _artifact_role_identities_v1(model_source)
+        self.assertEqual([name for name, _ in identities], roles)
+        self.assertEqual([value for _, value in identities], list(range(54)))
+
+
+    def test_role_identity_parser_preserves_implicit_explicit_and_trivia_semantics(self) -> None:
+        source = "pub enum KagemushaArtifactRoleV1 { First, Second = 34, Third, }"
+        self.assertEqual(_artifact_role_identities_v1(source), [("First", 0), ("Second", 34), ("Third", 35)])
+        model = RELEASE_MODEL.read_text(encoding="utf-8")
+        identities = _artifact_role_identities_v1(model)
+        grown = model.replace("    ParamsEq,", "/* " + "\n" * 25_000 + " */\n    ParamsEq ,", 1)
+        self.assertGreater(len(grown), len(model) + 25_000)
+        self.assertEqual(_artifact_role_identities_v1(grown), identities)
+
+    def test_role_identity_guard_detects_implicit_explicit_order_and_name_changes(self) -> None:
+        source = RELEASE_MODEL.read_text(encoding="utf-8")
+        original = _artifact_role_identities_v1(source)
+        mutations = [
+            ("    ParamsEq,", "    ParamsEq = 1,"),
+            ("    InnerMintAuthorizationPkEq = 34,", "    InnerMintAuthorizationPkEq = 35,"),
+            ("    OrdinaryAppGuardVkEp = 53,", "    OrdinaryAppGuardVkEp = 54,"),
+            ("    OrdinaryAppGuardPkEq = 50,", "    OrdinaryAppGuardVkEq = 50,"),
+            ("    ParamsEq,", "    ParamsEp,"),
+        ]
+        for old, new in mutations:
+            with self.subTest(old=old, new=new):
+                self.assertIn(old, source)
+                changed = _artifact_role_identities_v1(source.replace(old, new, 1))
+                self.assertNotEqual(changed, original)
+                self.assertFalse([name for name, _ in changed] == [name for name, _ in original]
+                                 and [value for _, value in changed] == list(range(54)))
+        for invalid in ["First(u8),", "First = OTHER,", "First = -1,", "First = 0x1,", "First"]:
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                _artifact_role_identities_v1("pub enum KagemushaArtifactRoleV1 { " + invalid + " }")
 
     def test_success_requires_projection_artifacts_runtime_and_native_evidence(self) -> None:
         source = COMMAND.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
@@ -233,10 +308,12 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
             "expected_release_id",
             "expected_asset_identity_digest",
             "expected_asset_incarnation",
-            "expected_asset_scale",
+            "asset_scale",
             "expected_liability_pool_id",
         ):
             self.assertIn(pin, source)
+        self.assertIn('long = "expected-asset-scale"', source)
+        self.assertIn("asset_scale: pins.asset_scale", source)
         self.assertIn('"hardware_qualified", &false', source)
         self.assertIn('"monetary_admission", &false', source)
         self.assertIn('"runtime_loaded", &false', source)

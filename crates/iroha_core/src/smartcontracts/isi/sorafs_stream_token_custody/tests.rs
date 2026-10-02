@@ -214,10 +214,18 @@ fn committed_configuration_enrollment_and_history_use_exact_native_anchor() {
     assert!(approval.state.active_head.is_none());
     let bytes = attest(&f, 1_500);
     transact(&mut f.state, 1_500, |tx| {
-        instruction(tx, f.provider, Action::Enroll(bytes))
+        instruction(tx, f.provider, Action::Enroll(bytes.clone()))
             .execute(&f.authority, tx)
             .expect("full verified enrollment")
     });
+    let original = read_active(f.state.view().world(), f.provider)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.record.active_enrollment.as_ref(), Some(&bytes));
+    original
+        .record
+        .validate_active_enrollment(&original.state)
+        .unwrap();
     let enrolled = read_stream_token_custody_control_at_v1(&f.state.view(), &f.policy.binding, 2)
         .expect("enrolled")
         .expect("head");

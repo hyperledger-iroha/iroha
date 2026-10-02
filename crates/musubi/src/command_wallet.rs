@@ -219,7 +219,11 @@ pub(super) fn run_wallet(
             let balance = service.xor_balance().map_err(wallet_error)?;
             let _profile = ChainDiscriminantGuard::enter(balance.chain_discriminant);
             Ok(Success {
-                message: format!("{}\nBalance: {} XOR", balance.account_id, balance.amount),
+                message: format!(
+                    "{}\nBalance: {} XOR",
+                    balance.asset_id.account(),
+                    balance.amount
+                ),
                 data: balance.to_json().map_err(wallet_error)?,
             })
         }

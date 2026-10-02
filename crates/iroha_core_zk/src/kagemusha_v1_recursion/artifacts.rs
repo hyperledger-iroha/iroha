@@ -598,6 +598,21 @@ pub struct KagemushaAuthenticatedArtifactSetV1<R> {
 }
 
 impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> {
+    /// Bind exact installed release artifacts with the sole internally derived empty effect.
+    /// This public constructor accepts an already authenticated model release, never its pins.
+    /// # Errors
+    /// Rejects a substituted/invalid release inventory, resolver or canonical empty-effect binding.
+    pub fn new_canonical(
+        release: &KagemushaAuthenticatedReleaseV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactErrorV1> {
+        let empty = crate::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(
+            release.release_id(),
+        )
+        .map_err(|error| KagemushaArtifactErrorV1::InvalidRelease(error.to_string()))?;
+        Self::new(release, empty, resolver)
+    }
+
     /// Bind an untrusted resolver to one already threshold-authenticated release.
     ///
     /// This validates the one release-wide proof suite, all 50 role/length bindings, and the

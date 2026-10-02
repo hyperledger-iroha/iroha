@@ -1,4 +1,4 @@
-//! Account balances and exact, quoted transfers with durable submission evidence.
+//! Account balances and exact, quoted native operations with durable submission evidence.
 use crate::operation_journal::Journal;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -29,6 +29,19 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "operations_alias.rs"]
+mod bounded_alias;
+#[path = "operations_private_root.rs"]
+mod private_root;
+use bounded_alias::AliasFeeBounds;
+use iroha_data_model::private_dataspace::{
+    PrivateDataspaceAnchor, PrivateDataspaceAnchorState, PrivateDataspaceRegistration,
+};
+use private_root::BoundedTerms;
+pub use private_root::{
+    BoundedTransactionOptions, PrivateRootAnchorRequest, PrivateRootRegistrationRequest,
+};
+
 /// Canonical XOR asset definition used by Taira's native fee economy.
 pub const XOR_ASSET_DEFINITION: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 
@@ -39,7 +52,8 @@ pub enum OperationStatus {
     Prepared,
     /// An authenticated onboarding response requires current-state proof.
     ProofRequired,
-    /// The exact transaction and committed wire agree on global state-resolved application.
+    /// Exact committed wire agrees with the configured node's state-resolved application.
+    /// Independent parent anchoring additionally requires the attachment service's verified proof.
     Applied,
     /// The requested account or alias state already agrees with authenticated native evidence.
     AlreadyPresent,
@@ -119,12 +133,17 @@ pub enum NativeOperationKind {
     Transfer,
     /// Indivisible paid alias setup planned and verified by the SDK.
     AliasSetup,
+    /// Exact owner-bound compact private-root registration.
+    PrivateRootRegistration,
+    /// Exact next compact private-root certificate against retained parent cursor state.
+    PrivateRootAnchor,
 }
 
 /// Account-authorized shared native wallet operations.
 pub struct AccountService {
     config: Config,
     client: Client,
+    deadline: Option<std::time::Instant>,
 }
 impl AccountService {
     /// Bind a native client to one exact configured network, account and signing key.
@@ -134,14 +153,21 @@ impl AccountService {
     pub fn new(config: Config) -> Result<Self> {
         validate_config(&config)?;
         let client = Client::new(config.clone())?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            deadline: None,
+        })
     }
     /// Read this account's exact XOR balance without preparing a transaction.
     ///
     /// # Errors
     /// Returns authentication, routing, account/asset-definition absence or query errors.
     pub fn xor_balance(&self) -> Result<BalanceReport> {
-        self.client.balance(&XOR_ASSET_DEFINITION.parse()?)
+        self.client.balance(&AssetId::new(
+            XOR_ASSET_DEFINITION.parse()?,
+            self.config.account.clone(),
+        ))
     }
     /// Quote, sign once and privately persist one transfer before any transaction submission.
     ///
@@ -173,7 +199,18 @@ impl AccountService {
         fee_payment: FeePaymentIntent,
         journal: &Path,
     ) -> Result<OperationReport> {
+        self.prepare_alias_with_bounds(request, fee_payment, AliasFeeBounds::Quoted, journal)
+    }
+
+    fn prepare_alias_with_bounds(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+        fee_payment: FeePaymentIntent,
+        bounds: AliasFeeBounds,
+        journal: &Path,
+    ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        self.ensure_deadline()?;
         fee_payment.validate()?;
         let plan = self.client.client().plan_alias_setup(request)?;
         self.client
@@ -200,10 +237,20 @@ impl AccountService {
             NativeOperation::AliasSetup {
                 request: request.clone(),
                 plan: Box::new(plan),
+                bounds,
             },
             fee_payment,
             journal,
         )
+    }
+    fn ensure_deadline(&self) -> Result<()> {
+        if self
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            eyre::bail!("wallet operation deadline elapsed");
+        }
+        Ok(())
     }
     fn prepare_native(
         &self,
@@ -211,6 +258,7 @@ impl AccountService {
         requested_fee: FeePaymentIntent,
         journal: &Path,
     ) -> Result<OperationReport> {
+        self.ensure_deadline()?;
         requested_fee.validate()?;
         self.client
             .refresh_capabilities()
@@ -230,16 +278,30 @@ impl AccountService {
             );
         }
         let mut payload = self.client.account_client().prepare_transaction(draft)?;
+        if let Some(terms) = operation.bounded_terms() {
+            terms.validate()?;
+            let remaining = terms
+                .deadline_ms
+                .checked_sub(payload.creation_time_ms)
+                .and_then(std::num::NonZeroU64::new)
+                .ok_or_else(|| eyre!("bounded transaction deadline elapsed before preparation"))?;
+            payload.time_to_live_ms = Some(
+                payload
+                    .time_to_live_ms
+                    .map_or(remaining, |ttl| ttl.min(remaining)),
+            );
+        }
         let quote = self
             .client
             .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
-        if !requested_fee.has_same_payer_and_gas_bound(&quote.intent) {
-            eyre::bail!(
-                "transfer fee quote changed the selected payer, sponsor revision or gas bound"
-            );
+        verify_quote_limits(&requested_fee, &quote)?;
+        if let Some(terms) = operation.bounded_terms() {
+            terms.verify_quote(&quote)?;
         }
-        self.client
-            .check_funding(&operation.principal()?, std::slice::from_ref(&quote))?;
+        self.client.check_funding(
+            &operation.principal(&self.config.account)?,
+            std::slice::from_ref(&quote),
+        )?;
         payload.fee_payment = quote.intent.clone();
         let signed = self.client.account_client().sign_transaction(payload)?;
         let record = TransactionJournal {
@@ -257,8 +319,13 @@ impl AccountService {
             deadline_ms: transaction_deadline(&signed)?,
         };
         record.verify(&self.config)?;
-        let journal = Journal::create(journal)?;
-        journal.write_operation(&record)?;
+        if let Some(terms) = record.operation.bounded_terms()
+            && current_unix_ms()? >= terms.deadline_ms
+        {
+            eyre::bail!("bounded operation deadline elapsed before journal publication");
+        }
+        self.ensure_deadline()?;
+        let journal = Journal::create_prepared(journal, &record)?;
         Ok(transfer_report(
             &journal,
             &record,
@@ -266,27 +333,31 @@ impl AccountService {
             None,
         ))
     }
-    /// Submit a wholly unattempted saved transfer once, then verify its exact committed wire.
+    /// Submit a wholly unattempted saved transfer or alias operation once, then verify its wire.
     ///
     /// An existing attempt is reconciled by hash without another submission.
+    /// Bounded operations require their request-bound submission methods.
     ///
     /// # Errors
     /// Returns invalid/unsafe journal or untrusted observation errors. Unresolved dispatch returns Pending.
     pub fn submit(&self, journal: &Path, expected: NativeOperationKind) -> Result<OperationReport> {
-        self.run_transaction(journal, expected, true)
+        self.run_transaction(journal, expected, true, None)
     }
-    /// Read-only reconciliation of the saved transfer; no rebuilding, signing or submission occurs.
+    /// Read-only reconciliation of a saved transfer or alias operation without rebuilding or signing.
+    ///
+    /// Bounded operations require their request-bound recovery methods.
     ///
     /// # Errors
     /// Returns changed identity, unsafe evidence or malformed status/committed-wire errors.
     pub fn resume(&self, journal: &Path, expected: NativeOperationKind) -> Result<OperationReport> {
-        self.run_transaction(journal, expected, false)
+        self.run_transaction(journal, expected, false, None)
     }
     fn run_transaction(
         &self,
         path: &Path,
         expected: NativeOperationKind,
         submit: bool,
+        expectation: Option<private_root::BoundedOperationExpectation<'_>>,
     ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let journal = Journal::open(path)?;
@@ -297,6 +368,15 @@ impl AccountService {
             );
         }
         let transaction = record.verify(&self.config)?;
+        match expectation {
+            Some(expectation) => expectation.verify(&record)?,
+            None if record.operation.bounded_terms().is_some() => {
+                eyre::bail!(
+                    "bounded submission and recovery require the exact selected operation request"
+                );
+            }
+            None => {}
+        }
         let mut before = observe_transaction(self.client.client(), &transaction)?;
         if before.status == OperationStatus::Absent && journal.submission_recorded(&record)? {
             before.status = OperationStatus::Pending;
@@ -320,6 +400,7 @@ impl AccountService {
         self.client.refresh_capabilities().wrap_err(
             "wallet transaction submission compatibility; saved operation remains unattempted",
         )?;
+        self.ensure_deadline()?;
         if !journal.record_submission(&record)? {
             return Ok(transfer_report(
                 &journal,
@@ -407,12 +488,56 @@ impl TransactionJournal {
                 "transfer journal has substituted transaction, destination, amount, fee or signer evidence"
             );
         }
+        verify_quote_limits(&self.requested_fee, &self.quote)?;
+        if let Some(terms) = self.operation.bounded_terms() {
+            terms.verify_quote(&self.quote)?;
+            if self.deadline_ms > terms.deadline_ms {
+                eyre::bail!("saved bounded transaction exceeds its original operation deadline");
+            }
+        }
         self.quote
             .validate_for_draft(transaction.payload())
             .map_err(|error| eyre!(error))?;
         Ok(transaction)
     }
 }
+fn verify_quote_limits(requested: &FeePaymentIntent, quote: &FeeQuoteResponse) -> Result<()> {
+    verify_fee_intent_limits(requested, &quote.intent)
+}
+
+/// Require the original payer/gas selection and every explicitly authorized component maximum.
+///
+/// # Errors
+/// Rejects invalid intents, changed payer or gas, and unlisted or increased fee components.
+pub(crate) fn verify_fee_intent_limits(
+    requested: &FeePaymentIntent,
+    actual: &FeePaymentIntent,
+) -> Result<()> {
+    requested.validate()?;
+    actual.validate()?;
+    if !requested.has_same_payer_and_gas_bound(actual) {
+        eyre::bail!("fee quote changed the selected payer, sponsor revision or gas bound");
+    }
+    if !requested.charge_limits().is_empty() {
+        for quoted in actual.charge_limits() {
+            let retained = requested
+                .charge_limits()
+                .iter()
+                .find(|limit| {
+                    limit.kind() == quoted.kind()
+                        && limit.asset_definition_id() == quoted.asset_definition_id()
+                })
+                .ok_or_else(|| {
+                    eyre!("fee quote added a component outside the explicit caller limits")
+                })?;
+            if quoted.max_amount() > retained.max_amount() {
+                eyre::bail!("fee quote increased an explicit caller maximum");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_transfer_request(request: &TransferRequest, authority: &AccountId) -> Result<()> {
     request.fee_payment.validate()?;
     if request.amount.is_zero() || &request.destination == authority {
@@ -435,19 +560,50 @@ enum NativeOperation {
     AliasSetup {
         request: AliasSetupPlanRequestV1,
         plan: Box<AliasTransactionPlanV1>,
+        bounds: AliasFeeBounds,
+    },
+    PrivateRootRegistration {
+        alias: String,
+        expected_ownership_generation: u64,
+        registration: Box<PrivateDataspaceRegistration>,
+        terms: BoundedTerms,
+    },
+    PrivateRootAnchor {
+        state: Box<PrivateDataspaceAnchorState>,
+        anchor: Box<PrivateDataspaceAnchor>,
+        terms: BoundedTerms,
     },
 }
 impl NativeOperation {
-    fn principal(&self) -> Result<BTreeMap<AssetDefinitionId, Quantity>> {
+    fn bounded_terms(&self) -> Option<&BoundedTerms> {
         match self {
+            Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
+                Some(terms)
+            }
+            Self::AliasSetup {
+                bounds: AliasFeeBounds::Bounded(terms),
+                ..
+            } => Some(terms),
+            Self::Transfer { .. } | Self::AliasSetup { .. } => None,
+        }
+    }
+    fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
+        match self {
+            Self::PrivateRootRegistration { .. } | Self::PrivateRootAnchor { .. } => {
+                Ok(BTreeMap::new())
+            }
             Self::Transfer { amount, .. } => Ok(BTreeMap::from([(
-                XOR_ASSET_DEFINITION.parse()?,
+                AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone()),
                 amount.clone(),
             )])),
             Self::AliasSetup { plan, .. } => {
                 let mut result = BTreeMap::new();
                 for total in &plan.body.totals_by_asset {
-                    add_quantity(&mut result, &total.payment_asset, &total.amount)?;
+                    add_quantity(
+                        &mut result,
+                        &AssetId::new(total.payment_asset.clone(), authority.clone()),
+                        &total.amount,
+                    )?;
                 }
                 Ok(result)
             }
@@ -457,10 +613,36 @@ impl NativeOperation {
         match self {
             Self::Transfer { .. } => NativeOperationKind::Transfer,
             Self::AliasSetup { .. } => NativeOperationKind::AliasSetup,
+            Self::PrivateRootRegistration { .. } => NativeOperationKind::PrivateRootRegistration,
+            Self::PrivateRootAnchor { .. } => NativeOperationKind::PrivateRootAnchor,
         }
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
+            Self::PrivateRootRegistration {
+                alias,
+                expected_ownership_generation,
+                registration,
+                terms,
+            } => {
+                terms.validate()?;
+                Ok(vec![private_root::registration_instruction(
+                    config,
+                    alias,
+                    *expected_ownership_generation,
+                    registration,
+                )?])
+            }
+            Self::PrivateRootAnchor {
+                state,
+                anchor,
+                terms,
+            } => {
+                terms.validate()?;
+                Ok(vec![private_root::anchor_instruction(
+                    config, state, anchor,
+                )?])
+            }
             Self::Transfer {
                 destination,
                 amount,
@@ -479,7 +661,14 @@ impl NativeOperation {
                     .into(),
                 ])
             }
-            Self::AliasSetup { request, plan } => {
+            Self::AliasSetup {
+                request,
+                plan,
+                bounds,
+            } => {
+                if let AliasFeeBounds::Bounded(terms) = bounds {
+                    terms.validate()?;
+                }
                 if plan.body.network_id != config.network_id
                     || plan.body.authority != config.account
                 {
@@ -498,6 +687,23 @@ fn transfer_report(
     evidence: Option<&Value>,
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
+        NativeOperation::PrivateRootRegistration {
+            alias,
+            expected_ownership_generation,
+            registration,
+            terms,
+        } => (
+            "private_root_registration",
+            norito::json!({"alias": alias, "expected_ownership_generation": expected_ownership_generation, "registration": registration, "terms": terms}),
+        ),
+        NativeOperation::PrivateRootAnchor {
+            state,
+            anchor,
+            terms,
+        } => (
+            "private_root_anchor",
+            norito::json!({"registration": (state.registration()), "previous_cursor": (state.cursor()), "anchor": anchor, "terms": terms}),
+        ),
         NativeOperation::Transfer {
             destination,
             amount,
@@ -505,9 +711,13 @@ fn transfer_report(
             "transfer",
             norito::json!({"destination": (destination.to_string()), "asset_definition": XOR_ASSET_DEFINITION, "amount": (amount.to_string())}),
         ),
-        NativeOperation::AliasSetup { request, plan } => (
+        NativeOperation::AliasSetup {
+            request,
+            plan,
+            bounds,
+        } => (
             "alias_setup",
-            norito::json!({"request": (request), "plan": (plan)}),
+            norito::json!({"request": (request), "plan": (plan), "fee_bounds": bounds}),
         ),
     };
     let mut data = norito::json!({
@@ -545,9 +755,9 @@ fn transaction_deadline(transaction: &SignedTransaction) -> Result<u64> {
 fn transaction_expired(transaction: &SignedTransaction) -> Result<bool> {
     Ok(current_unix_ms()? >= transaction_deadline(transaction)?)
 }
-fn add_quantity(
-    required: &mut BTreeMap<AssetDefinitionId, Quantity>,
-    asset: &AssetDefinitionId,
+fn add_quantity<K: Ord + Clone>(
+    required: &mut BTreeMap<K, Quantity>,
+    asset: &K,
     amount: &Quantity,
 ) -> Result<()> {
     let total = required.entry(asset.clone()).or_insert_with(Quantity::zero);

@@ -396,6 +396,83 @@ fn commit_wrapper_roles_are_distinct_and_authenticated() {
 }
 
 #[test]
+fn authenticated_ordinary_fixture_protocols_are_canonical_and_preview_bootstrap() {
+    use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1;
+
+    for apple in [false, true] {
+        // Actual fixture signatures and model admission precede the native artifact projection.
+        // Synthetic reports still confer no physical, proving-key or monetary qualification.
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+        let enrollment = fixture.verify(300).expect("signed ordinary enrollment");
+        let empty = crate::kagemusha_v1_state::canonical_empty_durable_effect_digest_v1(
+            fixture.release.release_id(),
+        )
+        .unwrap();
+        let actual = KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
+            &fixture.release,
+            empty,
+        )
+        .expect("signed fixture has canonical ordinary helper protocols");
+        for (eq, ep) in [
+            (
+                actual.mint_hash_shard_eq_protocol_digest,
+                actual.mint_hash_shard_ep_protocol_digest,
+            ),
+            (
+                actual.mint_hash_claim_eq_protocol_digest,
+                actual.mint_hash_claim_ep_protocol_digest,
+            ),
+            (
+                actual.guard_bundle_eq_protocol_digest,
+                actual.guard_bundle_ep_protocol_digest,
+            ),
+        ] {
+            assert!(crate::kagemusha_v1_poseidon::decode::<Fp>(eq).is_some());
+            assert!(crate::kagemusha_v1_poseidon::decode::<Fq>(ep).is_some());
+            assert_ne!(eq, ep);
+        }
+        // Restoring any original out-of-field tag must remain rejected by the real validator.
+        for (index, tag) in (0x41_u8..=0x46).enumerate() {
+            let mut invalid = actual;
+            {
+                let mut fields = [
+                    &mut invalid.mint_hash_shard_eq_protocol_digest,
+                    &mut invalid.mint_hash_shard_ep_protocol_digest,
+                    &mut invalid.mint_hash_claim_eq_protocol_digest,
+                    &mut invalid.mint_hash_claim_ep_protocol_digest,
+                    &mut invalid.guard_bundle_eq_protocol_digest,
+                    &mut invalid.guard_bundle_ep_protocol_digest,
+                ];
+                *fields[index] = [tag; 32];
+            }
+            assert_eq!(
+                invalid.validate(),
+                Err(KagemushaRecursionErrorV1::InvalidArtifacts)
+            );
+        }
+        let challenge = crate::kagemusha_v1_state::KagemushaOrdinaryLogicalApprovalJournalV1::test_only_bootstrap_challenge_v1(
+            &enrollment,
+            std::sync::Arc::clone(&fixture.release),
+            [43; 32],
+            [44; 32],
+            [45; 32],
+            300,
+        )
+        .expect("same signed originals derive the native zero-State preview");
+        assert_eq!(
+            challenge.subject.operation_kind,
+            KagemushaOperationKindV1::Bootstrap
+        );
+        assert_eq!(challenge.subject.secure_index_before, 0);
+        assert_eq!(challenge.subject.secure_index_after, 0);
+        assert_eq!(
+            challenge.enrollment_digest,
+            enrollment.app_credential().digest()
+        );
+    }
+}
+
+#[test]
 fn mint_finality_protocol_accessor_returns_the_compiled_identity() {
     let artifacts = artifacts();
     artifacts

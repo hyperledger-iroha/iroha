@@ -60,11 +60,6 @@ struct NativeCustodyFixture {
 impl NativeCustodyFixture {
     /// Configuration (height 2) and enrollment (height 3), both certified.
     fn new() -> Self {
-        Self::certified_by([Signers::Quorum, Signers::Quorum])
-    }
-
-    /// Configuration and enrollment blocks whose local `CommitQC`s are signed by `signers`.
-    fn certified_by(signers: [Signers; 2]) -> Self {
         let key = fixture_key(0xA1);
         let authority = AccountId::new(key.public_key().clone());
         let provider = ProviderId::new(PROVIDER);
@@ -115,7 +110,7 @@ impl NativeCustodyFixture {
         let at = NOW_MS - 500;
         let transaction = chain.sign(&key, [InstructionBox::from(configure)], at - 1);
         assert_eq!(
-            chain.commit_with(Some(at), vec![transaction], signers[0]),
+            chain.commit_with(Some(at), vec![transaction], Signers::Quorum),
             [true],
             "actual authorized native configuration"
         );
@@ -157,7 +152,7 @@ impl NativeCustodyFixture {
         };
         let transaction = chain.sign(&key, [InstructionBox::from(enroll)], NOW_MS - 1);
         assert_eq!(
-            chain.commit_with(Some(NOW_MS), vec![transaction], signers[1]),
+            chain.commit_with(Some(NOW_MS), vec![transaction], Signers::Quorum),
             [true],
             "actual authorized native enrollment"
         );
@@ -265,11 +260,14 @@ impl NativeCustodyFixture {
 
 #[test]
 fn actual_native_custody_requires_both_certified_blocks_then_accepts_signed_observation() {
-    for signers in [
-        [Signers::BelowQuorum, Signers::BelowQuorum],
-        [Signers::Quorum, Signers::BelowQuorum],
-    ] {
-        let fixture = NativeCustodyFixture::certified_by(signers);
+    for height in [2, 3] {
+        let mut fixture = NativeCustodyFixture::new();
+        // Publish both native mutations with genuine quorum certificates first. Corrupt the
+        // retained configuration/enrollment QC independently at the consumer boundary: the
+        // real publication worker must never be asked to accept a below-quorum certificate.
+        fixture
+            .chain
+            .corrupt_local_quorum_for_test(height, Signers::BelowQuorum);
         assert!(matches!(
             fixture.guard().capture(fixture.approval),
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
@@ -340,6 +338,84 @@ fn actual_native_custody_rejects_same_height_forged_control_digests() {
             &observation,
             None,
         ),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
+}
+
+#[test]
+fn actual_native_custody_checks_every_unsorted_and_duplicate_height_target() {
+    let fixture = NativeCustodyFixture::new();
+    let guard = fixture.guard();
+    let observation = fixture.verified_observation_at(fixture.current.anchor);
+    let floor = guard.capture(fixture.approval).expect("certified floor");
+    let genesis = FinalityFloorV1 {
+        height: 1,
+        block_hash: *fixture.chain.genesis().hash().as_ref(),
+    };
+    guard
+        .validate(
+            fixture.approval,
+            fixture.current.anchor,
+            floor,
+            &[
+                HistoricalFinalityV1::Custody(fixture.approval),
+                HistoricalFinalityV1::Block(floor),
+                HistoricalFinalityV1::Block(genesis),
+            ],
+            &observation,
+            None,
+        )
+        .expect("one certified history authenticates unsorted, duplicate and genesis targets");
+
+    // A valid hash at this height must not hide another supplied hash through deduplication.
+    for mut forged in [
+        floor,
+        HistoricalFinalityV1::Custody(fixture.approval).coordinates(),
+    ] {
+        forged.block_hash[0] ^= 1;
+        assert!(matches!(
+            guard.validate(
+                fixture.approval,
+                fixture.current.anchor,
+                floor,
+                &[
+                    HistoricalFinalityV1::Custody(fixture.approval),
+                    HistoricalFinalityV1::Block(forged),
+                ],
+                &observation,
+                None,
+            ),
+            Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+        ));
+    }
+    let mut forged_floor = floor;
+    forged_floor.block_hash[0] ^= 1;
+    assert!(matches!(
+        fixture.validate(&guard, forged_floor, fixture.current.anchor, &observation),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
+}
+
+#[test]
+fn actual_native_custody_rechecks_certificates_after_successful_validation() {
+    let mut fixture = NativeCustodyFixture::new();
+    let guard = fixture.guard();
+    let observation = fixture.verified_observation_at(fixture.current.anchor);
+    let floor = guard.capture(fixture.approval).expect("certified floor");
+    fixture
+        .validate(&guard, floor, fixture.current.anchor, &observation)
+        .expect("positive validation before durable evidence changes");
+    fixture
+        .chain
+        .corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    // The same guard, coordinates, native custody rows and signed observation cannot reuse an
+    // earlier successful walk after its retained approval certificate becomes invalid.
+    assert!(matches!(
+        guard.capture(fixture.approval),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
+    assert!(matches!(
+        fixture.validate(&guard, floor, fixture.current.anchor, &observation),
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)
     ));
 }

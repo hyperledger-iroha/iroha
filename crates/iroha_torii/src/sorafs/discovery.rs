@@ -1211,8 +1211,9 @@ impl ProviderAdvertCache {
         let record = self.record_by_provider(provider_id)?;
         let advert = record.advert();
         let admission = self.admission.entry(provider_id)?;
-        (admission.is_council_verified()
-            && advert.signature_strict
+        // The registry selects current native authority, including signed-genesis
+        // admissions. Council signature presence is not a substitute for that source.
+        (advert.signature_strict
             && advert.validate_with_body(now_unix_seconds).is_ok()
             && verify_signature(advert).is_ok()
             && verify_advert_against_envelope(advert, &admission).is_ok())
@@ -1277,6 +1278,7 @@ pub fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::PotrMlDsa => "potr_mldsa",
+        CapabilityType::RegisteredAccountRead => "registered_account_read",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
@@ -1289,6 +1291,7 @@ pub fn parse_capability_name(name: &str) -> Option<CapabilityType> {
         "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
         "soranet_pq" => Some(CapabilityType::SoraNetHybridPq),
         "potr_mldsa" => Some(CapabilityType::PotrMlDsa),
+        "registered_account_read" => Some(CapabilityType::RegisteredAccountRead),
         "vendor_reserved" => Some(CapabilityType::VendorReserved),
         _ => None,
     }

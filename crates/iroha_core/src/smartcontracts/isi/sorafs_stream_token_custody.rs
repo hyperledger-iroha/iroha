@@ -182,6 +182,7 @@ fn apply_control(
         _ => 0,
     };
     let mut key_paths = Vec::new();
+    let mut active_enrollment = None;
     let state = match instruction.action {
         Action::Configure(bytes) => {
             let policy: SignerCustodyPolicyV1 = decode(&bytes)?;
@@ -241,6 +242,7 @@ fn apply_control(
             let mut next = current.state.clone();
             next.next_sequence = next.next_sequence.checked_add(1).ok_or(Error::Capacity)?;
             next.predecessor_digest = verified.record_digest();
+            active_enrollment = Some(bytes);
             next.active_head = Some(SignerCustodyActiveHeadV1 {
                 record_digest: verified.record_digest(),
                 sequence: verified.statement().sequence,
@@ -252,7 +254,9 @@ fn apply_control(
             next
         }
         Action::Revoke(SorafsStreamTokenCustodyRevocationV1 { signer, attester }) => {
-            let mut next = current.as_ref().ok_or(Error::Conflict)?.state.clone();
+            let previous = current.as_ref().ok_or(Error::Conflict)?;
+            active_enrollment = previous.record.active_enrollment.clone();
+            let mut next = previous.state.clone();
             if !(signer && !next.signer_revoked || attester && !next.attester_revoked) {
                 return Err(Error::Conflict);
             }
@@ -275,6 +279,7 @@ fn apply_control(
         recorded_at_unix_ms: now,
         authority: authority.clone(),
         control_state: encode(&state)?,
+        active_enrollment,
     };
     let index = ControlIndexV1 {
         revision,

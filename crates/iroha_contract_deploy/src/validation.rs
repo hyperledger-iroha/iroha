@@ -141,6 +141,7 @@ fn decode_bound_step(
     }
     let signed = decode_transaction(step)?;
     let quote = &context.fee_quotes[index];
+    native::validate_quote_route(quote, context.dataspace_id)?;
     if signed.authority() != &context.authority
         || signed.network_id() != Some(&context.network_id)
         || signed.metadata() != metadata

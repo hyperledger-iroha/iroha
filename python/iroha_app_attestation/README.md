@@ -56,7 +56,13 @@ recognized/licensed/device verdicts and trusted freshness. Testing verdicts are
 rejected. `google_oauth.py` checks the actual public decoder-policy original and
 project/principal/client ID before duplicating the owner-only credential FD.
 RS256 signing runs in the same process through the fixed isolated Python runtime's
-loaded OpenSSL 3 module; it never pipes the private key to a subprocess. Private
+loaded OpenSSL 3 module; it never pipes the private key to a subprocess. It holds
+the actual Root-owned physical `_ssl` original plus the `dladdr`-selected crypto
+and TLS dependencies before duplicating the Google credential FD. Owner, mode,
+ACL, ancestor, metadata, digest and exact loaded-symbol checks remain mandatory
+for private RSA, token-cache reuse and TLS exchange. User-owned Homebrew runtime
+files are rejected. Local FD custody does not replace signed runtime admission.
+Private
 JSON, keys and access tokens are absent from argv, environment and public outputs.
 
 The production `ordinary_worker.py` uses the Native-admitted private descriptor
@@ -64,7 +70,26 @@ channel and sealed encoder/runtime/store roles. Its closed phases are `raw`,
 `credential` and `refresh`; no request selects an executable, policy or key path.
 Linux startup requires the Native parent's held Yama policy to disallow sibling
 ptrace before exec; the worker and both encoders independently become nondumpable
-before private intake. The Core startup adapter validates the same admitted
+before private intake. The shared Python worker also has a macOS process
+implementation: it requires one actual native thread, sets and reads back zero
+core-file limits, applies `PT_DENY_ATTACH`, then requires a bounded disposable
+same-user child to observe real ptrace and task-control/read/inspection denial.
+Each task API first passes a self-task control. The probe child closes every
+inherited private descriptor before observing its own live parent. A setting
+success, generic permission error, missing API or timeout cannot pass. Worker
+startup then closes unrelated descriptors, disables inheritance and checks the
+fixed pipe/code/signer/Google/store role grammar and held owners before private
+intake. No public caller can select a probe PID or alternate OS implementation.
+
+This macOS process check grants no Native issuer authority. The actual installed
+owner must still authenticate its signed launch and Python/archive/TLS/native
+encoder originals, private custody and current governed policy. Both native encoder entrypoints have matching
+macOS protection source implementations; their complete compiled runtime union
+and a BOI-owned protected runtime/DATA session remain mandatory before macOS
+issuance. This component's disposable
+tests do not supply those owners or authorize an issuer launch.
+
+The Core startup adapter validates the same admitted
 release, immutable provider originals, signing-key identity and owner-only held
 custody before launching the worker. These boundaries have source and component
 tests; final integrated release, SDK and financial proof gates remain required.

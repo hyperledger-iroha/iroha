@@ -17,6 +17,18 @@ private const val ATTESTATION_OID = "1.3.6.1.4.1.11129.2.1.17"
 private val INT_MIN_BIG_INTEGER = BigInteger.valueOf(Int.MIN_VALUE.toLong())
 private val INT_MAX_BIG_INTEGER = BigInteger.valueOf(Int.MAX_VALUE.toLong())
 
+/** Sole original certificate parser shared by evidence DERs and independently selected roots. */
+private fun decodeExactOriginalCertificateV1(factory: CertificateFactory, originalDer: ByteArray): X509Certificate {
+    val original = ByteArrayInputStream(originalDer)
+    val certificate = factory.generateCertificate(original) as X509Certificate
+    // A provider must neither ignore a tail nor normalize the original certificate bytes.
+    if (original.available() != 0 || !certificate.encoded.contentEquals(originalDer)) {
+        throw AttestationVerificationException("Attestation certificate is not exact original DER")
+    }
+    return certificate
+}
+
+
 /**
  * Validates Android key attestation certificate chains and extracts metadata required by higher
  * level policy checks.
@@ -89,7 +101,7 @@ class AttestationVerifier private constructor(
 
         return attestation.certificateChain().map { certificateDer ->
             try {
-                factory.generateCertificate(ByteArrayInputStream(certificateDer)) as X509Certificate
+                decodeExactOriginalCertificateV1(factory, certificateDer)
             } catch (ex: CertificateException) {
                 throw AttestationVerificationException("Failed to decode attestation certificate", ex)
             }
@@ -268,7 +280,7 @@ class AttestationVerifier private constructor(
             try {
                 val factory = CertificateFactory.getInstance("X.509")
                 trustedRoots.add(
-                    factory.generateCertificate(ByteArrayInputStream(certificateDer)) as X509Certificate
+                    decodeExactOriginalCertificateV1(factory, certificateDer)
                 )
             } catch (ex: CertificateException) {
                 throw AttestationVerificationException("Failed to decode trusted root certificate", ex)

@@ -30,7 +30,7 @@ fn complete_prefix_roundtrips_and_restores_ids_fences_audit_and_original_owner()
         reservation: second.reservation,
     };
     f.apply(
-        TopologyActionV1::Expire(expiry),
+        TopologyActionV1::Expire(Box::new(expiry)),
         6,
         second.reservation.expires_at_unix_ms,
         33,
@@ -660,10 +660,10 @@ fn every_action_has_one_canonical_frame_and_oversized_inputs_fail_before_publica
         }),
         TopologyActionV1::Reserve(Box::new(row.reviewed.clone())),
         TopologyActionV1::Complete(Box::new(f.completion(&row))),
-        TopologyActionV1::Expire(TopologyExpireV1 {
+        TopologyActionV1::Expire(Box::new(TopologyExpireV1 {
             operation_id: [10; 32],
             reservation: row.reservation,
-        }),
+        })),
         TopologyActionV1::Check(Box::new(check)),
     ] {
         let bytes = encode(&action, TOPOLOGY_RECORD_MAX_BYTES_V1).unwrap();

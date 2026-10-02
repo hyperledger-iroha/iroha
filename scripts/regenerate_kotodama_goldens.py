@@ -738,7 +738,7 @@ def compare_runtime_manifest(source: Path, destination: Path) -> None:
 
 
 def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, ...]:
-    """Read the canonical sorted destination set from one validated stage."""
+    """Read private compiler outputs and declare their explicit public fixture modes."""
 
     sources: dict[Path, Path] = {}
     for row in rows:
@@ -755,6 +755,9 @@ def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, .
     rendered: list[RenderedFile] = []
     for destination in sorted(sources, key=lambda value: value.as_posix()):
         payload = read_compiler_output(sources[destination])
+        # Compiler and admission work products stay owner-private. This owner explicitly
+        # publishes public checked-in fixtures; the descriptor-bound publisher creates
+        # separate files in the declared public mode without relaxing staging custody.
         rendered.append(RenderedFile(destination, 0o644, payload))
     return tuple(rendered)
 

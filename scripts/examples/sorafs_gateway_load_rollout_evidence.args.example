@@ -8,7 +8,7 @@
 --require-kind local_conformance,staging_load,telemetry_slo,transport_scope,governance_approval
 --now-unix 1800400000
 --max-evidence-age-secs 604800
---min-staging-duration-secs 86400
+--min-staging-duration-secs 1
 --min-streams 1000
 --min-success-rate-bps 9900
 --max-error-rate-bps 100

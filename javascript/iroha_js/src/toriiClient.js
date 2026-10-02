@@ -22182,9 +22182,16 @@ function normalizeContractManifestResponse(payload, requested, networkId) {
     rejectType("contractManifest.abi_hash does not match manifest.abi_hash");
   }
   if (codeHash !== requested.code_hash) rejectType("contract manifest artifact hash differs from requested artifact");
-  if (record.code_bytes !== undefined && (!Number.isSafeInteger(record.code_bytes) || record.code_bytes < 0 || record.code_bytes > IVM_ARTIFACT_MAX_BYTES)) rejectType("contract manifest response.code_bytes must be a bounded artifact byte count");
+  let inlineCode;
+  if (record.code_bytes !== undefined) {
+    inlineCode = normalizeIvmArtifactBase64String(record.code_bytes, "contract manifest response.code_bytes");
+    if (computeIvmArtifactHashes(Buffer.from(inlineCode, "base64")).codeHashHex !== requested.code_hash) {
+      rejectType("contract manifest inline bytes hash differs from requested artifact");
+    }
+  }
   return {
     ...identity,
+    ...(inlineCode === undefined ? {} : { code_bytes: inlineCode }),
     manifest,
     code_hash: codeHash,
     abi_hash: abiHash,
@@ -22214,7 +22221,7 @@ function normalizeContractCodeBytesResponse(payload, requested, networkId) {
 
 function contractArtifactDataspace(value, context) {
   if (typeof value === "number" && !Number.isSafeInteger(value)) rejectType(`${context} must be an exact u64`);
-  if (!((typeof value === "number" && value >= 0) || typeof value === "bigint" || (typeof value === "string" && /^(0|[1-9][0-9]*)$/u.test(value)))) rejectType(`${context} must be a canonical u64`);
+  if (!((typeof value === "number" && value >= 0) || typeof value === "bigint" || (typeof value === "string" && value.length <= 20 && /^(0|[1-9][0-9]*)$/u.test(value)))) rejectType(`${context} must be a canonical u64`);
   const integer = BigInt(value);
   if (integer < 0n || integer > 0xffff_ffff_ffff_ffffn) rejectType(`${context} must fit u64`);
   return integer.toString();

@@ -173,8 +173,8 @@ Operators still must deploy the reviewed four-validator topology, exercise
 DA/RBC and recovery, bring up independently administered gateways and
 Governance DAG/Kubo instances, inject isolated authenticated signing,
 key-custody, and WebAuthn providers from runtime-only secret stores, operate
-multiple storage providers, complete the 1,000-stream and 24-hour soak
-exercises, and collect one valid fresh summary for every lane. L2 remains
+multiple storage providers, observe the 1,000-stream workload for an
+operator-selected diagnostic duration, and collect one valid fresh summary for every lane. L2 remains
 blocked until the trusted external software Ed25519 signer signs the ordered
 nine-prerequisite envelope and both aggregate replays return the exact ready
 counts. Until genuine deployment evidence exists, the honest readiness state

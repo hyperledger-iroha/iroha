@@ -223,6 +223,7 @@ impl Fixture {
             footprint: SumeragiFootprint::default(),
         };
         let body = SumeragiFinalityAttestationBody {
+            observed_at_unix_ms: 1_000_000,
             challenge,
             network_id: NetworkId::from_genesis_hash(self.genesis.expected_hash()),
             node_fingerprint: peer.node_fingerprint,

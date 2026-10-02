@@ -160,6 +160,78 @@ class KagemushaAndroidAppSignatureOriginalV1Test {
         assertTrue(verifies(public, retained, der)); assertFalse(verifies(public, message, der))
     }
 
+    /** Synthetic purpose2 cash specimen derived from the maintained Rust model vector.
+     * Public W/S correlation is data only and cannot authorize hardware signing or Native cash.
+     */
+    private fun ordinaryPreparationSpecimen(): Pair<ByteArray, ByteArray> {
+        val w = vector("w_send_split_9")
+        val s = vector("s_send_split_9")
+        // The ordinary credential/enrollment identity is common to W and S.
+        w.copyInto(s, 155, 213, 245)
+        s.fill(0, 364, 428) // Before candidate/terminal selection, both commitments are absent.
+        w[52] = 2
+        MessageDigest.getInstance("SHA-256").digest(s).copyInto(w, 245)
+        val binding = org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryCashApprovalOriginalBindingV1(
+            w.copyOfRange(53,85), w.copyOfRange(117,149), w.copyOfRange(149,181),
+            w.copyOfRange(181,213), w.copyOfRange(213,245), w.copyOfRange(277,309), s)
+        val projected = org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryCashApprovalProjectionV1
+            .requirePreparation(w, s, binding)
+        assertContentEquals(w, projected.signingBytes())
+        assertContentEquals(s, projected.selectionBytes())
+        return w to s
+    }
+
+    @Test fun ordinaryPreparationSignsExactPurposeTwoAndCannotUseAnotherSignerPurpose() {
+        val (w,s) = ordinaryPreparationSpecimen()
+        val purpose = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL
+        val key = key(); val public = key.public as ECPublicKey
+        var guards = 0
+        val der = signOriginalAndroidAppMessageV1(key.private, public, w, purpose) { guards++ }
+        assertEquals(3, guards); requireOriginalP256DerV1(der)
+        assertTrue(verifies(public, w, der)); assertFalse(verifies(public, s, der))
+        for (other in listOf(KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL,
+            KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL,
+            KagemushaAndroidAppSignaturePurposeV1.IDENTITY_ENROLLMENT_POSSESSION)) {
+            assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(w, other) }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            requireAppPlatformSigningMessageV1(vector("w_send_split_9"), purpose)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            requireAppPlatformSigningMessageV1(vector("e_enrollment_android"), purpose)
+        }
+        requireAppPlatformSigningMessageV1(vector("w_send_split_9"),
+            KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL)
+        requireAppPlatformSigningMessageV1(vector("w_send_split_9"),
+            KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL)
+        requireAppPlatformSigningMessageV1(vector("e_enrollment_android"),
+            KagemushaAndroidAppSignaturePurposeV1.IDENTITY_ENROLLMENT_POSSESSION)
+    }
+
+    @Test fun ordinaryPreparationKeepsExactFramingAllSelectorsAndBoundedOriginalInterval() {
+        val (w,_) = ordinaryPreparationSpecimen()
+        val purpose = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL
+        val start = purpose.domain.toByteArray(Charsets.US_ASCII).size + 8
+        for (field in 0 until 8) {
+            val changed = w.copyOf().also { it.fill(0, start + 3 + field*32, start + 3 + (field+1)*32) }
+            assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(changed, purpose) }
+        }
+        for (tag in listOf(0,1,3,255)) {
+            val changed = w.copyOf().also { it[start+2] = tag.toByte() }
+            assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(changed, purpose) }
+        }
+        for (changed in listOf(w+byteArrayOf(0), w.copyOf(w.size-1),
+            w.copyOf().also { it[0] = 0 }, w.copyOf().also { it[start-8] = 0 },
+            w.copyOf().also { it[start] = 2 })) {
+            assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(changed, purpose) }
+        }
+        for ((issued,expires) in listOf(0L to 1L, 1000L to 1000L, 1000L to 999L, 1000L to 121001L)) {
+            val changed = w.copyOf().also { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(309,issued).putLong(317,expires) }
+            assertFailsWith<IllegalArgumentException> { requireAppPlatformSigningMessageV1(changed, purpose) }
+        }
+    }
+
     @Test fun teeOnlyNativePolicyDoesNotBroadenToStrongBoxOrSoftware() {
         fun admitted(level: Int, policy: KagemushaAndroidAppKeyHardwarePolicyV1) =
             requirePersistentHardwareAppKeyV1(level, KeyProperties.ORIGIN_GENERATED, KeyProperties.PURPOSE_SIGN,

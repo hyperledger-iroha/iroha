@@ -1,10 +1,16 @@
 //! Exact replay, crash recovery, and lease-boundary tests.
 use super::*;
 use iroha_data_model::sorafs::reputation::{
-    PorTerminalOutcomeV1, ReputationJournalEventIdV1, StreamTokenRequestRouteV1,
-    StreamTokenValidationBindingV1,
+    StreamTokenExcludedKindV1, StreamTokenRequestRouteV1, StreamTokenValidationBindingV1,
+    StreamTokenValidationOutcomeV1, StreamTokenValidationRequestContextV1,
+    StreamTokenViolationKindV1,
 };
-use sorafs_node::reputation::runtime::{ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError};
+use iroha_data_model::sorafs::{
+    capacity::ProviderId,
+    stream_token_gateway::{
+        StreamTokenGatewayQuotaRequestV1, stream_token_gateway_lease_expiry_unix_ms_v1,
+    },
+};
 use std::{
     collections::VecDeque,
     sync::{
@@ -13,6 +19,10 @@ use std::{
     },
 };
 const VALIDATED_AT_MS: u64 = 1_800_000_000_000;
+/// Independent monotonic fixture budget; synthetic token timestamps remain unchanged.
+pub(crate) fn test_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}
 const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
 fn qualification() -> StreamTokenGatewayAdmissionQualificationV1 {
     StreamTokenGatewayAdmissionQualificationV1 {
@@ -31,6 +41,7 @@ fn request(
     max_streams: u16,
 ) -> StreamTokenGatewayAdmissionRequestV1 {
     StreamTokenGatewayAdmissionRequestV1 {
+        serving_attempt_id: [0x61; 32],
         context: StreamTokenValidationRequestContextV1::try_new(
             ProviderId::new([0x41; 32]),
             [0x42; 32],
@@ -70,6 +81,8 @@ fn record_for_request(
             .expires_at_epoch
     });
     StreamTokenGatewayAdmissionRecordV1 {
+        serving_attempt_id: request.serving_attempt_id,
+        admitted_under: qualification(),
         provider_id: request.context.provider_id(),
         outcome: StreamTokenValidationOutcomeV1 {
             binding: StreamTokenValidationBindingV1 {
@@ -85,7 +98,7 @@ fn record_for_request(
         retry_after_secs: None,
         lease_id: admitted.then(|| [u8::try_from(sequence).expect("test sequence"); 32]),
         lease_expires_at_unix_ms: token_expiry.map(|expires| {
-            exact_lease_expiry_unix_ms(
+            stream_token_gateway_lease_expiry_unix_ms_v1(
                 request.validated_at_unix_ms,
                 expires,
                 qualification().lease_ttl_ms,
@@ -97,35 +110,30 @@ fn record_for_request(
 }
 #[derive(Debug, Default)]
 struct ReputationProbe {
-    calls: Mutex<Vec<(ProviderId, StreamTokenValidationOutcomeV1)>>,
+    calls: Mutex<Vec<(StreamTokenGatewayAdmissionRecordV1, Instant)>>,
+    wrong_binding: AtomicUsize,
     fail_next: AtomicUsize,
+    trace: Mutex<Option<Arc<Mutex<Vec<&'static str>>>>>,
 }
 impl ReputationProbe {
     fn fail_once(&self) {
         self.fail_next.store(1, Ordering::Release);
     }
-    fn calls(&self) -> Vec<(ProviderId, StreamTokenValidationOutcomeV1)> {
+    fn calls(&self) -> Vec<(StreamTokenGatewayAdmissionRecordV1, Instant)> {
         self.calls.lock().expect("reputation calls").clone()
     }
 }
-impl ReputationNativeOutcomeAdmissionApiV1 for ReputationProbe {
-    fn activation_state(
-        &self,
-    ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError> {
-        Ok(ReputationNativeOutcomeAdmissionStateV1::Active)
+impl StreamTokenReputationDeliveryV1 for ReputationProbe {
+    fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1 {
+        let mut expected = qualification();
+        expected.revision += self.wrong_binding.load(Ordering::Acquire) as u64;
+        expected
     }
-    fn record_por_terminal(
+    fn deliver(
         &self,
-        _provider_id: ProviderId,
-        _outcome: PorTerminalOutcomeV1,
-    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
-        Err(ReputationRuntimeError::InvalidRuntimePolicy)
-    }
-    fn record_authenticated_stream_token_validation(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
+        record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
+    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
         if self
             .fail_next
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
@@ -133,24 +141,14 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationProbe {
             })
             .is_ok()
         {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
+            return Err(StreamTokenGatewayAdmissionErrorV1::ReputationCallback);
+        }
+        if let Some(trace) = self.trace.lock().unwrap().as_ref() {
+            trace.lock().unwrap().push("callback");
         }
         let mut calls = self.calls.lock().expect("reputation calls");
-        let replay = calls
-            .iter()
-            .any(|(seen_provider, seen)| *seen_provider == provider_id && *seen == outcome);
-        calls.push((provider_id, outcome));
-        if !outcome.status.counts_for_provider() {
-            return Ok(StreamTokenReputationAdmissionOutcomeV1::NotCounted);
-        }
-        let event_id = ReputationJournalEventIdV1(outcome.binding.validation_id());
-        Ok(StreamTokenReputationAdmissionOutcomeV1::Enqueued(
-            if replay {
-                ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id }
-            } else {
-                ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
-            },
-        ))
+        calls.push((record, deadline));
+        Ok(())
     }
 }
 #[derive(Debug, Default)]
@@ -165,14 +163,35 @@ struct DurableProviderState {
     released_leases: Vec<[u8; 32]>,
     pending_script: VecDeque<Option<StreamTokenGatewayAdmissionReadbackV1>>,
     admission_unavailable: bool,
+    qualification_unavailable: bool,
+    logical_now_unix_ms: u64,
+    calls: Vec<(&'static str, Instant)>,
+    trace: Option<Arc<Mutex<Vec<&'static str>>>>,
+    serving_unavailable: bool,
+    serving_substituted: bool,
 }
 #[derive(Debug)]
 struct DurableProvider {
+    configured_qualification: StreamTokenGatewayAdmissionQualificationV1,
     state: Mutex<DurableProviderState>,
 }
 impl DurableProvider {
+    fn note_call(
+        &self,
+        name: &'static str,
+        deadline: Instant,
+    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+        let mut state = self.state.lock().unwrap();
+        state.calls.push((name, deadline));
+        if let Some(trace) = &state.trace {
+            trace.lock().unwrap().push(name);
+        }
+        ensure_live(deadline)
+    }
+
     fn new() -> Self {
         Self {
+            configured_qualification: qualification(),
             state: Mutex::new(DurableProviderState::default()),
         }
     }
@@ -197,21 +216,32 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
     fn handle(&self) -> &str {
         HANDLE
     }
+    fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1 {
+        self.configured_qualification
+    }
     fn qualification(
         &self,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>
     {
+        self.note_call("qualification", deadline)?;
+        if self.state.lock().unwrap().qualification_unavailable {
+            return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+        }
         Ok(qualification())
     }
     fn admit(
         &self,
         request: &StreamTokenGatewayAdmissionRequestV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.note_call("admit", deadline)?;
         request.validate()?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| StreamTokenGatewayAdmissionErrorV1::Unavailable)?;
+        state.logical_now_unix_ms = state.logical_now_unix_ms.max(request.validated_at_unix_ms);
         if state.admission_unavailable {
             return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
         }
@@ -284,7 +314,9 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
     fn pending(
         &self,
         max_items: u32,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.note_call("pending", deadline)?;
         let mut state = self
             .state
             .lock()
@@ -312,7 +344,9 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
     fn acknowledge(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.note_call("acknowledge", deadline)?;
         let mut state = self
             .state
             .lock()
@@ -335,7 +369,9 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
     fn release_lease(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.note_call("release_lease", deadline)?;
         let lease_id = record
             .lease_id
             .ok_or(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?;
@@ -355,6 +391,38 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
         state.released_leases.push(lease_id);
         Ok(StreamTokenGatewayAdmissionAckV1::Acknowledged)
     }
+    fn confirm_serving(
+        &self,
+        request: &StreamTokenGatewayAdmissionRequestV1,
+        record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
+    ) -> Result<StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.note_call("confirm_serving", deadline)?;
+        let state = self.state.lock().unwrap();
+        if state.serving_unavailable {
+            return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+        }
+        if record.outcome.status != StreamTokenValidationStatusV1::Accepted
+            || !state
+                .requests
+                .iter()
+                .any(|(original, retained)| original == request && *retained == record)
+            || state.acknowledged_through < record.outcome.binding.gateway_sequence
+            || !state.active_leases.iter().any(|(_, id, expiry)| {
+                Some(*id) == record.lease_id && *expiry > state.logical_now_unix_ms
+            })
+        {
+            return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+        }
+        // This synthetic provider owns synthetic UTC. Wall-clock time never reinterprets the
+        // fixed historical request times used by quota, recovery and frame fixtures.
+        if state.serving_substituted {
+            let mut different = record;
+            different.serving_attempt_id[0] ^= 1;
+            return Ok(different);
+        }
+        Ok(record)
+    }
 }
 fn capture(
     provider: Arc<DurableProvider>,
@@ -365,6 +433,7 @@ fn capture(
         HANDLE,
         qualification(),
         reconcile_max_items,
+        Duration::from_secs(60),
         provider,
         reputation,
     )
@@ -381,11 +450,15 @@ fn acknowledged_admit_replay_replays_reputation_and_requires_exact_ack_readback(
         VALIDATED_AT_MS / 1_000 + 600,
         2,
     );
-    let inserted = first.admit(&request).expect("first admission");
+    let inserted = first
+        .admit(&request, test_deadline())
+        .expect("first admission");
     assert_eq!(provider.acknowledged_through(), 1);
     let replica = capture(Arc::clone(&provider), Arc::clone(&reputation), 8);
     assert_eq!(
-        replica.admit(&request).expect("acknowledged replay"),
+        replica
+            .admit(&request, test_deadline())
+            .expect("acknowledged replay"),
         inserted
     );
     assert_eq!(provider.acknowledged_through(), 1);
@@ -405,12 +478,15 @@ fn omitted_required_row_is_rejected_before_any_callback() {
     let reputation = Arc::new(ReputationProbe::default());
     let capture = capture(Arc::clone(&provider), Arc::clone(&reputation), 8);
     let error = capture
-        .admit(&request(
-            "nonce-omitted",
-            VALIDATED_AT_MS,
-            VALIDATED_AT_MS / 1_000 + 600,
-            2,
-        ))
+        .admit(
+            &request(
+                "nonce-omitted",
+                VALIDATED_AT_MS,
+                VALIDATED_AT_MS / 1_000 + 600,
+                2,
+            ),
+            test_deadline(),
+        )
         .expect_err("omitted required row must fail");
     assert_eq!(
         error,
@@ -449,7 +525,7 @@ fn later_sequence_cannot_substitute_for_required_row() {
     let reputation = Arc::new(ReputationProbe::default());
     let capture = capture(Arc::clone(&provider), Arc::clone(&reputation), 8);
     assert_eq!(
-        capture.admit(&required),
+        capture.admit(&required, test_deadline()),
         Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
     );
     assert!(reputation.calls().is_empty());
@@ -470,8 +546,14 @@ fn complete_batch_is_validated_before_first_callback_or_ack() {
         VALIDATED_AT_MS / 1_000 + 600,
         2,
     );
-    let first_record = provider.admit(&first).expect("stage first").record;
-    let mut substituted = provider.admit(&second).expect("stage second").record;
+    let first_record = provider
+        .admit(&first, test_deadline())
+        .expect("stage first")
+        .record;
+    let mut substituted = provider
+        .admit(&second, test_deadline())
+        .expect("stage second")
+        .record;
     substituted.lease_expires_at_unix_ms = substituted
         .lease_expires_at_unix_ms
         .and_then(|expires| expires.checked_add(1));
@@ -501,7 +583,7 @@ fn callback_crash_retains_row_for_exact_restart_replay() {
         2,
     );
     assert_eq!(
-        capture(Arc::clone(&provider), Arc::clone(&reputation), 8).admit(&request),
+        capture(Arc::clone(&provider), Arc::clone(&reputation), 8).admit(&request, test_deadline()),
         Err(StreamTokenGatewayAdmissionErrorV1::ReputationCallback)
     );
     assert_eq!(provider.acknowledged_through(), 0);
@@ -517,20 +599,26 @@ fn shared_provider_owns_concurrency_and_release_across_replicas() {
     let first_replica = capture(Arc::clone(&provider), Arc::clone(&reputation), 8);
     let second_replica = capture(Arc::clone(&provider), Arc::clone(&reputation), 8);
     let first = first_replica
-        .admit(&request(
-            "nonce-stream-a",
-            VALIDATED_AT_MS,
-            VALIDATED_AT_MS / 1_000 + 600,
-            1,
-        ))
+        .admit(
+            &request(
+                "nonce-stream-a",
+                VALIDATED_AT_MS,
+                VALIDATED_AT_MS / 1_000 + 600,
+                1,
+            ),
+            test_deadline(),
+        )
         .expect("first lease");
     let blocked = second_replica
-        .admit(&request(
-            "nonce-stream-b",
-            VALIDATED_AT_MS + 1,
-            VALIDATED_AT_MS / 1_000 + 600,
-            1,
-        ))
+        .admit(
+            &request(
+                "nonce-stream-b",
+                VALIDATED_AT_MS + 1,
+                VALIDATED_AT_MS / 1_000 + 600,
+                1,
+            ),
+            test_deadline(),
+        )
         .expect("authenticated concurrency terminal");
     assert_eq!(
         blocked.outcome.status,
@@ -545,12 +633,15 @@ fn shared_provider_owns_concurrency_and_release_across_replicas() {
     );
     assert_eq!(
         second_replica
-            .admit(&request(
-                "nonce-stream-c",
-                VALIDATED_AT_MS + 2,
-                VALIDATED_AT_MS / 1_000 + 600,
-                1,
-            ))
+            .admit(
+                &request(
+                    "nonce-stream-c",
+                    VALIDATED_AT_MS + 2,
+                    VALIDATED_AT_MS / 1_000 + 600,
+                    1,
+                ),
+                test_deadline()
+            )
             .expect("lease after release")
             .outcome
             .status,
@@ -563,87 +654,29 @@ fn crashed_lease_expires_at_exact_authenticated_deadline() {
     let reputation = Arc::new(ReputationProbe::default());
     let capture = capture(Arc::clone(&provider), reputation, 8);
     let first = capture
-        .admit(&request(
-            "nonce-expiring-a",
-            VALIDATED_AT_MS,
-            VALIDATED_AT_MS / 1_000 + 600,
-            1,
-        ))
+        .admit(
+            &request(
+                "nonce-expiring-a",
+                VALIDATED_AT_MS,
+                VALIDATED_AT_MS / 1_000 + 600,
+                1,
+            ),
+            test_deadline(),
+        )
         .expect("first lease");
     let deadline = first
         .lease_expires_at_unix_ms
         .expect("authenticated lease deadline");
     assert_eq!(
         capture
-            .admit(&request(
-                "nonce-expiring-b",
-                deadline,
-                deadline / 1_000 + 600,
-                1,
-            ))
+            .admit(
+                &request("nonce-expiring-b", deadline, deadline / 1_000 + 600, 1,),
+                test_deadline()
+            )
             .expect("lease at exact prior expiry")
             .outcome
             .status,
         StreamTokenValidationStatusV1::Accepted
-    );
-}
-#[test]
-fn lease_deadline_is_exact_and_rejects_early_late_expired_and_overflow_values() {
-    let provider = DurableProvider::new();
-    let short = request(
-        "nonce-lease-boundary",
-        VALIDATED_AT_MS,
-        VALIDATED_AT_MS / 1_000 + 30,
-        2,
-    );
-    let admission = provider.admit(&short).expect("short token lease");
-    let expected = VALIDATED_AT_MS + 30_000;
-    assert_eq!(admission.record.lease_expires_at_unix_ms, Some(expected));
-    admission
-        .validate_for_request(&short, qualification())
-        .expect("exact lease deadline");
-    let mut early = admission;
-    early.record.lease_expires_at_unix_ms = Some(expected - 1);
-    assert_eq!(
-        early.validate_for_request(&short, qualification()),
-        Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
-    );
-    let mut late = admission;
-    late.record.lease_expires_at_unix_ms = Some(expected + 1);
-    assert_eq!(
-        late.validate_for_request(&short, qualification()),
-        Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
-    );
-    let mut expired = admission;
-    expired.record.lease_token_expires_at_epoch = Some(VALIDATED_AT_MS / 1_000);
-    expired.record.lease_expires_at_unix_ms = Some(VALIDATED_AT_MS);
-    assert_eq!(
-        expired.validate_for_request(&short, qualification()),
-        Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
-    );
-    let mut overflowing_token = short.clone();
-    overflowing_token
-        .quota
-        .as_mut()
-        .expect("quota")
-        .expires_at_epoch = u64::MAX / 1_000 + 1;
-    assert_eq!(
-        overflowing_token.validate(),
-        Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)
-    );
-    let mut mismatched_bytes = short.clone();
-    mismatched_bytes
-        .quota
-        .as_mut()
-        .expect("quota")
-        .requested_bytes = 959;
-    assert_eq!(
-        mismatched_bytes.validate(),
-        Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)
-    );
-    assert_eq!(
-        exact_lease_expiry_unix_ms(u64::MAX - 5, u64::MAX / 1_000, 10),
-        Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)
     );
 }
 
@@ -660,17 +693,17 @@ fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() 
     );
     let request_frame = crate::frame_test_support::assert_current_frame(
         &request,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRequestV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionRequestV1",
     );
     let decoded_request: StreamTokenGatewayAdmissionRequestV1 =
         norito::decode_canonical(&request_frame).expect("decode provider request");
     decoded_request.validate().expect("valid decoded request");
     let result = provider
-        .admit(&decoded_request)
+        .admit(&decoded_request, test_deadline())
         .expect("atomic provider admission");
     let result_frame = crate::frame_test_support::assert_current_frame(
         &result,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionResultV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionResultV1",
     );
     let decoded_result: StreamTokenGatewayAdmissionResultV1 =
         norito::decode_canonical(&result_frame).expect("decode admission result");
@@ -679,17 +712,19 @@ fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() 
         .expect("exact result binding");
     let record_frame = crate::frame_test_support::assert_current_frame(
         &decoded_result.record,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRecordV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionRecordV1",
     );
     let record: StreamTokenGatewayAdmissionRecordV1 =
         norito::decode_canonical(&record_frame).expect("decode callback record");
     record
         .validate_for_request(&request, qualification())
         .expect("exact callback binding");
-    let readback = provider.pending(8).expect("oldest pending prefix");
+    let readback = provider
+        .pending(8, test_deadline())
+        .expect("oldest pending prefix");
     let readback_frame = crate::frame_test_support::assert_current_frame(
         &readback,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionReadbackV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionReadbackV1",
     );
     let decoded_readback: StreamTokenGatewayAdmissionReadbackV1 =
         norito::decode_canonical(&readback_frame).expect("decode pending prefix");
@@ -698,23 +733,23 @@ fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() 
         .expect("exact contiguous prefix");
     assert_eq!(decoded_readback.records, vec![record]);
     let acknowledged = provider
-        .acknowledge(record)
+        .acknowledge(record, test_deadline())
         .expect("acknowledge exact callback");
     assert_eq!(acknowledged, StreamTokenGatewayAdmissionAckV1::Acknowledged);
     crate::frame_test_support::assert_current_frame(
         &acknowledged,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionAckV1",
     );
     let replay_ack = provider
-        .acknowledge(record)
+        .acknowledge(record, test_deadline())
         .expect("exact acknowledgement replay");
     assert_eq!(replay_ack, StreamTokenGatewayAdmissionAckV1::ExactReplay);
     crate::frame_test_support::assert_current_frame(
         &replay_ack,
-        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1",
+        "iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionAckV1",
     );
     let replay = provider
-        .admit(&decoded_request)
+        .admit(&decoded_request, test_deadline())
         .expect("exact admitted request replay");
     replay
         .validate_for_request(&decoded_request, qualification())
@@ -730,4 +765,228 @@ fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() 
         Err(norito::Error::SchemaMismatch)
     ));
     assert_eq!(provider.acknowledged_through(), 1);
+}
+
+#[test]
+fn expired_original_deadline_rejects_before_any_provider_or_callback_call() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    provider.state.lock().unwrap().calls.clear();
+    let request = request(
+        "expired-original-deadline",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    assert_eq!(
+        capture.admit(&request, Instant::now() - Duration::from_millis(1)),
+        Err(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+    );
+    assert!(provider.state.lock().unwrap().calls.is_empty());
+    assert!(reputation.calls().is_empty());
+}
+
+#[test]
+fn one_absolute_deadline_reaches_every_phase_and_serving_follows_callback_acknowledgement() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    provider.state.lock().unwrap().trace = Some(trace.clone());
+    *reputation.trace.lock().unwrap() = Some(trace.clone());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    provider.state.lock().unwrap().calls.clear();
+    trace.lock().unwrap().clear();
+    let deadline = test_deadline();
+    let request = request(
+        "one-original-deadline",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    let record = capture.admit(&request, deadline).unwrap();
+    assert_eq!(
+        record.outcome.status,
+        StreamTokenValidationStatusV1::Accepted
+    );
+    assert_eq!(reputation.calls(), vec![(record, deadline)]);
+    let state = provider.state.lock().unwrap();
+    assert!(state.calls.iter().all(|(_, actual)| *actual == deadline));
+    assert!(
+        state
+            .calls
+            .iter()
+            .all(|(phase, _)| *phase != "qualification"),
+        "purpose proofs must not add redundant standalone Qualification transactions"
+    );
+    for phase in ["pending", "admit", "acknowledge", "confirm_serving"] {
+        assert!(
+            state.calls.iter().any(|(actual, _)| *actual == phase),
+            "missing phase {phase}"
+        );
+    }
+    assert_eq!(state.acknowledged_through, 1);
+    drop(state);
+    let trace = trace.lock().unwrap();
+    let callback = trace.iter().position(|phase| *phase == "callback").unwrap();
+    let ack = trace
+        .iter()
+        .position(|phase| *phase == "acknowledge")
+        .unwrap();
+    let serving = trace
+        .iter()
+        .position(|phase| *phase == "confirm_serving")
+        .unwrap();
+    assert!(callback < ack && ack < serving);
+    assert_eq!(
+        trace.last(),
+        Some(&"confirm_serving"),
+        "no provider or callback work follows the final serving handoff"
+    );
+}
+
+#[test]
+fn final_serving_proof_failure_prevents_accepted_return_after_callback_success() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    provider.state.lock().unwrap().serving_unavailable = true;
+    let request = request(
+        "failed-final-serving",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    assert_eq!(
+        capture.admit(&request, test_deadline()),
+        Err(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+    );
+    assert_eq!(reputation.calls().len(), 1);
+    assert_eq!(provider.acknowledged_through(), 1);
+    assert_eq!(
+        provider.state.lock().unwrap().calls.last().unwrap().0,
+        "confirm_serving"
+    );
+}
+
+#[test]
+fn final_serving_record_substitution_prevents_accepted_return() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    provider.state.lock().unwrap().serving_substituted = true;
+    let request = request(
+        "substituted-final-serving",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    assert_eq!(
+        capture.admit(&request, test_deadline()),
+        Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
+    );
+    assert_eq!(reputation.calls().len(), 1);
+    assert_eq!(provider.acknowledged_through(), 1);
+}
+
+#[test]
+fn configured_identity_is_only_a_pin_and_startup_still_live_qualifies() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    assert_eq!(provider.configured_qualification(), qualification());
+    assert_eq!(
+        provider
+            .state
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        vec!["qualification"],
+        "construction performs exactly one live qualification"
+    );
+    capture
+        .validate_expected_binding(HANDLE, qualification(), 8, Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(provider.state.lock().unwrap().calls.len(), 2);
+    provider.state.lock().unwrap().qualification_unavailable = true;
+    assert_eq!(
+        capture.validate_expected_binding(HANDLE, qualification(), 8, Duration::from_secs(60)),
+        Err(StreamTokenGatewayAdmissionErrorV1::Unavailable),
+        "matching configured pins cannot replace fresh launch authority"
+    );
+    provider.state.lock().unwrap().qualification_unavailable = false;
+    provider.state.lock().unwrap().admission_unavailable = true;
+    let request = request(
+        "same-pins-unavailable-purpose",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    assert_eq!(
+        capture.admit(&request, test_deadline()),
+        Err(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+    );
+    assert!(reputation.calls().is_empty());
+    assert!(provider.state.lock().unwrap().records.is_empty());
+}
+
+#[test]
+fn substituted_configured_identity_rejects_before_live_qualification() {
+    let mut provider = DurableProvider::new();
+    provider.configured_qualification.policy_digest[0] ^= 1;
+    let provider = Arc::new(provider);
+    assert!(matches!(
+        StreamTokenAdmissionCaptureV1::try_new(
+            HANDLE,
+            qualification(),
+            8,
+            Duration::from_secs(60),
+            provider.clone(),
+            Arc::new(ReputationProbe::default()),
+        ),
+        Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch)
+    ));
+    assert!(provider.state.lock().unwrap().calls.is_empty());
+}
+
+#[test]
+fn native_delivery_binding_substitution_rejects_startup() {
+    let reputation = Arc::new(ReputationProbe::default());
+    reputation.wrong_binding.store(1, Ordering::Release);
+    let result = StreamTokenAdmissionCaptureV1::try_new(
+        HANDLE,
+        qualification(),
+        8,
+        Duration::from_secs(60),
+        Arc::new(DurableProvider::new()),
+        reputation,
+    );
+    assert!(matches!(
+        result,
+        Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch)
+    ));
+}
+
+#[test]
+fn native_delivery_binding_drift_rejects_before_any_operation_work() {
+    let provider = Arc::new(DurableProvider::new());
+    let reputation = Arc::new(ReputationProbe::default());
+    let capture = capture(provider.clone(), reputation.clone(), 8);
+    provider.state.lock().unwrap().calls.clear();
+    reputation.wrong_binding.store(1, Ordering::Release);
+    let request = request(
+        "delivery-binding-drift",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    assert_eq!(
+        capture.admit(&request, test_deadline()),
+        Err(StreamTokenGatewayAdmissionErrorV1::StaleOrRevoked)
+    );
+    assert!(reputation.calls().is_empty());
+    assert!(provider.state.lock().unwrap().calls.is_empty());
 }

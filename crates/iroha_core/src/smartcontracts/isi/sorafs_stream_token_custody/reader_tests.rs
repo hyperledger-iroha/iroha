@@ -48,6 +48,12 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         [true]
     );
     let original = chain.committed(2);
+    let original_qc = original
+        .block()
+        .commit_certificate()
+        .expect("genuine native exact-quorum certificate")
+        .commit_qc()
+        .to_vec();
     chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert_eq!(
         read(&policy.binding, 2),
@@ -70,14 +76,7 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         .kura()
         .corrupt_commit_certificate_for_testing(
             std::num::NonZeroUsize::new(2).unwrap(),
-            Some(
-                original
-                    .block()
-                    .commit_certificate()
-                    .unwrap()
-                    .commit_qc()
-                    .to_vec(),
-            ),
+            Some(original_qc.clone()),
         )
         .unwrap();
     assert_eq!(
@@ -90,6 +89,19 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
     );
     // A certified successor: the retained row is current at a certified block.
     assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());
+    // Re-corrupt the historical certificate after the actual successor is sealed.
+    // Its otherwise valid newer QC cannot repair the required authority prefix.
+    chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
+    assert_eq!(read(&policy.binding, 3), Err(Error::FinalityUnavailable));
+    // Restore only the actual original stored QC, without inventing an execution result.
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(original_qc),
+        )
+        .expect("restore original native certificate");
+    // The retained row is now current on the independently certified complete prefix.
     let current = read(&policy.binding, 3)
         .expect("same-State finality")
         .expect("raw custody");

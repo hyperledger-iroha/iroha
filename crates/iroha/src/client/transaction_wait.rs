@@ -9,8 +9,9 @@ use eyre::{Result, eyre};
 use super::{
     HashOf, PipelineTransactionStatusResponse, Response, SignedTransaction, TransactionWaitOptions,
     TransactionWaitOutcome, TxConfirmationStatus, transaction_wait_outcome,
-    tx_confirmation_final_report, tx_confirmation_unresolved_final_report,
-    validate_global_pipeline_status_response,
+    tx_confirmation_final_report, tx_confirmation_status_from_pipeline_response,
+    tx_confirmation_unresolved_final_report, validate_global_pipeline_status_response,
+    validate_pipeline_status_response,
 };
 
 /// Exact authoritative proof that a signed transaction can no longer become `Applied`.
@@ -113,9 +114,26 @@ pub(super) fn retry_after_delay(response: &Response<Vec<u8>>) -> Result<Option<D
     Ok(retry_after)
 }
 
+/// Explicit internal status authority; local observations never become global failure proofs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Scope {
+    Global,
+    Local,
+}
+
+impl Scope {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Local => "local",
+        }
+    }
+}
+
 /// One finality decision rule shared by blocking and asynchronous transports.
 pub(super) struct PollState {
     hash: HashOf<SignedTransaction>,
+    scope: Scope,
     options: TransactionWaitOptions,
     started: Instant,
     deadline: Instant,
@@ -130,6 +148,7 @@ impl PollState {
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
         inherited_deadline: Option<Instant>,
+        scope: Scope,
     ) -> Result<Self> {
         if options.poll_interval.is_zero() {
             return Err(eyre!(
@@ -143,6 +162,7 @@ impl PollState {
         let deadline = inherited_deadline.map_or(deadline, |inherited| inherited.min(deadline));
         Ok(Self {
             hash,
+            scope,
             options,
             started,
             deadline,
@@ -193,7 +213,9 @@ impl PollState {
         };
         let kind = response.status.kind.as_str();
         self.last_status = Some(kind.to_owned());
-        let status = validate_global_pipeline_status_response(&response, self.hash)?;
+        validate_pipeline_status_response(&response, self.hash, self.scope.as_str())?;
+        let status = tx_confirmation_status_from_pipeline_response(&response)
+            .ok_or_else(|| eyre!("unsupported pipeline transaction status"))?;
         // HTTP completion alone is insufficient: decoding and exact authority
         // validation also belong to this wait. Never accept a late Applied result.
         let observed = self.ensure_before_deadline()?;
@@ -208,6 +230,13 @@ impl PollState {
             TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
                 if response.resolved_from == "state" =>
             {
+                if self.scope == Scope::Local {
+                    return Err(eyre!(
+                        "peer-local transaction {} has state-resolved status `{}`; this observation is not a global finality failure",
+                        self.hash,
+                        response.status.kind
+                    ));
+                }
                 let failure = TransactionFinalityFailure::from_response(self.hash, response)?
                     .ok_or_else(|| {
                         eyre!("fixed terminal status failed canonical classification")
@@ -248,6 +277,9 @@ impl PollState {
         } else {
             eyre!(message)
         };
-        tx_confirmation_unresolved_final_report(report)
+        match self.scope {
+            Scope::Global => tx_confirmation_unresolved_final_report(report),
+            Scope::Local => report.wrap_err("peer-local Applied observation remains unresolved"),
+        }
     }
 }

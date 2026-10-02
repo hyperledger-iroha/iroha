@@ -222,6 +222,9 @@ state_test! { sync ordinary_block_seals_axt_replay_pruning_before_atomic_commit
     let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
     assert!(pending.inspect_prepared(|_| ()).is_err(), "unprepared source is not a publication snapshot");
     pending.prepare(Signers::Quorum).unwrap();
+    assert!(pending.inspect_prepared(|_| ()).is_err(), "a certificate alone has not finalized State metadata");
+    pending.prepare_publication_for_inspection(Signers::Quorum)
+        .expect("real history contention retains finalized original metadata before visibility");
     let inspect_state = Arc::clone(&state);
     let (staged_bytes, staged_hash) = pending.inspect_prepared(move |original| {
         let staged = original.state;
@@ -329,6 +332,9 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
     let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
     pending.prepare(Signers::Quorum).unwrap();
+    assert!(pending.inspect_prepared(|_| ()).is_err(), "a certificate alone has not finalized quota metadata");
+    pending.prepare_publication_for_inspection(Signers::Quorum)
+        .expect("real history contention retains original quota preparation before visibility");
     let (writes, projected_storage, staged_bytes, staged_hash) = pending.inspect_prepared(|original| {
         let block = original.state;
     let writes = block.pending_da_pin_intents.as_ref()

@@ -3042,6 +3042,7 @@ mod tests {
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
+            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),

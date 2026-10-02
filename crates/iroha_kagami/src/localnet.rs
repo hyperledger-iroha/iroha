@@ -207,6 +207,7 @@ impl<T: Write> RunArgs<T> for Args {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
         let opts = LocalnetOptions {
+            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
             sora_profile,
             perf_profile,
             peers,

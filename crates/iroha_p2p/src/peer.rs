@@ -19,7 +19,10 @@ use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
     boilerplate::*,
     preauth::{InboundAuthCompletion, PreauthDeadline},
-    puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
+    puzzle_work_admission::{
+        SoranetOutboundWorkControl, SoranetOutboundWorkOutcome, SoranetPuzzleWorkAdmission,
+        run_soranet_admission_work, run_soranet_outbound_search,
+    },
 };
 #[cfg(test)]
 use bytes::{Buf, BufMut, BytesMut};
@@ -803,28 +806,34 @@ async fn mint_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
     transcript_hash: [u8; 32],
     mut rng: StdRng,
-) -> Result<(MintedChallenge, StdRng), Error> {
-    // Argon2 minting is memory-hard and must stay off peer tasks. The process
-    // gate bounds concurrent memory use independently from connection count.
-    run_soranet_admission_work(
-        config.puzzle_work_admission.outbound_mint_gate(),
-        move |cancellation| {
+) -> Result<MintedChallenge, Error> {
+    // Spare searches share the original process gate and yield to other
+    // handshakes. Advancing the OS-seeded parent gives each worker an
+    // independent CSPRNG stream, including helpers started after contention.
+    run_soranet_outbound_search(Arc::clone(&config.puzzle_work_admission), move || {
+        let config = Arc::clone(&config);
+        let mut worker_rng = StdRng::from_rng(&mut rng);
+        move |control: SoranetOutboundWorkControl| {
             let binding = config.puzzle_binding(&transcript_hash);
-            let ticket = puzzle::mint_ticket_while(
+            let ticket = match puzzle::mint_ticket_while(
                 config.puzzle_params.as_ref(),
                 &binding,
                 config.effective_ticket_ttl(),
-                &mut rng,
-                || !cancellation.is_cancelled(),
-            )
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-            let minted = MintedChallenge {
+                &mut worker_rng,
+                || control.should_continue(),
+            ) {
+                Ok(ticket) => ticket,
+                Err(puzzle::MintError::Cancelled) if control.yielded() => {
+                    return Ok(SoranetOutboundWorkOutcome::Yielded);
+                }
+                Err(error) => return Err(Error::HandshakeSoranet(error.to_string())),
+            };
+            Ok(SoranetOutboundWorkOutcome::Completed(MintedChallenge {
                 credential: ticket.to_vec(),
                 admission: config.admission(),
-            };
-            Ok((minted, rng))
-        },
-    )
+            }))
+        }
+    })
     .await
 }
 async fn verify_handshake_challenge(
@@ -12685,10 +12694,9 @@ mod state {
                 .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
             let admission_transcript =
                 soranet_admission_transcript(&client_hello, &verified_transport_delegation.binding);
-            let (minted, _resumed_rng) =
+            let mut minted =
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
-            let mut minted = minted;
             let send_result =
                 write_handshake_frame(&mut connection.write, &minted.credential).await;
             minted.clear_sensitive_bytes();

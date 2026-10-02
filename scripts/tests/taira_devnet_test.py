@@ -6393,7 +6393,7 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(
             names(REPO_ROOT / "crates" / "iroha_test_network" / "src" / "bin"),
-            set(),
+            {"taira_beacon_bootstrap.rs"},
         )
 
 

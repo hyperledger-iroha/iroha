@@ -9,6 +9,9 @@ use iroha_data_model::kagemusha::*;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 
+#[path = "ordinary_app_identity/governed_policy.rs"]
+mod governed_policy;
+pub use governed_policy::KagemushaOrdinaryGovernedPolicyOriginalsV1;
 #[path = "ordinary_app_identity/journal.rs"]
 mod journal;
 pub use journal::KagemushaOrdinaryAppEnrollmentAttemptV1;
@@ -21,9 +24,25 @@ pub use retail_enrollment_journal::KagemushaOrdinaryRetailEnrollmentAttemptV1;
 #[path = "ordinary_app_identity/preparation_reservation.rs"]
 mod preparation_reservation;
 pub use preparation_reservation::{
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1,
+    KagemushaAuthenticatedOrdinaryLineageAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
+    KagemushaOrdinaryCurrentFinancialControlOwnerV1, KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    KagemushaOrdinaryIntegrityRefreshOwnerV1, KagemushaOrdinaryPreparationCarrierV1,
     KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
 };
+pub(crate) use preparation_reservation::{
+    KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,
+    KagemushaCapturedOrdinaryFinancialControlDecisionV1, KagemushaOrdinaryLineageCasOwnerV1,
+};
+
+#[path = "ordinary_app_identity/issuer_preparation.rs"]
+mod issuer_preparation;
+pub use issuer_preparation::KagemushaOrdinaryIssuerPreparationAttemptV1;
 
 /// Confidential closed ordinary identity failures; private inputs are never formatted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

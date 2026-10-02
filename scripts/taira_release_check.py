@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Qualify basic Taira connectivity, or the full regression census, before a build.
+"""Run optional basic or full Taira regression diagnostics independently of deployment.
 
 Requires Python 3.11+, the repository Rust toolchain, and executable lsof at
-/usr/sbin/lsof on macOS or /usr/bin/lsof on Linux. Both qualification and focused
-checks validate this artifact-inspection prerequisite before compilation. Install
+/usr/sbin/lsof on macOS or /usr/bin/lsof on Linux. Both scopes and focused
+diagnostics validate this artifact-inspection prerequisite before compilation. Install
 lsof with the platform package manager if absent; runtime inspection failures still
 retain artifacts. Compile focused native harnesses and run a four-peer network
 with isolated Cargo and fixture-only inputs. Selected beacon workloads validate
@@ -34,16 +34,16 @@ The default basic scope keeps deployment custody, authentication, application an
 startup admission checks plus real four-validator Applied transactions and restart.
 After configuration, explicit MV ownership stages and the complete admitted-map,
 Concread admission/writer/checkpoint source census execute before native archive
-recovery controls. Either prerequisite stops qualification on failure before
-other startup checks, shipping builds or network execution. These controls use
+recovery controls. Either prerequisite stops the optional diagnostic on failure
+before its other startup checks, shipping builds or fixture network execution. These controls use
 the same complete native compile graph. Focused development checks execute
 selected MV targets before building mandatory configuration in the same lane;
 that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes run the exact reset-scope CLI test
 and canonical outcome, transaction-details and prepared-account admission Torii
 groups from the completed native graph. They collect failures before the
-production shipping build; preparation records this exact passed prefix in its
-pre-network checkpoint. The four-peer network fixture then runs
+diagnostic shipping build; this diagnostic records its exact passed prefix in
+its pre-network checkpoint. Preparation records that regressions were not run. The four-peer network fixture then runs
 before the remaining independent tests, so an unusable fresh testnet fails
 before the long regression census. The complete independent checkpoint is
 published only after that fixture and the deferred census pass.
@@ -64,12 +64,13 @@ unrequested data-model tests. Selected portable MV/Concread controls run first i
 a separate diagnostic Cargo graph. Configuration and the remaining targets build
 afterward in the same warm lane; configuration must pass
 before nonportable tests and overall success. Unselected harnesses wait for
-immutable preparation, whose complete compile graph is unchanged. Selected native archive
+the complete optional diagnostic; preparation builds its authenticated shipping
+graph independently. Selected native archive
 recovery runs immediately after configuration and must pass before the
 remaining nonportable focused regressions.
 The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
-does not replace immutable preparation or its complete gate.
+does not replace authenticated preparation or its source, tool and artifact custody checks.
 Linux development checks default to LLVM 18, requiring executable /usr/bin/clang-18
 and /usr/bin/ld.lld-18 before compilation. Missing tools fail without fallback;
 install clang-18 and lld-18 with the platform package manager, or explicitly select
@@ -104,7 +105,7 @@ import tomllib
 import uuid
 
 
-# Authenticated preparation injects the census executed from retained verified bytes.
+# Captured diagnostics inject the census from retained authenticated source bytes.
 # Only the explicitly mutable development gate reads its adjacent source from disk.
 if __name__ == "taira_captured_release_check":
     _native_inventory = _captured_native_inventory
@@ -4391,7 +4392,7 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
     print(f"[taira-prequalify] diagnostic passed: {selected_harness_count} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "
-          "NOT release qualification; immutable prepare still runs its complete gate.", flush=True)
+          "Development diagnostic only; prepare builds without regression checks.", flush=True)
 
 
 PRIORITY_CLI_TESTS = (
@@ -4484,7 +4485,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                update_independent_checks=None,
                completed_pre_network_checks: dict[str, object] | None = None,
                update_pre_network_checks=None) -> None:
-    """Run the gate; preparation alone may supply its exact-request checkpoints.
+    """Run optional diagnostics with exact-request observation checkpoints.
+
+    Preparation does not invoke this runner. Neither scope is a prerequisite
+    for authenticated builds or deployment.
 
     The pre-network checkpoint binds the MV ownership, startup and priority
     prefix that passes before the four-peer fixture. The complete checkpoint
@@ -4649,9 +4653,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
             if shipping and not split_network_stages(scoped_stages["network"])[1]:
                 raise CheckError("shipping graph requires a selected runtime network fixture")
             if scoped_stages["network"]:
-                # A fresh testnet that cannot commit its first transaction is a
-                # release blocker. Qualify the real four-peer path before the
-                # remaining long census, using the same isolated native artifacts.
+                # Check the real four-peer path before the remaining diagnostic
+                # census, using the same isolated native artifacts. A failure
+                # fails this optional diagnostic, not a deployment prerequisite.
                 run_network_checks(root, fixture_root, env, lock_fds,
                                    harness=harnesses["network"], stages=scoped_stages["network"],
                                    inventories=inventories)
@@ -4694,7 +4698,7 @@ def main() -> int:
                         help="repository root (default: this maintained script's parent repository)")
     parser.add_argument("--target-dir", type=Path, help="existing development Cargo lane (default: sibling routine lane)")
     parser.add_argument("--native-check-scope", choices=QUALIFICATION_SCOPES, default="basic",
-                        help="basic application/startup checks (default), or full advanced regressions")
+                        help="optional development diagnostics: basic application/startup regressions (default), or full census; neither blocks preparation or deployment")
     parser.add_argument("--native-linker", choices=("system", "llvm"), default=release.default_development_linker(),
                         help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",

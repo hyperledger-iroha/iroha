@@ -14,7 +14,7 @@ from typing import Callable
 
 from .apple_receipt import verify_apple_receipt
 from .attestation import (RawPlatformProof, cbor_exact, decode_android_chain, fixed32,
-                          require, verify_android_raw, verify_apple_raw)
+                          require, verify_android_persistent_app_key_raw, verify_apple_raw)
 from .ordinary_enrollment import (EnrollmentPossession, OrdinaryEnrollmentChallenge,
     OrdinaryPlatformEvidenceChallenge, authenticate_challenge_transport,
     credential_signing_request, decode_challenge_transport, verify_enrollment_possession)
@@ -285,7 +285,7 @@ class GovernedOrdinaryEvidenceProvider:
             chain = decode_android_chain(request.raw_attestation)
             selected_root = (platform.root_for_chain(chain[-1]) if type(platform) is GoogleKeyMintPolicy
                              else platform.attestation_root_der)
-            proof = verify_android_raw(chain, selected, platform.package_name, platform.package_version,
+            proof = verify_android_persistent_app_key_raw(chain, selected, platform.package_name, platform.package_version,
                 platform.signing_certificate_sha256, selected_root,
                 hashlib.sha256(selected_root).digest(), evidence_time, self._openssl,
                 allowed_security_levels=platform.allowed_security_levels)

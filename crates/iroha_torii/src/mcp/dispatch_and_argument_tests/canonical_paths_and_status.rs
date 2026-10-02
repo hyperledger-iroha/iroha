@@ -537,7 +537,13 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 }
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
+    let cases: [(Value, fn(&Map) -> Result<String, String>); 13] = [
+        (norito::json!({ "code_hash": "cafebabe" }), |args| {
+            contract_artifact_route(args, false)
+        }),
+        (norito::json!({ "hash": "cafebabe" }), |args| {
+            contract_artifact_route(args, false)
+        }),
         (
             norito::json!({ "dataspace_id": "0", "code_hash": ("11".repeat(32)) }),
             |arguments| contract_artifact_route(arguments, false),

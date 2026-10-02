@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+diagnostics=false
+case "$#" in
+  0) ;;
+  1)
+    if [[ "$1" != "--diagnostics" ]]; then
+      echo "usage: $0 [--diagnostics]" >&2
+      exit 2
+    fi
+    diagnostics=true
+    ;;
+  *)
+    echo "usage: $0 [--diagnostics]" >&2
+    exit 2
+    ;;
+esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "${repo_root}"
@@ -57,7 +73,24 @@ finally:
 PY
 }
 
+verify_cargo_lock_unchanged() {
+  if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]; then
+    echo "workspace Cargo.lock changed during the release gate" >&2
+    exit 1
+  fi
+}
+
 expected_cargo_lock_sha256="$(cargo_lock_sha256)"
+
+echo "[sorafs-release] runtime-provider broker deployment contracts"
+python3 scripts/tests/check_runtime_provider_broker_install_test.py
+
+verify_cargo_lock_unchanged
+
+if [[ "${diagnostics}" != true ]]; then
+  echo "[sorafs-release] source integrity checks complete; diagnostics were not run"
+  exit 0
+fi
 
 echo "[sorafs-release] fmt check (workspace)"
 cargo fmt --all -- --check
@@ -233,8 +266,5 @@ cargo test --locked -p sorafs_manifest --features pqc,dev-tools --all-targets
 echo "[sorafs-release] tests sorafs_chunker"
 cargo test --locked -p sorafs_chunker --all-targets
 
-if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]; then
-  echo "workspace Cargo.lock changed during the release gate" >&2
-  exit 1
-fi
+verify_cargo_lock_unchanged
 echo "[sorafs-release] release verification complete"

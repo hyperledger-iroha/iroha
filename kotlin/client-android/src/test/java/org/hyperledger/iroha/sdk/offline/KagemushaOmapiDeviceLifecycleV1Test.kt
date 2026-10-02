@@ -57,10 +57,10 @@ class KagemushaOmapiDeviceLifecycleV1Test {
                 timeoutCallbacks += 1
             },
         )
-        assertEquals(
-            KagemushaDeviceLifecycleBridgeV1.Availability.ONLINE_ONLY,
-            pending.join().bridge.availability,
-        )
+        assertEquals(null, pending.join().bridge)
+        assertFailsWith<java.util.concurrent.CompletionException> {
+            KagemushaOmapiDeviceLifecycleV1.projectDiscovery(pending).join()
+        }
         assertFalse(
             KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) {
                 timeoutCallbacks += 1
@@ -101,17 +101,21 @@ class KagemushaOmapiDeviceLifecycleV1Test {
         var shutdowns = 0
         assertTrue(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) { shutdowns++ })
         assertEquals(KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.TIMED_OUT, pending.join().status)
-        assertEquals(KagemushaDeviceLifecycleBridgeV1.Availability.ONLINE_ONLY, pending.join().bridge.availability)
+        assertEquals(null, pending.join().bridge)
         assertFalse(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) { shutdowns++ })
         assertEquals(1, shutdowns)
         val original = KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE1", SecurityException("denied"))
         val complete = CompletableFuture.completedFuture(KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
-            KagemushaDeviceLifecycleBridgeV1.onlineOnly(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.UNAVAILABLE, listOf(original)))
+            null, KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.UNAVAILABLE, listOf(original)))
         assertFalse(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(complete) { shutdowns++ })
         assertTrue(complete.join().failures.single() === original)
+        val rejected = assertFailsWith<java.util.concurrent.CompletionException> {
+            KagemushaOmapiDeviceLifecycleV1.projectDiscovery(complete).join()
+        }
+        assertTrue(rejected.cause?.cause === original.cause)
         assertEquals(1, shutdowns)
         assertFailsWith<IllegalArgumentException> { KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
-            KagemushaDeviceLifecycleBridgeV1.onlineOnly(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE, emptyList()) }
+            null, KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE, emptyList()) }
     }
 
     @Test

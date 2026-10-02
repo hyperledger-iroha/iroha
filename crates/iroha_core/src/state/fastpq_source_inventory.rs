@@ -36,7 +36,9 @@ pub use statement_reservation::{
 /// order. This is not the physical order of state fragments. Rejected and
 /// zero-transcript calls remain present; a transcript capture does not invent an
 /// additional execution call. Protocol work without a transcript is not a proof
-/// source. The inactive native prefix retains separate test-only join controls.
+/// source. Applied SNS maintenance and retained governance share the public
+/// ProtocolPurpose kind but final reconciliation requires exactly one private
+/// native or governance quota owner for every purpose; the kind grants neither.
 ///
 /// Private construction prevents a supplied archive from becoming an owned
 /// inventory. The seal retains exact finalized public occurrences while excluding
@@ -494,6 +496,13 @@ impl StateBlock<'_> {
     pub(crate) fn verified_fastpq_source_inventory_for_capture(
         &self,
     ) -> Result<Arc<FastpqSourceInventoryV1>, String> {
+        #[cfg(test)]
+        if matches!(
+            self.execution_output_plan,
+            Some(super::output_capacity::ExecutionOutputPlanState::Inspecting)
+        ) {
+            return Err("FASTPQ witness capture refuses a source inspection carrier".into());
+        }
         if matches!(
             self.execution_output_plan,
             Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)

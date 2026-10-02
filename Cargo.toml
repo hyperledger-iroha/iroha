@@ -494,7 +494,18 @@ opt-level = 3
 [profile.test.package.halo2curves-axiom]
 opt-level = 3
 
-# Pasta owns the concrete field and curve operations reexported by halo2curves.
+# Native signer finality also validates paired Pasta keys through halo2curves
+# 0.9, which owns its concrete Fp/Fq arithmetic. CPU samples of the native
+# signer workflow found its unoptimized square roots in repeated epoch checks.
+# Optimize that owner in both local profiles without changing expiry, proof
+# verification, debug assertions, or overflow checks.
+[profile.dev.package.halo2curves]
+opt-level = 3
+
+[profile.test.package.halo2curves]
+opt-level = 3
+
+# Pasta owns the concrete arithmetic reexported by halo2curves-axiom.
 # Optimizing the reexporting crate alone leaves its upstream arithmetic at O0.
 # Preserve assertions and overflow checks in both local runnable profiles.
 [profile.dev.package.pasta_curves]

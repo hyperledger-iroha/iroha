@@ -3441,6 +3441,14 @@ mod tests {
         chain_id: ChainId,
         nexus: Option<iroha_config::parameters::actual::Nexus>,
     ) -> State {
+        runtime_state_with_genesis_instructions(world, chain_id, nexus, Vec::new())
+    }
+    fn runtime_state_with_genesis_instructions(
+        world: World,
+        chain_id: ChainId,
+        nexus: Option<iroha_config::parameters::actual::Nexus>,
+        genesis_instructions: Vec<InstructionBox>,
+    ) -> State {
         use crate::sumeragi::{
             startup,
             test_chain::{CertifiedTestChain, TestChainConfig},
@@ -3449,6 +3457,7 @@ mod tests {
         let mut config = TestChainConfig::new(world, 0);
         config.chain_id = chain_id;
         config.nexus = nexus;
+        config.genesis_instructions = genesis_instructions;
         let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
         let consensus_mode = config.consensus_mode;
         let prepared =
@@ -3592,14 +3601,55 @@ mod tests {
         ])
         .expect("sbp dataspace catalog");
         nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
-        let state = runtime_state(
+        // The executor resolves aliases from committed SNS state. A static node
+        // catalog alone cannot stand in for the original bootstrap name lease.
+        let bootstrap_dataspace = EnsureAlias::new(
+            AliasIntentV1::Dataspace(iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
+                dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
+                    "sbp".parse().expect("canonical sbp dataspace name"),
+                    sbp,
+                ),
+                owner: signer1_id.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: 1,
+                expected_payment_asset: payment_asset_definition_id.clone(),
+                max_amount: Quantity::zero(),
+                valid_until_ms: u64::MAX,
+            },
+        );
+        let state = runtime_state_with_genesis_instructions(
             world,
             ChainId::from("multisig-fi-registration-alias-batch"),
             Some(nexus),
+            vec![bootstrap_dataspace.into()],
         );
         let block_header = runtime_header(&state, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction_for_callback_testing();
+        assert_eq!(
+            crate::sns::resolve_active_dataspace_id_by_alias(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                "sbp",
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("original signed genesis retains the sbp name lease"),
+            sbp,
+        );
+        assert_eq!(
+            get_name_record(
+                tx.world(),
+                tx.world().dataspace_catalog(),
+                SnsNamespace::Dataspace,
+                "sbp",
+                tx.block_unix_timestamp_ms(),
+            )
+            .expect("committed bootstrap dataspace lease")
+            .owner,
+            signer1_id,
+        );
         let spec = spec(
             BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             2,
@@ -6844,6 +6894,18 @@ seiyaku TriggerDispatch {
             .expect("compile trigger dispatch contract");
         let (bytecode, contract_address) =
             install_trigger_contract(&mut tx, &owner_id, &owner_keypair, program, manifest, 6_061);
+        // Context authority remains the multisig caller, while ledger effects
+        // are authorized by the contract subject. Delegate only this target.
+        Grant::account_permission(
+            Permission::from(
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: multisig_id.clone(),
+                },
+            ),
+            contract_address.subject_id(),
+        )
+        .execute(&multisig_id, &mut tx)
+        .expect("delegate exact caller metadata permission to the contract subject");
         let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(
@@ -7350,9 +7412,7 @@ seiyaku TriggerDispatch {
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut tx)
-            .expect("domain registration");
+        domain!(tx, signer1_id, domain_id, "domain registration");
         account!(tx, signer1_id, domain_id, signer1_id, "register signer1");
         account!(tx, signer1_id, domain_id, signer2_id, "register signer2");
         let spec = spec(

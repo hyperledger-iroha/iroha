@@ -360,6 +360,23 @@ class StagingModeTests(unittest.TestCase):
 
 
 class StagedPublicationTests(unittest.TestCase):
+    def test_private_staging_is_required_before_explicit_public_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary).resolve(strict=True)
+            (stage / "release").mkdir()
+            artifact = stage / "release/example.to"
+            artifact.write_bytes(b"compiler output")
+            artifact.chmod(0o644)
+            rows = [MODULE.Golden("standard", Path("example.ko"), Path("example.to"))]
+            with mock.patch.object(MODULE, "COMPILER_MANIFESTS", {}):
+                with self.assertRaisesRegex(MODULE.GoldenError, "mode 0600"):
+                    MODULE.rendered_files(stage, rows)
+                artifact.chmod(0o600)
+                rendered = MODULE.rendered_files(stage, rows)
+            self.assertEqual(rendered[0].mode, 0o644)
+            self.assertEqual(artifact.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(artifact.read_bytes(), b"compiler output")
+
     def test_publish_and_check_touch_only_the_distinct_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve(strict=True)

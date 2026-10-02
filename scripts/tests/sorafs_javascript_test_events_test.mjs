@@ -175,6 +175,16 @@ const mutations = {
   "coordinate mutation": (e) => { event(e, "test:pass").data.column += 1; },
   "ordinal mutation": (e) => { event(e, "test:pass").data.testNumber += 1; },
   "parent label": (e) => { event(e, "test:pass", 1).data.classname = "other"; },
+  "matching nested detail label is not an original field": (e) => {
+    const terminal = event(e, "test:complete", 1);
+    terminal.data.details.classname = e.find((x) => x.type === "test:enqueue"
+      && x.data.testId === terminal.data.parentId).data.name;
+  },
+  "matching nested outer label is not an original field": (e) => {
+    const terminal = event(e, "test:pass", 1);
+    terminal.data.classname = e.find((x) => x.type === "test:enqueue"
+      && x.data.testId === terminal.data.parentId).data.name;
+  },
   "duplicate enqueue": (e) => { e.splice(1, 0, structuredClone(e[0])); },
   "duplicate pass": (e) => { const i = e.findIndex((x) => x.type === "test:pass"); e.splice(i + 1, 0, structuredClone(e[i])); },
   "missing complete": (e) => { e.splice(e.findIndex((x) => x.type === "test:complete"), 1); },

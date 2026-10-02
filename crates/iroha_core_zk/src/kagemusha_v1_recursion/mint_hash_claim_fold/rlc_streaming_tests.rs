@@ -10,15 +10,15 @@ mod rlc_streaming_tests {
     fn endpoint(values: &[u128], challenge: u128) -> u128 {
         let mut coefficients = values
             .iter()
-            .map(|value| value % CLAIM_CARRIER_RLC_MODULUS_V1)
+            .map(|value| value % CARRIER_RLC_MODULUS_V1)
             .collect::<Vec<_>>();
-        for values in values.chunks(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
+        for values in values.chunks(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
             let mut pack = 0_u128;
             let mut power = 1_u128;
             for (index, value) in values.iter().enumerate() {
-                pack += (value / CLAIM_CARRIER_RLC_MODULUS_V1) * power;
+                pack += (value / CARRIER_RLC_MODULUS_V1) * power;
                 if index + 1 < values.len() {
-                    power *= CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1;
+                    power *= CARRIER_RLC_QUOTIENT_RADIX_V1;
                 }
             }
             coefficients.push(pack);
@@ -26,16 +26,14 @@ mod rlc_streaming_tests {
         coefficients
             .into_iter()
             .fold(0, |accumulator, coefficient| {
-                claim_rlc_native_step_v1(accumulator, challenge, coefficient)
+                carrier_rlc_native_step_v1(accumulator, challenge, coefficient)
                     .unwrap()
                     .1
             })
     }
 
     /// Use distinct virtual coordinates and all quotient classes around the packing boundary.
-    fn machine<F: KagemushaPoseidonFieldV1>(
-        capacity: usize,
-    ) -> KagemushaClaimCarrierRlcMachineV1<F> {
+    fn machine<F: KagemushaPoseidonFieldV1>(capacity: usize) -> ClaimCarrierRlcMachineV1<F> {
         let mut offset = 0;
         let mut assign = |value: u128| {
             let cell = ContextCell::new(EXTERNAL_CELL_TYPE_ID, 37, offset);
@@ -51,21 +49,21 @@ mod rlc_streaming_tests {
             let choices = [
                 0,
                 1,
-                CLAIM_CARRIER_RLC_MODULUS_V1 - 1,
-                CLAIM_CARRIER_RLC_MODULUS_V1,
-                2 * CLAIM_CARRIER_RLC_MODULUS_V1,
+                CARRIER_RLC_MODULUS_V1 - 1,
+                CARRIER_RLC_MODULUS_V1,
+                2 * CARRIER_RLC_MODULUS_V1,
                 u128::MAX,
             ];
             let values = (0..capacity)
                 .map(|index| choices[(index + carrier) % choices.len()])
                 .collect::<Vec<_>>();
-            ClaimRlcCarrierV1 {
+            CarrierRlcCarrierV1 {
                 expected_a: assign(endpoint(&values, 2)),
                 expected_b: assign(endpoint(&values, 3)),
                 values: values.into_iter().map(&mut assign).collect(),
             }
         });
-        KagemushaClaimCarrierRlcMachineV1 {
+        ClaimCarrierRlcMachineV1 {
             challenge_a,
             challenge_b,
             carriers,
@@ -112,20 +110,20 @@ mod rlc_streaming_tests {
                 let mut expected_loads = BTreeMap::new();
                 for (logical, row) in expected.iter().enumerate() {
                     match row.binding {
-                        Some(ClaimRlcBusBindingV1::Virtual(value)) => {
+                        Some(CarrierRlcBusBindingV1::Virtual(value)) => {
                             expected_copies.push(CopyEvent::Virtual {
                                 bus: logical * 2,
                                 cell: value.cell,
                             })
                         }
-                        Some(ClaimRlcBusBindingV1::PackStore { carrier, pack }) => {
+                        Some(CarrierRlcBusBindingV1::PackStore { carrier, pack }) => {
                             assert!(
                                 expected_stores
                                     .insert((carrier, pack), logical * 2)
                                     .is_none()
                             );
                         }
-                        Some(ClaimRlcBusBindingV1::PackLoad { carrier, pack }) => {
+                        Some(CarrierRlcBusBindingV1::PackLoad { carrier, pack }) => {
                             assert!(
                                 expected_loads
                                     .insert((carrier, pack), logical * 2)
@@ -164,10 +162,10 @@ mod rlc_streaming_tests {
                         assert_eq!(row.ternary_power, original.ternary_power);
                         assert_eq!(
                             row.fixed_encoding().unwrap(),
-                            claim_rlc_fixed_encoding_v1(original).unwrap()
+                            carrier_rlc_fixed_encoding_v1(original).unwrap()
                         );
                         let projected = row.physical_values();
-                        let original_projected = claim_rlc_physical_values_v1(original);
+                        let original_projected = carrier_rlc_physical_values_v1(original);
                         for (half, values) in projected.iter().enumerate() {
                             for (column, value) in values.iter().enumerate() {
                                 assert_eq!(
@@ -181,7 +179,7 @@ mod rlc_streaming_tests {
                         match (row.binding, original.binding) {
                             (
                                 Some(rlc_streaming::Binding::Virtual(cell)),
-                                Some(ClaimRlcBusBindingV1::Virtual(value)),
+                                Some(CarrierRlcBusBindingV1::Virtual(value)),
                             ) => {
                                 assert_eq!(cell, value.cell);
                                 actual_copies.push(CopyEvent::Virtual {
@@ -191,7 +189,7 @@ mod rlc_streaming_tests {
                             }
                             (
                                 Some(rlc_streaming::Binding::PackStore { carrier, pack }),
-                                Some(ClaimRlcBusBindingV1::PackStore {
+                                Some(CarrierRlcBusBindingV1::PackStore {
                                     carrier: old_carrier,
                                     pack: old_pack,
                                 }),
@@ -201,7 +199,7 @@ mod rlc_streaming_tests {
                             }
                             (
                                 Some(rlc_streaming::Binding::PackLoad { carrier, pack }),
-                                Some(ClaimRlcBusBindingV1::PackLoad {
+                                Some(CarrierRlcBusBindingV1::PackLoad {
                                     carrier: old_carrier,
                                     pack: old_pack,
                                 }),
@@ -328,7 +326,7 @@ mod rlc_streaming_tests {
                 }
                 _ => {
                     machine.challenge_b.value = Assigned::Trivial(F::from_u128(
-                        (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1) + 1,
+                        (1_u128 << CARRIER_RLC_CHALLENGE_BITS_V1) + 1,
                     ));
                     4
                 }
@@ -351,7 +349,7 @@ mod rlc_streaming_tests {
             let carrier_rows = machine.required_rows_with_capacity(capacity).unwrap() / 4;
             if bad_expected {
                 machine.carriers[1].expected_b.value =
-                    Assigned::Trivial(F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1));
+                    Assigned::Trivial(F::from_u128(CARRIER_RLC_MODULUS_V1));
             } else {
                 machine.carriers[1].values[capacity - 1].value =
                     Assigned::Trivial(F::from_u128(u128::MAX) + F::ONE);

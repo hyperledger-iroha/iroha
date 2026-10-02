@@ -366,8 +366,6 @@ impl IVM {
             #[cfg(test)]
             prepared_loads: 0,
             scheduler_limits: self.scheduler_limits,
-            use_metal: self.use_metal,
-            use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
             zk_trace_enabled: self.zk_trace_enabled,
             entrypoint_pc: self.entrypoint_pc,

@@ -7249,7 +7249,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional KAGEMUSHA V1 command-submission authority.
+    /// Optional KAGEMUSHA V1 command capacity and redemption authority customization.
+    /// Command admission remains active with bounded defaults when absent.
     pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
@@ -8876,6 +8877,14 @@ pub struct SorafsSignerJournalInventory {
     /// Concurrent retained path, scan and receipt file descriptors.
     pub open_handles: u32,
 }
+impl SorafsSignerJournalInventory {
+    /// Minimum requested bytes for bounded native ACL buffers, retained paths and receipt reads.
+    pub const MIN_RESIDENT_BYTES: u64 = 2 * 1024 * 1024;
+    /// One complete 65,536-record scan, its control entry, overflow guard and 65 pinned ancestors.
+    pub const MIN_METADATA_PROBES: u64 = 8 * 65_538 + 92 * 65 + 34;
+    /// Sixty-five ancestor handles, one ownership lock, one pinned receipt and four probes.
+    pub const MIN_OPEN_HANDLES: u32 = 71;
+}
 impl Default for SorafsSignerJournalInventory {
     fn default() -> Self {
         Self {
@@ -10040,6 +10049,8 @@ pub struct SorafsMeteringSmoothing {
     /// Alpha applied to the PoR-success exponential moving average.
     pub por_success_alpha: Option<f64>,
 }
+mod stream_token_gateway;
+pub use stream_token_gateway::SorafsStreamTokenGatewayNativeConfig;
 mod stream_token_signer;
 pub use stream_token_signer::{
     SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
@@ -10053,18 +10064,24 @@ pub struct SorafsTokenConfig {
     pub enabled: bool,
     /// Complete signer and independent attester/observer trust, absent when disabled.
     pub signer: Option<SorafsStreamTokenSignerConfig>,
-    /// Deployment-owned quota, sealed-sequence, and callback-outbox provider handle.
+    /// Explicit native gateway transaction custody, required when issuance is enabled.
+    pub admission_native: Option<SorafsStreamTokenGatewayNativeConfig>,
+    /// Credential-free handle pinned to the native consensus gateway owner.
     pub admission_provider_handle: Option<String>,
-    /// Exact non-zero external admission-provider contract revision.
+    /// Exact non-zero native admission policy revision.
     pub admission_provider_revision: Option<u64>,
-    /// Exact non-zero digest of the external admission provider's public policy.
+    /// Exact non-zero commitment to the governed native admission policy.
     pub admission_provider_policy_digest: Option<[u8; 32]>,
     /// Durable callback row ceiling; also bounds local queued/reserved lease cleanup tickets.
     pub admission_max_pending: u32,
-    /// Maximum active token quota windows admitted by the external provider.
+    /// Maximum active token quota windows admitted by native consensus.
     pub admission_max_tracked_tokens: u32,
     /// Maximum ordered callbacks replayed by one reconciliation tick.
     pub admission_reconcile_max_items: u32,
+    /// Interval between supervised native callback reconciliation attempts.
+    pub admission_reconcile_interval_ms: u64,
+    /// Absolute budget shared by admission, callback reconciliation and final Serving proof.
+    pub admission_operation_timeout_ms: u64,
     /// Maximum lifetime of one cross-replica concurrency lease.
     pub admission_lease_ttl_ms: u64,
     /// Default TTL applied to tokens (seconds).
@@ -10080,6 +10097,7 @@ impl_default!(SorafsTokenConfig => {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer: None,
+            admission_native: None,
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest: None,
@@ -10088,6 +10106,10 @@ impl_default!(SorafsTokenConfig => {
                 defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS,
             admission_reconcile_max_items:
                 defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
+            admission_reconcile_interval_ms:
+                defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_INTERVAL_MS,
+            admission_operation_timeout_ms:
+                defaults::sorafs::storage::tokens::ADMISSION_OPERATION_TIMEOUT_MS,
             admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,

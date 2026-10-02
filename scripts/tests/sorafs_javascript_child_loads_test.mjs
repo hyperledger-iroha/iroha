@@ -3,7 +3,7 @@
 // no SDK/addon or production child is executed or reported as qualified.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,9 +11,11 @@ import { canonical, fixture, hash } from "./sorafs_javascript_child_fixture.mjs"
 
 const INPUT = new URL("../sorafs_javascript_child_input.mjs", import.meta.url).href;
 const LOADS = new URL("../sorafs_javascript_child_loads.mjs", import.meta.url).href;
-for (const mode of ["normal", "changed-source", "data-url", "query-url", "unknown-file", "late-quiet-hook", "late-transform-hook", "fake-input-owner"])
+for (const mode of ["normal", "changed-source", "data-url", "query-url", "unknown-file", "late-quiet-hook", "late-transform-hook", "fake-input-owner", "aliased-controller-parent"])
   test(`actual inert loader observation: ${mode}`, () => {
-    const root = mkdtempSync(join(process.env.TMPDIR, "sorafs-child-loads-"));
+    // Node resolves the actual main module through macOS /var -> /private/var.
+    // Bind every original descriptor to the same physical root before loading.
+    const root = realpathSync(mkdtempSync(join(process.env.TMPDIR, "sorafs-child-loads-")));
     const input = fixture(); input.environmentRoot = root; input.temporaryRoot = join(root, "temporary");
     const tools = join(root, "qualification/tools"), dependency = join(root, "node_modules/base64-js/index.js");
     const jsonPath = join(root, "node_modules/base64-js/data.json"), entry = join(tools, "sorafs_javascript_child_entry.mjs");
@@ -46,7 +48,7 @@ try {
  catch(failure){error=String(failure);}
  if(mode==='normal') {assert.equal(error,undefined);assert.equal(result,11);}
  else if(mode.startsWith('late-')){assert.equal(error,undefined);assert.equal(result,99);}
- else assert.ok(error);
+ else {assert.ok(error);if(mode==='aliased-controller-parent')assert.match(error,/module URL is outside the original closure/u);}
  // With no actual native load this owner cannot yield a completed child load
  // observation, even when every inert source was positive. No fake cache used.
  assert.throws(()=>observed.recheck());assert.throws(()=>observed.recheck());
@@ -55,12 +57,15 @@ try {
 console.log(JSON.stringify({scope:'inert loader component, not SDK qualification',mode,result:result??null,error:error??null}));`;
     const controllerPath = join(tools, "sorafs_javascript_child.mjs");
     writeFileSync(controllerPath, controller, { mode: 0o644 });
+    const controllerAlias = join(root, "outside-original-controller.mjs");
+    if(mode==='aliased-controller-parent')symlinkSync(controllerPath, controllerAlias);
     const row = input.tools.find((r)=>r.path==='sorafs_javascript_child.mjs'); row.sha256=hash(Buffer.from(controller));row.size=Buffer.byteLength(controller);
     writeFileSync(join(root, "unknown.mjs"), 'export const value=99;\n');
     const raw = canonical(input), inputPath = join(root, "input.json"); writeFileSync(inputPath, raw, { mode: 0o600 });
     const fd = openSync(inputPath, "r");
     try {
-      const result = spawnSync(process.execPath,[controllerPath,hash(raw)],{stdio:["ignore","pipe","pipe",fd],
+      const result = spawnSync(process.execPath,mode==='aliased-controller-parent'
+        ?["--preserve-symlinks-main",controllerAlias,hash(raw)]:[controllerPath,hash(raw)],{stdio:["ignore","pipe","pipe",fd],
         timeout:5000,maxBuffer:64*1024,env:{PATH:dirname(process.execPath),TMPDIR:root},cwd:root});
       assert.equal(result.status,0,result.stderr.toString());assert.equal(result.stderr.length,0);
       const line = result.stdout.toString().trim().split("\n").at(-1), report = JSON.parse(line);

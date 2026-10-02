@@ -314,7 +314,10 @@ fn wrong_reviewed_predecessor_refuses_signing_before_reservation_or_key_use() {
     assert_eq!(state.signing_reads, 1);
     assert!(state.used_ids.is_empty());
     assert!(state.reservation.is_none());
-    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&canonical),
+        0
+    );
 }
 
 #[test]
@@ -334,7 +337,10 @@ fn audit_predecessor_drift_after_construction_fails_before_reservation_or_key_us
     assert_eq!(state.signing_reads, 1);
     assert!(state.used_ids.is_empty());
     assert!(state.reservation.is_none());
-    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&canonical),
+        0
+    );
 }
 
 #[test]
@@ -358,7 +364,10 @@ fn audit_head_advance_after_snapshot_is_refused_by_reservation_cas() {
     assert_eq!(state.signing_reads, 1);
     assert!(state.used_ids.is_empty());
     assert!(state.reservation.is_none());
-    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&canonical),
+        0
+    );
 }
 
 #[test]
@@ -461,7 +470,10 @@ fn failed_commit_leaves_pending_tombstone_but_never_releases_or_retries_signatur
     source.state.lock().unwrap().fail_commit = true;
     assert!(service.sign(manifest()).is_err());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
-    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 1);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&canonical),
+        1
+    );
     assert!(service.recover(manifest()).is_err());
     assert!(service.sign(manifest()).is_err());
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
@@ -644,5 +656,8 @@ fn release_constructor_rejects_stream_token_journal_before_current_state_or_key_
     assert_eq!(error, SignerReleaseManifestErrorV1::Journal);
     assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.source.state.lock().unwrap().commits, 0);
-    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&canonical),
+        0
+    );
 }

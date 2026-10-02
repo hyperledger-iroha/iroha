@@ -21,6 +21,13 @@ use iroha_data_model::kagemusha::KagemushaCanonicalFramePrefixV1;
 
 use crate::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256ByteV1};
 
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+#[path = "canonical_selected_stream.rs"]
+pub(super) mod selected_stream;
 #[path = "canonical_preimage_stream.rs"]
 pub(super) mod stream;
 

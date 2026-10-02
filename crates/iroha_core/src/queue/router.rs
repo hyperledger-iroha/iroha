@@ -198,6 +198,9 @@ pub enum RoutingResolveError {
     /// An original local routing read did not complete; this is never a route rejection.
     #[error("routing deferred: {0}")]
     Deferred(#[from] crate::execution_attempt::ExecutionDeferred),
+    /// Immutable signed-genesis root scope is missing, malformed, or unsupported.
+    #[error("routing requires authenticated signed-genesis root scope")]
+    UnauthenticatedRootScope,
     /// An atomic settlement cannot be routed because its signed movement list is invalid.
     #[error("invalid atomic settlement movements: {reason}")]
     InvalidAtomicSettlement {
@@ -334,6 +337,7 @@ impl RoutingResolveError {
     pub const fn as_label(&self) -> &'static str {
         match self {
             Self::Deferred(_) => "routing_deferred",
+            Self::UnauthenticatedRootScope => "unauthenticated_root_scope",
             Self::InvalidAtomicSettlement { .. } => "invalid_atomic_settlement",
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
@@ -2731,6 +2735,36 @@ pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
     })
 }
 
+/// Resolve one instruction solely for an authenticated original private genesis source.
+/// Private genesis initializes its own alias registry; ordinary alias acquisition remains global.
+/// This classification grants no authority: callers must retain the original genesis capability.
+pub(crate) fn private_genesis_instruction_target<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspaces: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    if let Some(alias) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+    {
+        return Ok(NativeExecutionTarget {
+            dataspace: Some(alias.intent.target().dataspace_id()),
+            global: false,
+        });
+    }
+    if instruction
+        .as_any()
+        .is::<iroha_data_model::isi::SetParameter>()
+    {
+        return Ok(NativeExecutionTarget {
+            dataspace: None,
+            global: false,
+        });
+    }
+    native_instruction_execution_target(instruction, dataspaces, world, ledger_time_ms)
+}
+
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the
@@ -3507,6 +3541,62 @@ fn contract_artifact_dataspace_target(instruction: &dyn Instruction) -> Option<D
         })
 }
 
+/// Retail activation and signed identity carriers bind their physical policy scope.
+/// Routing does not authenticate either carrier; native execution retains every
+/// policy/definition/issuer/signature check after the exact source route is captured.
+fn retail_declared_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    use iroha_data_model::isi::retail_daily_limit::{
+        ActivateRetailDailyLimitV1, BindRetailIdentityV1,
+    };
+    let any = instruction.as_any();
+    any.downcast_ref::<ActivateRetailDailyLimitV1>()
+        .map(|value| value.policy.physical_dataspace)
+        .or_else(|| {
+            any.downcast_ref::<BindRetailIdentityV1>()
+                .map(|value| value.attestation.body.physical_dataspace)
+        })
+}
+
+/// Monetary instructions carry a definition, so their scope comes from its
+/// current restricted definition and exact activated native policy, never metadata.
+fn retail_monetary_dataspace_target_with_world<W: WorldReadOnly>(
+    movement: &iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Result<DataSpaceId, RoutingResolveError> {
+    let unavailable = |reason: &str| RoutingResolveError::OrdinaryRouteUnavailable {
+        reason: reason.to_owned(),
+    };
+    let definition =
+        asset_definition_for_routing(world, &movement.asset_definition_id, ledger_time_ms)
+            .ok_or_else(|| unavailable("retail monetary definition is absent"))?;
+    if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
+        return Err(unavailable(
+            "retail monetary definition is not dataspace-restricted",
+        ));
+    }
+    let dataspace = asset_definition_dataspace_target_with_world(
+        &movement.asset_definition_id,
+        None,
+        None,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )?
+    .ok_or_else(|| unavailable("retail monetary definition has no physical dataspace"))?;
+    let policy = crate::state::retail_daily_limit_state::policy_for_exact(
+        world,
+        &movement.asset_definition_id,
+        dataspace,
+    )
+    .map_err(|_| unavailable("retail monetary native policy is invalid"))?
+    .ok_or_else(|| unavailable("retail monetary native policy is absent"))?;
+    crate::state::retail_daily_limit_state::activation_for_exact(world, &policy)
+        .map_err(|_| unavailable("retail monetary native activation is invalid"))?;
+    Ok(dataspace)
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3514,6 +3604,24 @@ fn instruction_transaction_dataspace_target(
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
+    }
+    if let Some(dataspace) = retail_declared_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
+    if let Some(movement) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1>(
+    ) {
+        let view = state_view.ok_or_else(|| RoutingResolveError::OrdinaryRouteUnavailable {
+            reason: "retail monetary routing requires current native policy state".to_owned(),
+        })?;
+        return retail_monetary_dataspace_target_with_world(
+            movement,
+            dataspace_catalog,
+            view.world(),
+            Some(state_view_ledger_time_ms(view)),
+        )
+        .map(Some);
     }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
@@ -3914,6 +4022,21 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     if let Some(dataspace) = contract_artifact_dataspace_target(instruction) {
         return Ok(Some(dataspace));
+    }
+    if let Some(dataspace) = retail_declared_dataspace_target(instruction) {
+        return Ok(Some(dataspace));
+    }
+    if let Some(movement) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1>(
+    ) {
+        return retail_monetary_dataspace_target_with_world(
+            movement,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )
+        .map(Some);
     }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
@@ -6627,6 +6750,9 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
 }
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if any.is::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1>() {
+        return true;
+    }
     if any.is::<TransferAssetBatch>() {
         return true;
     }
@@ -9259,6 +9385,10 @@ mod sccp_routing_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Canonical typed retail scope routing and native-policy refusal controls.
+    mod retail_daily_limit_routing_tests {
+        include!("router/retail_daily_limit_routing_tests.rs");
+    }
     use super::*;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};

@@ -112,6 +112,68 @@ impl KagemushaAppAttestationAuthorityPolicyV1 {
         })
     }
 
+    /// Decode the exact model-owned V1 app-authority digest preimage.
+    ///
+    /// This checks the sole wire grammar, not authority. The caller must independently
+    /// bind the resulting policy digest to an authenticated release profile.
+    /// # Errors
+    /// Rejects truncation, trailing bytes, unknown classes, noncanonical keys or incomplete policy.
+    pub fn decode_canonical_digest_preimage_v1(bytes: &[u8]) -> Result<Self, String> {
+        let invalid = || "Kagemusha app authority policy preimage is invalid".to_owned();
+        if bytes.len() != KAGEMUSHA_APP_AUTHORITY_POLICY_DIGEST_PREIMAGE_BYTES_V1
+            || !bytes.starts_with(APP_AUTHORITY_POLICY_DOMAIN)
+        {
+            return Err(invalid());
+        }
+        let length_start = APP_AUTHORITY_POLICY_DOMAIN.len();
+        let key_start = length_start + 8;
+        let key_end = key_start + KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1;
+        if u64::from_le_bytes(
+            bytes[length_start..key_start]
+                .try_into()
+                .map_err(|_| invalid())?,
+        ) != KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1 as u64
+        {
+            return Err(invalid());
+        }
+        let authority_key: PublicKey = norito::decode_canonical_with_limits(
+            &bytes[key_start..key_end],
+            norito::canonical_decode_limits(KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1),
+        )
+        .map_err(|_| invalid())?;
+        let platform_class = match bytes[key_end] {
+            0 => KagemushaHardwarePlatformClassV1::AndroidOemService,
+            1 => KagemushaHardwarePlatformClassV1::AppleOemService,
+            2 => KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            3 => KagemushaHardwarePlatformClassV1::OtherQualified,
+            4 => KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            5 => KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+            _ => return Err(invalid()),
+        };
+        let app_start = key_end + 1;
+        let release_start = app_start + 32;
+        let lifetime_start = release_start + 32;
+        let policy = Self {
+            authority_key,
+            platform_class,
+            app_signing_identity_digest: bytes[app_start..release_start]
+                .try_into()
+                .map_err(|_| invalid())?,
+            app_release_digest: bytes[release_start..lifetime_start]
+                .try_into()
+                .map_err(|_| invalid())?,
+            maximum_lifetime_ms: u64::from_le_bytes(
+                bytes[lifetime_start..].try_into().map_err(|_| invalid())?,
+            ),
+        };
+        // The encoder enforces Ed25519 and all nonzero fields, and the exact roundtrip
+        // rejects any alternative canonical-key frame or trailing representation.
+        if policy.canonical_digest_preimage_v1()?.bytes != bytes {
+            return Err(invalid());
+        }
+        Ok(policy)
+    }
+
     /// Return the exact governance-committed verifier authority and app allowlist identity.
     ///
     /// # Errors
@@ -576,6 +638,98 @@ mod tests {
         );
         let independent: [u8; 32] = Sha256::digest(&opening.bytes).into();
         assert_eq!(policy.canonical_digest().unwrap(), independent);
+    }
+
+    #[test]
+    fn authority_policy_original_roundtrips_every_governed_class() {
+        let (_, original, _) = signed();
+        for platform_class in [
+            KagemushaHardwarePlatformClassV1::AndroidOemService,
+            KagemushaHardwarePlatformClassV1::AppleOemService,
+            KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            KagemushaHardwarePlatformClassV1::OtherQualified,
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+        ] {
+            let policy = KagemushaAppAttestationAuthorityPolicyV1 {
+                platform_class,
+                ..original.clone()
+            };
+            let bytes = policy.canonical_digest_preimage_v1().unwrap().bytes;
+            let decoded =
+                KagemushaAppAttestationAuthorityPolicyV1::decode_canonical_digest_preimage_v1(
+                    &bytes,
+                )
+                .unwrap();
+            assert_eq!(decoded, policy);
+            assert_eq!(decoded.canonical_digest_preimage_v1().unwrap().bytes, bytes);
+        }
+    }
+
+    #[test]
+    fn authority_policy_original_rejects_incomplete_and_noncanonical_transcripts() {
+        let (_, policy, _) = signed();
+        let opening = policy.canonical_digest_preimage_v1().unwrap();
+        for end in 0..opening.bytes.len() {
+            assert!(
+                KagemushaAppAttestationAuthorityPolicyV1::decode_canonical_digest_preimage_v1(
+                    &opening.bytes[..end]
+                )
+                .is_err()
+            );
+        }
+        let mut suffix = opening.bytes.clone();
+        suffix.push(0);
+        let mut malformed = vec![suffix];
+        for index in [
+            0,
+            APP_AUTHORITY_POLICY_DOMAIN.len(),
+            opening.authority_key_frame.start,
+        ] {
+            let mut bytes = opening.bytes.clone();
+            bytes[index] ^= 1;
+            malformed.push(bytes);
+        }
+        let mut unknown_class = opening.bytes.clone();
+        unknown_class[opening.platform_class.start] = 6;
+        malformed.push(unknown_class);
+        for range in [
+            opening.app_signing_identity_digest,
+            opening.app_release_digest,
+            opening.maximum_lifetime_ms,
+        ] {
+            let mut bytes = opening.bytes.clone();
+            bytes[range].fill(0);
+            malformed.push(bytes);
+        }
+        for bytes in malformed {
+            assert!(
+                KagemushaAppAttestationAuthorityPolicyV1::decode_canonical_digest_preimage_v1(
+                    &bytes
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn authority_policy_decoding_alone_does_not_authenticate_a_different_key() {
+        let (_, policy, _) = signed();
+        let mut alternate = policy.clone();
+        alternate.authority_key = KeyPair::from_seed(vec![74; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let original = alternate.canonical_digest_preimage_v1().unwrap().bytes;
+        let decoded =
+            KagemushaAppAttestationAuthorityPolicyV1::decode_canonical_digest_preimage_v1(
+                &original,
+            )
+            .unwrap();
+        assert_eq!(decoded, alternate);
+        assert_ne!(
+            decoded.canonical_digest().unwrap(),
+            policy.canonical_digest().unwrap()
+        );
     }
 
     #[test]

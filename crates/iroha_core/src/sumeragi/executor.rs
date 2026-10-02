@@ -238,6 +238,8 @@ type PendingInspection = Box<
 >;
 
 enum Request {
+    #[cfg(test)]
+    PreparePublicationForInspection(AvailableBody, Qc, mpsc::SyncSender<Result<(), String>>),
     #[cfg(any(test, feature = "iroha-core-tests"))]
     InspectPending(Hash32, PendingInspection),
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -334,6 +336,20 @@ pub struct StateExecutor {
 }
 
 impl StateExecutor {
+    /// Finalize the durable original metadata while a real history writer refuses visibility.
+    /// The same prepared owner remains available for immutable inspection and ordinary retry.
+    #[cfg(test)]
+    pub(crate) fn prepare_publication_for_inspection(
+        &self,
+        block: &AvailableBody,
+        qc: &Qc,
+    ) -> Result<(), String> {
+        self.call(|reply| {
+            Request::PreparePublicationForInspection(block.clone(), qc.clone(), reply)
+        })
+        .ok_or_else(|| "original execution Worker stopped".to_owned())?
+    }
+
     /// Spawn the executor thread.
     ///
     /// # Errors
@@ -480,8 +496,12 @@ impl StateExecutor {
             None => return Err("replayed block no longer executes".into()),
         }
         self.commit(block, commit_qc)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        // Startup has no driver to retire its completed execution receipt. Release
+        // the original Published owner only after commit and archive completion;
+        // the serialized discard precedes archive binding or the next replay.
+        self.discard(block.header().height, &[]);
+        Ok(())
     }
 
     fn prepare_with_origin(
@@ -798,6 +818,30 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
 impl<'s> Worker<'s> {
     fn serve(&mut self, request: Request) {
         match request {
+            #[cfg(test)]
+            Request::PreparePublicationForInspection(block, qc, reply) => {
+                let state = self.state;
+                let original_height = state.committed_height();
+                let result = state.with_publication_blocked_for_test(|| self.commit(&block, &qc));
+                let prepared = self.live.as_ref().is_some_and(|live| {
+                    live.block_hash == qc.block_hash
+                        && matches!(&live.phase,
+                            PublicationPhase::Prepared { qc: original, state_events: Some(_), .. }
+                                if original == &qc)
+                });
+                let result = if matches!(result, Err(PublicationError::Retryable(_)))
+                    && self.recovery.is_none()
+                    && prepared
+                    && state.committed_height() == original_height
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "original publication did not defer before visibility: {result:?}"
+                    ))
+                };
+                let _ = reply.send(result);
+            }
             #[cfg(any(test, feature = "iroha-core-tests"))]
             Request::InspectPending(block_hash, inspect) => {
                 let original =

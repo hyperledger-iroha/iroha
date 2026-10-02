@@ -92,11 +92,25 @@ pub(super) fn staged_block(
 
 #[test]
 fn direct_state_musubi_scratch_refusal_preserves_world_metadata_and_original_retry_owner() {
+    // The global EBR collector also protects readers in unrelated parallel tests.
+    // Keep this exact retirement accounting independent of their pin lifetimes.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::direct_state_musubi_scratch_refusal_preserves_world_metadata_and_original_retry_owner",
+    ) {
+        return;
+    }
     check_direct_refusal(false);
 }
 
 #[test]
 fn replacement_state_musubi_scratch_refusal_preserves_published_predecessor_then_retries() {
+    // The global EBR collector also protects readers in unrelated parallel tests.
+    // Keep this exact retirement accounting independent of their pin lifetimes.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::replacement_state_musubi_scratch_refusal_preserves_published_predecessor_then_retries",
+    ) {
+        return;
+    }
     check_direct_refusal(true);
 }
 

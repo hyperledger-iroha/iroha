@@ -155,3 +155,198 @@ fn static_catalog_rejects_conflicts_and_preserves_nondefault_ids() {
         Some(DataSpaceId::new(7))
     );
 }
+
+fn dataspace_policy() -> SuffixPolicyV1 {
+    let mut value = default_policy();
+    value.suffix_id = DATASPACE_ALIAS_SUFFIX_ID;
+    value.suffix = "dataspace".into();
+    value.pricing[0].label_regex = "^[a-z]+$".into();
+    value
+}
+
+#[test]
+fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_changes() {
+    let policy = dataspace_policy();
+    let selector = private_dataspace_selector("builders").unwrap();
+    let owner = steward_account();
+    let quote = quote_private_dataspace(
+        &policy,
+        selector.clone(),
+        owner.clone(),
+        1_000,
+        Duration::from_secs(60),
+        &[],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        quote.dataspace.dataspace_id,
+        DataSpaceId::from_hash(&selector.name_hash())
+    );
+    assert_eq!(quote.dataspace.canonical_name.as_ref(), "builders");
+    assert_eq!(quote.valid_until_ms, 61_000);
+    assert_eq!(quote.rent, "0.5".parse().unwrap());
+    assert_eq!(quote.request.intents.len(), 1);
+    let intent = &quote.request.intents[0];
+    assert!(
+        matches!(&intent.intent, AliasIntentV1::Dataspace(value) if value.owner == owner && value.dataspace == quote.dataspace)
+    );
+    assert_eq!(intent.acquisition.term_years, 1);
+    assert_eq!(
+        intent.quote_guard.expected_payment_asset,
+        quote.payment_asset
+    );
+    assert_eq!(intent.quote_guard.max_amount, quote.rent);
+    assert_eq!(
+        intent.quote_guard.expected_policy_version,
+        policy.policy_version
+    );
+    assert_eq!(intent.quote_guard.valid_until_ms, quote.valid_until_ms);
+    let wire = norito::json::to_vec(&quote.request).unwrap();
+    assert_eq!(
+        norito::json::from_slice::<AliasSetupPlanRequestV1>(&wire).unwrap(),
+        quote.request
+    );
+    let existing = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![],
+        0,
+        1,
+        10_000,
+        20_000,
+        30_000,
+        Metadata::default(),
+    );
+    assert!(
+        quote_private_dataspace(
+            &policy,
+            selector,
+            owner,
+            1_000,
+            Duration::from_secs(60),
+            &[],
+            Some(&existing)
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn private_dataspace_quote_refuses_reserved_aliases_physical_scopes_and_changed_ownership() {
+    for alias in [
+        "universal",
+        "Builders",
+        " builders",
+        "builders ",
+        "a.b",
+        "",
+        "a@b",
+    ] {
+        assert!(private_dataspace_selector(alias).is_err(), "{alias:?}");
+    }
+    let policy = dataspace_policy();
+    let selector = private_dataspace_selector("builders").unwrap();
+    let id = DataSpaceId::from_hash(&selector.name_hash());
+    let owner = steward_account();
+    let quote = |policy: &SuffixPolicyV1,
+                 now,
+                 ttl,
+                 catalog: &[NexusDataspaceCatalogStatus],
+                 record: Option<&NameRecordV1>| {
+        quote_private_dataspace(
+            policy,
+            selector.clone(),
+            owner.clone(),
+            now,
+            ttl,
+            catalog,
+            record,
+        )
+    };
+    for catalog in [
+        vec![NexusDataspaceCatalogStatus {
+            alias: "builders".into(),
+            dataspace_id: 7,
+            ..Default::default()
+        }],
+        vec![NexusDataspaceCatalogStatus {
+            alias: "other".into(),
+            dataspace_id: id.as_u64(),
+            ..Default::default()
+        }],
+    ] {
+        assert!(quote(&policy, 1_000, Duration::from_secs(60), &catalog, None).is_err());
+    }
+    for (now, ttl) in [
+        (0, Duration::from_secs(60)),
+        (u64::MAX, Duration::from_secs(60)),
+        (1, Duration::ZERO),
+    ] {
+        assert!(quote(&policy, now, ttl, &[], None).is_err());
+    }
+    let original = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![],
+        0,
+        1,
+        10_000,
+        20_000,
+        30_000,
+        Metadata::default(),
+    );
+    for mutation in 0..4 {
+        let mut record = original.clone();
+        match mutation {
+            0 => record.owner = iroha_test_samples::gen_account_in("foreign").0,
+            1 => record.expires_at_ms = 1_000,
+            2 => record.ownership_generation = 0,
+            3 => {
+                record.metadata.insert(
+                    "sns.dataspace_id".parse().unwrap(),
+                    iroha_primitives::json::Json::new(7_u64),
+                );
+            }
+            _ => unreachable!(),
+        }
+        assert!(quote(&policy, 1_000, Duration::from_secs(60), &[], Some(&record)).is_err());
+    }
+    let mut wrong = policy.clone();
+    wrong.suffix_id = DOMAIN_NAME_SUFFIX_ID;
+    assert!(quote(&wrong, 1_000, Duration::from_secs(60), &[], None).is_err());
+    wrong = policy;
+    wrong.min_term_years = 2;
+    assert!(quote(&wrong, 1_000, Duration::from_secs(60), &[], None).is_err());
+}
+
+#[test]
+fn private_dataspace_preparation_does_not_dispatch_after_deadline_or_for_invalid_alias() {
+    let (account, key) = iroha_test_samples::gen_account_in("tests");
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"namespace deadline fixture",
+        )),
+    );
+    let table = toml::toml! {
+        chain = "namespace-deadline"
+        network_id = (network.to_string())
+        torii_url = "https://unreachable.invalid/"
+        [account]
+        domain = "tests.universal"
+        public_key = (key.public_key().to_string())
+        private_key = (iroha_crypto::ExposedPrivateKey(key.private_key().clone()).to_string())
+    };
+    let config = Config::load_table("namespace-tests.toml", table).unwrap();
+    assert_eq!(config.account, account);
+    let error = prepare_private_dataspace_request(&config, "builders", Instant::now()).unwrap_err();
+    assert!(error.to_string().contains("deadline expired"));
+    assert!(
+        prepare_private_dataspace_request(
+            &config,
+            "universal",
+            Instant::now() + Duration::from_secs(1)
+        )
+        .is_err()
+    );
+}

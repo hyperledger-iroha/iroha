@@ -9,6 +9,27 @@ fn source_word(sources: Sources<'_>, operand: usize) -> F {
 }
 
 pub(super) fn append_residues(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+    append_with_count_boundary(out, row, next, fixed, CountBoundary::PublicExpected);
+}
+
+/// Private ordered/sorted counts agree at the last row without being public inputs.
+pub(super) fn append_private_residues(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+    append_with_count_boundary(out, row, next, fixed, CountBoundary::PrivateEquality);
+}
+
+#[derive(Clone, Copy)]
+enum CountBoundary {
+    PublicExpected,
+    PrivateEquality,
+}
+
+fn append_with_count_boundary(
+    out: &mut Vec<F>,
+    row: &[F],
+    next: &[F],
+    fixed: &[F],
+    boundary: CountBoundary,
+) {
     let start = out.len();
     let sources = Sources::new(&row[SOURCES..COMPARE]);
     sources.append_residues(out);
@@ -20,7 +41,7 @@ pub(super) fn append_residues(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[
     ));
     append_packet_shape(out, row, next, fixed);
     append_source_routes(out, row, fixed);
-    append_state_transitions(out, row, next, fixed);
+    append_state_transitions(out, row, next, fixed, boundary);
     append_read_preservation(out, row, fixed);
     debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }
@@ -130,7 +151,13 @@ fn append_source_routes(out: &mut Vec<F>, row: &[F], fixed: &[F]) {
     }
 }
 
-fn append_state_transitions(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]) {
+fn append_state_transitions(
+    out: &mut Vec<F>,
+    row: &[F],
+    next: &[F],
+    fixed: &[F],
+    boundary: CountBoundary,
+) {
     use packet::*;
     let a = &row[ORDERED..SORTED];
     let b = &row[SORTED..PREVIOUS];
@@ -202,13 +229,27 @@ fn append_state_transitions(out: &mut Vec<F>, row: &[F], next: &[F], fixed: &[F]
                     .sub(advance.mul(packet[ENABLED])),
             ),
         );
+        if matches!(boundary, CountBoundary::PublicExpected) {
+            out.push(
+                last.mul(
+                    row[offset]
+                        .add(advance.mul(packet[ENABLED]))
+                        .sub(fixed[TOTAL]),
+                ),
+            );
+        }
+    }
+    if matches!(boundary, CountBoundary::PrivateEquality) {
         out.push(
             last.mul(
-                row[offset]
-                    .add(advance.mul(packet[ENABLED]))
-                    .sub(fixed[TOTAL]),
+                row[ORDERED_COUNT]
+                    .add(advance.mul(a[ENABLED]))
+                    .sub(row[SORTED_COUNT].add(advance.mul(b[ENABLED]))),
             ),
         );
+        // Same bank geometry as public qualification; no private count is placed
+        // in a fixed column or exposed as a terminal/public transcript value.
+        out.push(F::ZERO);
     }
 }
 

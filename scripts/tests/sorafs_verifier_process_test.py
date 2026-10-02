@@ -154,14 +154,27 @@ def test_environment_stdin_cwd_and_umask_are_fixed(private_root: Path, monkeypat
 
 
 def test_silent_timeout_reaps_owned_process(private_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pid_path = private_root / "pid"
+    original_popen = PROCESS.subprocess.Popen
+    owned_processes = []
+
+    def capture_owned_process(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        owned_processes.append(process)
+        return process
+
+    # Popen owns the actual child identity before timeout; a child-written PID file
+    # can be empty when cleanup interrupts the write and is not needed for reaping.
+    monkeypatch.setattr(PROCESS.subprocess, "Popen", capture_owned_process)
     monkeypatch.setattr(PROCESS, "VERIFIER_TIMEOUT_SECS", 0.2)
     start = time.monotonic()
     with pytest.raises(OSError, match="^verifier process unavailable$"):
-        run(private_root, "import os,time; from pathlib import Path; Path('pid').write_text(str(os.getpid())); time.sleep(60)", expected_stderr=b"")
+        run(private_root, "import time; time.sleep(60)", expected_stderr=b"")
     assert time.monotonic() - start < 2
+    assert len(owned_processes) == 1
+    process = owned_processes[0]
+    assert process.returncode is not None
     with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_path.read_text()), 0)
+        os.kill(process.pid, 0)
 
 
 @pytest.mark.parametrize("inherit_pipes", [True, False])
@@ -345,3 +358,66 @@ def test_destination_parent_must_remain_private_and_at_the_original_path(private
     if mutation == "path":
         destination = private_root / "old-destination/copy"
     assert not destination.stat().st_mode & 0o111
+
+
+@pytest.mark.parametrize("phase", ["child", "group"])
+@pytest.mark.parametrize("finished_at_deadline", [False, True])
+def test_cleanup_deadline_observes_current_child_and_group_state(
+    monkeypatch: pytest.MonkeyPatch, phase: str, finished_at_deadline: bool,
+) -> None:
+    """A scheduler pause cannot turn already complete cleanup into unavailability."""
+    class OwnedChild:
+        pid = 999_001
+
+        def __init__(self) -> None:
+            self.poll_calls = 0
+
+        def poll(self):
+            self.poll_calls += 1
+            if phase == "group":
+                return 0
+            if self.poll_calls == 1 or not finished_at_deadline:
+                return None
+            return 0
+
+        def wait(self, **kwargs):
+            raise AssertionError("an expired cleanup deadline must not block")
+
+    child = OwnedChild()
+    ticks = iter([10.0, 12.0])
+    signals = []
+    group_checks = 0
+
+    def group_exists(process):
+        nonlocal group_checks
+        assert process is child
+        group_checks += 1
+        if phase == "child":
+            return False
+        return group_checks == 1 or not finished_at_deadline
+
+    monkeypatch.setattr(PROCESS.os, "name", "posix")
+    monkeypatch.setattr(PROCESS.os, "killpg", lambda *args: signals.append(args))
+    monkeypatch.setattr(PROCESS.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(PROCESS, "_verifier_process_group_exists", group_exists)
+    assert PROCESS._kill_and_reap_verifier(child) is finished_at_deadline
+    assert signals == [(child.pid, PROCESS.signal.SIGKILL)]
+
+
+def test_cleanup_cannot_accept_a_failed_owned_group_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Completed child/group observations do not hide failed cleanup custody."""
+    class OwnedChild:
+        pid = 999_002
+
+        def poll(self):
+            return 0
+
+    def denied_signal(*args):
+        raise PermissionError("synthetic owned-group signal refusal")
+
+    monkeypatch.setattr(PROCESS.os, "name", "posix")
+    monkeypatch.setattr(PROCESS.os, "killpg", denied_signal)
+    monkeypatch.setattr(PROCESS, "_verifier_process_group_exists", lambda _: False)
+    assert PROCESS._kill_and_reap_verifier(OwnedChild()) is False

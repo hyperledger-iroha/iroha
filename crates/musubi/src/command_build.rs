@@ -253,11 +253,13 @@ pub(super) fn prepare_build(
 
 pub(super) fn build_runtime_package(
     config: &iroha::config::Config,
+    registry_config: Option<&iroha::config::Config>,
+    registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
     manifest: &Path,
     package: Option<&str>,
     contract: Option<&str>,
     locked: bool,
-    archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
+    mut archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> Result<crate::deployment_runtime::BuiltArtifact, Diagnostic> {
     let selection = SelectionArgs {
         packages: package
@@ -282,44 +284,118 @@ pub(super) fn build_runtime_package(
     // Local packages must not consult any network file, environment, wallet or registry.
     let local = resolve_workspace_local(&workspace, &selected, previous.clone(), resolve_mode)
         .map_err(graph_diagnostic)?;
-    let (outcome, registry) = if let Some(outcome) = local {
-        (outcome, None)
+    let (outcome, registry, cached_source) = if let Some(outcome) = local {
+        (outcome, None, None)
     } else {
-        let client = iroha::client::Client::builder(config.clone())
-            .build()
-            .map_err(|error| Diagnostic::new(ErrorCode::Network, format!("{error:#}")))?;
-        let registry = RegistryReadClientV1::new(
-            &client,
-            config
-                .torii_request_timeout
-                .min(std::time::Duration::from_secs(60)),
-            config.account_chain_discriminant,
-        )
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
-        ensure_network_identity(config.network_id, registry.network_id())?;
+        let resolved_registry = registry_resolver
+            .map(|resolve| {
+                resolve().map_err(|error| {
+                    Diagnostic::new(
+                        ErrorCode::Registry,
+                        format!("cannot resolve authenticated build registry: {error:#}"),
+                    )
+                })
+            })
+            .transpose()?
+            .flatten();
+        let registry_config = resolved_registry
+            .as_ref()
+            .map(|(config, _)| config)
+            .or(registry_config)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::Registry,
+                    "the selected environment has no authenticated build registry",
+                )
+            })?;
+        if let Some((_, transport)) = &resolved_registry {
+            if transport.network_id() != registry_config.network_id {
+                return Err(Diagnostic::new(
+                    ErrorCode::Registry,
+                    "build registry transport belongs to another network",
+                ));
+            }
+            archive_transport = Some(transport.clone());
+        }
         let cache_root =
             platform_cache_root_v1().map_err(|error| cache_maintenance_diagnostic(&error))?;
         let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
             .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
-        let mut snapshot_mismatches = 0_u8;
-        let outcome = loop {
-            match resolve_workspace_online_cached(
-                &registry,
+        let cached = if previous.is_some() {
+            match resolve_workspace_offline_cached(
                 &resolver_cache,
                 &workspace,
                 &selected,
                 previous.clone(),
                 None,
-                resolve_mode,
-                GraphPurposeV1::Workspace,
+                OfflineGraphOptionsV1 {
+                    mode: resolve_mode,
+                    purpose: GraphPurposeV1::Workspace,
+                    expected_binding: Some((
+                        registry_config.network_id,
+                        registry_config.account_chain_discriminant,
+                    )),
+                },
             ) {
-                Err(GraphErrorV1::SnapshotChanged) if snapshot_mismatches < 2 => {
-                    snapshot_mismatches += 1;
-                }
-                result => break result.map_err(graph_diagnostic)?,
+                Ok(cached) => Some(cached),
+                Err(GraphErrorV1::OfflineMiss(_)) => None,
+                Err(error) => return Err(graph_diagnostic(error)),
             }
+        } else {
+            None
         };
-        (outcome, Some(registry))
+        let warm = if let Some(cached) = cached {
+            let cache = open_user_cache()?;
+            if !cached.outcome.changed
+                && cached
+                    .outcome
+                    .lockfile
+                    .nodes
+                    .iter()
+                    .all(|node| cache.load_compiler_package(node).is_ok())
+            {
+                Some(cached)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(cached) = warm {
+            (cached.outcome, None, Some(cached.source))
+        } else {
+            let client = iroha::client::Client::builder(registry_config.clone())
+                .build()
+                .map_err(|error| Diagnostic::new(ErrorCode::Network, format!("{error:#}")))?;
+            let registry = RegistryReadClientV1::new(
+                &client,
+                registry_config
+                    .torii_request_timeout
+                    .min(std::time::Duration::from_secs(60)),
+                registry_config.account_chain_discriminant,
+            )
+            .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+            ensure_network_identity(registry_config.network_id, registry.network_id())?;
+            let mut snapshot_mismatches = 0_u8;
+            let outcome = loop {
+                match resolve_workspace_online_cached(
+                    &registry,
+                    &resolver_cache,
+                    &workspace,
+                    &selected,
+                    previous.clone(),
+                    None,
+                    resolve_mode,
+                    GraphPurposeV1::Workspace,
+                ) {
+                    Err(GraphErrorV1::SnapshotChanged) if snapshot_mismatches < 2 => {
+                        snapshot_mismatches += 1;
+                    }
+                    result => break result.map_err(graph_diagnostic)?,
+                }
+            };
+            (outcome, Some(registry), None)
+        }
     };
     if outcome.changed {
         write_resolved_lock(&workspace, GraphPurposeV1::Workspace, &outcome.lockfile)?;
@@ -327,7 +403,7 @@ pub(super) fn build_runtime_package(
     let graph = ResolvedWorkspaceGraphV1 {
         lock: outcome.lockfile,
         registry,
-        cached_source: None,
+        cached_source,
         prepared_archive_fetch: archive_transport.map(Ok),
         platform_config_provenance: None,
         account_chain_discriminant: config.account_chain_discriminant,

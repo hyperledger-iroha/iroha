@@ -26,6 +26,10 @@ pub const KAGEMUSHA_ORDINARY_APP_CREDENTIAL_BODY_BYTES_V1: usize =
 /// Exact native enrollment challenge signing domain, including NUL.
 pub const KAGEMUSHA_ORDINARY_APP_ENROLLMENT_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0";
+/// Purpose-specific private native C encoder request prefix; never a generic signing oracle.
+pub const KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_MAGIC_V1: &[u8; 5] = b"KOCP\x01";
+/// Fixed body451 plus the independently selected Ed25519 issuer public key.
+pub const KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_BYTES_V1: usize = 5 + 451 + 32;
 const POLICY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-trust-policy\0";
 const CREDENTIAL_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-credential-original\0";
 const STATIC_BINDING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-static-binding\0";
@@ -457,6 +461,50 @@ impl KagemushaOrdinaryAppEnrollmentChallengeV1 {
         bytes.extend_from_slice(&self.issued_at_ms.to_le_bytes());
         bytes.extend_from_slice(&self.expires_at_ms.to_le_bytes());
         Ok(bytes)
+    }
+
+    /// Exact purpose-specific private encoder request under an independently selected Ed key.
+    /// These bytes are correlation data; they confer no caller, signer or issuer authority.
+    /// # Errors
+    /// Rejects a malformed C subject or a missing/non-Ed25519 issuer key.
+    pub fn to_signing_request(&self, issuer: &PublicKey) -> Result<Vec<u8>, String> {
+        let (algorithm, key) = issuer.to_bytes();
+        if algorithm != Algorithm::Ed25519 || key.len() != 32 || key.iter().all(|b| *b == 0) {
+            return Err("ordinary C issuer public key rejected".into());
+        }
+        let message = self.canonical_signing_bytes()?;
+        let mut request = KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_MAGIC_V1.to_vec();
+        request.extend_from_slice(
+            &message[KAGEMUSHA_ORDINARY_APP_ENROLLMENT_CHALLENGE_DOMAIN_V1.len() + 8..],
+        );
+        request.extend_from_slice(key);
+        Ok(request)
+    }
+
+    /// Decode the sole private C encoder request using the existing model transport parser.
+    /// Parsing supplies no signature, selected policy or Native installation authority.
+    /// # Errors
+    /// Rejects another signing purpose, width, empty issuer pin or malformed model subject.
+    pub fn from_signing_request(input: &[u8]) -> Result<(Self, [u8; 32]), String> {
+        if input.len() != KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_BYTES_V1
+            || &input[..5] != KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_MAGIC_V1
+        {
+            return Err("ordinary C signing request rejected".into());
+        }
+        let key: [u8; 32] = input[456..]
+            .try_into()
+            .map_err(|_| "ordinary C issuer pin width")?;
+        if key == [0; 32] {
+            return Err("ordinary C issuer pin absent".into());
+        }
+        // Zero signature bytes let the existing public parser validate only the body shape.
+        // They are never authenticated or returned as a signed preparation.
+        let mut transport = input[5..456].to_vec();
+        transport.resize(515, 0);
+        let subject =
+            KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&transport)?
+                .challenge;
+        Ok((subject, key))
     }
 
     /// Exact platform enrollment challenge hash, consumed by `KeyMint` or App Attest.
@@ -1197,6 +1245,25 @@ impl KagemushaOrdinaryAppCredentialV1 {
         )
     }
 
+    /// Derive model-owned complete-original framing for a circuit layout specimen.
+    /// This data-only metadata does not bind the countersignature subject to this specimen's
+    /// Ed original and grants no credential, issuer or native admission. All original semantic
+    /// bytes remain unassigned in the layout. Actual credentials must still use
+    /// `original_preimage_layout`, `canonical_bytes` and the independent issuer authentication.
+    /// # Errors
+    /// Rejects malformed subject/signature shapes, bounds or declared encoder layouts.
+    pub fn original_preimage_layout_for_specimen(
+        &self,
+    ) -> Result<KagemushaOrdinaryAppCredentialOriginalLayoutV1, String> {
+        credential_original_layout(
+            self,
+            &self.subject,
+            &self.signature,
+            Some(&self.circuit_admission),
+            true,
+        )
+    }
+
     /// Authenticate actual issuer, policy, release, original preparation and independently held key.
     /// # Errors
     /// Rejects substituted key roles, signer, policy, release, challenge, scope, Integrity or time.
@@ -1785,6 +1852,69 @@ mod tests {
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
+    #[test]
+    fn preparation_signing_request_preserves_the_sole_model_c_body() {
+        for apple in [false, true] {
+            let f = fixture(apple);
+            let request = f
+                .preparation
+                .challenge
+                .to_signing_request(f.issuer.public_key())
+                .unwrap();
+            assert_eq!(
+                request.len(),
+                KAGEMUSHA_ORDINARY_PREPARATION_SIGNING_REQUEST_BYTES_V1
+            );
+            let (parsed, pin) =
+                KagemushaOrdinaryAppEnrollmentChallengeV1::from_signing_request(&request).unwrap();
+            assert_eq!(parsed, f.preparation.challenge);
+            assert_eq!(pin.as_slice(), f.issuer.public_key().to_bytes().1);
+            let original = f.preparation.to_transport_bytes().unwrap();
+            assert_eq!(&request[5..456], &original[..451]);
+            f.preparation
+                .authenticate(f.issuer.public_key(), &parsed, parsed.issued_at_ms)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn preparation_signing_request_refuses_other_purposes_and_noncanonical_bodies() {
+        let f = fixture(false);
+        let request = f
+            .preparation
+            .challenge
+            .to_signing_request(f.issuer.public_key())
+            .unwrap();
+        let other_algorithm = KeyPair::from_seed(vec![7; 32], Algorithm::Secp256k1);
+        assert!(
+            f.preparation
+                .challenge
+                .to_signing_request(other_algorithm.public_key())
+                .is_err()
+        );
+        for size in [0, 5, 456, 487] {
+            assert!(
+                KagemushaOrdinaryAppEnrollmentChallengeV1::from_signing_request(&request[..size])
+                    .is_err()
+            );
+        }
+        let mut suffix = request.clone();
+        suffix.push(0);
+        assert!(KagemushaOrdinaryAppEnrollmentChallengeV1::from_signing_request(&suffix).is_err());
+        for change in 0..4 {
+            let mut other = request.clone();
+            match change {
+                0 => other[..5].copy_from_slice(b"KOAC\x01"),
+                1 => other[5] = 2,
+                2 => other[7] = 9,
+                _ => other[456..].fill(0),
+            }
+            assert!(
+                KagemushaOrdinaryAppEnrollmentChallengeV1::from_signing_request(&other).is_err()
+            );
+        }
+    }
+
     struct Fixture {
         authority: KagemushaAppAttestationAuthorityPolicyV1,
         trust: KagemushaOrdinaryAppTrustPolicyV1,
@@ -2023,8 +2153,10 @@ mod tests {
             &f.certificate.subject.canonical_signing_bytes().unwrap(),
         );
         assert_eq!(
-            admit(&f, 300).err().as_deref(),
-            Some("ordinary issuer original/profile differs")
+            admit(&f, 300)
+                .err()
+                .expect("forged issuer original must be rejected"),
+            "ordinary issuer original/profile differs"
         );
         resign(&mut f);
         admit(&f, 300).unwrap();
@@ -2039,10 +2171,132 @@ mod tests {
         f.certificate.circuit_admission.signature =
             super::super::KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap();
         assert_eq!(
-            admit(&f, 300).err().as_deref(),
-            Some("ordinary circuit issuer signature rejected")
+            admit(&f, 300)
+                .err()
+                .expect("wrong circuit issuer signature must be rejected"),
+            "ordinary circuit issuer signature rejected"
         );
     }
+    #[test]
+    fn layout_specimens_keep_full_framing_without_canonical_or_native_admission() {
+        for apple in [false, true] {
+            let f = fixture(apple);
+            admit(&f, 300).unwrap();
+            let original = f.certificate.canonical_bytes().unwrap();
+            let admission = f.certificate.circuit_admission;
+            let mut option_templates: [Option<Vec<Option<u8>>>; 2] = [None, None];
+            for integrity in [false, true] {
+                for (platform, level) in [
+                    (
+                        KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+                        KagemushaAppKeySecurityLevelV1::TrustedExecutionEnvironment,
+                    ),
+                    (
+                        KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+                        KagemushaAppKeySecurityLevelV1::StrongBox,
+                    ),
+                    (
+                        KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                        KagemushaAppKeySecurityLevelV1::AppleAppAttest,
+                    ),
+                ] {
+                    let mut specimen = f.certificate.clone();
+                    specimen.subject.platform_class = platform;
+                    specimen.subject.security_level = level;
+                    specimen.subject.play_integrity =
+                        integrity.then_some(KagemushaPlayIntegrityBindingV1 {
+                            request_hash: [3; 32],
+                            evidence_digest: [4; 32],
+                            policy_digest: [5; 32],
+                            verified_at_ms: 10,
+                            refresh_before_ms: 100,
+                        });
+                    let layout = specimen.original_preimage_layout_for_specimen().unwrap();
+                    assert_eq!(specimen.circuit_admission, admission);
+                    let frame = bounded_encode(&specimen).unwrap();
+                    let mut preimage = CREDENTIAL_DIGEST_DOMAIN.to_vec();
+                    preimage.extend_from_slice(&(frame.len() as u64).to_le_bytes());
+                    preimage.extend_from_slice(&frame);
+                    assert_eq!(layout.original.end, preimage.len());
+                    for (position, value) in layout.bytes.iter().enumerate() {
+                        if let Some(value) = value {
+                            assert_eq!(preimage[position], *value);
+                        }
+                    }
+                    for position in layout
+                        .version_bytes
+                        .iter()
+                        .chain(&layout.platform_class_bytes)
+                        .chain(&layout.security_level_bytes)
+                        .chain(layout.fixed_digest_bytes.iter().flatten())
+                        .chain(&layout.app_public_key_bytes)
+                        .chain(layout.scalar_bytes.iter().flatten())
+                        .chain(&layout.signature_bytes)
+                    {
+                        assert_eq!(layout.bytes[*position], None);
+                    }
+                    let issuer = layout.issuer_admission_layout.unwrap();
+                    for position in issuer
+                        .version_bytes
+                        .iter()
+                        .chain(core::iter::once(&issuer.purpose_byte))
+                        .chain(issuer.fixed_digest_bytes.iter().flatten())
+                        .chain(&issuer.signature_bytes)
+                    {
+                        assert_eq!(layout.bytes[*position], None);
+                    }
+                    for position in layout.play_integrity_bytes.iter().flatten().flatten() {
+                        assert_eq!(layout.bytes[*position], None);
+                    }
+                    let expected = &mut option_templates[usize::from(integrity)];
+                    if let Some(expected) = expected {
+                        assert_eq!(*expected, layout.bytes);
+                    } else {
+                        *expected = Some(layout.bytes);
+                    }
+                    if specimen != f.certificate {
+                        assert_eq!(
+                            specimen.canonical_bytes().unwrap_err(),
+                            "ordinary issuer admission original differs"
+                        );
+                        assert!(specimen.original_preimage_layout().is_err());
+                        assert!(
+                            KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&frame)
+                                .is_err()
+                        );
+                        assert!(
+                            specimen
+                                .authenticate_originals(
+                                    &f.profile,
+                                    &f.trust,
+                                    &f.authority,
+                                    &f.preparation.challenge,
+                                    &f.certificate.subject.app_public_key,
+                                    300,
+                                )
+                                .is_err()
+                        );
+                    }
+                    assert_eq!(f.certificate.canonical_bytes().unwrap(), original);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layout_specimens_still_refuse_malformed_original_and_issuer_shapes() {
+        let f = fixture(false);
+        let mut specimen = f.certificate.clone();
+        specimen.subject.version = 0;
+        assert!(specimen.original_preimage_layout_for_specimen().is_err());
+        let mut specimen = f.certificate.clone();
+        specimen.signature = Signature::from_bytes(&[0; 63]);
+        assert!(specimen.original_preimage_layout_for_specimen().is_err());
+        let mut specimen = f.certificate;
+        specimen.circuit_admission.subject.version = 0;
+        assert!(specimen.original_preimage_layout_for_specimen().is_err());
+    }
+
     fn approval(
         f: &Fixture,
         credential: &KagemushaVerifiedOrdinaryAppCredentialV1,

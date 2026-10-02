@@ -5,6 +5,13 @@
 //! advertises readiness only after all four peers serve genesis and a signed smoke commits.
 //! Secrets stay in the private store; public receipts contain only connection metadata.
 
+mod build_registry;
+mod bundle;
+mod deployment_report;
+mod generation;
+mod remote;
+mod remote_failure;
+mod remote_status;
 mod runtime;
 mod store;
 mod transport;
@@ -14,6 +21,17 @@ use std::{path::PathBuf, time::Duration};
 
 use norito::json::{JsonDeserialize, JsonSerialize};
 
+pub use build_registry::ManagedBuildRegistry;
+pub use bundle::{MOCHI_APPLICATION_ID, NativeBundleLayout, macos_info_plist};
+pub use deployment_report::{
+    ManagedDeploymentExecution, ManagedDeploymentReport, ManagedDeploymentTarget,
+    ManagedParentObservation, ManagedParentReport,
+};
+pub use remote_failure::ManagedAttachmentFailure;
+pub use remote_status::{
+    DataspaceRequest, ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedConfirmedAnchor,
+    ManagedDataspaceStatus,
+};
 pub use runtime::run_worker;
 pub use store::{LocalnetPorts, ManagedStore};
 pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
@@ -39,6 +57,21 @@ pub enum Error {
     /// Startup could not prove readiness within the requested budget.
     #[error("localnet startup did not complete within {0:?}; inspect `kagami localnet logs`")]
     Timeout(Duration),
+    /// Parent attachment or its independent registry work exhausted the caller's finite budget.
+    #[error(
+        "parent operation deadline expired; inspect `kagami dataspace status` and retry the same retained context"
+    )]
+    ParentDeadline,
+    /// Foreground attachment time elapsed; the last safe stage and classification are retained.
+    #[error(
+        "parent attachment deadline expired during {stage}: {failure}; inspect `kagami dataspace status` and retry the same retained context"
+    )]
+    ParentProgressDeadline {
+        /// Last observed operation stage, distinct from local validator readiness.
+        stage: ManagedAttachmentPhase,
+        /// Closed classification containing no request, response or custody text.
+        failure: ManagedAttachmentFailure,
+    },
 }
 
 /// Selected, secret-free client context backed by owner-private generated configuration.
@@ -79,6 +112,8 @@ pub struct ManagedPeer {
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PreparedLocalnet {
+    /// Exact closed genesis service-authority profile; never inferred from optional files.
+    pub service_profile: crate::localnet::LocalnetServiceProfile,
     /// Client identity and connection information generated with this genesis.
     pub context: ManagedContext,
     /// Exactly four independent validators, in stable order.
@@ -88,6 +123,8 @@ pub struct PreparedLocalnet {
 /// A localnet startup request. Omitted CLI settings should use [`Self::new`].
 #[derive(Debug, Clone)]
 pub struct LocalnetRequest {
+    /// Explicit internal preparation profile; an existing generation must match exactly.
+    pub service_profile: crate::localnet::LocalnetServiceProfile,
     /// Store-local network name.
     pub name: String,
     /// Installed Kagami executable, used to start the native background worker.
@@ -103,6 +140,7 @@ impl LocalnetRequest {
     #[must_use]
     pub fn new(launcher: PathBuf, daemon: PathBuf) -> Self {
         Self {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             name: "local".into(),
             launcher,
             daemon,
@@ -183,10 +221,25 @@ struct BinaryPin {
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct RetainedLocalnet {
+    root_kind: RootKind,
     prepared: PreparedLocalnet,
     launcher: BinaryPin,
     daemon: BinaryPin,
     startup_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum RootKind {
+    Global,
+    Private {
+        spec: crate::localnet::PrivateRootSpec,
+    },
 }
 
 #[derive(JsonSerialize, JsonDeserialize)]

@@ -5,10 +5,10 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAppAttestOriginalV1
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -75,6 +75,39 @@ object KagemushaCoreCoordinatorFrameV1 {
         val retained = fields.map { it.copyOf() }
         validateResponseFields(method, request, retained)
         return encode(retained, MAXIMUM_RESPONSE_BYTES)
+    }
+
+    /** Encode the dedicated phase8 Bootstrap selector or its original ticket phases2–7. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalRequest(fields: List<ByteArray>): ByteArray {
+        encodedSize(fields, MAXIMUM_REQUEST_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapRequest(retained)
+        return encode(retained, MAXIMUM_REQUEST_BYTES)
+    }
+
+    /** Decode only the dedicated Bootstrap request grammar; data grants no Native authority. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalRequest(requestFrame: ByteArray): List<ByteArray> =
+        decode(requestFrame, MAXIMUM_REQUEST_BYTES).also(KagemushaAppOwnedHardwareFrameV1::requireOrdinaryBootstrapRequest)
+
+    /** Separate Bootstrap-only C19 correlation. This API creates no Native owner or money permission. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, fields: List<ByteArray>): ByteArray {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        encodedSize(fields, MAXIMUM_RESPONSE_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, retained)
+        return encode(retained, MAXIMUM_RESPONSE_BYTES)
+    }
+
+    /** Decode only the original Bootstrap owner response, preserving the generic monetary S gate. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, responseFrame: ByteArray): List<ByteArray> {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        return decode(responseFrame, MAXIMUM_RESPONSE_BYTES).also {
+            KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, it)
+        }
     }
 
     /** Canonical little-endian native discriminant, suitable for method request fields. */
@@ -232,11 +265,9 @@ object KagemushaCoreCoordinatorFrameV1 {
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
                 bounded(fields, 3, 8 * 1024)
-                val previous = number(fields, 4).toUInt()
-                require(previous != UInt.MAX_VALUE) { "App Attest counter is exhausted" }
-                KagemushaSelectionFrameV1.requireAppAttest(selection)
-                require(originalAppAttestSignCount(field(fields, 3)) > previous) {
-                    "App Attest assertion did not advance the original counter"
+                KagemushaSelectionFrameV1.requireAppAttestSubject(selection)
+                require(KagemushaAppAttestOriginalV1.counter(field(fields, 3)) > number(fields, 4).toUInt()) {
+                    "App Attest counter did not advance beyond the retained floor"
                 }
                 digest(fields, 5); digest(fields, 6)
             }
@@ -335,86 +366,12 @@ object KagemushaCoreCoordinatorFrameV1 {
                         "App Attest acknowledgment substituted original bytes"
                     }
                 }
-                require(number(response, 4).toUInt() == originalAppAttestSignCount(field(request, 3))) {
-                    "App Attest acknowledgment substituted the original signed counter"
+                require(number(response, 4).toUInt() == KagemushaAppAttestOriginalV1.counter(field(request, 3))) {
+                    "App Attest acknowledgment substituted the original counter"
                 }
                 equal(response, 5, request, 5); equal(response, 6, request, 6)
             }
         }
-    }
-
-    /** Read the bounded original CBOR shape; enrolled-key signature verification stays native. */
-    private fun originalAppAttestSignCount(raw: ByteArray): UInt {
-        require(raw.isNotEmpty() && raw.size <= 8192) { "invalid original App Attest assertion size" }
-        val reader = AppAttestAssertionReader(raw)
-        require(reader.length(5, 2) == 2) { "invalid original App Attest assertion map" }
-        var authenticator: ByteArray? = null
-        var signature: ByteArray? = null
-        repeat(2) {
-            when (reader.text()) {
-                "authenticatorData" -> {
-                    require(authenticator == null) { "duplicate original App Attest authenticator data" }
-                    authenticator = reader.bytes(1024)
-                }
-                "signature" -> {
-                    require(signature == null) { "duplicate original App Attest signature" }
-                    signature = reader.bytes(72)
-                }
-                else -> throw IllegalArgumentException("unknown original App Attest assertion field")
-            }
-        }
-        val original = requireNotNull(authenticator) { "missing original App Attest authenticator data" }
-        val signed = requireNotNull(signature) { "missing original App Attest signature" }
-        require(reader.atEnd && original.size in 37..1024 && signed.size in 8..72 && signed[0] == 0x30.toByte()) {
-            "invalid original App Attest assertion shape"
-        }
-        return ByteBuffer.wrap(original, 33, 4).order(ByteOrder.BIG_ENDIAN).int.toUInt()
-    }
-
-    /** Only canonical definite lengths for the exact two-field assertion, with bounded copies. */
-    private class AppAttestAssertionReader(private val raw: ByteArray) {
-        private var offset = 0
-        val atEnd: Boolean get() = offset == raw.size
-
-        private fun take(count: Int): ByteArray {
-            require(count >= 0 && count <= raw.size - offset) { "truncated original App Attest assertion" }
-            return raw.copyOfRange(offset, offset + count).also { offset += count }
-        }
-
-        fun length(major: Int, maximum: Int): Int {
-            val first = take(1)[0].toInt() and 0xff
-            require(first ushr 5 == major) { "invalid original App Attest CBOR type" }
-            val additional = first and 31
-            val width = when (additional) {
-                in 0..23 -> 0
-                24 -> 1
-                25 -> 2
-                26 -> 4
-                else -> throw IllegalArgumentException("unsupported original App Attest CBOR length")
-            }
-            var value = if (width == 0) additional.toLong() else 0L
-            if (width > 0) {
-                for (byte in take(width)) value = (value shl 8) or (byte.toLong() and 0xff)
-                val minimum = when (width) { 1 -> 24L; 2 -> 256L; else -> 65536L }
-                require(value >= minimum) { "noncanonical original App Attest CBOR length" }
-            }
-            require(value <= maximum.toLong()) { "oversized original App Attest CBOR field" }
-            return value.toInt()
-        }
-
-        fun text(): String {
-            val encoded = take(length(3, 32))
-            return try {
-                Charsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(encoded)).toString()
-            } catch (error: CharacterCodingException) {
-                throw IllegalArgumentException("invalid original App Attest CBOR text", error)
-            }
-        }
-
-        fun bytes(maximum: Int): ByteArray = take(length(2, maximum))
     }
 
     private fun field(fields: List<ByteArray>, index: Int): ByteArray =

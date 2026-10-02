@@ -21,6 +21,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { devNull } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -40,6 +41,11 @@ const MAX_CARGO_LOCK_BYTES = 16n * 1024n * 1024n;
 const CARGO_LOCK_PATH = Buffer.from("Cargo.lock", "utf8");
 export const NATIVE_BUILD_CARGO_LOCK_ENV =
   "IROHA_JS_CARGO_LOCKFILE_PATH";
+const REVIEWED_SOURCE_CAPTURE_SCHEMA = "iroha.js.reviewed-source-capture.v1";
+const MAX_REVIEWED_SOURCE_BYTES = 1024 * 1024 * 1024;
+const reviewedSourcePolicies = new WeakSet();
+const reviewedCargoLockPolicies = new WeakMap();
+const reviewedSnapshotPolicies = new WeakMap();
 const SNAPSHOT_PREFIX = ".iroha-js-source-snapshot-";
 const PROVENANCE_PREVIOUS_SUFFIX = ".previous";
 const PROVENANCE_RETIRED_PREFIX = `.${NATIVE_BUILD_PROVENANCE_FILENAME}.retired-`;
@@ -245,7 +251,7 @@ function canonicalizeEntries(entries, label) {
   return entries;
 }
 
-function readTrackedInventory(repoRoot, run, env) {
+function readTrackedInventory(repoRoot, run, env, policy) {
   const raw = runGit(repoRoot, ["ls-files", "--stage", "-z", "--"], {
     env,
     run,
@@ -272,6 +278,7 @@ function readTrackedInventory(repoRoot, run, env) {
       }
       return {
         indexMode: match.groups.mode,
+        ...(policy === undefined ? {} : { indexObject: match.groups.object }),
         path: Buffer.from(record.subarray(tab + 1)),
       };
     },
@@ -469,7 +476,200 @@ function lstatOrNull(path) {
   }
 }
 
-function selectedCargoLock(repoRoot, env) {
+
+// This optional local capture policy constrains resource use. It contributes
+// no bytes to the normal source fingerprint and grants no release authority.
+function reviewedSourcePolicy(value) {
+  if (value === undefined) return undefined;
+  if (reviewedSourcePolicies.has(value)) return value;
+  const closed = (object, keys) => object !== null && typeof object === "object" &&
+    !Array.isArray(object) && Object.keys(object).sort().join("\0") === keys.sort().join("\0");
+  if (!closed(value, ["schema", "maximumFileBytes", "maximumTotalBytes", "entries"]) ||
+      value.schema !== REVIEWED_SOURCE_CAPTURE_SCHEMA ||
+      !Number.isSafeInteger(value.maximumFileBytes) || value.maximumFileBytes < 1 ||
+      value.maximumFileBytes > Number(MAX_UNTRACKED_FILE_BYTES) ||
+      !Number.isSafeInteger(value.maximumTotalBytes) || value.maximumTotalBytes < 1 ||
+      value.maximumTotalBytes > MAX_REVIEWED_SOURCE_BYTES ||
+      !Array.isArray(value.entries) || value.entries.length === 0 ||
+      value.entries.length > MAX_UNTRACKED_FILES) {
+    throw new Error("Malformed bounded reviewed source capture policy");
+  }
+  const entries = new Map();
+  let total = 0;
+  for (const claim of value.entries) {
+    const keys = claim?.kind === "regular" || claim?.kind === "symlink"
+      ? ["path", "kind", "sizeBytes", "identity"]
+      : claim?.kind === "gitlink" ? ["path", "kind", "indexObject"] : ["path", "kind"];
+    if (!closed(claim, keys) || typeof claim.path !== "string" ||
+        !["regular", "symlink", "absent", "gitlink"].includes(claim.kind)) {
+      throw new Error("Malformed reviewed source entry");
+    }
+    const path = Buffer.from(claim.path, "utf8");
+    assertSafeRelativePath(path, "Reviewed source capture");
+    if (path.toString("utf8") !== claim.path || entries.has(path.toString("base64"))) {
+      throw new Error("Duplicate or noncanonical reviewed source path");
+    }
+    let selection = { path, kind: claim.kind };
+    if (claim.kind === "regular" || claim.kind === "symlink") {
+      const fields = ["dev", "ino", "mode", "uid", "gid", "nlink", "mtimeNs", "ctimeNs"];
+      if (!Number.isSafeInteger(claim.sizeBytes) || claim.sizeBytes < 0 ||
+          claim.sizeBytes > value.maximumFileBytes || !closed(claim.identity, fields) ||
+          fields.some((field) => typeof claim.identity[field] !== "string" ||
+            claim.identity[field].length > 20 || !/^(?:0|[1-9][0-9]*)$/u.test(claim.identity[field]))) {
+        throw new Error("Malformed reviewed source size or identity");
+      }
+      const identity = Object.fromEntries(fields.map((field) => [field, BigInt(claim.identity[field])]));
+      identity.size = BigInt(claim.sizeBytes);
+      const type = claim.kind === "regular" ? 0o100000n : 0o120000n;
+      if (Object.values(identity).some((part) => part > 0xffff_ffff_ffff_ffffn) ||
+          identity.nlink !== 1n || (identity.mode & 0o170000n) !== type) {
+        throw new Error("Reviewed source identity has an unsafe type or link count");
+      }
+      total += claim.sizeBytes;
+      if (!Number.isSafeInteger(total) || total > value.maximumTotalBytes) {
+        throw new Error("Reviewed source aggregate byte budget exceeded");
+      }
+      selection = { ...selection, sizeBytes: claim.sizeBytes, identity: Object.freeze(identity) };
+    } else if (claim.kind === "gitlink") {
+      if (typeof claim.indexObject !== "string" || !REVISION_PATTERN.test(claim.indexObject)) {
+        throw new Error("Malformed reviewed gitlink object");
+      }
+      selection.indexObject = claim.indexObject;
+    }
+    entries.set(path.toString("base64"), Object.freeze(selection));
+  }
+  const lock = entries.get(CARGO_LOCK_PATH.toString("base64"));
+  if (lock?.kind !== "regular" || lock.sizeBytes === 0 || BigInt(lock.sizeBytes) > MAX_CARGO_LOCK_BYTES) {
+    throw new Error("Reviewed source capture requires its regular root Cargo.lock");
+  }
+  const normalized = Object.freeze({ entries, maximumTotalBytes: value.maximumTotalBytes });
+  reviewedSourcePolicies.add(normalized);
+  return normalized;
+}
+
+function assertReviewedSourceIdentity(actual, selected, original = true) {
+  const wanted = selected.identity;
+  if (actual === null || actual.nlink !== 1n || actual.size !== wanted.size ||
+      (selected.kind === "regular" ? !actual.isFile() : !actual.isSymbolicLink()) ||
+      (original && (!sameStableIdentity(actual, wanted) || actual.uid !== wanted.uid || actual.gid !== wanted.gid)) ||
+      (!original && selected.kind === "regular" && canonicalRegularMode(actual) !== canonicalRegularMode(wanted))) {
+    throw new Error("Reviewed source identity or exact size changed");
+  }
+}
+
+// The claim and each later branch observation must agree. A tracked body
+// disappearing between select() and lstat must not become an admitted absence.
+function assertReviewedSourceObservation(actual, selected, original = true) {
+  if (selected === undefined) return;
+  if (selected.kind === "absent") {
+    if (actual !== null) throw new Error("Reviewed absent source changed");
+  } else if (selected.kind !== "gitlink") {
+    assertReviewedSourceIdentity(actual, selected, original);
+  }
+}
+
+function reviewedSourcePass(policy, sourceRoot, original = true) {
+  if (policy === undefined) return undefined;
+  const seen = new Set();
+  let total = 0;
+  return {
+    select(entry) {
+      const key = entry.path.toString("base64"), selected = policy.entries.get(key);
+      if (selected === undefined || seen.has(key)) throw new Error("Reviewed source path roster changed");
+      seen.add(key);
+      const actual = lstatOrNull(absoluteSourcePath(sourceRoot, entry.path));
+      if (selected.kind === "gitlink") {
+        if (entry.indexMode !== GITLINK_MODE || entry.indexObject !== selected.indexObject) {
+          throw new Error("Reviewed source gitlink changed");
+        }
+      } else if (selected.kind === "absent") {
+        if (actual !== null || entry.indexMode === undefined) throw new Error("Reviewed absent source changed");
+      } else {
+        assertReviewedSourceIdentity(actual, selected, original);
+        total += selected.sizeBytes;
+        if (total > policy.maximumTotalBytes) throw new Error("Reviewed source aggregate byte budget exceeded");
+      }
+      return selected;
+    },
+    finish() {
+      if (seen.size !== policy.entries.size) throw new Error("Reviewed source path roster changed");
+    },
+  };
+}
+
+function consumeReviewedSourceRegular(path, selected, { original = true, hash, consume } = {}) {
+  const before = lstatSync(path, { bigint: true });
+  assertReviewedSourceIdentity(before, selected, original);
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_CLOEXEC ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const digest = createHash("sha256");
+  let opened;
+  try {
+    opened = fstatSync(descriptor, { bigint: true });
+    assertReviewedSourceIdentity(opened, selected, original);
+    if (!sameStableIdentity(before, opened) || before.uid !== opened.uid || before.gid !== opened.gid) {
+      throw new Error("Reviewed source descriptor changed while opening");
+    }
+    if (hash !== undefined) appendLength(hash, opened.size);
+    const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(64 * 1024, selected.sizeBytes)));
+    let at = 0;
+    while (at < selected.sizeBytes) {
+      const count = readSync(descriptor, buffer, 0, Math.min(buffer.length, selected.sizeBytes - at), at);
+      if (count === 0) throw new Error("Reviewed source shortened while reading");
+      const bytes = buffer.subarray(0, count);
+      digest.update(bytes);
+      if (hash !== undefined) hash.update(bytes);
+      if (consume !== undefined) consume(bytes);
+      at += count;
+    }
+    if (readSync(descriptor, buffer, 0, 1, selected.sizeBytes) !== 0) {
+      throw new Error("Reviewed source grew beyond its fixed byte budget");
+    }
+    const after = fstatSync(descriptor, { bigint: true });
+    const pathAfter = lstatSync(path, { bigint: true });
+    if (!sameStableIdentity(opened, after) || !sameStableIdentity(opened, pathAfter) ||
+        opened.uid !== after.uid || opened.gid !== after.gid ||
+        opened.uid !== pathAfter.uid || opened.gid !== pathAfter.gid) {
+      throw new Error("Reviewed source changed while reading held bytes");
+    }
+  } finally { closeSync(descriptor); }
+  const fields = ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"];
+  const identity = Object.freeze(Object.fromEntries(fields.map((field) => [field, opened[field]])));
+  return Object.freeze({ identity, sha256: digest.digest("hex") });
+}
+
+function copyReviewedSourceRegular(sourcePath, destinationPath, selected) {
+  let destination;
+  try { consumeReviewedSourceRegular(sourcePath, selected, {
+    consume(bytes) {
+      if (destination === undefined) destination = openSync(destinationPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_CLOEXEC ?? 0) | (constants.O_NOFOLLOW ?? 0), 0o600);
+      let at = 0;
+      while (at < bytes.length) {
+        const count = writeSync(destination, bytes, at, bytes.length - at);
+        if (count === 0) throw new Error("Reviewed source copy made no write progress");
+        at += count;
+      }
+    },
+  });
+  if (destination === undefined) destination = openSync(destinationPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_CLOEXEC ?? 0) | (constants.O_NOFOLLOW ?? 0), 0o600);
+  } finally { if (destination !== undefined) closeSync(destination); }
+}
+
+function readReviewedSourceSymlink(path, selected, original = true) {
+  const before = lstatSync(path, { bigint: true });
+  assertReviewedSourceIdentity(before, selected, original);
+  const payload = readlinkSync(path, { encoding: "buffer" });
+  const after = lstatSync(path, { bigint: true });
+  assertReviewedSourceIdentity(after, selected, original);
+  if (!sameStableIdentity(before, after) || before.uid !== after.uid || before.gid !== after.gid ||
+      payload.length !== selected.sizeBytes) {
+    throw new Error("Reviewed source symlink changed while reading selected bytes");
+  }
+  return payload;
+}
+
+function selectedCargoLock(repoRoot, env, policy) {
   const configured = env[NATIVE_BUILD_CARGO_LOCK_ENV];
   if (
     configured !== undefined &&
@@ -493,6 +693,9 @@ function selectedCargoLock(repoRoot, env) {
       "Native build Cargo.lock path must be canonical and contain no symbolic-link components",
     );
   }
+  if (cargoLockPath !== join(resolve(repoRoot), "Cargo.lock")) {
+    throw new Error("Native build Cargo.lock must be the authenticated repository root Cargo.lock.");
+  }
   const metadata = lstatSync(cargoLockPath, { bigint: true });
   if (
     !metadata.isFile() ||
@@ -503,16 +706,16 @@ function selectedCargoLock(repoRoot, env) {
       "Native build Cargo.lock must be a non-executable regular non-symbolic-link file",
     );
   }
-  const seal = readStableRegularFileDigest(cargoLockPath, {
+  const selected = policy?.entries.get(CARGO_LOCK_PATH.toString("base64"));
+  const seal = selected === undefined ? readStableRegularFileDigest(cargoLockPath, {
     label: "Native build Cargo.lock",
     maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
     requireNonempty: true,
-  });
-  return Object.freeze({
-    identity: seal.identity,
-    path: cargoLockPath,
-    sha256: seal.sha256,
-  });
+  }) : consumeReviewedSourceRegular(cargoLockPath, selected);
+  if (seal.identity.size === 0n || seal.identity.size > MAX_CARGO_LOCK_BYTES) throw new Error("Native build Cargo.lock is outside the supported size bound");
+  const lock = Object.freeze({ identity: seal.identity, path: cargoLockPath, sha256: seal.sha256 });
+  if (policy !== undefined) reviewedCargoLockPolicies.set(lock, policy);
+  return lock;
 }
 
 function assertSelectedCargoLockUnchanged(cargoLock) {
@@ -522,11 +725,12 @@ function assertSelectedCargoLockUnchanged(cargoLock) {
   ) {
     throw new Error("Native build Cargo.lock path changed identity");
   }
-  const current = readStableRegularFileDigest(cargoLock.path, {
+  const selected = reviewedCargoLockPolicies.get(cargoLock)?.entries.get(CARGO_LOCK_PATH.toString("base64"));
+  const current = selected === undefined ? readStableRegularFileDigest(cargoLock.path, {
     label: "Native build Cargo.lock",
     maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
     requireNonempty: true,
-  });
+  }) : consumeReviewedSourceRegular(cargoLock.path, selected);
   if (
     current.sha256 !== cargoLock.sha256 ||
     !sameStableIdentity(current.identity, cargoLock.identity)
@@ -660,11 +864,13 @@ function absoluteSourcePath(repoRoot, relativePath) {
   ]);
 }
 
-function appendSourceEntry(hash, repoRoot, entry, kind) {
+function appendSourceEntry(hash, repoRoot, entry, kind, pass, original = true) {
+  const selected = pass?.select(entry);
   appendField(hash, kind);
   appendField(hash, entry.path);
   const absolutePath = absoluteSourcePath(repoRoot, entry.path);
   const metadata = lstatOrNull(absolutePath);
+  assertReviewedSourceObservation(metadata, selected, original);
   if (entry.indexMode === GITLINK_MODE) {
     if (kind !== "tracked-source-v1") {
       throw new Error("Native build untracked source cannot be a gitlink");
@@ -693,17 +899,18 @@ function appendSourceEntry(hash, repoRoot, entry, kind) {
   if (metadata.isFile() && !metadata.isSymbolicLink()) {
     appendField(hash, "regular");
     appendField(hash, canonicalRegularMode(metadata));
-    appendStableRegularFile(hash, absolutePath, "Native build source", {
-      ...(kind === "untracked-source-v1"
-        ? { maximumBytes: MAX_UNTRACKED_FILE_BYTES }
-        : {}),
+    if (selected === undefined) appendStableRegularFile(hash, absolutePath, "Native build source", {
+      ...(kind === "untracked-source-v1" ? { maximumBytes: MAX_UNTRACKED_FILE_BYTES } : {}),
     });
+    else consumeReviewedSourceRegular(absolutePath, selected, { hash, original });
     return;
   }
   if (metadata.isSymbolicLink()) {
     appendField(hash, "symlink");
     appendField(hash, "120000");
-    appendField(hash, readStableSymlink(absolutePath, "Native build source"));
+    const payload = selected === undefined ? readStableSymlink(absolutePath, "Native build source")
+      : readReviewedSourceSymlink(absolutePath, selected, original);
+    appendField(hash, payload);
     return;
   }
   throw new Error("Native build source has an unsafe file type");
@@ -715,7 +922,10 @@ function fingerprintSourceEntries(
   untrackedInventory,
   status,
   cargoLockPath = absoluteSourcePath(sourceRoot, CARGO_LOCK_PATH),
+  policy,
+  original = true,
 ) {
+  const pass = reviewedSourcePass(policy, sourceRoot, original);
   const hash = createHash("sha256");
   hash.update(SOURCE_TREE_DOMAIN);
   appendField(hash, "stage0-index-inventory-v1");
@@ -724,11 +934,11 @@ function fingerprintSourceEntries(
   appendField(hash, status);
   for (const entry of trackedInventory.entries) {
     if (entry.path.equals(CARGO_LOCK_PATH)) continue;
-    appendSourceEntry(hash, sourceRoot, entry, "tracked-source-v1");
+    appendSourceEntry(hash, sourceRoot, entry, "tracked-source-v1", pass, original);
   }
   for (const entry of untrackedInventory.entries) {
     if (entry.path.equals(CARGO_LOCK_PATH)) continue;
-    appendSourceEntry(hash, sourceRoot, entry, "untracked-source-v1");
+    appendSourceEntry(hash, sourceRoot, entry, "untracked-source-v1", pass, original);
   }
 
   const cargoLockMetadata = lstatOrNull(cargoLockPath);
@@ -746,15 +956,12 @@ function fingerprintSourceEntries(
   appendField(hash, CARGO_LOCK_PATH);
   appendField(hash, "regular");
   appendField(hash, "100644");
-  appendStableRegularFile(
-    hash,
-    cargoLockPath,
-    "Native build Cargo.lock",
-    {
-      maximumBytes: MAX_CARGO_LOCK_BYTES,
-      requireNonempty: true,
-    },
-  );
+  const selectedLock = pass?.select({ path: CARGO_LOCK_PATH });
+  if (selectedLock === undefined) appendStableRegularFile(hash, cargoLockPath, "Native build Cargo.lock", {
+    maximumBytes: MAX_CARGO_LOCK_BYTES, requireNonempty: true,
+  });
+  else consumeReviewedSourceRegular(cargoLockPath, selectedLock, { hash, original });
+  pass?.finish();
   return hash.digest("hex");
 }
 
@@ -764,8 +971,9 @@ function captureSourceTreeFingerprint(
   env,
   status,
   selectedLock,
+  policy,
 ) {
-  const trackedBefore = readTrackedInventory(repoRoot, run, env);
+  const trackedBefore = readTrackedInventory(repoRoot, run, env, policy);
   const untrackedBefore = readUntrackedInventory(repoRoot, run, env);
   const trackedPaths = new Set(
     trackedBefore.entries.map(({ path }) => path.toString("base64")),
@@ -775,7 +983,7 @@ function captureSourceTreeFingerprint(
       throw new Error("Native build source inventories overlap");
     }
   }
-  const cargoLock = selectedLock ?? selectedCargoLock(repoRoot, env);
+  const cargoLock = selectedLock ?? selectedCargoLock(repoRoot, env, policy);
   assertSelectedCargoLockUnchanged(cargoLock);
 
   const sourceTreeSha256 = fingerprintSourceEntries(
@@ -784,10 +992,11 @@ function captureSourceTreeFingerprint(
     untrackedBefore,
     status,
     cargoLock.path,
+    policy,
   );
   assertSelectedCargoLockUnchanged(cargoLock);
 
-  const trackedAfter = readTrackedInventory(repoRoot, run, env);
+  const trackedAfter = readTrackedInventory(repoRoot, run, env, policy);
   const untrackedAfter = readUntrackedInventory(repoRoot, run, env);
   if (
     !trackedAfter.raw.equals(trackedBefore.raw) ||
@@ -809,8 +1018,9 @@ export function sha256NativeFile(path) {
 
 function captureNativeBuildSourceState(
   repoRoot,
-  { env = process.env, run = spawnSync } = {},
+  { env = process.env, run = spawnSync, sourceCapturePolicy } = {},
 ) {
+  const policy = reviewedSourcePolicy(sourceCapturePolicy);
   assertNoGitSourceOverrides(env);
   const sourceGitRevision = readGitRevision(repoRoot, run, env);
   const statusBefore = readGitStatus(repoRoot, run, env);
@@ -819,6 +1029,8 @@ function captureNativeBuildSourceState(
     run,
     env,
     statusBefore,
+    undefined,
+    policy,
   );
   const cargoLock = captured.cargoLock;
   const statusMiddle = readGitStatus(repoRoot, run, env);
@@ -828,6 +1040,7 @@ function captureNativeBuildSourceState(
     env,
     statusMiddle,
     cargoLock,
+    policy,
   );
   assertSelectedCargoLockUnchanged(cargoLock);
   const statusAfter = readGitStatus(repoRoot, run, env);
@@ -965,7 +1178,8 @@ function ensureSnapshotParents(snapshotRoot, relativePath) {
   }
 }
 
-function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
+function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind, pass) {
+  const selected = pass?.select(entry);
   if (entry.indexMode === GITLINK_MODE) {
     if (kind !== "tracked-source-v1") {
       throw new Error("Native build untracked source cannot be a gitlink");
@@ -975,6 +1189,7 @@ function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
   const sourcePath = absoluteSourcePath(repoRoot, entry.path);
   const destinationPath = absoluteSourcePath(snapshotRoot, entry.path);
   const before = lstatOrNull(sourcePath);
+  assertReviewedSourceObservation(before, selected);
   if (before === null) {
     if (kind !== "tracked-source-v1") {
       throw new Error("Native build untracked source disappeared during snapshot");
@@ -986,14 +1201,13 @@ function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
     if (before.nlink !== 1n) {
       throw new Error("Native build source must be a singly linked regular file");
     }
-    copyFileSync(
-      sourcePath,
-      destinationPath,
-      constants.COPYFILE_EXCL | (constants.COPYFILE_FICLONE ?? 0),
-    );
+    if (selected === undefined) copyFileSync(sourcePath, destinationPath,
+      constants.COPYFILE_EXCL | (constants.COPYFILE_FICLONE ?? 0));
+    else copyReviewedSourceRegular(sourcePath, destinationPath, selected);
     chmodSync(destinationPath, canonicalRegularMode(before) === "100755" ? 0o500 : 0o400);
   } else if (before.isSymbolicLink()) {
-    const payload = readStableSymlink(sourcePath, "Native build source");
+    const payload = selected === undefined ? readStableSymlink(sourcePath, "Native build source")
+      : readReviewedSourceSymlink(sourcePath, selected);
     symlinkSync(payload, destinationPath);
   } else {
     throw new Error("Native build source has an unsafe file type");
@@ -1004,23 +1218,22 @@ function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
   }
 }
 
-function copySelectedCargoLock(snapshotRoot, cargoLock) {
+function copySelectedCargoLock(snapshotRoot, cargoLock, pass) {
+  const selected = pass?.select({ path: CARGO_LOCK_PATH });
   assertSelectedCargoLockUnchanged(cargoLock);
   const destinationPath = absoluteSourcePath(
     snapshotRoot,
     CARGO_LOCK_PATH,
   );
-  copyFileSync(
-    cargoLock.path,
-    destinationPath,
-    constants.COPYFILE_EXCL | (constants.COPYFILE_FICLONE ?? 0),
-  );
+  if (selected === undefined) copyFileSync(cargoLock.path, destinationPath,
+    constants.COPYFILE_EXCL | (constants.COPYFILE_FICLONE ?? 0));
+  else copyReviewedSourceRegular(cargoLock.path, destinationPath, selected);
   chmodSync(destinationPath, 0o400);
-  const copied = readStableRegularFileDigest(destinationPath, {
+  const copied = selected === undefined ? readStableRegularFileDigest(destinationPath, {
     label: "Native build snapshotted Cargo.lock",
     maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
     requireNonempty: true,
-  });
+  }) : consumeReviewedSourceRegular(destinationPath, selected, { original: false });
   if (copied.sha256 !== cargoLock.sha256) {
     throw new Error(
       "Native build snapshotted Cargo.lock does not match its selected input",
@@ -1248,12 +1461,13 @@ function removeNativeBuildSourceSnapshot(snapshot) {
 export function createNativeBuildSourceSnapshot(
   repoRoot,
   targetRoot,
-  { env = process.env, run = spawnSync } = {},
+  { env = process.env, run = spawnSync, sourceCapturePolicy } = {},
 ) {
+  const policy = reviewedSourcePolicy(sourceCapturePolicy);
   assertNoGitSourceOverrides(env);
   if (existsSync(targetRoot)) assertCanonicalTargetRoot(targetRoot);
   assertSnapshotTarget(repoRoot, targetRoot, run, env);
-  const captured = captureNativeBuildSourceState(repoRoot, { env, run });
+  const captured = captureNativeBuildSourceState(repoRoot, { env, run, sourceCapturePolicy: policy });
   mkdirSync(targetRoot, { recursive: true });
   const canonicalTarget = assertCanonicalTargetRoot(targetRoot);
   const snapshotRoot = mkdtempSync(
@@ -1278,15 +1492,17 @@ export function createNativeBuildSourceSnapshot(
     untrackedInventory: captured.untrackedInventory,
   };
   try {
+    const pass = reviewedSourcePass(policy, repoRoot);
     for (const entry of captured.trackedInventory.entries) {
       if (entry.path.equals(CARGO_LOCK_PATH)) continue;
-      copySnapshotEntry(repoRoot, snapshotRoot, entry, "tracked-source-v1");
+      copySnapshotEntry(repoRoot, snapshotRoot, entry, "tracked-source-v1", pass);
     }
     for (const entry of captured.untrackedInventory.entries) {
       if (entry.path.equals(CARGO_LOCK_PATH)) continue;
-      copySnapshotEntry(repoRoot, snapshotRoot, entry, "untracked-source-v1");
+      copySnapshotEntry(repoRoot, snapshotRoot, entry, "untracked-source-v1", pass);
     }
-    copySelectedCargoLock(snapshotRoot, captured.cargoLock);
+    copySelectedCargoLock(snapshotRoot, captured.cargoLock, pass);
+    pass?.finish();
     assertTargetIdentity(snapshot);
     assertSnapshotRootIdentity(snapshot);
     assertSnapshotSymlinksContained(snapshot);
@@ -1296,13 +1512,16 @@ export function createNativeBuildSourceSnapshot(
         captured.trackedInventory,
         captured.untrackedInventory,
         captured.status,
+        undefined,
+        policy,
+        false,
       ) !== captured.sourceState.sourceTreeSha256
     ) {
       throw new Error("Native build source snapshot does not match its captured seal");
     }
     freezeSnapshotDirectories(snapshotRoot);
     assertExactSnapshotInventory(snapshot);
-    const sourceAfterCopy = readNativeBuildSourceState(repoRoot, { env, run });
+    const sourceAfterCopy = readNativeBuildSourceState(repoRoot, { env, run, sourceCapturePolicy: policy });
     if (
       sourceAfterCopy.sourceGitRevision !== captured.sourceState.sourceGitRevision ||
       sourceAfterCopy.sourceTreeClean !== captured.sourceState.sourceTreeClean ||
@@ -1310,6 +1529,7 @@ export function createNativeBuildSourceSnapshot(
     ) {
       throw new Error("Native build source changed while its snapshot was created");
     }
+    if (policy !== undefined) reviewedSnapshotPolicies.set(snapshot, policy);
     return Object.freeze(snapshot);
   } catch (error) {
     removeNativeBuildSourceSnapshot(snapshot);
@@ -1328,6 +1548,9 @@ export function verifyNativeBuildSourceSnapshot(snapshot) {
     snapshot.trackedInventory,
     snapshot.untrackedInventory,
     snapshot.status,
+    undefined,
+    reviewedSnapshotPolicies.get(snapshot),
+    false,
   );
   if (digest !== snapshot.sourceState.sourceTreeSha256) {
     throw new Error("Native build source snapshot changed while Cargo was running");

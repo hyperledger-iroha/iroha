@@ -3,24 +3,43 @@
 The bundle contains matching native executables for the desktop, developer CLI
 and four-validator runtime:
 
+On macOS the package contains one application with all three programs:
+
 ```text
-bin/mochi              # desktop
-bin/kagami             # developer CLI and managed process owner
-bin/iroha3d            # matching validator
-docs/README.md        # this guide
+Mochi.app/Contents/Info.plist
+Mochi.app/Contents/MacOS/mochi
+Mochi.app/Contents/MacOS/kagami
+Mochi.app/Contents/MacOS/iroha3d
+Mochi.app/Contents/Resources/network-profiles.nrt # optional installed authorities
+docs/README.md
 LICENSE
-manifest.json          # file inventory with sizes and SHA-256 digests
+manifest.json
 ```
 
-Executable names end in `.exe` on Windows. Keep all three binaries together.
+Linux and Windows put the three programs and optional `network-profiles.nrt` in
+`bin/`; executable names end in `.exe` on Windows. macOS has no outer `bin/`
+copies or launch scripts. Keep the application intact: its CLI and validator
+are part of the same installed runtime. You may move or rename the application
+before creating a managed environment. Retained environments pin their original
+runtime location; relocation does not rewrite that custody.
+
+The application metadata supplies a native desktop identity. Bundle assembly
+alone does not establish code signing, notarization or authenticated release
+provenance.
 
 ## Start from a project
 
+On macOS, copy `Mochi.app` to your preferred installation directory and use its
+CLI directly (or add that exact `Contents/MacOS` directory to your shell PATH):
+
 ```sh
-/path/to/bundle/bin/kagami localnet up
-/path/to/bundle/bin/kagami contract deploy hello.ko
-/path/to/bundle/bin/kagami localnet down
+/Applications/Mochi.app/Contents/MacOS/kagami localnet up
+/Applications/Mochi.app/Contents/MacOS/kagami contract deploy hello.ko
+/Applications/Mochi.app/Contents/MacOS/kagami localnet down
 ```
+
+On Linux and Windows use the corresponding `bin/kagami` or `bin/kagami.exe`
+inside the extracted bundle.
 
 No supplied TOML, source checkout, build tools or container runtime is needed.
 Deployment accepts `.ko`, `.to` and existing Musubi packages. With no selected
@@ -29,10 +48,14 @@ context, deployment starts the default localnet in the same invocation.
 Open the desktop for the same project with:
 
 ```sh
-/path/to/bundle/bin/mochi --workspace /path/to/project
+/Applications/Mochi.app/Contents/MacOS/mochi --workspace /path/to/project
 ```
 
-Omit `--workspace` to use the current directory. Both frontends call the same
+You can also open `Mochi.app` in Finder, then choose the project directory in the
+workspace field and select **Open** before starting a network. Launch alone
+creates no network or signing identity. On Linux/Windows launch `bin/mochi`
+(`mochi.exe` on Windows). Omit `--workspace` when launching from a shell to use
+the current directory. Both frontends call the same
 services and select the same retained context. The desktop does not own a
 separate network generator or supervisor.
 
@@ -43,6 +66,9 @@ application storage outside the project. Each workspace has its own selection.
 Repeated `localnet up` and `down`/`up` retain the same network and account.
 Repeated unchanged deployment recovers its original evidence and verifies
 current code and alias state.
+The result says which localnet or private dataspace applied the deployment.
+Any parent receipt is shown separately as historical evidence; parent observation
+failure preserves the original successful deployment and recovery journal.
 
 Use `kagami context list`, `context show`, `context use <name>`,
 `localnet status` and `localnet logs` to inspect the environment.
@@ -59,8 +85,33 @@ startup needs none of its input files or generated scripts.
 Release provenance must authenticate the manifest before those digests establish
 trust in a downloaded bundle.
 
+Release tooling accepts `cargo xtask mochi-bundle --profile release --network-profiles <artifact.nrt>` to
+validate and package an independently authenticated native profile artifact. Its
+release keys, rollback floors and HTTPS checkpoint locations are included in the
+bundle inventory. Omitting this option installs no remote-network authority;
+downloaded responses cannot choose one. This is an installer input, not a file
+developers must supply when using the installed CLI or desktop.
+
+The repository's `cargo xtask` alias enables the required `dev-tools` feature.
+
 The release acceptance gates include clean-install runs on macOS/Linux ARM64
 and x86-64 and Windows x86-64. Source compilation and component tests do not
 establish those native runtime results. Private dataspace attachment and startup
 latency remain separate acceptance gates in the repository's developer-experience
 specification.
+
+The repository's `devex_native.yml` workflow is a manual native qualification
+entry point. Dispatch it at the candidate commit with existing runner labels for
+all five required OS/architecture targets; each runner must provide at least
+13 GiB RAM and 50 GiB free build storage. It builds the locked `release` profile,
+runs native custody and managed-runtime tests, and exercises the installed bundle.
+Its runtime-directory inputs resolve to `Mochi.app/Contents/MacOS` on both macOS
+architectures and `bin` on Linux/Windows.
+It also runs the ignored eight-validator attachment fixture. That test controller
+requires Python 3.10 or newer with SSL support and OpenSSL; its temporary CA is
+supplied only to the fixture's child processes, without changing system trust.
+These tools are qualification prerequisites; installed developer commands use
+the native executables in the bundle.
+`local-release` is rejected for packaging. Workflow source and component checks
+do not imply that those native jobs have passed; official-network attachment and
+the repeated startup-latency campaign remain separate qualification work.

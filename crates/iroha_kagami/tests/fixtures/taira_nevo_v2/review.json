@@ -4,9 +4,9 @@
   "chain_discriminant": 369,
   "state": "unsigned_operator_review_required",
   "public_inputs_sha256": "eacdf8d3cd1e914502ddd7942aaec888d466f38dc97cf514a00bbd0fab458d63",
-  "base_genesis_sha256": "7e6b86e8b7247a9b829dbc699b32f2d531c79b731f1c4127ce15002de47c0a49",
+  "base_genesis_sha256": "709735572b0a434af693ee3cbf35b47c35d1364df59f564d4e2ab882cc0fd7da",
   "base_config_sha256": "33214fbefcef9e234b1e1777d0e643f14822661d3d8947f73f71c904601fddb2",
-  "unsigned_genesis_sha256": "ee5cdaa6ecee16b921e92c48a401adf566ee9a9aacc9e4fa56660feb1772a1c2",
+  "unsigned_genesis_sha256": "91316f105f086b88551a61b288c10e91353487225a6be236f4a7dc102b78e3be",
   "public_identities": {
     "onboarding_authority_account_id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
     "api_signer_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",

@@ -225,6 +225,10 @@ impl ProviderAdmissionProposalV1 {
         if self.endpoints.is_empty() {
             return Err(ProviderAdmissionValidationError::MissingEndpoints);
         }
+        crate::provider_advert::account_read::RegisteredAccountReadV1::from_capabilities(
+            &self.capabilities,
+        )
+        .map_err(|_| ProviderAdmissionValidationError::InvalidAccountReadCapability)?;
         let mut seen_range_capability = false;
         let mut seen_pq_capability = false;
         let mut seen_potr_mldsa_capability = false;
@@ -1325,6 +1329,8 @@ pub enum ProviderAdmissionValidationError {
     InvalidSoranetPqCapability(#[source] PqCapabilityError),
     #[error("duplicate PoTR ML-DSA capability TLV detected")]
     DuplicatePotrMldsaCapability,
+    #[error("registered-account read capability is duplicate or invalid")]
+    InvalidAccountReadCapability,
     #[error("PoTR ML-DSA capability invalid: {0}")]
     InvalidPotrMldsaCapability(#[source] PotrMldsaCapabilityError),
     #[error("stream budget or transport hints require chunk_range_fetch capability")]

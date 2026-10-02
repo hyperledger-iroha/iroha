@@ -1251,7 +1251,7 @@ fn state_initialization_rejects_non_current_account_alias_policy_without_mutatio
     );
 }
 #[test]
-fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
+fn seed_genesis_alias_records_covers_domains_and_account_labels() {
     let genesis_key = checked_keypair();
     let genesis_account = AccountId::new(genesis_key.public_key().clone());
     let domain_id: DomainId = DomainId::try_new("cbuae", "universal").expect("domain");
@@ -1357,7 +1357,7 @@ fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
         .authority()
         .clone();
     let mut world = World::default();
-    seed_genesis_alias_bootstrap(&mut world, &block, &dataspace_catalog);
+    seed_genesis_alias_records(&mut world, &block, &dataspace_catalog);
     let view = world.view();
     let domain_selector = selector_for_domain(&domain_id).expect("selector");
     let dataspace_selector = selector_for_dataspace_alias("cbuae").expect("selector");

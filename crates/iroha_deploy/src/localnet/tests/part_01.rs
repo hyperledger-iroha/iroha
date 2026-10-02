@@ -8,6 +8,74 @@ use std::{
 include!("../runtime_artifact_tests.rs");
 
 #[test]
+fn parent_admission_is_explicit_and_exclusive_to_global_localnets() {
+    let seed = b"localnet-private-root-admission";
+    let peers = build_peers(4, Some(seed), 8_080, 13_337).unwrap();
+    let (genesis_public_key, _) = generate_genesis_key_pair(Some(seed), GENESIS_SEED).unwrap();
+    let chain_id = "disposable-parent-localnet";
+    let original = generate_raw_genesis(
+        &genesis_public_key,
+        SumeragiConsensusMode::Permissioned,
+        chain_id,
+        &peers,
+    )
+    .unwrap();
+    let policy_id = PrivateDataspaceAdmissionPolicy::parameter_id();
+    assert!(
+        !original
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+    let enabled = append_localnet_private_root_admission_policy(original.clone(), chain_id)
+        .unwrap()
+        .effective_parameters()
+        .unwrap();
+    assert_eq!(
+        PrivateDataspaceAdmissionPolicy::from_custom_parameter(
+            enabled.custom().get(&policy_id).unwrap()
+        )
+        .unwrap(),
+        PrivateDataspaceAdmissionPolicy {
+            max_registered_roots: 64,
+            max_roots_per_owner: 8,
+        }
+    );
+    let public =
+        append_localnet_private_root_admission_policy(original.clone(), PUBLIC_TAIRA_CHAIN_ID)
+            .unwrap();
+    assert!(
+        !public
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+
+    let mut context = original.sumeragi_context_parameters().clone();
+    context.root_scope = SumeragiRootScope::Dataspace {
+        parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::new(b"parent admission fixture")),
+        ),
+        dataspace_id: DataSpaceId::new(u64::MAX),
+    };
+    let private = original
+        .into_builder()
+        .with_sumeragi_context_parameters(context)
+        .build_raw()
+        .unwrap();
+    let private = append_localnet_private_root_admission_policy(private, chain_id).unwrap();
+    assert!(
+        !private
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .contains_key(&policy_id)
+    );
+}
+
+#[test]
 fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(
         known_chain_discriminant_for_chain_id(PUBLIC_TAIRA_CHAIN_ID).unwrap(),
@@ -104,7 +172,9 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
     );
 
     let service_id = AccountId::new(generate_account_key_pair(Some(seed), b"service").unwrap().0);
-    let with_service = append_localnet_service_accounts(extended.clone(), &[&service_id]).unwrap();
+    let with_service =
+        append_localnet_service_accounts(extended.clone(), &[Account::new(service_id.clone())])
+            .unwrap();
     assert_eq!(
         with_service.transactions().len(),
         extended.transactions().len(),
@@ -125,7 +195,11 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
     assert_eq!(register.object.id, service_id);
     assert_eq!(
         json::to_json(
-            &append_localnet_service_accounts(with_service.clone(), &[&service_id]).unwrap()
+            &append_localnet_service_accounts(
+                with_service.clone(),
+                &[Account::new(service_id.clone())]
+            )
+            .unwrap()
         )
         .unwrap(),
         json::to_json(&with_service).unwrap(),
@@ -210,6 +284,7 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir()
         .expect("temporary Taira directory");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
@@ -949,6 +1024,15 @@ fn localnet_genesis_for_opts_and_client(
         )
         .expect("extend genesis");
     }
+    genesis = append_localnet_service_accounts(genesis, &[Account::new(client_account_id.clone())])
+        .expect("register generated localnet fixture service account");
+    genesis = append_localnet_service_fee_bootstrap(
+        genesis,
+        &genesis_account_id,
+        client_account_id,
+        client_account_id,
+    )
+    .expect("fund generated localnet fixture services");
     genesis = apply_parameter_overrides(
         genesis,
         opts.peers,
@@ -1027,6 +1111,7 @@ fn genesis_parameters(manifest: &json::Value) -> Parameters {
 fn generated_configs_parse_with_current_schema() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1115,6 +1200,7 @@ fn generated_configs_parse_with_current_schema() {
 fn generated_configs_for_user_localnet_parse() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1205,6 +1291,7 @@ fn requested_localnet_asset_spec_rejects_blank_or_invalid_asset_definition_id() 
 fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
     let requested_asset_literal = localnet_sample_asset_literal();
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1274,6 +1361,7 @@ fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
 #[allow(clippy::too_many_lines)]
 fn generated_localnet_bootstraps_universal_kagemusha_asset() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1444,6 +1532,7 @@ fn generated_localnet_bootstraps_universal_kagemusha_asset() {
 #[test]
 fn permissioned_localnet_genesis_deduplicates_kagemusha_reserve_grant() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1484,6 +1573,7 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
         .expect("make localnet output directory owner-held");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1790,6 +1880,7 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
 fn generated_peer_config_includes_required_addr_literals() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1917,6 +2008,7 @@ fn generated_peers_use_dedicated_deterministic_transport_and_streaming_identitie
 fn generated_peer_config_allows_bls_signing_for_npos() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1967,6 +2059,7 @@ fn generated_peer_config_allows_bls_signing_for_npos() {
 fn generated_genesis_allows_bls_signing_for_npos() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2004,6 +2097,7 @@ fn generated_genesis_allows_bls_signing_for_npos() {
 fn generated_peer_configs_include_peer_telemetry_urls() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2097,6 +2191,7 @@ fn generated_peer_configs_include_peer_telemetry_urls() {
 fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2174,6 +2269,7 @@ fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
 fn generated_configs_use_strict_sumeragi_schema() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2296,6 +2392,7 @@ fn localnet_tx_gossip_overrides_follow_fast_pipeline() {
 fn perf_profile_permissioned_applies_bounded_runtime_limits() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: Some(LocalnetPerfProfile::Throughput10kPermissioned),
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2355,6 +2452,7 @@ fn perf_profile_permissioned_applies_bounded_runtime_limits() {
 fn perf_profile_npos_applies_election_and_runtime_limits() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2395,6 +2493,7 @@ fn perf_profile_npos_applies_election_and_runtime_limits() {
 #[test]
 fn validate_localnet_options_rejects_perf_profile_mismatch() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2435,6 +2534,7 @@ type ConsensusHandshakeMetaTest = iroha_data_model::parameter::system::Consensus
 fn generated_genesis_handshake_meta_decodes() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2493,6 +2593,7 @@ fn generated_genesis_handshake_meta_decodes() {
 fn localnet_signed_genesis_uses_first_release_npos_context() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2516,6 +2617,7 @@ fn localnet_signed_genesis_uses_first_release_npos_context() {
 fn default_block_cadence_is_injected_when_unset() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2543,6 +2645,7 @@ fn default_block_cadence_is_injected_when_unset() {
 fn localnet_sets_block_max_transactions() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2573,6 +2676,7 @@ fn localnet_npos_bootstraps_public_lane_stake() {
     use std::collections::BTreeSet;
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2664,6 +2768,7 @@ fn permissioned_localnet_registers_support_accounts_without_staking() {
     use std::collections::BTreeSet;
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2837,6 +2942,7 @@ fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(7).expect("non-zero");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: peer_count,

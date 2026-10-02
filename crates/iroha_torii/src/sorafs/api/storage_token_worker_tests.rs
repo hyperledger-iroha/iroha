@@ -339,3 +339,35 @@ async fn storage_token_issuance_worker_preserves_unavailable_response_and_releas
     );
     assert_storage_token_worker_permits(&context.app, 1);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn account_token_rejects_missing_auth_and_missing_native_policy_before_signing() {
+    let (context, fixture) = storage_token_worker_context(TestSignerMode::Sign);
+    let rejected = handle_post_sorafs_storage_account_token(
+        None,
+        State(context.app.clone()),
+        storage_token_worker_headers(&context),
+        JsonOnly(context.token_request(TokenOverrides::default())),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    let key = iroha_crypto::KeyPair::from_seed(vec![92; 32], iroha_crypto::Algorithm::Ed25519);
+    let account = AccountId::new(key.public_key().clone());
+    let authenticated = crate::app_auth::VerifiedCanonicalRequest {
+        account,
+        signer: key.public_key().clone(),
+        verified_signers: vec![key.public_key().clone()],
+    };
+    // This fixture has an operational signed custody service, but no native admitted
+    // account-read policy. Authenticating a wallet must not grant operator issuance.
+    let rejected = handle_post_sorafs_storage_account_token(
+        Some(Extension(authenticated)),
+        State(context.app.clone()),
+        storage_token_worker_headers(&context),
+        JsonOnly(context.token_request(TokenOverrides::default())),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    assert_eq!(fixture.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_storage_token_worker_permits(&context.app, 1);
+}

@@ -677,6 +677,13 @@ mod retry_and_periodic {
             plain_network(),
         );
         install_pending_retry(&state, &id, retry);
+        let parent_time = output_fixture_parent_time(&state);
+        let source_time = u64::try_from(source.header().creation_time().as_millis()).unwrap();
+        assert_eq!(source_time.checked_sub(parent_time), Some(2));
+        assert!(
+            source_time < 1_000,
+            "the scheduled action is still in the future"
+        );
         let (mut block, _recording) = recorded_component_block(&state, source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
@@ -706,9 +713,13 @@ mod retry_and_periodic {
             "a_ordinary"
         );
         assert_eq!(second.invocation.schedule_index, 1);
-        // This fixture has no prior header and hence a zero-length interval;
-        // the future scheduled action is invoked solely because its retry is due.
-        assert_eq!(first.invocation.event.interval.length_ms, 0);
+        // The real signed genesis is the retained parent. This exact two-ms
+        // interval precedes the future action, which runs only because its retry is due.
+        assert_eq!(first.invocation.event.interval.since_ms, parent_time);
+        assert_eq!(
+            first.invocation.event.interval.length_ms,
+            source_time - parent_time
+        );
         assert!(first.result.is_ok());
         assert_eq!(first.result.as_ref().unwrap().len(), 1);
         assert_eq!(first.completions.len(), 1);

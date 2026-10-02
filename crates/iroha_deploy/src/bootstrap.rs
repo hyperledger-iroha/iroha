@@ -11,17 +11,30 @@
 // TODO(DX5): publish release-signed Taira checkpoints and install the independently selected
 // release key/floor in native runtime bundles, then connect this owner to dataspace provisioning.
 
-use std::{fs::File, path::Path};
+use std::{fs::File, path::Path, sync::Mutex};
 
 use iroha_crypto::{Algorithm, Hash, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     sumeragi_finality::{MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint},
 };
-use iroha_fs::{PrivateDirectory, PublishMode};
+use iroha_fs::{FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode};
 use norito::{Decode, Encode};
 
 use crate::verify::finality::FinalityVerifier;
+
+mod runtime;
+pub use runtime::ParentFinalityStore;
+mod profile;
+mod transport;
+pub use profile::{
+    InstalledNetworkProfile, InstalledNetworkProfiles, MAX_INSTALLED_NETWORK_PROFILES,
+    MAX_INSTALLED_PROFILE_BYTES, NETWORK_PROFILES_FILENAME,
+};
+pub use transport::{CheckpointReadError, CheckpointTransport, MAX_DOWNLOADED_CHECKPOINT_BYTES};
+mod provisioning;
+pub use provisioning::{ReleaseBuildRegistry, ReleaseFaucet, ReleasePeer};
+mod registry;
 
 const RELEASE_DOMAIN: &[u8] = b"iroha.developer.network-checkpoint.v1\0";
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;
@@ -36,6 +49,9 @@ pub enum BootstrapError {
     /// Native private-file custody or publication failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// Another live operation holds bootstrap custody; retry within the existing deadline.
+    #[error("network bootstrap custody is already in use")]
+    Busy,
     /// Bounded input, signature, clock or monotonicity validation failed.
     #[error("network bootstrap: {0}")]
     Invalid(&'static str),
@@ -88,12 +104,22 @@ pub struct NetworkRelease {
     pub network_id: NetworkId,
     /// Consensus chain label authenticated with the selected genesis.
     pub chain_id: String,
+    /// Explicit account-address profile authenticated with this network generation.
+    pub account_chain_discriminant: u16,
+    /// Qualified native World schema for independently verified current-state projections.
+    pub native_world_schema: Hash,
     /// Inclusive release validity start in Unix milliseconds.
     pub issued_at_ms: u64,
     /// Exclusive release expiry in Unix milliseconds.
     pub expires_at_ms: u64,
     /// Approved HTTPS Torii roots. Credentials, query strings and fragments are prohibited.
     pub torii_roots: Vec<String>,
+    /// Exact BLS member-to-approved-root hints; the native verifier still selects the committee.
+    pub peers: Vec<ReleasePeer>,
+    /// Optional testnet funding and finite automatic spending allowances for a managed wallet.
+    pub faucet: Option<ReleaseFaucet>,
+    /// Explicit public build registry on this parent network; absence disables remote resolution.
+    pub build_registry: Option<ReleaseBuildRegistry>,
     /// Hash of the complete canonical native checkpoint frame.
     pub checkpoint_hash: Hash,
     /// Authenticated checkpoint height, repeated for monotonic release comparison.
@@ -176,6 +202,48 @@ impl AuthenticatedBootstrap {
         self.reset
     }
 
+    /// Bind native HTTP observation clients to this release's approved endpoints and network.
+    /// Endpoint hints cannot select the authenticated committee: the verifier still chooses each
+    /// BLS member and verifies every returned chain. No credentials are copied between clients.
+    ///
+    /// # Errors
+    /// Any client endpoint was not independently authorized by the signed release, or the
+    /// transport's network, committee identity, endpoint bounds or deadline are invalid.
+    pub fn http_source(
+        &self,
+        proof_clients: Vec<iroha::client::Client>,
+        peer_clients: Vec<(iroha_model_base::peer::PeerId, iroha::client::Client)>,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<
+        crate::verify::http::HttpFinalitySource,
+        crate::verify::http::HttpFinalityError,
+    > {
+        for client in proof_clients
+            .iter()
+            .chain(peer_clients.iter().map(|(_, client)| client))
+        {
+            if !self
+                .release
+                .torii_roots
+                .iter()
+                .any(|root| root == client.endpoint().as_str())
+            {
+                return Err(crate::verify::http::HttpFinalityError::Invalid(
+                    "endpoint absent from signed release",
+                ));
+            }
+        }
+        crate::verify::http::HttpFinalitySource::new(
+            self.release.network_id,
+            std::num::NonZeroU64::new(self.verifier.checkpoint().height()).ok_or(
+                crate::verify::http::HttpFinalityError::Invalid("checkpoint height"),
+            )?,
+            proof_clients,
+            peer_clients,
+            deadline,
+        )
+    }
+
     /// Consume the bootstrap and continue contiguous native finality verification.
     pub fn into_verifier(self) -> FinalityVerifier {
         self.verifier
@@ -189,13 +257,24 @@ struct RetainedRelease {
     last_verified_at_ms: u64,
 }
 
+#[derive(Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_deploy::bootstrap::ReleaseWatermarkV1")]
+struct ReleaseWatermark {
+    accepted: Option<RetainedRelease>,
+}
+
 /// Exclusive private custody of one installed network label's release watermark.
 ///
 /// Keep this directory outside resettable developer generations. This release watermark is
 /// separate from the later contiguous finality checkpoint, which its runtime must also retain.
 pub struct ReleaseCheckpointStore {
     directory: PrivateDirectory,
-    _lock: File,
+    lock: File,
+    state: Mutex<ReleaseStoreState>,
+}
+
+struct ReleaseStoreState {
+    publication_uncertain: bool,
 }
 
 impl ReleaseCheckpointStore {
@@ -204,16 +283,75 @@ impl ReleaseCheckpointStore {
     /// # Errors
     /// Invalid custody, unsafe path, another owner or durability failure.
     pub fn open(path: &Path) -> Result<Self> {
-        let directory = PrivateDirectory::open_or_create(path)?;
-        let lock = directory.open_lock("release.lock")?;
-        lock.try_lock()
-            .map_err(|_| BootstrapError::Invalid("release custody is already in use"))?;
+        let name = path
+            .file_name()
+            .ok_or(BootstrapError::Invalid("release custody path"))?;
+        let parent = OwnerDirectory::open_or_create(
+            path.parent()
+                .ok_or(BootstrapError::Invalid("release custody path"))?,
+        )?;
+        // The unaccepted watermark is part of the first atomic directory publication. A crash
+        // before it cannot leave a visible store that looks like lost accepted custody.
+        let initial = norito::encode_canonical(&ReleaseWatermark { accepted: None })
+            .map_err(|_| BootstrapError::Invalid("cannot initialize release watermark"))?;
+        let _: ReleaseWatermark = decode(&initial, MAX_RELEASE_CHECKPOINT_BYTES)?;
+        let directory = match parent
+            .publish_private_child(name, &[("release.lock", &[]), ("accepted.nrt", &initial)])
+        {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                PrivateDirectory::open(parent.path().join(name))?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let lock = directory.open_existing_lock("release.lock")?;
+        lock.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => BootstrapError::Busy,
+            std::fs::TryLockError::Error(error) => BootstrapError::Io(error),
+        })?;
         lock.sync_all()?;
         directory.sync()?;
         Ok(Self {
             directory,
-            _lock: lock,
+            lock,
+            state: Mutex::new(ReleaseStoreState {
+                publication_uncertain: false,
+            }),
         })
+    }
+
+    /// Reauthenticate the retained release without network I/O while its signed policy is valid.
+    ///
+    /// The same independently installed authority, native checkpoint checks and clock watermark
+    /// apply. Returns `None` only before first acceptance, after expiry, or when a newer installed
+    /// serial floor requires refreshing the release. This never supplies fresh committee
+    /// readiness; provider discovery and parent operations still perform their own observation.
+    ///
+    /// # Errors
+    /// Unsafe or uncertain custody, invalid retained authority/checkpoint, or clock rollback.
+    pub fn authenticate_retained(
+        &self,
+        trust: &ReleaseTrust,
+        now_ms: u64,
+    ) -> Result<Option<AuthenticatedBootstrap>> {
+        let bytes = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| BootstrapError::Invalid("release custody update was interrupted"))?;
+            self.check_custody(&state)?;
+            let Some(retained) = self.read_watermark()?.accepted else {
+                return Ok(None);
+            };
+            verify_retained_release(trust, &retained, now_ms)?;
+            if now_ms >= retained.artifact.release.expires_at_ms
+                || retained.artifact.release.serial < trust.minimum_serial
+            {
+                return Ok(None);
+            }
+            retained.artifact.encode_canonical()?
+        };
+        self.authenticate(trust, &bytes, now_ms).map(Some)
     }
 
     /// Authenticate an untrusted release and checkpoint, then durably publish its watermark.
@@ -229,6 +367,12 @@ impl ReleaseCheckpointStore {
         bytes: &[u8],
         now_ms: u64,
     ) -> Result<AuthenticatedBootstrap> {
+        // Serialize in-process callers as well as retaining the native inter-process lock.
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| BootstrapError::Invalid("release custody update was interrupted"))?;
+        self.check_custody(&state)?;
         let artifact: SignedNetworkCheckpoint = decode(bytes, MAX_RELEASE_CHECKPOINT_BYTES)?;
         verify_release_signature(trust, &artifact)?;
         if artifact.release.serial < trust.minimum_serial {
@@ -239,31 +383,11 @@ impl ReleaseCheckpointStore {
         if now_ms < artifact.release.issued_at_ms || now_ms >= artifact.release.expires_at_ms {
             return Err(BootstrapError::Invalid("release is not currently valid"));
         }
-        let previous = match self
-            .directory
-            .read("accepted.nrt", MAX_RELEASE_CHECKPOINT_BYTES + 1024)
-        {
-            Ok(bytes) => Some(decode::<RetainedRelease>(
-                &bytes,
-                MAX_RELEASE_CHECKPOINT_BYTES + 1024,
-            )?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
+        let previous = self.read_watermark()?.accepted;
         let mut reset = false;
         if let Some(previous) = previous {
             // Expiry limits fresh bootstrap, not the lifetime of a retained rollback watermark.
-            verify_release_signature(trust, &previous.artifact)?;
-            if previous.last_verified_at_ms < previous.artifact.release.issued_at_ms
-                || previous.last_verified_at_ms >= previous.artifact.release.expires_at_ms
-                || now_ms < previous.last_verified_at_ms
-                || Hash::new(&previous.artifact.checkpoint)
-                    != previous.artifact.release.checkpoint_hash
-            {
-                return Err(BootstrapError::Invalid(
-                    "local clock or retained observation regressed",
-                ));
-            }
+            verify_retained_release(trust, &previous, now_ms)?;
             reset = validate_successor(&previous.artifact.release, &artifact.release)?;
         }
         let verifier = verify_checkpoint(&artifact.release, &artifact.checkpoint)?;
@@ -272,16 +396,77 @@ impl ReleaseCheckpointStore {
             artifact,
             last_verified_at_ms: now_ms,
         };
-        let encoded = norito::encode_canonical(&retained)
-            .map_err(|_| BootstrapError::Invalid("cannot encode retained release"))?;
-        self.directory
-            .write_atomic("accepted.nrt", &encoded, PublishMode::Replace)?;
+        self.publish(&mut state, retained)?;
         Ok(AuthenticatedBootstrap {
             release,
             verifier,
             reset,
         })
     }
+
+    fn check_custody(&self, state: &ReleaseStoreState) -> Result<()> {
+        if state.publication_uncertain {
+            return Err(BootstrapError::Invalid(
+                "release publication uncertain; reopen custody",
+            ));
+        }
+        self.directory.revalidate()?;
+        if FileIdentity::of(&self.directory.open_read("release.lock")?)?
+            != FileIdentity::of(&self.lock)?
+        {
+            return Err(BootstrapError::Invalid("release custody lock was replaced"));
+        }
+        Ok(())
+    }
+
+    fn read_watermark(&self) -> Result<ReleaseWatermark> {
+        decode(
+            &self
+                .directory
+                .read("accepted.nrt", MAX_RELEASE_CHECKPOINT_BYTES + 1024)?,
+            MAX_RELEASE_CHECKPOINT_BYTES + 1024,
+        )
+    }
+
+    fn publish(&self, state: &mut ReleaseStoreState, retained: RetainedRelease) -> Result<()> {
+        self.directory.revalidate()?;
+        if FileIdentity::of(&self.directory.open_read("release.lock")?)?
+            != FileIdentity::of(&self.lock)?
+        {
+            return Err(BootstrapError::Invalid("release custody lock was replaced"));
+        }
+        let encoded = norito::encode_canonical(&ReleaseWatermark {
+            accepted: Some(retained),
+        })
+        .map_err(|_| BootstrapError::Invalid("cannot encode retained release"))?;
+        let _: ReleaseWatermark = decode(&encoded, MAX_RELEASE_CHECKPOINT_BYTES + 1024)?;
+        if let Err(error) =
+            self.directory
+                .write_atomic("accepted.nrt", &encoded, PublishMode::Replace)
+        {
+            state.publication_uncertain = true;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+fn verify_retained_release(
+    trust: &ReleaseTrust,
+    retained: &RetainedRelease,
+    now_ms: u64,
+) -> Result<()> {
+    verify_release_signature(trust, &retained.artifact)?;
+    if retained.last_verified_at_ms < retained.artifact.release.issued_at_ms
+        || retained.last_verified_at_ms >= retained.artifact.release.expires_at_ms
+        || now_ms < retained.last_verified_at_ms
+        || Hash::new(&retained.artifact.checkpoint) != retained.artifact.release.checkpoint_hash
+    {
+        return Err(BootstrapError::Invalid(
+            "local clock or retained observation regressed",
+        ));
+    }
+    Ok(())
 }
 
 fn decode<T: norito::codec::Decode + norito::NoritoSchema>(
@@ -351,6 +536,7 @@ fn validate_release(release: &NetworkRelease) -> Result<()> {
             ));
         }
     }
+    provisioning::validate(release)?;
     Ok(())
 }
 
@@ -402,6 +588,32 @@ fn verify_checkpoint(release: &NetworkRelease, bytes: &[u8]) -> Result<FinalityV
             "checkpoint differs from signed height or block",
         ));
     }
+    if checkpoint.tip().committee.iter().any(|validator| {
+        !release
+            .peers
+            .iter()
+            .any(|peer| peer.node_id.public_key() == &validator.public_key)
+    }) {
+        return Err(BootstrapError::Invalid(
+            "signed release omits a checkpoint committee endpoint",
+        ));
+    }
+    let native =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &release.network_id,
+            &release.chain_id,
+        )
+        .map_err(crate::verify::finality::FinalityError::from)?;
+    if native
+        .root_scope()
+        .map_err(crate::verify::finality::FinalityError::from)?
+        != iroha_data_model::block::consensus::SumeragiRootScope::Global
+    {
+        return Err(BootstrapError::Invalid(
+            "public parent release requires a committed global root",
+        ));
+    }
     Ok(FinalityVerifier::from_checkpoint(
         checkpoint,
         release.network_id,
@@ -422,6 +634,7 @@ fn validate_successor(previous: &NetworkRelease, next: &NetworkRelease) -> Resul
     if next.generation == previous.generation {
         if next.network_id != previous.network_id
             || next.chain_id != previous.chain_id
+            || next.account_chain_discriminant != previous.account_chain_discriminant
             || next.checkpoint_height < previous.checkpoint_height
             || (next.checkpoint_height == previous.checkpoint_height
                 && (next.checkpoint_block_hash != previous.checkpoint_block_hash

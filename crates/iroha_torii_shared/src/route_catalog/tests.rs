@@ -50,6 +50,7 @@ mod tests {
     #[test]
     fn credential_bound_authentication_boundaries_require_private_no_store() {
         for policy in [
+            AuthenticationPolicy::PrivateRootOwnerToken,
             AuthenticationPolicy::OnboardingToken,
             AuthenticationPolicy::CanonicalAccountSignature,
             AuthenticationPolicy::OptionalCanonicalAccountSignature,
@@ -75,6 +76,39 @@ mod tests {
                 "unexpected private no-store policy for {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn compact_private_root_exports_require_exact_owner_token_policy() {
+        for route in [
+            sumeragi::PRIVATE_ROOT_REGISTRATION,
+            sumeragi::PRIVATE_ROOT_ANCHOR,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::PrivateRootOwnerToken
+            );
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal
+            );
+            assert_eq!(route.projections(), RouteProjections::SDK);
+            assert!(route.requires_private_no_store());
+            assert!(RouteCatalog::new(&[route]).validate().is_ok());
+            let unauthenticated = route.with_authentication(AuthenticationPolicy::ToriiDefault);
+            assert!(RouteCatalog::new(&[unauthenticated]).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn provider_discovery_is_finite_private_no_store_sdk_evidence() {
+        let route = sorafs::PROVIDER_DISCOVERY;
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.projections(), RouteProjections::SDK);
+        assert!(route.requires_private_no_store());
+        assert!(RouteCatalog::new(&[route]).validate().is_ok());
     }
 
     #[test]
@@ -343,9 +377,8 @@ mod tests {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn kagemusha_routes_are_universal_for_app_api_with_exact_mcp_projection() {
+    fn kagemusha_routes_are_mandatory_without_features_and_project_to_mcp() {
         let catalog = RouteCatalog::new(kagemusha::ROUTES);
-        let enabled = EnabledFeatures::new(&["app_api"]);
         let complete = BTreeSet::from([
             "kagemusha.readiness",
             "kagemusha.top_up",
@@ -354,18 +387,26 @@ mod tests {
             "kagemusha.authority_state",
             "ledger.resource_names_state",
             "ledger.authority_originals",
+            "kagemusha.ordinary_wallet_current",
         ]);
-        for projection in [CatalogProjection::Mounted, CatalogProjection::OpenApi] {
-            let projected = catalog.project(projection, enabled);
-            assert_eq!(projected.len(), complete.len());
-            assert_eq!(
-                projected
-                    .iter()
-                    .map(|route| route.stable_route_id())
-                    .collect::<BTreeSet<_>>(),
-                complete,
-                "every app-api node and authored OpenAPI contract must expose the five native KAGEMUSHA routes and exact authenticated names/authority routes"
-            );
+        assert_eq!(complete.len(), 8);
+        for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
+            for projection in [
+                CatalogProjection::Mounted,
+                CatalogProjection::OpenApi,
+                CatalogProjection::Sdk,
+            ] {
+                let projected = catalog.project(projection, enabled);
+                assert_eq!(projected.len(), complete.len());
+                assert_eq!(
+                    projected
+                        .iter()
+                        .map(|route| route.stable_route_id())
+                        .collect::<BTreeSet<_>>(),
+                    complete,
+                    "every node and authored client surface must expose all eight native KAGEMUSHA and original-carrier routes"
+                );
+            }
         }
         assert_eq!(
             kagemusha::RESOURCE_NAMES_STATE.admission(),
@@ -392,8 +433,36 @@ mod tests {
             kagemusha::AUTHORITY_ORIGINALS.effect(),
             RouteEffect::ReadOnly
         );
-        let mcp = catalog.project(CatalogProjection::Mcp, enabled);
-        assert_eq!(mcp.len(), 4);
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.path(),
+            "/v1/kagemusha/ordinary/current-wallet"
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.feature_gate(),
+            FeatureGate::Always
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.projections(),
+            RouteProjections::OPENAPI_AND_SDK
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.method(),
+            HttpMethod::Post
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::ORDINARY_WALLET_CURRENT.effect(),
+            RouteEffect::ReadOnly
+        );
+        let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());
+        assert_eq!(mcp.len(), 5);
         assert_eq!(
             mcp.iter()
                 .map(|route| route.stable_route_id())
@@ -403,10 +472,12 @@ mod tests {
                 "kagemusha.top_up",
                 "kagemusha.redeem",
                 "kagemusha.operation",
+                "kagemusha.authority_state",
             ]),
-            "complete native authority/name carriers have no MCP projection"
+            "signed original-carrier endpoints are available through their native SDK transport"
         );
     }
+
     #[test]
     fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
         assert!(
@@ -2394,7 +2465,7 @@ mod tests {
             CatalogValidationErrorKind::PublicMutation,
             CatalogValidationErrorKind::PublicExpensiveCompute,
             CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
-            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
+            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresAuthentication,
             CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
             CatalogValidationErrorKind::StreamingTransportRequiresGet,
         ] {

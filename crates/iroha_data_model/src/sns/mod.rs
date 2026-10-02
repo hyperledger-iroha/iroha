@@ -1,5 +1,7 @@
 //! Sora Name Service data structures for registrar APIs.
 
+/// Independently authenticated current native SNS leases at a selected certified World cut.
+pub mod lease;
 /// Deterministic policy pricing used by consensus and native clients.
 pub mod pricing;
 
@@ -22,6 +24,17 @@ pub const ACCOUNT_ALIAS_SUFFIX_ID: SuffixId = 0x1001;
 pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
 /// Fixed suffix id for dataspace-alias lease records.
 pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
+/// Canonical native World storage key for an exact SNS record selector.
+#[must_use]
+pub fn record_storage_key(selector: &NameSelectorV1) -> iroha_model_base::state_path::StatePath {
+    format!(
+        "sns/records/{}/{}",
+        selector.suffix_id,
+        hex::encode(selector.name_hash())
+    )
+    .parse()
+    .expect("canonical SNS storage key is a valid StatePath")
+}
 /// Canonical selector payload for SNS names.
 #[derive(
     Clone,

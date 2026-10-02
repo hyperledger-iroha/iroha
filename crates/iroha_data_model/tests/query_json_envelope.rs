@@ -94,20 +94,27 @@ mod json_envelope {
     }
     #[test]
     fn singular_contract_manifest_roundtrip() {
-        let json = r#"{
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            iroha_crypto::Hash::new(b"canonical manifest query"),
+        );
+        let json = norito::json::to_json(&norito::json!({
             "singular": {
                 "type": "FindContractManifestByArtifactId",
-                "payload": {"artifact_id": {"dataspace_id": 18446744073709551615, "code_hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}}
+                "payload": {"artifact_id": (artifact_id)}
             }
-        }"#;
-        let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
+        }))
+        .expect("typed artifact envelope");
+        let envelope: QueryEnvelopeJson = norito::json::from_str(&json).expect("parse envelope");
         let request = envelope.into_request().expect("build query request");
         let QueryRequest::Singular(query_box) = &request else {
             panic!("expected singular envelope");
         };
-        assert!(matches!(
-            *query_box,
-            iroha_data_model::query::SingularQueryBox::FindContractManifestByArtifactId(_)
-        ));
+        let iroha_data_model::query::SingularQueryBox::FindContractManifestByArtifactId(query) =
+            query_box
+        else {
+            panic!("expected exact artifact manifest query");
+        };
+        assert_eq!(query.artifact_id, artifact_id);
     }
 }

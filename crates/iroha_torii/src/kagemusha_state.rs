@@ -1,6 +1,7 @@
 //! Challenge-bound, data-only complete World publication at the native applied cut.
 
 use super::*;
+use crate::native_projection_response::{capacity, encode, native_committee_original_bytes};
 use iroha_core::{
     state::{AllocationBudget, StateReadOnly},
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
@@ -9,7 +10,6 @@ use iroha_data_model::asset::AssetDefinitionId;
 use iroha_torii_shared::kagemusha_state::{
     KAGEMUSHA_AUTHORITY_STATE_MAX_BYTES_V1, KagemushaAuthorityStateRefV1,
 };
-use norito::json::{BoundedJsonError, JsonSerialize as _, JsonWriteSink};
 
 const ROUTE: &str = "/v1/kagemusha/authority-state/{asset_definition_id}";
 
@@ -101,9 +101,31 @@ async fn handle(
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))
                 })
                 .map_err(|_| unavailable())?;
+            let genesis_committee = &genesis.commitment().schedule.current.committee;
+            let tip_committee = &tip.commitment().schedule.current.committee;
+            let genesis_storage = native_committee_original_bytes(
+                genesis_committee.len(),
+                genesis_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
+            let tip_storage = native_committee_original_bytes(
+                tip_committee.len(),
+                tip_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
             let proof_bytes = proof_bytes
                 .0
                 .checked_add(proof_bytes.1)
+                .and_then(|len| len.checked_add(genesis_storage))
+                .and_then(|len| len.checked_add(tip_storage))
                 .and_then(|len| len.checked_add(16 * 1024))
                 .ok_or_else(capacity)?;
             let _proof_charge = budget
@@ -134,7 +156,7 @@ async fn handle(
                             incarnation,
                             registry,
                         );
-                        encode(&payload, format, max_response, &budget)
+                        encode(&payload, format, max_response, &budget, unavailable)
                             .map_err(|_| "native authority state serialization refused".to_owned())
                     },
                 )
@@ -168,188 +190,6 @@ fn unavailable() -> Error {
     Error::AppServiceUnavailable {
         code: "kagemusha_authority_state_unavailable",
         message: "Current certified native authority state is unavailable.".into(),
-    }
-}
-pub(super) fn capacity() -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-    ))
-}
-
-pub(super) struct EncodedBody {
-    bytes: iroha_allocation::ChargedBuffer<u8>,
-    pub(super) memory: Option<QueryFanoutMemoryReservation>,
-}
-impl AsRef<[u8]> for EncodedBody {
-    fn as_ref(&self) -> &[u8] {
-        self.bytes.as_slice()
-    }
-}
-struct ChargedWriter(iroha_allocation::ChargedBuffer<u8>);
-impl std::io::Write for ChargedWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.0.capacity().saturating_sub(self.0.as_slice().len()) {
-            return Err(std::io::Error::other("native response length changed"));
-        }
-        for byte in bytes {
-            self.0.push_reserved(*byte);
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-impl JsonWriteSink for ChargedWriter {
-    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
-        let mut bytes = [0; 4];
-        self.push_str(value.encode_utf8(&mut bytes))
-    }
-    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
-        std::io::Write::write_all(self, value.as_bytes())
-            .map_err(|_| BoundedJsonError::LengthMismatch)
-    }
-}
-struct CountJson {
-    length: usize,
-    limit: usize,
-    depth: usize,
-}
-impl JsonWriteSink for CountJson {
-    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
-        let mut bytes = [0; 4];
-        self.push_str(value.encode_utf8(&mut bytes))
-    }
-    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
-        let next = self
-            .length
-            .checked_add(value.len())
-            .ok_or(BoundedJsonError::BodyTooLarge)?;
-        if next > self.limit {
-            return Err(BoundedJsonError::BodyTooLarge);
-        }
-        self.length = next;
-        Ok(())
-    }
-    fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
-        let next = self
-            .depth
-            .checked_add(1)
-            .ok_or(BoundedJsonError::Unsupported)?;
-        if next >= norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
-            return Err(BoundedJsonError::Unsupported);
-        }
-        self.depth = next;
-        Ok(())
-    }
-    fn end_container(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
-    }
-}
-pub(super) fn encode<T>(
-    payload: &T,
-    format: ResponseFormat,
-    limit: usize,
-    budget: &AllocationBudget,
-) -> Result<EncodedBody, Error>
-where
-    T: norito::core::SerializePayload + norito::NoritoSchema + norito::json::JsonSerialize,
-{
-    let length = match format {
-        ResponseFormat::Norito => {
-            norito::canonical_frame_len(payload).map_err(|_| unavailable())?
-        }
-        ResponseFormat::Json => {
-            let mut count = CountJson {
-                length: 0,
-                limit,
-                depth: 0,
-            };
-            payload
-                .json_serialize_to(&mut count)
-                .map_err(|_| capacity())?;
-            count.length
-        }
-    };
-    if length > limit {
-        return Err(capacity());
-    }
-    let bytes = iroha_allocation::ChargedBuffer::new(length, budget).map_err(|_| capacity())?;
-    let mut writer = ChargedWriter(bytes);
-    match format {
-        ResponseFormat::Norito => norito::core::write_canonical_to_writer(payload, &mut writer)
-            .map_err(|_| unavailable())?,
-        ResponseFormat::Json => payload
-            .json_serialize_to(&mut writer)
-            .map_err(|_| unavailable())?,
-    }
-    if writer.0.as_slice().len() != length {
-        return Err(unavailable());
-    }
-    Ok(EncodedBody {
-        bytes: writer.0,
-        memory: None,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write as _;
-
-    #[test]
-    fn charged_native_output_rejects_growth_and_refunds_only_when_backing_drops() {
-        let budget = AllocationBudget::new(3);
-        let mut writer = ChargedWriter(iroha_allocation::ChargedBuffer::new(3, &budget).unwrap());
-        writer.write_all(b"abc").unwrap();
-        assert!(writer.write_all(b"d").is_err());
-        assert_eq!(writer.0.as_slice(), b"abc");
-        let bytes = Bytes::from_owner(EncodedBody {
-            bytes: writer.0,
-            memory: None,
-        });
-        let retained = bytes.clone();
-        drop(bytes);
-        assert_eq!(budget.reserved_bytes(), 3);
-        drop(retained);
-        assert_eq!(budget.reserved_bytes(), 0);
-    }
-
-    #[test]
-    fn json_preflight_counts_utf8_and_rejects_length_and_depth_before_output() {
-        let mut count = CountJson {
-            length: 0,
-            limit: 4,
-            depth: 0,
-        };
-        count.push('😀').unwrap();
-        assert_eq!(count.length, 4);
-        assert_eq!(count.push('a'), Err(BoundedJsonError::BodyTooLarge));
-        assert_eq!(count.length, 4);
-        for _ in 1..norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
-            count.begin_container().unwrap();
-        }
-        assert_eq!(count.begin_container(), Err(BoundedJsonError::Unsupported));
-    }
-
-    #[test]
-    fn native_response_last_byte_retains_real_aggregate_query_permit() {
-        let pool = ByteWeightedMemoryPool::new(3).unwrap();
-        let permit = pool.try_acquire_parts([3]).unwrap();
-        let budget = AllocationBudget::new(3);
-        let mut writer = ChargedWriter(iroha_allocation::ChargedBuffer::new(3, &budget).unwrap());
-        writer.write_all(b"abc").unwrap();
-        let bytes = Bytes::from_owner(EncodedBody {
-            bytes: writer.0,
-            memory: Some(QueryFanoutMemoryReservation::new(permit)),
-        });
-        let retained = bytes.slice(1..);
-        drop(bytes);
-        assert!(pool.try_acquire_parts([1]).is_none());
-        assert_eq!(budget.reserved_bytes(), 3);
-        drop(retained);
-        assert!(pool.try_acquire_parts([3]).is_some());
-        assert_eq!(budget.reserved_bytes(), 0);
     }
 }
 
@@ -503,20 +343,14 @@ async fn handle_resource_names_inner(
                             iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
                                 .map_err(|error| error.to_string())?;
                         for (_, value) in originals {
-                            let length =
-                                norito::canonical_frame_len(*value).map_err(|e| e.to_string())?;
-                            if length > 1024 * 1024 {
-                                return Err("native alias original exceeds bound".into());
-                            }
-                            let buffer = iroha_allocation::ChargedBuffer::new(length, &budget)
-                                .map_err(|error| error.to_string())?;
-                            let mut writer = ChargedWriter(buffer);
-                            norito::core::write_canonical_to_writer(*value, &mut writer)
-                                .map_err(|e| e.to_string())?;
-                            if writer.0.as_slice().len() != length {
-                                return Err("native alias original length changed".into());
-                            }
-                            wires.push_reserved(writer.0);
+                            let wire = super::native_projection_response::encode_canonical(
+                                *value,
+                                1024 * 1024,
+                                &budget,
+                                unavailable,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            wires.push_reserved(wire);
                         }
                         let mut aliases =
                             iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
@@ -545,7 +379,7 @@ async fn handle_resource_names_inner(
                             keys,
                             sns.as_slice(),
                         );
-                        encode(&payload, format, max_response, &budget)
+                        encode(&payload, format, max_response, &budget, unavailable)
                             .map_err(|_| "native names state serialization refused".to_owned())
                     },
                 )
@@ -611,39 +445,6 @@ fn validate_resource_names_request_target(
         ));
     }
     Ok(challenge)
-}
-
-pub(super) fn native_committee_original_bytes<'a>(
-    expected: usize,
-    members: impl IntoIterator<Item = (&'a iroha_crypto::PublicKey, &'a [u8])>,
-) -> Result<usize, Error> {
-    // proof_committee retains a tuple Vec; build_proof collects FinalityValidator.
-    // Do not assume allocator reuse of two different element layouts. Both Vec
-    // geometries and each independently cloned compact key/PoP are prepaid.
-    let tuples = std::alloc::Layout::array::<(iroha_crypto::PublicKey, Vec<u8>)>(expected)
-        .map_err(|_| capacity())?
-        .size();
-    let final_values = std::alloc::Layout::array::<
-        iroha_data_model::sumeragi_finality::FinalityValidator,
-    >(expected)
-    .map_err(|_| capacity())?
-    .size();
-    let mut bytes = tuples.checked_add(final_values).ok_or_else(capacity)?;
-    let mut seen = 0usize;
-    for (key, pop) in members {
-        seen = seen.checked_add(1).ok_or_else(capacity)?;
-        if seen > expected {
-            return Err(capacity());
-        }
-        bytes = bytes
-            .checked_add(key.retained_allocation_layout().size())
-            .and_then(|value| value.checked_add(pop.len()))
-            .ok_or_else(capacity)?;
-    }
-    if seen != expected {
-        return Err(capacity());
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -722,31 +523,5 @@ mod resource_names_route_tests {
         assert!(
             validate_resource_names_request_target(&headers, &Method::GET, &uri, &value).is_err()
         );
-    }
-    #[test]
-    fn variable_committees_are_fully_prepaid_in_the_original_pool() {
-        let key =
-            iroha_crypto::KeyPair::from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal);
-        let pop = iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap();
-        let bytes = native_committee_original_bytes(
-            1024,
-            std::iter::repeat_n((key.public_key(), pop.as_slice()), 1024),
-        )
-        .unwrap();
-        assert!(
-            bytes > 16 * 1024,
-            "fixed metadata overhead is insufficient for supported large committees"
-        );
-        let budget = AllocationBudget::new(16 * 1024);
-        assert!(budget.try_reserve_bytes(bytes).is_err());
-        assert_eq!(budget.reserved_bytes(), 0);
-        let budget = AllocationBudget::new(bytes);
-        let charge = budget.try_reserve_bytes(bytes).unwrap();
-        assert_eq!(budget.reserved_bytes(), bytes);
-        drop(charge);
-        assert_eq!(budget.reserved_bytes(), 0);
-        assert!(native_committee_original_bytes(2, [(key.public_key(), pop.as_slice())]).is_err());
-        assert!(native_committee_original_bytes(0, [(key.public_key(), pop.as_slice())]).is_err());
-        assert!(native_committee_original_bytes(usize::MAX, std::iter::empty()).is_err());
     }
 }

@@ -2020,7 +2020,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     )
 }
 fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
-    world: World,
+    mut world: World,
     iso: Option<iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
@@ -2029,6 +2029,21 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     network_id: NetworkId,
     intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
 ) -> SharedAppState {
+    // These synthetic routing fixtures model a Global root unless their caller explicitly
+    // supplied another root (or malformed metadata for a rejection test). An absent root
+    // must never gain Global authority in production routing.
+    #[cfg(feature = "app_api")]
+    if !world
+        .view()
+        .parameters()
+        .custom()
+        .contains_key(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
+    {
+        crate::private_account_routing_tests::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+    }
     // Minimal core state
     let _ = &push;
     let query_handle = LiveQueryStore::start_test();
@@ -2252,7 +2267,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
             .expect("default proxy HTTP memory envelope fits");
     let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
         .expect("default query memory pool fits weighted semaphore geometry");
-    #[cfg(feature = "app_api")]
     let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
         kagemusha_command_memory_pool_bytes(
             usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
@@ -2283,7 +2297,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         kura,
         chain_id: Arc::new(chain_id),
         signed_query_admission: signed_query_test_admission(),
-        #[cfg(feature = "app_api")]
         transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         torii_proxy_max_response_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
@@ -2348,7 +2361,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         proof_rate_limiter: limits::RateLimiter::new(None, None),
         proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_body_inflight,
-        #[cfg(feature = "app_api")]
         kagemusha_command_memory_inflight,
         soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
@@ -2519,8 +2531,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         ),
         #[cfg(feature = "app_api")]
         sorafs_appeal_settlement_submitter: None,
-        #[cfg(feature = "app_api")]
-        kagemusha_commands: None,
+        kagemusha_commands: Arc::new(kagemusha_commands::KagemushaCommandRuntime::default()),
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_relay_trust: None,
@@ -2542,7 +2553,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         sumeragi: None,
         #[cfg(any(feature = "app_api", feature = "connect"))]
         p2p: None,
-        #[cfg(any(feature = "app_api", feature = "connect"))]
         local_peer_id: None,
         #[cfg(feature = "connect")]
         connect_bus: crate::connect::Bus::from_config(

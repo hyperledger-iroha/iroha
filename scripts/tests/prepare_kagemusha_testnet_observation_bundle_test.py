@@ -58,6 +58,13 @@ class TestnetBundleTests(unittest.TestCase):
         )
         report = self.report(args)
         self.assertEqual(len(BUNDLE.verify_report(report, args)), 54)
+        with self.assertRaises(BUNDLE.BundleError):
+            BUNDLE.verify_report(dict(report, artifacts=report["artifacts"][:50]), args)
+        for omitted in range(50, 54):
+            rows = list(report["artifacts"])
+            rows.pop(omitted)
+            with self.subTest(omitted=omitted), self.assertRaises(BUNDLE.BundleError):
+                BUNDLE.verify_report(dict(report, artifacts=rows), args)
         bad = dict(report, release_id="3" * 64)
         with self.assertRaises(BUNDLE.BundleError):
             BUNDLE.verify_report(bad, args)

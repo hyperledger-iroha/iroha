@@ -33,3 +33,7 @@
 -keep class org.hyperledger.iroha.sdk.offline.probe.Pixel6TestnetDiagnosticSelectionJniV1 {
     native <methods>;
 }
+
+# ServiceLoader's exact installed ordinary app-key route and SPI filename.
+-keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaAndroidOrdinaryHardwareServiceFactoryV1
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaAndroidAppOwnedHardwareServiceFactoryV1 { public <init>(); }

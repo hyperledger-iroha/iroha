@@ -9,7 +9,6 @@ use crate::state::{State, StateReadOnly};
 use crate::state::{
     StateBlock, StateStorageAdmissionError, StateTransaction, World, WorldReadOnly,
 };
-#[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 #[cfg(test)]
 use iroha_data_model::nexus::DataSpaceMetadata;
@@ -18,7 +17,7 @@ use iroha_data_model::sns::pricing::{
     pick_pricing_tier, required_payment_amount, tier_by_pricing_class, validate_term_bounds,
 };
 pub use iroha_data_model::sns::{
-    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, record_storage_key,
 };
 #[cfg(test)]
 use iroha_data_model::transaction::Executable;
@@ -98,9 +97,109 @@ const SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE: u32 = 1;
 ///
 /// This consensus constant bounds native maintenance work. A durable cursor
 /// advances through canonically ordered storage keys so larger registries remain fair.
-pub const ALIAS_AUTO_RENEW_SWEEP_LIMIT: usize = 64;
+pub const ALIAS_AUTO_RENEW_SWEEP_LIMIT: usize =
+    iroha_data_model::parameter::FastpqSourcePolicyV1::NATIVE_MAINTENANCE_INVOCATIONS as usize;
+/// Move-only source authority issued by the original bounded SNS sweep.
+pub(crate) struct SnsNativeMaintenancePermit {
+    network: iroha_data_model::NetworkId,
+    proposal: iroha_crypto::HashOf<BlockHeader>,
+    direct_slot: iroha_crypto::Hash,
+    storage_key: StatePath,
+    revision: u64,
+    record_digest: iroha_crypto::Hash,
+}
+impl SnsNativeMaintenancePermit {
+    fn issue(
+        transaction: &StateTransaction<'_, '_>,
+        scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
+        state: &AliasAutoRenewStateV1,
+    ) -> Result<Self, SnsError> {
+        scope
+            .authenticate(transaction)
+            .map_err(SnsError::Internal)?;
+        Ok(Self {
+            network: transaction.network_id,
+            proposal: transaction._curr_block.hash(),
+            direct_slot: transaction
+                .direct_execution_identity()
+                .map_err(|error| SnsError::Internal(error.to_owned()))?,
+            storage_key: alias_auto_renew_storage_key(&state.target)?,
+            revision: state.revision,
+            record_digest: Self::record_digest(
+                state,
+                transaction.native_maintenance_binding_limit(),
+            )
+            .map_err(SnsError::Internal)?,
+        })
+    }
+    fn record_digest(
+        state: &AliasAutoRenewStateV1,
+        limit: u64,
+    ) -> Result<iroha_crypto::Hash, String> {
+        let length =
+            u64::try_from(norito::canonical_frame_len(state).map_err(|error| error.to_string())?)
+                .map_err(|_| "SNS native record length exceeds u64")?;
+        if length > limit {
+            return Err("SNS native record exceeds its committed intrinsic source limit".into());
+        }
+        Ok(iroha_crypto::Hash::new(
+            norito::encode_canonical(state).map_err(|error| error.to_string())?,
+        ))
+    }
+    /// Canonical source facts included alongside the exact live renewal quote.
+    pub(crate) fn binding(&self) -> Result<Vec<u8>, String> {
+        norito::encode_canonical(&(
+            "iroha:sns:native-maintenance-source:v1",
+            self.network,
+            self.proposal,
+            self.direct_slot,
+            self.storage_key.clone(),
+            self.revision,
+            self.record_digest,
+        ))
+        .map_err(|error| error.to_string())
+    }
+    /// Recheck the original proposal and persisted configuration before source admission.
+    pub(crate) fn authenticate(
+        &self,
+        transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), SnsError> {
+        transaction
+            .validate_native_maintenance_scope()
+            .map_err(SnsError::Internal)?;
+        self.authenticate_source_record(transaction)
+    }
+    fn authenticate_source_record(
+        &self,
+        transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), SnsError> {
+        if self.network != transaction.network_id
+            || self.proposal != transaction._curr_block.hash()
+            || self.direct_slot
+                != transaction
+                    .direct_execution_identity()
+                    .map_err(|error| SnsError::Internal(error.to_owned()))?
+        {
+            return Err(SnsError::Internal(
+                "SNS native source belongs to a foreign execution scope".into(),
+            ));
+        }
+        let current = alias_auto_renew_state_by_storage_key(&transaction.world, &self.storage_key)?;
+        if current.revision != self.revision
+            || Self::record_digest(&current, transaction.native_maintenance_binding_limit())
+                .map_err(SnsError::Internal)?
+                != self.record_digest
+        {
+            return Err(SnsError::Internal(
+                "SNS native source differs from the original record or configuration".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 /// Non-reusable proof that the SNS maintenance sweep admitted one exact renewal charge.
 pub(crate) struct VerifiedSnsAutoRenewalCharge {
+    source: SnsNativeMaintenancePermit,
     selector: NameSelectorV1,
     owner: AccountId,
     current_expiry_ms: u64,
@@ -111,6 +210,9 @@ pub(crate) struct VerifiedSnsAutoRenewalCharge {
 }
 impl VerifiedSnsAutoRenewalCharge {
     fn new(
+        transaction: &StateTransaction<'_, '_>,
+        scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
+        state: &AliasAutoRenewStateV1,
         selector: NameSelectorV1,
         owner: AccountId,
         current_expiry_ms: u64,
@@ -118,8 +220,9 @@ impl VerifiedSnsAutoRenewalCharge {
         source_id: AssetId,
         destination: AccountId,
         amount: Quantity,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, SnsError> {
+        Ok(Self {
+            source: SnsNativeMaintenancePermit::issue(transaction, scope, state)?,
             selector,
             owner,
             current_expiry_ms,
@@ -127,11 +230,12 @@ impl VerifiedSnsAutoRenewalCharge {
             source_id,
             destination,
             amount,
-        }
+        })
     }
     pub(crate) fn into_parts(
         self,
     ) -> (
+        SnsNativeMaintenancePermit,
         NameSelectorV1,
         AccountId,
         u64,
@@ -141,6 +245,7 @@ impl VerifiedSnsAutoRenewalCharge {
         Quantity,
     ) {
         (
+            self.source,
             self.selector,
             self.owner,
             self.current_expiry_ms,
@@ -382,16 +487,6 @@ impl SnsNamespace {
         }
     }
 }
-/// Compute the durable smart-contract-state key for a SNS record selector.
-#[must_use]
-pub fn record_storage_key(selector: &NameSelectorV1) -> StatePath {
-    StatePath::from_str(&format!(
-        "sns/records/{}/{}",
-        selector.suffix_id,
-        hex::encode(selector.name_hash())
-    ))
-    .expect("static SNS storage key format is a valid StatePath")
-}
 /// Compute the durable smart-contract-state key for a SNS suffix policy.
 #[must_use]
 pub fn policy_storage_key(suffix_id: SuffixId) -> StatePath {
@@ -573,50 +668,6 @@ fn decode_alias_auto_renew_state(
     }
     Ok(state)
 }
-/// Visit the authenticated retained configuration corpus without a second registry.
-/// Failed/suspended enabled records still reserve their future exact transfer shape.
-pub(crate) fn visit_retained_auto_renew_obligations(
-    storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
-    replacement: Option<&AliasAutoRenewStateV1>,
-    mut visit: impl FnMut(&AccountId, &AccountId, &AssetDefinitionId) -> Result<(), SnsError>,
-) -> Result<(), SnsError> {
-    let replacement_key = replacement
-        .map(|state| alias_auto_renew_storage_key(&state.target))
-        .transpose()?;
-    let prefix = alias_auto_renew_internal_key(ALIAS_AUTO_RENEW_STATE_PREFIX);
-    let mut append = |state: &AliasAutoRenewStateV1| {
-        let Some(config) = &state.config else {
-            return Ok(());
-        };
-        let selector = crate::alias_setup::selector_for_resolved_alias_target(&state.target)
-            .map_err(|error| SnsError::BadRequest(error.to_string()))?;
-        let bytes = storage
-            .get(&policy_storage_key(selector.suffix_id))
-            .ok_or_else(|| {
-                SnsError::Conflict("retained SNS renewal has no suffix policy".into())
-            })?;
-        let policy = decode_policy_for_suffix(bytes, selector.suffix_id)?;
-        visit(
-            &state.owner,
-            &policy.fund_splitter_account,
-            &config.payment_asset,
-        )
-    };
-    for (key, bytes) in storage.range(prefix..) {
-        if !key.as_ref().starts_with(ALIAS_AUTO_RENEW_STATE_PREFIX) {
-            break;
-        }
-        if replacement_key.as_ref() == Some(key) {
-            continue;
-        }
-        append(&decode_alias_auto_renew_state(bytes, key)?)?;
-    }
-    if let Some(state) = replacement {
-        append(state)?;
-    }
-    Ok(())
-}
-
 /// Persist one validated alias auto-renew state record.
 ///
 /// # Errors
@@ -627,7 +678,6 @@ pub(crate) fn persist_alias_auto_renew_state(
     state: &AliasAutoRenewStateV1,
 ) -> Result<(), SnsError> {
     let key = alias_auto_renew_storage_key(&state.target)?;
-    state_transaction.validate_fastpq_sns_state(state)?;
     state_transaction
         .world
         .smart_contract_state
@@ -643,7 +693,8 @@ enum AliasAutoRenewAttempt {
     Storage(StateStorageAdmissionError),
 }
 fn alias_auto_renew_attempt(
-    state_transaction: &mut crate::state::sns_maintenance::SnsMaintenanceTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
     state: &AliasAutoRenewStateV1,
     config: &AliasAutoRenewConfigV1,
     now_ms: u64,
@@ -748,7 +799,10 @@ fn alias_auto_renew_attempt(
             quote.charge_amount, config.max_amount
         ));
     }
-    let charge = VerifiedSnsAutoRenewalCharge::new(
+    let charge = match VerifiedSnsAutoRenewalCharge::new(
+        state_transaction,
+        scope,
+        state,
         selector.clone(),
         state.owner.clone(),
         record.expires_at_ms,
@@ -756,7 +810,15 @@ fn alias_auto_renew_attempt(
         AssetId::of(config.payment_asset.clone(), state.owner.clone()),
         quote.collector_account.clone(),
         quote.charge_amount.clone(),
-    );
+    ) {
+        Ok(charge) => charge,
+        Err(error) => {
+            return match error {
+                SnsError::Deferred(reason) => AliasAutoRenewAttempt::Deferred(reason),
+                error => AliasAutoRenewAttempt::Retry(error.to_string()),
+            };
+        }
+    };
     if let Err(error) =
         crate::smartcontracts::isi::asset::isi::execute_verified_sns_auto_renewal_charge(
             state_transaction,
@@ -870,7 +932,8 @@ fn record_alias_auto_renew_failure(
     Ok(())
 }
 fn process_alias_auto_renew_storage_key(
-    state_block: &mut crate::state::sns_maintenance::SnsTimeMaintenance<'_, '_>,
+    state_block: &mut StateBlock<'_>,
+    scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
     storage_key: &StatePath,
     now_ms: u64,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
@@ -892,8 +955,8 @@ fn process_alias_auto_renew_storage_key(
     if state.suspended_reason.is_some() {
         return Ok(());
     }
-    let mut transaction = state_block.renewal_transaction()?;
-    let attempt = alias_auto_renew_attempt(&mut transaction, &state, &config, now_ms);
+    let mut transaction = state_block.try_transaction()?;
+    let attempt = alias_auto_renew_attempt(&mut transaction, scope, &state, &config, now_ms);
     transaction.require_storage_admission()?;
     if let Some(reason) = transaction.execution_deferral() {
         return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
@@ -946,7 +1009,8 @@ fn process_alias_auto_renew_storage_key(
 /// Individual payment failures update deterministic retry/suspension state;
 /// a local World admission refusal returns to the original output owner.
 pub(crate) fn process_alias_auto_renewals(
-    mut state_block: crate::state::sns_maintenance::SnsTimeMaintenance<'_, '_>,
+    state_block: &mut StateBlock<'_>,
+    scope: &crate::state::native_maintenance::NativeMaintenanceTimeScope,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<StateStorageAdmissionError>> {
     let cursor = match alias_auto_renew_cursor(&state_block.world) {
         Ok(cursor) => cursor,
@@ -963,12 +1027,12 @@ pub(crate) fn process_alias_auto_renewals(
     let storage_keys = alias_auto_renew_candidate_keys(
         &state_block.world,
         cursor.as_ref().map(|cursor| &cursor.last_storage_key),
-        ALIAS_AUTO_RENEW_SWEEP_LIMIT,
+        ALIAS_AUTO_RENEW_SWEEP_LIMIT.min(state_block.native_maintenance_invocation_limit()),
     );
     let now_ms =
         u64::try_from(state_block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
     for storage_key in &storage_keys {
-        process_alias_auto_renew_storage_key(&mut state_block, storage_key, now_ms)?;
+        process_alias_auto_renew_storage_key(state_block, scope, storage_key, now_ms)?;
     }
     if let Some(last_storage_key) = storage_keys.last().cloned() {
         let mut transaction = state_block.try_transaction()?;
@@ -1359,7 +1423,77 @@ fn seed_alias_manage_permissions_if_missing(
 /// authority are only coming online while the block executes. This helper pre-seeds the leases and
 /// alias-management permissions that the first block itself consumes, mirroring how operators would
 /// pre-register those names before normal operation.
+/// Private namespace pricing is initialized from the unique fee policy in the same authenticated
+/// original genesis before State initialization can seed its global defaults. Existing policy
+/// bytes are validated, never retargeted or repaired.
+///
+/// # Errors
+/// Rejects unauthenticated genesis, invalid private fee authority, or conflicting namespace state.
 pub fn seed_genesis_alias_bootstrap(
+    world: &mut World,
+    block: &iroha_data_model::block::SignedBlock,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<(), SnsError> {
+    use iroha_data_model::{
+        block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
+        isi::SetParameter,
+        parameter::Parameter,
+    };
+
+    iroha_data_model::sumeragi_finality::genesis_epoch(block)
+        .map_err(|error| SnsError::BadRequest(format!("invalid SNS bootstrap genesis: {error}")))?;
+    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
+        .map_err(SnsError::BadRequest)?;
+    if let SumeragiRootScope::Dataspace { .. } = metadata.sumeragi_context.root_scope {
+        let mut policy = None;
+        for transaction in block.external_transactions() {
+            for instruction in transaction.instructions().explicit_instructions() {
+                let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                let Parameter::Custom(custom) = set.inner() else {
+                    continue;
+                };
+                if custom.id() != &PrivateRootFeePolicy::parameter_id() {
+                    continue;
+                }
+                let decoded = PrivateRootFeePolicy::from_custom_parameter(custom)
+                    .map_err(|error| SnsError::BadRequest(error.to_string()))?;
+                if policy.replace(decoded).is_some() {
+                    return Err(SnsError::BadRequest(
+                        "private SNS bootstrap repeats its signed fee policy".into(),
+                    ));
+                }
+            }
+        }
+        let policy = policy.ok_or_else(|| {
+            SnsError::BadRequest("private SNS bootstrap omits its signed fee policy".into())
+        })?;
+        let payment_asset_id = policy.asset_definition_id.to_string();
+        // Prevalidate all present namespaces before inserting any absent policy. A partial
+        // retained world with another currency must fail without creating mixed state.
+        for namespace in [
+            SnsNamespace::AccountAlias,
+            SnsNamespace::Domain,
+            SnsNamespace::Dataspace,
+        ] {
+            if let Some(bytes) = world
+                .smart_contract_state
+                .view()
+                .get(&policy_storage_key(namespace.suffix_id()))
+            {
+                let existing = decode_policy_for_suffix(bytes, namespace.suffix_id())?;
+                ensure_namespace_policy_is_current(namespace, &existing)?;
+                ensure_policy_payment_asset_literal(&existing, &payment_asset_id)?;
+            }
+        }
+        try_seed_default_namespace_policies(world, &payment_asset_id)?;
+    }
+    seed_genesis_alias_records(world, block, dataspace_catalog);
+    Ok(())
+}
+
+fn seed_genesis_alias_records(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
     dataspace_catalog: &DataSpaceCatalog,
@@ -3037,5 +3171,9 @@ pub fn active_dataspace_owner_by_id(
     };
     active_dataspace_owner_by_alias(world, &resolution.alias, now_ms)
 }
+#[cfg(test)]
+mod genesis_bootstrap_tests;
+#[cfg(test)]
+mod native_maintenance_tests;
 #[cfg(test)]
 mod tests;

@@ -87,9 +87,6 @@ pub enum RootScopeDecodeRefusal {
 /// Local State storage or protocol decoder refusal; never a verdict on consensus data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateStorageAdmissionError {
-    /// The original SNS maintenance/corpus decoder could not complete locally.
-    #[error("local SNS maintenance deferred: {0}")]
-    SnsMaintenance(crate::execution_attempt::ExecutionDeferred),
     /// Original finite-credit refusal from an admitted World index.
     #[error(transparent)]
     World(#[from] mv::storage::AdmittedStorageError),
@@ -107,12 +104,6 @@ impl StateStorageAdmissionError {
         match self {
             Self::World(error) => error.release_wait(),
             Self::AmxDecode(_) | Self::RootScopeDecode(_) => None,
-            Self::SnsMaintenance(reason) => match reason.allocation_refusal() {
-                Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
-                    Some(release)
-                }
-                _ => None,
-            },
         }
     }
 }

@@ -4,55 +4,56 @@ use super::*;
 use crate::managed::{Error, LocalnetPorts, ManagedContext, ManagedPeer, PreparedLocalnet};
 use iroha_data_model::{
     NetworkId,
-    block::consensus::SumeragiRootScope,
+    block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
     hijiri::HijiriParametersV1,
-    nexus::{DataSpaceCatalog, DataSpaceMetadata, RuntimeDataSpaceAdditionV1},
     parameter::{Parameter, Parameters},
+    sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
 };
 use norito::{JsonDeserialize, JsonSerialize};
 
 const PREPARED: &str = "private-root-prepared.json";
 
-/// Exact parent catalog identity for an independently operated private ledger.
+/// Exact parent SNS identity for an independently operated private ledger.
 ///
-/// The caller must authenticate the parent catalog admission of this descriptor. Decoding or
-/// validating this value proves structural identity only. The stable catalog manifest hash is
-/// separate from the child genesis and from the native lane governance manifest; it must be
-/// supplied from genuine parent admission, never synthesized to obtain a chosen identifier.
+/// The caller must authenticate parent SNS ownership and admission before claiming attachment.
+/// Local preparation may precede that reservation; decoding or validating this value proves
+/// structural identity only. The canonical SNS name hash derives the child dataspace identifier;
+/// no physical parent lane or catalog entry is created. The child's own catalog uses that exact
+/// name hash independently of child genesis.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivateRootSpec {
     /// Genesis-bound identity of the parent network.
     pub parent_network_id: NetworkId,
-    /// Full-width identifier assigned by the authenticated parent catalog.
+    /// Full-width identifier derived from the canonical parent SNS alias name hash.
     pub dataspace_id: DataSpaceId,
-    /// Canonical parent-reserved namespace.
+    /// Canonical namespace to reserve in parent SNS before registration.
     pub dataspace_alias: String,
-    /// Stable parent catalog identity hash whose first eight bytes derive `dataspace_id`.
-    pub manifest_hash: [u8; 32],
 }
 
 impl PrivateRootSpec {
-    /// Validate the exact parent catalog hash/identifier/alias binding.
+    /// Validate the exact parent SNS alias/hash/identifier binding.
     ///
     /// # Errors
     /// Rejects reserved identity, malformed aliases and a hash deriving a different identifier.
     pub fn validate(&self) -> Result<()> {
-        let addition = RuntimeDataSpaceAdditionV1 {
-            descriptor: DataSpaceMetadata {
-                id: self.dataspace_id,
-                alias: self.dataspace_alias.clone(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            manifest_hash: self.manifest_hash,
-        };
-        addition.validate_structure()?;
-        let catalog = DataSpaceCatalog::new(vec![addition.descriptor])?;
-        ResolvedDataSpaceV1::resolve_catalog(&self.dataspace_alias, &catalog)?;
+        ensure!(
+            DataSpaceId::from_hash(&self.name_hash()?) == self.dataspace_id,
+            "private-root dataspace identifier differs from its canonical SNS alias"
+        );
         DomainId::parse_fully_qualified(&format!("app.{}", self.dataspace_alias))?;
         self.scope().validate()?;
         Ok(())
+    }
+
+    fn name_hash(&self) -> Result<[u8; 32]> {
+        let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, &self.dataspace_alias)?;
+        ensure!(
+            selector.normalized_label() == self.dataspace_alias
+                && self.dataspace_alias != "universal",
+            "private-root alias must be canonical and cannot be universal"
+        );
+        Ok(selector.name_hash())
     }
 
     /// Immutable native root identity embedded in the signed child genesis.
@@ -72,13 +73,110 @@ struct RetainedPrivateRoot {
     prepared: PreparedLocalnet,
 }
 
+impl PreparedLocalnet {
+    /// Derive the public child registration from the original retained signed private genesis.
+    ///
+    /// This authenticates the generated manifest, scope, owner and validator configuration,
+    /// then executes genesis through the native startup path in isolated temporary storage.
+    /// The result commitment comes from that original local execution, without trusting a
+    /// Torii response or touching the running validators' storage. Parent authorization and
+    /// independently verified parent inclusion remain separate requirements.
+    ///
+    /// # Errors
+    /// Rejects a global generation, changed retained artifacts, invalid signed genesis or any
+    /// failure to reproduce its native execution and compact registration.
+    pub fn load_private_registration(
+        &self,
+    ) -> crate::managed::Result<iroha_data_model::private_dataspace::PrivateDataspaceRegistration>
+    {
+        let invalid = || Error::Invalid("retained private registration binding is invalid".into());
+        let root = iroha_fs::PrivateDirectory::open(
+            self.context.client_config.parent().ok_or_else(invalid)?,
+        )?;
+        let retained: RetainedPrivateRoot =
+            norito::json::from_slice(&root.read(PREPARED, 1024 * 1024)?).map_err(|_| invalid())?;
+        if retained.prepared != *self {
+            return Err(invalid());
+        }
+        retained.spec.validate().map_err(|_| invalid())?;
+        verify_retained(root.path(), self, &retained.spec)?;
+        let manifest_bytes = root.read(
+            "genesis.json",
+            iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
+        )?;
+        validate_genesis_manifest_json(&manifest_bytes).map_err(|_| invalid())?;
+        let manifest = RawGenesisTransaction::from_json_slice_at_path(
+            &manifest_bytes,
+            root.path().join("genesis.json"),
+        )
+        .map_err(|_| invalid())?;
+        let signed = root.read("genesis.signed.nrt", SIGNED_GENESIS_MAX_BYTES_V1)?;
+        let config_bytes = root.read("peer0.toml", 1024 * 1024)?;
+        let config = parse_private_peer_config(
+            std::str::from_utf8(&config_bytes).map_err(|_| invalid())?,
+            Some(&root.path().join("peer0.toml")),
+        )
+        .map_err(|_| invalid())?;
+        let registration = std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("iroha-private-registration".into())
+                .stack_size(16 * 1024 * 1024)
+                .spawn_scoped(scope, || -> Result<_> {
+                    use crate::genesis::staging::{
+                        configured_initial_genesis_state, ensure_peer_config_matches_manifest,
+                        staged_genesis_chain_discriminant,
+                    };
+                    let _discriminant = staged_genesis_chain_discriminant(&manifest);
+                    ensure_peer_config_matches_manifest(&config, &manifest)?;
+                    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+                        &signed,
+                        &manifest,
+                        &config.genesis.public_key,
+                        config.genesis.expected_hash,
+                    )?;
+                    let genesis = iroha_genesis::GenesisBlock(validated.block().clone());
+                    let (state, _storage, authority) =
+                        configured_initial_genesis_state(&manifest, Some(&config), &genesis)?;
+                    iroha_core::sumeragi::startup::apply_genesis(
+                        &state,
+                        genesis.0,
+                        &authority,
+                        iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+                        None,
+                    )?;
+                    Ok(
+                        iroha_core::sumeragi::private_dataspace_export::registration(
+                            &state.view(),
+                        )?,
+                    )
+                })?
+                .join()
+                .map_err(|_| invalid())?
+                .map_err(|error| {
+                    Error::Invalid(format!(
+                        "retained private genesis execution failed: {error:#}"
+                    ))
+                })
+        })?;
+        if registration.scope != retained.spec.scope()
+            || registration.child_network_id.to_string() != self.context.network_id
+            || registration.child_chain_id.to_string() != self.context.chain_id
+        {
+            return Err(invalid());
+        }
+        root.revalidate()?;
+        Ok(registration)
+    }
+}
+
 /// Prepare four loopback validators for an independent, owner-operated private root.
 ///
 /// This only prepares local artifacts. It neither registers with the parent nor starts a node.
 /// The generated ledger owner is returned in the context and retained for parent registration.
 /// Reopening a completed generation returns that exact identity. An interrupted incomplete
 /// generation is retained and rejected; it is never silently replaced with new signing keys.
-/// TODO: Resume partially prepared artifacts through the parent-admission operation journal.
+/// The managed engine wraps this low-level renderer in whole-generation atomic publication,
+/// discarding only its unpublished staging directory before another preparation attempt.
 ///
 /// # Errors
 /// Rejects unsafe custody, conflicting identity, incomplete preparation or genuine Core genesis
@@ -89,12 +187,28 @@ pub fn prepare_private_root(
     ports: &LocalnetPorts,
     spec: &PrivateRootSpec,
 ) -> crate::managed::Result<PreparedLocalnet> {
-    spec.validate()
-        .map_err(|error| Error::Invalid(format!("private-root catalog is invalid: {error}")))?;
+    prepare_private_root_at(name, directory, ports, spec, None)
+}
+
+pub(crate) fn prepare_private_root_at(
+    name: &str,
+    directory: &Path,
+    ports: &LocalnetPorts,
+    spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
+) -> crate::managed::Result<PreparedLocalnet> {
+    spec.validate().map_err(|error| {
+        Error::Invalid(format!("private-root SNS identity is invalid: {error}"))
+    })?;
     if directory.exists() {
         let root = iroha_fs::PrivateDirectory::open(directory)?;
         match root.read(PREPARED, 1024 * 1024) {
             Ok(bytes) => {
+                if publication_root.is_some() {
+                    return Err(Error::Invalid(
+                        "publication stage already contains a prepared identity".into(),
+                    ));
+                }
                 let retained: RetainedPrivateRoot = norito::json::from_slice(&bytes)
                     .map_err(|_| Error::Invalid("retained private root is invalid".into()))?;
                 if retained.spec != *spec || retained.prepared.context.name != name {
@@ -109,9 +223,15 @@ pub fn prepare_private_root(
             Err(error) => return Err(error.into()),
         }
     }
-    let prepared = prepare_fresh(name, directory, ports, spec)
+    let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root)
         .map_err(|error| Error::Invalid(format!("private-root preparation failed: {error:#}")))?;
     verify_retained(&directory.canonicalize()?, &prepared, spec)?;
+    if let Some(root) = publication_root {
+        prepared.context.client_config = root.join("client.toml");
+        for (index, peer) in prepared.peers.iter_mut().enumerate() {
+            peer.config_path = root.join(format!("peer{index}.toml"));
+        }
+    }
     let retained = RetainedPrivateRoot {
         spec: spec.clone(),
         prepared: prepared.clone(),
@@ -127,13 +247,17 @@ pub fn prepare_private_root(
     Ok(prepared)
 }
 
-fn verify_retained(
+pub(crate) fn verify_retained(
     root: &Path,
     prepared: &PreparedLocalnet,
     spec: &PrivateRootSpec,
 ) -> crate::managed::Result<()> {
+    // Reopening through a desktop or library entry point may precede fresh generation.
+    // The shared loader owns the built-in instruction registry required by signed decoding.
+    init_instruction_registry();
     let invalid = || Error::Invalid("retained private-root artifact binding differs".into());
-    if prepared.context.client_config != root.join("client.toml")
+    if prepared.service_profile != LocalnetServiceProfile::Standard
+        || prepared.context.client_config != root.join("client.toml")
         || prepared.context.dataspace_id != spec.dataspace_id.as_u64()
         || prepared.context.dataspace_alias != spec.dataspace_alias
         || prepared.peers.len() != 4
@@ -147,7 +271,7 @@ fn verify_retained(
     }
     let client = prepared.context.load_client_config()?;
     prepared.load_operator_key_pair()?;
-    verify_private_credentials(prepared)?;
+    verify_private_credentials(prepared, spec)?;
     let bytes = iroha_fs::read_private(
         &root.join("genesis.signed.nrt"),
         SIGNED_GENESIS_MAX_BYTES_V1,
@@ -155,6 +279,7 @@ fn verify_retained(
     let block =
         iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| invalid())?;
     iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
+    service_authorities::validate_signed_profile(prepared, &block)?;
     let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&block)
         .map_err(|_| invalid())?;
     if metadata.sumeragi_context.root_scope != spec.scope()
@@ -164,8 +289,24 @@ fn verify_retained(
     }
     let management = Permission::from(CanManageSmartContractCode);
     let mut found_owner = false;
+    let mut found_fees = false;
+    let expected_fees = private_fee_policy(spec).map_err(|_| invalid())?;
     for transaction in block.external_transactions() {
+        if transaction.authority() != &client.account {
+            return Err(invalid());
+        }
         for instruction in transaction.instructions().explicit_instructions() {
+            if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                && let Parameter::Custom(parameter) = set_parameter.inner()
+                && parameter.id() == &PrivateRootFeePolicy::parameter_id()
+            {
+                let policy = PrivateRootFeePolicy::from_custom_parameter(parameter)
+                    .map_err(|_| invalid())?;
+                if found_fees || policy != expected_fees {
+                    return Err(invalid());
+                }
+                found_fees = true;
+            }
             if let Some(GrantBox::Permission(grant)) =
                 instruction.as_any().downcast_ref::<GrantBox>()
                 && grant.object() == &management
@@ -177,13 +318,16 @@ fn verify_retained(
             }
         }
     }
-    if !found_owner {
+    if !found_owner || !found_fees {
         return Err(invalid());
     }
     Ok(())
 }
 
-fn verify_private_credentials(prepared: &PreparedLocalnet) -> crate::managed::Result<()> {
+fn verify_private_credentials(
+    prepared: &PreparedLocalnet,
+    spec: &PrivateRootSpec,
+) -> crate::managed::Result<()> {
     let invalid = || Error::Invalid("private-root listener credential binding is invalid".into());
     let client = iroha_fs::read_private(&prepared.context.client_config, 1024 * 1024)?;
     let client = crate::secret_toml::Table::new(
@@ -213,6 +357,21 @@ fn verify_private_credentials(prepared: &PreparedLocalnet) -> crate::managed::Re
             )
             .map_err(|_| invalid())?,
         );
+        let gas_account = table
+            .get("pipeline")
+            .and_then(|value| value.get("gas"))
+            .and_then(|value| value.get("tech_account_id"))
+            .and_then(toml::Value::as_str)
+            .ok_or_else(invalid)?;
+        let expected = private_fee_configuration(
+            &private_fee_policy(spec).map_err(|_| invalid())?,
+            gas_account,
+        );
+        if table.get("nexus").and_then(|value| value.get("fees"))
+            != Some(&toml::Value::Table(expected))
+        {
+            return Err(invalid());
+        }
         let torii = table
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -234,8 +393,14 @@ fn prepare_fresh(
     directory: &Path,
     ports: &LocalnetPorts,
     spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
 ) -> Result<PreparedLocalnet> {
     init_instruction_registry();
+    // Parent SDK work can carry a different address-rendering scope on this thread. A fresh
+    // local child owns its default node profile and must not inherit the parent's I105 prefix.
+    let _discriminant = ChainDiscriminantGuard::enter(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+    );
     let root = custody::prepare_empty_private_directory(directory)?;
     let chain = resolve_localnet_chain_id(None)?;
     let hosts = CanonicalHost::parse("127.0.0.1", "private-root loopback")?;
@@ -258,7 +423,14 @@ fn prepare_fresh(
         Zeroizing::new(format!("{}\n", owner.private_key.as_str())).as_bytes(),
     )?;
     write_managed_mint_finality_seeds(&root, &peers)?;
-    let (genesis_public, genesis_private) = generate_genesis_key_pair(None, GENESIS_SEED)?;
+    // This owner creates the private domain and its restricted assets in original genesis.
+    // Retain one identity for genesis, later private transactions and parent registration;
+    // assigning the domain to another signer would violate ordinary asset ownership checks.
+    let genesis_public = owner.public_key.clone();
+    let genesis_private: ExposedPrivateKey = owner
+        .private_key
+        .parse()
+        .map_err(|_| eyre!("generated private owner key is invalid"))?;
     write_genesis_key_files(
         &root.join(GENESIS_PUBLIC_KEY_FILE),
         &root.join(GENESIS_PRIVATE_KEY_FILE),
@@ -274,7 +446,12 @@ fn prepare_fresh(
         &gas,
         &peers,
     )?;
-    let rans = copy_rans_tables(&root)?;
+    let genesis = service_authorities::append_profile(
+        genesis,
+        LocalnetServiceProfile::Standard,
+        &owner.account_id,
+    )?;
+    copy_rans_tables(&root)?;
     let signed_path = root.join("genesis.signed.nrt");
     let trusted = peers
         .iter()
@@ -293,18 +470,20 @@ fn prepare_fresh(
         .collect::<Vec<_>>();
     let owner_literal = owner.account_id.to_string();
     let gas_literal = gas.to_string();
-    let render = |index: usize, identity| -> Result<Zeroizing<String>> {
-        let paths = LocalnetPeerStoragePaths::new(&root, index);
+    let render = |render_root: &Path, index: usize, identity| -> Result<Zeroizing<String>> {
+        let paths = LocalnetPeerStoragePaths::new(render_root, index);
         let raw = render_peer_config(
             &peers[index],
             &trusted,
-            &urls,
+            // Peer telemetry performs anonymous HTTP reads. A private listener requires owner
+            // credentials on every route, so leave that optional public monitor unconfigured.
+            &[],
             &genesis_public,
-            &signed_path,
+            &render_root.join("genesis.signed.nrt"),
             identity,
             &bls,
             &paths,
-            Some(&rans),
+            Some(&render_root.join(LOCALNET_RANS_TABLE_RELATIVE_PATH)),
             &chain,
             None,
             (&hosts, &hosts),
@@ -327,15 +506,16 @@ fn prepare_fresh(
             LOCALNET_QUEUE_CAPACITY,
         );
         let configured = private_peer_config(&raw, spec, &api_token)?;
-        managed_peer_config(&configured, &managed_node_dir(&root, index))
+        managed_peer_config(&configured, &managed_node_dir(render_root, index))
     };
     let bootstrap = render(
+        &root,
         0,
         LocalnetGenesisIdentitySource::BootstrapInline(HashOf::from_untyped_unchecked(Hash::new(
             b"private-root staged policy binding",
         ))),
     )?;
-    let config = parse_localnet_peer_config(&bootstrap, Some(&root.join("peer0.toml")))?;
+    let config = parse_private_peer_config(&bootstrap, Some(&root.join("peer0.toml")))?;
     let expected = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public,
@@ -367,12 +547,16 @@ fn prepare_fresh(
             custody::ensure_directory(path)?;
         }
         let path = root.join(format!("peer{index}.toml"));
-        let rendered = render(index, LocalnetGenesisIdentitySource::PublishedFile)?;
-        let parsed = parse_localnet_peer_config(&rendered, Some(&path))?;
+        let rendered = render(&root, index, LocalnetGenesisIdentitySource::PublishedFile)?;
+        let parsed = parse_private_peer_config(&rendered, Some(&path))?;
         ensure!(
             parsed.genesis.expected_hash == expected,
             "private-root genesis binding changed"
         );
+        let rendered = match publication_root {
+            Some(root) => render(root, index, LocalnetGenesisIdentitySource::PublishedFile)?,
+            None => rendered,
+        };
         custody::write(&path, rendered.as_bytes())?;
     }
     write_client_config(&root, ports.base_api, &hosts, &chain, None, &owner)?;
@@ -401,6 +585,7 @@ fn prepare_fresh(
     )?;
     custody::validate_private_tree(&root, &[])?;
     Ok(PreparedLocalnet {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         context: ManagedContext {
             name: name.into(),
             chain_id: chain,
@@ -421,6 +606,14 @@ fn prepare_fresh(
     })
 }
 
+fn parse_private_peer_config(rendered: &str, path: Option<&Path>) -> Result<actual::Root> {
+    let mut config = parse_localnet_peer_config(rendered, path)?;
+    // Match the native worker's required `--sora` launch profile before deriving any signed
+    // execution-policy commitment. Explicit private geometry is preserved by this owner.
+    config.apply_sora_profile();
+    Ok(config)
+}
+
 fn private_peer_config(
     raw: &str,
     spec: &PrivateRootSpec,
@@ -431,16 +624,24 @@ fn private_peer_config(
         raw,
         "private-root validator",
     )?);
+    let gas_account = root
+        .get("pipeline")
+        .and_then(|value| value.get("gas"))
+        .and_then(|value| value.get("tech_account_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("private-root gas account is absent"))?
+        .to_owned();
     let nexus = root
         .get_mut("nexus")
         .and_then(Value::as_table_mut)
         .ok_or_else(|| eyre!("private-root Nexus config absent"))?;
     let mut dataspace = Table::new();
     dataspace.insert("alias".into(), Value::String(spec.dataspace_alias.clone()));
-    // Use the authenticated complete hash. No TOML integer conversion can truncate its u64 ID.
+    // The child's physical catalog uses the genuine canonical SNS name hash. Passing the
+    // complete hash avoids signed TOML integer conversion truncating the full-width ID.
     dataspace.insert(
         "manifest_hash".into(),
-        Value::String(hex::encode(spec.manifest_hash)),
+        Value::String(hex::encode(spec.name_hash()?)),
     );
     dataspace.insert("fault_tolerance".into(), Value::Integer(1));
     nexus.insert(
@@ -468,6 +669,13 @@ fn private_peer_config(
         Value::String(spec.dataspace_alias.clone()),
     );
     nexus.insert("routing_policy".into(), Value::Table(routing));
+    nexus.insert(
+        "fees".into(),
+        Value::Table(private_fee_configuration(
+            &private_fee_policy(spec)?,
+            &gas_account,
+        )),
+    );
     let torii = root
         .entry("torii")
         .or_insert_with(|| Value::Table(Table::new()))
@@ -481,6 +689,43 @@ fn private_peer_config(
     Ok(Zeroizing::new(toml::to_string(&*root)?))
 }
 
+fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
+    let policy = PrivateRootFeePolicy {
+        asset_definition_id: AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified(&format!("app.{}", spec.dataspace_alias))?,
+            "gas".parse()?,
+        ),
+        base_fee: "0.001".parse()?,
+        per_byte_fee: Quantity::zero(),
+        per_instruction_fee: "0.001".parse()?,
+        per_gas_unit_fee: "0.00005".parse()?,
+    };
+    policy.validate()?;
+    Ok(policy)
+}
+
+fn private_fee_configuration(policy: &PrivateRootFeePolicy, gas_account: &str) -> toml::Table {
+    use toml::Value;
+    // Private execution burns the signed scoped fee. These required node-local sink fields
+    // retain the generated local account, never a public-network treasury or owner credential.
+    [
+        ("fee_asset_id", policy.asset_definition_id.to_string()),
+        ("base_fee", policy.base_fee.to_string()),
+        ("per_byte_fee", policy.per_byte_fee.to_string()),
+        (
+            "per_instruction_fee",
+            policy.per_instruction_fee.to_string(),
+        ),
+        ("per_gas_unit_fee", policy.per_gas_unit_fee.to_string()),
+        ("settlement_mode", "direct".into()),
+        ("fee_sink_account_id", gas_account.into()),
+        ("sponsor_vault_custody_account_id", gas_account.into()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), Value::String(value)))
+    .collect()
+}
+
 fn private_genesis(
     spec: &PrivateRootSpec,
     chain: &str,
@@ -490,6 +735,10 @@ fn private_genesis(
     peers: &[Peer],
 ) -> Result<RawGenesisTransaction> {
     let genesis_authority = AccountId::new(genesis_key.clone());
+    ensure!(
+        &genesis_authority == owner,
+        "private genesis signer must be the retained private owner"
+    );
     let domain = DomainId::parse_fully_qualified(&format!("app.{}", spec.dataspace_alias))?;
     let mut context = SumeragiGenesisContextParameters::recommended();
     context.root_scope = spec.scope();
@@ -500,14 +749,16 @@ fn private_genesis(
         );
     let mut parameters = Parameters::default();
     parameters.set_parameter(Parameter::Custom(
+        private_fee_policy(spec)?.into_custom_parameter()?,
+    ));
+    parameters.set_parameter(Parameter::Custom(
         HijiriParametersV1::first_release_genesis().into_custom_parameter(),
     ));
     for parameter in parameters.parameters() {
         builder = builder.append_parameter(parameter);
     }
-    builder = builder
-        .append_instruction(Register::account(Account::new(owner.clone())))
-        .append_instruction(Register::account(Account::new(gas.clone())));
+    // The canonical initial genesis state already registers its signing authority.
+    builder = builder.append_instruction(Register::account(Account::new(gas.clone())));
     for peer in peers {
         builder = builder.append_instruction(Register::account(Account::new(
             peer.validator_account_id(false),
@@ -557,12 +808,12 @@ fn private_genesis(
         .next_transaction();
     // Sample holdings belong to this root's sole dataspace. No global balance bucket or
     // public-network fee asset is created by the private development recipe.
-    for (name, label) in [("sample", "Private sample"), ("gas", "Private gas")] {
+    for name in ["sample", "gas"] {
         let definition = AssetDefinitionId::derive_from_components(domain.clone(), name.parse()?);
         builder = builder
             .append_instruction(Register::asset_definition(AssetDefinition::new(
                 definition.clone(),
-                label.to_owned(),
+                name.to_owned(),
                 NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
                 Some(domain.clone()),
@@ -579,11 +830,6 @@ fn private_genesis(
                     owner.clone(),
                     iroha_data_model::asset::AssetBalanceScope::Dataspace(spec.dataspace_id),
                 ),
-            ))
-            .append_instruction(Transfer::asset_definition(
-                AccountId::new(genesis_key.clone()),
-                definition,
-                owner.clone(),
             ));
     }
     builder = builder.next_transaction();
@@ -623,24 +869,21 @@ mod tests {
     use super::*;
 
     fn spec() -> PrivateRootSpec {
-        // An opaque admitted catalog identity in this fixture. Select an actual hash above
-        // the signed TOML integer range so accidental integer narrowing cannot hide in tests.
-        let manifest_hash = (0_u64..)
-            .map(|nonce| <[u8; 32]>::from(Hash::new(nonce.to_le_bytes())))
-            .find(|hash| DataSpaceId::from_hash(hash).as_u64() > i64::MAX as u64)
-            .unwrap();
+        let alias = "privateapp";
+        let name_hash = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)
+            .unwrap()
+            .name_hash();
         PrivateRootSpec {
             parent_network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
                 Hash::new(b"private-root parent fixture"),
             )),
-            dataspace_id: DataSpaceId::from_hash(&manifest_hash),
-            dataspace_alias: "privateapp".into(),
-            manifest_hash,
+            dataspace_id: DataSpaceId::from_hash(&name_hash),
+            dataspace_alias: alias.into(),
         }
     }
 
     #[test]
-    fn exact_catalog_identity_and_scope_preserve_all_64_bits() {
+    fn exact_sns_identity_and_scope_bind_alias_and_full_width_identifier() {
         let spec = spec();
         spec.validate().unwrap();
         assert_eq!(spec.scope().dataspace_id(), spec.dataspace_id);
@@ -653,6 +896,12 @@ mod tests {
         wrong.dataspace_id = DataSpaceId::new(spec.dataspace_id.as_u64() ^ 1);
         assert!(wrong.validate().is_err());
         wrong = spec.clone();
+        wrong.dataspace_alias = "differentapp".into();
+        assert!(wrong.validate().is_err());
+        wrong = spec.clone();
+        wrong.dataspace_alias = "PrivateApp".into();
+        assert!(wrong.validate().is_err());
+        wrong = spec.clone();
         wrong.dataspace_alias = "universal".into();
         assert!(wrong.validate().is_err());
         wrong = spec;
@@ -661,17 +910,29 @@ mod tests {
     }
 
     #[test]
-    fn private_config_has_one_restricted_lane_and_unmodified_catalog_hash() {
+    fn private_config_has_one_restricted_lane_and_the_canonical_sns_name_hash() {
         let spec = spec();
-        let config = private_peer_config("[nexus]\n", &spec, "private-fixture-token").unwrap();
+        let gas_account = ALICE_ID.to_string();
+        let raw = format!("[pipeline.gas]\ntech_account_id = {gas_account:?}\n[nexus]\n");
+        let config = private_peer_config(&raw, &spec, "private-fixture-token").unwrap();
         let parsed: toml::Table = config.parse().unwrap();
         let nexus = parsed["nexus"].as_table().unwrap();
+        let policy = private_fee_policy(&spec).unwrap();
+        assert_eq!(
+            nexus["fees"].as_table().unwrap(),
+            &private_fee_configuration(&policy, &gas_account)
+        );
+        assert!(!policy.base_fee.is_zero() && !policy.per_gas_unit_fee.is_zero());
+        assert_ne!(
+            policy.asset_definition_id,
+            localnet_xor_asset_definition_id()
+        );
         let dataspaces = nexus["dataspace_catalog"].as_array().unwrap();
         assert_eq!(dataspaces.len(), 1);
         assert!(dataspaces[0].get("id").is_none());
         assert_eq!(
             dataspaces[0]["manifest_hash"].as_str(),
-            Some(hex::encode(spec.manifest_hash).as_str())
+            Some(hex::encode(spec.name_hash().unwrap()).as_str())
         );
         let lanes = nexus["lane_catalog"].as_array().unwrap();
         assert_eq!(lanes.len(), 1);
@@ -694,6 +955,7 @@ mod tests {
 
     #[test]
     fn private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen() {
+        let _parent_profile = ChainDiscriminantGuard::enter(369);
         let _guard = crate::managed::native_test_guard();
         let parent = tempfile::tempdir().unwrap();
         let directory = parent.path().join("private-root");
@@ -703,17 +965,69 @@ mod tests {
         assert_eq!(prepared.context.dataspace_id, spec.dataspace_id.as_u64());
         assert_eq!(prepared.peers.len(), 4);
         verify_retained(&directory.canonicalize().unwrap(), &prepared, &spec).unwrap();
-        let owner = prepared.context.load_client_config().unwrap().account;
+        let registration = prepared.load_private_registration().unwrap();
+        assert_eq!(registration.scope, spec.scope());
+        assert_eq!(registration.genesis_cursor.height, 1);
+        assert_eq!(
+            registration.child_network_id.to_string(),
+            prepared.context.network_id
+        );
+        registration.validate().unwrap();
+        let client = prepared.context.load_client_config().unwrap();
+        assert_eq!(
+            client.account_chain_discriminant,
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            "parent address rendering cannot change the independently generated child profile"
+        );
+        let owner = client.account;
         for peer in &prepared.peers {
             let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
             let table: toml::Table = std::str::from_utf8(&bytes).unwrap().parse().unwrap();
             assert!(table["torii"].get("faucet").is_none());
             assert!(table["torii"].get("account_onboarding").is_none());
-            let config = parse_localnet_peer_config(
+            let config = parse_private_peer_config(
                 std::str::from_utf8(&bytes).unwrap(),
                 Some(&peer.config_path),
             )
             .unwrap();
+            assert_eq!(&config.genesis.public_key, client.key_pair.public_key());
+            assert_eq!(
+                config.network.connect_startup_delay,
+                std::time::Duration::ZERO
+            );
+            assert_eq!(
+                (config.network.dial_timeout, config.network.preauth_timeout),
+                (
+                    iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                    iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
+                )
+            );
+            let pow = &config.network.soranet_handshake.pow;
+            let expected_pow = actual::SoranetPow::default_const();
+            assert_eq!(
+                (
+                    pow.difficulty,
+                    pow.puzzle.memory_kib,
+                    pow.puzzle.time_cost,
+                    pow.puzzle.lanes,
+                ),
+                (
+                    expected_pow.difficulty,
+                    expected_pow.puzzle.memory_kib,
+                    expected_pow.puzzle.time_cost,
+                    expected_pow.puzzle.lanes,
+                )
+            );
+            assert!(config.torii.peer_telemetry_urls.is_empty());
+            assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
+            assert_eq!(
+                config.nexus.dataspace_catalog.entries()[0].id,
+                spec.dataspace_id
+            );
+            assert_eq!(
+                config.nexus.dataspace_catalog,
+                config.nexus.configured_dataspace_catalog
+            );
             assert_eq!(config.nexus.lane_catalog.lanes().len(), 1);
             assert_eq!(
                 config.nexus.lane_catalog.lanes()[0].dataspace_id,
@@ -724,6 +1038,11 @@ mod tests {
         assert_eq!(
             manifest.sumeragi_context_parameters().root_scope,
             spec.scope()
+        );
+        assert_eq!(
+            PrivateRootFeePolicy::from_parameters(&manifest.effective_parameters().unwrap())
+                .unwrap(),
+            Some(private_fee_policy(&spec).unwrap())
         );
         assert!(
             !manifest
@@ -758,6 +1077,14 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
+        assert_eq!(
+            definitions
+                .iter()
+                .map(|definition| definition.name.as_str())
+                .collect::<Vec<_>>(),
+            ["sample", "gas"],
+            "private asset names must match their canonical alias stems"
+        );
         for definition in definitions {
             assert_eq!(
                 definition.balance_scope_policy,
@@ -790,6 +1117,19 @@ mod tests {
         }
         let repeated = prepare_private_root("private", &directory, &ports, &spec).unwrap();
         assert_eq!(repeated, prepared);
+        assert_eq!(repeated.load_private_registration().unwrap(), registration);
+        let original_manifest = iroha_fs::read_private(
+            &directory.join("genesis.json"),
+            iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
+        )
+        .unwrap();
+        custody::replace(&directory.join("genesis.json"), b"{}").unwrap();
+        assert!(prepared.load_private_registration().is_err());
+        custody::replace(
+            &directory.join("genesis.json"),
+            original_manifest.as_slice(),
+        )
+        .unwrap();
         let peer_path = &prepared.peers[0].config_path;
         let bytes = iroha_fs::read_private(peer_path, 1024 * 1024).unwrap();
         let mut table = crate::secret_toml::Table::new(
@@ -808,7 +1148,25 @@ mod tests {
             Zeroizing::new(toml::to_string(&*table).unwrap()).as_bytes(),
         )
         .unwrap();
-        assert!(verify_private_credentials(&prepared).is_err());
+        assert!(verify_private_credentials(&prepared, &spec).is_err());
+        custody::replace(peer_path, bytes.as_slice()).unwrap();
+        table["torii"]
+            .as_table_mut()
+            .unwrap()
+            .insert("require_api_token".into(), toml::Value::Boolean(true));
+        table["nexus"]["fees"]
+            .as_table_mut()
+            .unwrap()
+            .insert("base_fee".into(), toml::Value::String("0".into()));
+        custody::replace(
+            peer_path,
+            Zeroizing::new(toml::to_string(&*table).unwrap()).as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            verify_private_credentials(&prepared, &spec).is_err(),
+            "a node-local zero-fee rewrite cannot replace the signed private fee policy"
+        );
         custody::replace(peer_path, bytes.as_slice()).unwrap();
         let mut foreign = spec;
         foreign.parent_network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(

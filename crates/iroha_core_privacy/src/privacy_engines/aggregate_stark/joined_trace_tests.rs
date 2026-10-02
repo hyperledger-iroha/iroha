@@ -642,3 +642,117 @@ fn joined_replay_rejects_wrong_evaluator_shapes_before_commitment_publication() 
         );
     }
 }
+
+#[test]
+fn retained_initial_and_selected_replay_preserve_both_joined_phase_roots_rows_and_frontiers() {
+    let (parameters, domains, layout) = fixture();
+    for kind in [JoinedTraceColumnKindV1::Base, JoinedTraceColumnKindV1::Aux] {
+        let plan = JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, kind).unwrap();
+        let polynomials = polynomial_groups(&plan);
+        let borrowed = polynomials.iter().collect::<Vec<_>>();
+        let rows = 1usize << plan.commitment_lde_log2;
+        let queries = [0, 15, 16, 17, rows - 1];
+        let expected = plan.commit_v1(domains, &borrowed, &queries).unwrap();
+        let evaluate = |columns: &[ZeroizingFieldColumnV1], native, common| {
+            columns
+                .iter()
+                .map(|column| {
+                    masked_trace_coefficients_on_coset_v1(column, native, common)
+                        .map(ZeroizingFieldColumnV1)
+                        .map_err(map_transparent_error_v1)
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let mut calls = Vec::new();
+        let (initial, cut) = plan
+            .commit_retained_replayed_v1(
+                domains,
+                &[],
+                None,
+                |group, column| {
+                    calls.push((group, column));
+                    Ok(polynomials[group].columns[column].to_vec())
+                },
+                evaluate,
+            )
+            .unwrap();
+        assert_eq!(initial.commitment.root, expected.commitment.root);
+        assert!(initial.opened_rows.is_empty());
+        assert!(initial.commitment.frontier.is_empty());
+        let cut = cut.unwrap();
+        cut.check_root_v1(rows, expected.commitment.root).unwrap();
+        let initial_calls = calls.clone();
+        calls.clear();
+        let (replayed, absent_cut) = plan
+            .commit_retained_replayed_v1(
+                domains,
+                &queries,
+                Some(&cut),
+                |group, column| {
+                    calls.push((group, column));
+                    Ok(polynomials[group].columns[column].to_vec())
+                },
+                evaluate,
+            )
+            .unwrap();
+        assert!(absent_cut.is_none());
+        assert_eq!(calls, initial_calls);
+        assert_eq!(calls.len(), plan.width);
+        assert_eq!(replayed, expected);
+        assert!(
+            cut.check_root_v1(rows / 2, expected.commitment.root)
+                .is_err()
+        );
+        assert!(
+            cut.check_root_v1(rows, PrivacyOuterDigestV1::default())
+                .is_err()
+        );
+        let changed = plan.commit_retained_replayed_v1(
+            domains,
+            &queries,
+            Some(&cut),
+            |group, column| {
+                let mut coefficients = polynomials[group].columns[column].to_vec();
+                if group == 0 && column == 0 {
+                    coefficients[0] = coefficients[0].add(F::ONE);
+                }
+                Ok(coefficients)
+            },
+            evaluate,
+        );
+        assert!(changed.is_err());
+    }
+}
+
+#[test]
+fn retained_replay_rejects_inconsistent_root_only_queries_and_source_failure_without_result() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let mut source_calls = 0;
+    let result = plan.commit_retained_replayed_v1(
+        domains,
+        &[0],
+        None,
+        |_, _| {
+            source_calls += 1;
+            Err(AggregateStarkErrorV1::InternalInvariant)
+        },
+        |_, _, _| panic!("inconsistent root-only request must reject before evaluation"),
+    );
+    assert!(result.is_err());
+    assert_eq!(source_calls, 0);
+    let result = plan.commit_retained_replayed_v1(
+        domains,
+        &[],
+        None,
+        |_, _| {
+            source_calls += 1;
+            Err(AggregateStarkErrorV1::InternalInvariant)
+        },
+        |_, _, _| panic!("source failure must reject before evaluation"),
+    );
+    assert!(result.is_err());
+    assert_eq!(source_calls, 1);
+}

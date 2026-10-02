@@ -95,7 +95,7 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1Test {
         assertFailsWith<IllegalStateException> { holder.originalRetailCertificate() }
         holder.signOriginalAccount { endpoint.expectedSignature.copyOf() }
         val request = holder.finishRequestOriginal()
-        assertEquals("/v1/offline/enrollment/ordinary/finish", request.path)
+        assertEquals("/v1/kagemusha/enrollment/ordinary/finish", request.path)
         assertEquals(KagemushaOrdinaryIdentityHttpCodecV1.retailRequestId(endpoint.id, "finish"), request.requestId)
         val body = KagemushaOrdinaryIdentityHttpCodecV1.retailFinishBody(endpoint.id, endpoint.expectedSignature)
         assertContentEquals(body, request.body())
@@ -138,6 +138,29 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1Test {
                 assertEquals(1, endpoint.closes)
             }
         }
+    }
+
+    @Test fun completedBootstrapBindingRequiresSameNativeFiAdmissionAndRetainsItsExactOriginals() = runBlocking {
+        val endpoint = Endpoint()
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/test/retail-bootstrap-binding", endpoint)
+        val holder = KagemushaNativeOrdinaryRetailEnrollmentV1.fromNative(bridge, endpoint.id,
+            endpoint.fields(), endpoint.scope, endpoint.credentialDigest, {})
+        assertFailsWith<IllegalStateException> { holder.completedOriginalBindingFor(bridge) }
+        holder.signOriginalAccount { endpoint.expectedSignature.copyOf() }
+        holder.completeOriginalEnrollment { endpoint.finishReply() }
+        val completed = holder.completedOriginalBindingFor(bridge)
+        assertContentEquals(endpoint.enrollmentId, completed.enrollmentId())
+        assertContentEquals(endpoint.certificate, completed.originalCertificate())
+        assertContentEquals(endpoint.credentialDigest, completed.credentialDigest())
+        completed.enrollmentId().fill(0); completed.originalCertificate().fill(0); completed.credentialDigest().fill(0)
+        assertContentEquals(endpoint.enrollmentId, completed.enrollmentId())
+        assertContentEquals(endpoint.certificate, completed.originalCertificate())
+        assertContentEquals(endpoint.credentialDigest, completed.credentialDigest())
+        val foreign = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/test/foreign-retail", Endpoint())
+        assertFailsWith<IllegalStateException> { holder.completedOriginalBindingFor(foreign) }
+        endpoint.certificate[0] = 0x77
+        assertFailsWith<IllegalStateException> { completed.recheck() }
+        assertEquals(1, endpoint.closes)
     }
 
     @Test fun transportOwnerChangeStopsBeforeNativeAdmissionAndRetainedSubstitutionClosesBridge() = runBlocking {

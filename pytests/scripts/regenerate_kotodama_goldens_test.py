@@ -240,6 +240,7 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
     generated_manifest = release / "example.manifest.json"
     artifact_path.write_bytes(artifact())
     generated_manifest.write_bytes(b'{"canonical":true}\n')
+    artifact_path.chmod(0o600)
     generated_manifest.chmod(0o600)
     iroha = tmp_path / "bin" / "iroha"
     commands: list[list[str]] = []
@@ -255,6 +256,10 @@ def test_runtime_manifest_verification_uses_canonical_contract_command(
 
     monkeypatch.setattr(goldens, "run", fake_run)
     goldens.verify_runtime_manifests(iroha, root, release.parent, [row])
+
+    assert artifact_path.stat().st_mode & 0o777 == 0o600
+    assert generated_manifest.stat().st_mode & 0o777 == 0o600
+    assert (release.parent / "verified" / "example.manifest.json").stat().st_mode & 0o777 == runtime_mode
 
     assert commands == [
             [

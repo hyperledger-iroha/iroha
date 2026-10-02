@@ -98,6 +98,9 @@ pub(super) enum ExecutionOutputPlanState {
     Reserved(ReservedExecutionOutputPlan),
     Running,
     Retained(producer::RetainedExecutionOutputs),
+    /// Source-only fixture custody cannot authorize witness capture or publication.
+    #[cfg(test)]
+    Inspecting,
     Sealing,
     Sealed(producer::SealedExecutionOutputs),
     Authorized(producer::AuthorizedExecutionOutputs),
@@ -264,9 +267,7 @@ impl StateTransaction<'_, '_> {
                     None,
                     None,
                 )
-                .map_err(invalid)?
-                .with_sns(&self.world.smart_contract_state, None)
-                .map_err(|error| error.retain_in_instruction(self))?;
+                .map_err(invalid)?;
             }
             Parameter::Block(BlockParameter::ExecutionOutput(next)) => {
                 if self.block_height() != 1 {

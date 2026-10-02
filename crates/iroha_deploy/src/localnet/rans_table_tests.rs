@@ -52,6 +52,7 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
     for (label, sora_profile, consensus_mode) in profiles {
         let out_dir = temp.path().join(label);
         let opts = LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),

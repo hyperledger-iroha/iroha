@@ -416,8 +416,11 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
         panic!("original executed parent authorizes height 3");
     };
-    let config = scheduled.height_config().unwrap();
-    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3).unwrap();
+    let mut validation = EpochValidationScope::new();
+    let config = scheduled
+        .height_config_with_validation(&mut validation)
+        .unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3, &mut validation).unwrap();
     let budget = AllocationBudget::new(1 << 26);
     let artifacts = artifacts::PrefixArtifactsRead::new(Arc::clone(&source), budget.clone())
         .complete(&budget)
@@ -486,8 +489,11 @@ fn state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_s
     let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
         panic!("original parent authorizes the source");
     };
-    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3).unwrap();
-    let config = scheduled.height_config().unwrap();
+    let mut validation = EpochValidationScope::new();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3, &mut validation).unwrap();
+    let config = scheduled
+        .height_config_with_validation(&mut validation)
+        .unwrap();
     let check = |field_limit| {
         norito::core::with_decode_limits_scope(
             norito::DecodeLimits::new(usize::MAX, field_limit, usize::MAX, usize::MAX, 128),

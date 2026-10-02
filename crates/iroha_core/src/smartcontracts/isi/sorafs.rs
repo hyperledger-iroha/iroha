@@ -913,7 +913,13 @@ pub(crate) fn validate_stored_capacity_declaration(
         &mut merged_metadata,
         &declaration.metadata,
     )
-    .map_err(|error| invalid(error.to_string()))?;
+    .map_err(|error| {
+        // The outer instruction Display is a category; retain its canonical
+        // inner parameter reason when explaining invalid stored metadata.
+        let reason = std::error::Error::source(&error)
+            .map_or_else(|| error.to_string(), |source| source.to_string());
+        invalid(reason)
+    })?;
     if merged_metadata != record.metadata {
         return Err(invalid(
             "stored metadata does not retain every canonical payload entry".to_owned(),
@@ -14696,6 +14702,54 @@ mod sorafs_tests {
             matches!(error, InstructionExecutionError::InvariantViolation(message)
             if message.contains("metadata conflict"))
         );
+    }
+    #[test]
+    fn stored_capacity_metadata_failure_retains_exact_inner_parameter_reason() {
+        let (provider, original) = capacity_record_with_owner(&alice());
+        let declaration = validate_stored_capacity_declaration(&original, "original metadata")
+            .expect("unmodified canonical record must pass stored validation");
+        assert_eq!(declaration.provider_id, *provider.as_bytes());
+        for (key, value, payload_value) in [
+            (
+                STORAGE_CLASS_METADATA_KEY,
+                "cold".to_owned(),
+                "hot".to_owned(),
+            ),
+            (
+                PROVIDER_OWNER_METADATA_KEY,
+                account_literal(&bob()),
+                account_literal(&alice()),
+            ),
+        ] {
+            let mut record = original.clone();
+            record
+                .metadata
+                .insert(key.parse::<Name>().unwrap(), Json::new(value.clone()));
+            assert_eq!(record.declaration, original.declaration);
+            let expected = format!(
+                "capacity declaration metadata conflict for provider {} on key `{key}`: record value `{value}`, payload value `{payload_value}`",
+                hex::encode(provider.as_bytes()),
+            );
+            let mut retained_metadata = record.metadata.clone();
+            let error = merge_declaration_metadata_into_record(
+                provider,
+                &mut retained_metadata,
+                &declaration.metadata,
+            )
+            .expect_err("exact payload/record mismatch must retain its typed parameter reason");
+            assert_eq!(
+                error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    expected.clone()
+                )),
+            );
+            assert_eq!(
+                validate_stored_capacity_declaration(&record, "conflicting metadata"),
+                Err(InstructionExecutionError::InvariantViolation(
+                    format!("capacity declaration conflicting metadata is invalid: Invalid smart contract: {expected}").into()
+                )),
+            );
+        }
     }
     #[test]
     fn capacity_declaration_rejects_metadata_whitespace_without_normalization() {

@@ -78,6 +78,13 @@ impl Worker<'_> {
         class: NativeControlFailure,
     ) -> PublicationError {
         let reason = error.to_string();
+        iroha_logger::debug!(
+            %reason,
+            ?class,
+            applied_height = self.applied.0,
+            applied_hash = ?self.applied.1,
+            "native control retained its original source after refusal"
+        );
         match class {
             NativeControlFailure::RecoveryRequired => {
                 self.recovery = Some(reason.clone());
@@ -99,6 +106,7 @@ impl Worker<'_> {
             .expect("attached original producer")
             .build(context)
             .map_err(|error| {
+                iroha_logger::debug!(?context, %error, "native control witness refused");
                 let class = error.local_classification();
                 self.control_error(error, class)
             })
@@ -130,6 +138,7 @@ impl Worker<'_> {
             .expect("attached original producer")
             .refresh_readiness(&view, context, self.applied, generation);
         if let Err(error) = observed {
+            iroha_logger::debug!(?context, %error, "native control parent observation refused");
             let class = error.local_classification();
             return Err(self.control_error(error, class));
         }
@@ -144,6 +153,7 @@ impl Worker<'_> {
                 bytes,
             })),
             Err(error) => {
+                iroha_logger::debug!(?context, %error, "native control source drive refused");
                 let class = error.local_classification();
                 Err(self.control_error(error, class))
             }

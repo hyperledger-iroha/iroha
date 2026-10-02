@@ -372,13 +372,23 @@ fn bounded_reads_and_retained_directory_identity_reject_malformed_files() {
             .import_key_file("socket", &network(), &key_path)
             .is_err()
     );
-    let pending = store.directory.child(".pending-test", true).unwrap();
-    assert!(pending.write_new("../escape", b"no").is_err());
-    pending.write_new("wallet.json", b"one").unwrap();
-    assert!(pending.write_new("wallet.json", b"two").is_err());
+    let pending = store.directory.create_child(".pending-test").unwrap();
+    assert!(
+        pending
+            .write_atomic("../escape", b"no", PublishMode::CreateNew)
+            .is_err()
+    );
+    pending
+        .write_atomic("wallet.json", b"one", PublishMode::CreateNew)
+        .unwrap();
+    assert!(
+        pending
+            .write_atomic("wallet.json", b"two", PublishMode::CreateNew)
+            .is_err()
+    );
     assert!(pending.read("wallet.json", 2).is_err());
     assert_eq!(pending.read("wallet.json", 3).unwrap().as_slice(), b"one");
-    store.directory.remove_pending(&pending).unwrap();
+    remove_pending(&store.directory, pending).unwrap();
     fs::rename(store.root(), temporary.path().join("moved-store")).unwrap();
     fs::create_dir(store.root()).unwrap();
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o700)).unwrap();

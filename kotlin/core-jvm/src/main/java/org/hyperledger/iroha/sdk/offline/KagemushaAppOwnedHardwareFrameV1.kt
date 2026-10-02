@@ -80,7 +80,33 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
         }
     }
 
-    private fun prepare(method: KagemushaCoreCoordinatorMethodV1, id: ByteArray, fields: List<ByteArray>) {
+    /** Distinct Native Bootstrap phase8; generic phase1 remains the monetary entry. */
+    fun requireOrdinaryBootstrapRequest(fields: List<ByteArray>) {
+        when (phase(fields)) {
+            8 -> { count(fields, 2); digest(fields[1]) }
+            9, 10 -> { count(fields, 2); ticket(fields[1]) }
+            2, 3, 4, 5, 6, 7 -> requireRequest(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL, fields)
+            else -> error("Unknown native Bootstrap approval phase")
+        }
+    }
+
+    /** Bootstrap is a separate prepared capability; generic monetary approvals still reject it. */
+    fun requireOrdinaryBootstrapResponse(request: List<ByteArray>, fields: List<ByteArray>) {
+        requireOrdinaryBootstrapRequest(request)
+        when (phase(request)) {
+            8 -> prepare(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
+                request[1], fields, ordinaryBootstrap = true)
+            9, 10 -> {
+                // Read-only commitments to the authentic retained initial publication. Decoding
+                // them neither recreates its owner nor grants a monetary wallet capability.
+                count(fields, 9); ticket(fields[0]); equal(fields[0], request[1])
+                fields.drop(1).forEach(::digest)
+            }
+            else -> requireResponse(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL, request, fields)
+        }
+    }
+
+    private fun prepare(method: KagemushaCoreCoordinatorMethodV1, id: ByteArray, fields: List<ByteArray>, ordinaryBootstrap: Boolean = false) {
         count(fields, 14); ticket(fields[0]); digest(fields[4]); digest(fields[6]); digest(fields[9]); digest(fields[12])
         require(fields[2].size == 1 && fields[2][0].toInt() in 4..5) { "Unknown native app platform" }
         val alias = fields[3]
@@ -117,8 +143,11 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
             interval(message.copyOfRange(259, 267), message.copyOfRange(267, 275))
             val s = fields[13]
             val before = s.copyOfRange(428, 444); val after = s.copyOfRange(444, 460)
-            require(unsigned(after) == unsigned(before).add(BigInteger.ONE) && unsigned(after).bitLength() <= 128)
-            KagemushaSelectionFrameV1.requireExact(s, cField(5), before, after)
+            if (ordinaryBootstrap) KagemushaSelectionFrameV1.requireOrdinaryBootstrapExact(s, cField(5))
+            else {
+                require(unsigned(after) == unsigned(before).add(BigInteger.ONE) && unsigned(after).bitLength() <= 128)
+                KagemushaSelectionFrameV1.requireExact(s, cField(5), before, after)
+            }
             equal(s.copyOfRange(155, 187), fields[8])
             equal(s.copyOfRange(323, 331), c.copyOfRange(427, 435))
             equal(s.copyOfRange(59, 91), cField(6)); equal(s.copyOfRange(187, 219), cField(4))

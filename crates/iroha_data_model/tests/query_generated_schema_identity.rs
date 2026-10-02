@@ -714,3 +714,20 @@ fn generated_queries_preserve_captured_frames() {
         "generated query identities",
     );
 }
+
+#[test]
+#[ignore = "explicit maintenance capture of the first-release scoped manifest query"]
+fn print_scoped_manifest_query_identity_frame() {
+    let row = record([
+        query::smart_contract::FindContractManifestByArtifactId::new(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::new(u64::MAX),
+                Hash::new(b"query contract"),
+            ),
+        ),
+    ]);
+    println!(
+        "SCOPED_MANIFEST_QUERY_FRAME={}",
+        json::to_json(&row).unwrap()
+    );
+}

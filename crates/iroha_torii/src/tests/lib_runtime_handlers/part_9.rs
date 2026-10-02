@@ -1181,6 +1181,19 @@ async fn app_api_get_by_id_not_found_returns_404() {
     let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
     let caller = AccountId::new(key_pair.public_key().clone());
     let mut app = app_with_root_scope_for_handler_test(world_with_account(&caller), false);
+    // The exact routing lookup and its authenticated handler both preserve scoped absence.
+    let direct = routing::handle_get_contract_code(
+        app.state.clone(),
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"missing artifact"),
+        ),
+    )
+    .await
+    .err()
+    .expect("missing scoped artifact must return an error")
+    .into_response();
+    assert_eq!(direct.status(), axum::http::StatusCode::NOT_FOUND);
     let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());
     let method = axum::http::Method::GET;
     let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{code_hash}")

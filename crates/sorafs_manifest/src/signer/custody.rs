@@ -218,6 +218,22 @@ impl fmt::Debug for SignerCustodyRecordV1 {
             .finish_non_exhaustive()
     }
 }
+impl SignerCustodyRecordV1 {
+    /// Derive the complete canonical record digest used by an authenticated enrollment head.
+    /// This pure commitment does not authenticate the statement or grant custody authority.
+    /// # Errors
+    /// Rejects encoding failure or an oversized canonical record.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], SignerCustodyErrorV1> {
+        if norito::canonical_frame_len(self).map_err(|_| SignerCustodyErrorV1::InvalidRecord)?
+            > SIGNER_CUSTODY_MAX_BYTES_V1
+        {
+            return Err(SignerCustodyErrorV1::InvalidRecord);
+        }
+        let bytes =
+            norito::encode_canonical(self).map_err(|_| SignerCustodyErrorV1::InvalidRecord)?;
+        Ok(digest_parts(CUSTODY_RECORD_DIGEST_DOMAIN_V1, &[&bytes]))
+    }
+}
 
 /// Caller-owned attestation trust, loaded independently from governed configuration.
 ///

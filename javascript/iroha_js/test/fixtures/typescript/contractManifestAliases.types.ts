@@ -154,3 +154,35 @@ void unitEntry;
 void absentUnitReturn;
 void partialUnitReturn;
 void nullUnitReturn;
+
+// Artifact identity is explicit and retains the complete unsigned dataspace ID.
+import type {
+  ContractArtifactIdInput,
+  RegisterSmartContractBytesInstructionInput,
+  RegisterSmartContractCodeInstructionInput,
+  ToriiClient,
+  CanonicalRequestAuth,
+} from "../../../index.js";
+const scopedArtifact: ContractArtifactIdInput = {
+  dataspaceId: 18446744073709551615n,
+  codeHash: "11".repeat(32),
+};
+const scopedBytes: RegisterSmartContractBytesInstructionInput = {
+  artifactId: scopedArtifact,
+  code: new Uint8Array([1]),
+};
+// @ts-expect-error A bare hash cannot identify the artifact's dataspace.
+const missingArtifact: RegisterSmartContractBytesInstructionInput = { code: new Uint8Array([1]) };
+// @ts-expect-error Manifest-only registry instructions cannot infer dataspace custody.
+const missingManifestScope: RegisterSmartContractCodeInstructionInput = { manifest: {} };
+declare const artifactClient: ToriiClient;
+declare const artifactAuth: CanonicalRequestAuth;
+void artifactClient.getContractManifest(scopedArtifact, { canonicalAuth: artifactAuth });
+void artifactClient.getContractCodeBytes(scopedArtifact, { canonicalAuth: artifactAuth });
+// @ts-expect-error Artifact reads always authenticate the requesting account.
+void artifactClient.getContractCodeBytes(scopedArtifact);
+// @ts-expect-error Hash-only REST reads are retired.
+void artifactClient.getContractManifest("11".repeat(32), { canonicalAuth: artifactAuth });
+// @ts-expect-error The unsupported registration POST has no public SDK method.
+void artifactClient.registerContractCode({});
+void [scopedBytes, missingArtifact, missingManifestScope];

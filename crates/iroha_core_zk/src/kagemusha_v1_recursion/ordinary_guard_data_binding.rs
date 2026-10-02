@@ -42,10 +42,20 @@ use crate::{
 pub(crate) struct KagemushaOrdinaryGuardDataBindingV1<F: KagemushaPoseidonFieldV1> {
     /// Normalized statement, credential, authorization transcript, complete S, provider root.
     pub(crate) digests: [[PastaSha256ByteV1<F>; 32]; 5],
+    /// Actual account binding copied from the same issuer-authenticated original C.
+    pub(crate) account_binding: [PastaSha256ByteV1<F>; 32],
     /// Exact full S signing bytes; State additionally joins its real proof statement/candidate.
     pub(crate) canonical_subject: [AssignedValue<F>; S::TOTAL_BYTES],
     /// Same signed purpose cell inside the whole platform-approved wrapper transcript.
     pub(crate) approval_purpose: AssignedValue<F>,
+    /// Same operation-ID bytes copy-bound inside the complete signed W wrapper.
+    pub(crate) approval_operation_id: [PastaSha256ByteV1<F>; 32],
+    /// Same original nonce bytes copy-bound inside the whole platform-approved wrapper.
+    pub(crate) approval_nonce: [PastaSha256ByteV1<F>; 32],
+    /// Same original W issuance cell, never a detached terminal time witness.
+    pub(crate) approval_issued_at_ms: AssignedValue<F>,
+    /// Same immutable original W expiry cell.
+    pub(crate) approval_expires_at_ms: AssignedValue<F>,
 }
 
 /// Reconstruct exact model originals and join every scope/key/financial field to assigned State.
@@ -190,7 +200,12 @@ pub(super) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
             subject_digest,
             provider,
         ],
+        account_binding: cells.fixed_digests[3],
         canonical_subject: signed_s,
         approval_purpose,
+        approval_operation_id: original.operation_id,
+        approval_nonce: original.nonce,
+        approval_issued_at_ms: original.issued_at_ms,
+        approval_expires_at_ms: original.expires_at_ms,
     })
 }

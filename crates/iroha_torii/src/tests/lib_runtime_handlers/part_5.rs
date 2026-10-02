@@ -3114,12 +3114,13 @@ async fn pipeline_status_resolves_native_executed_sealed_reveal_and_signed_alias
     let signed_alias = iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash);
     for identity in [reveal_hash, signed_alias] {
         assert_eq!(
-            canonical_carrier_hash_for_indexed_transaction_identity(
+            canonical_transaction_details_for_indexed_identity(
                 app.as_ref(),
                 NonZeroUsize::new(3).unwrap(),
                 &identity,
             )
-            .unwrap(),
+            .unwrap()
+            .entrypoint_hash,
             reveal_hash
         );
     }
@@ -3161,12 +3162,8 @@ async fn pipeline_status_rejects_uncertified_sealed_reveal_carrier_and_signed_al
     app.state.update_latest_block_header_cache_for_tests(header);
     for identity in [reveal_entry_hash, signed_entrypoint_alias] {
         assert!(
-            canonical_carrier_hash_for_indexed_transaction_identity(
-                app.as_ref(),
-                height_nz,
-                &identity,
-            )
-            .is_err(),
+            canonical_transaction_details_for_indexed_identity(app.as_ref(), height_nz, &identity)
+                .is_err(),
             "an indexed synthetic reveal must not replace a native commit certificate"
         );
     }

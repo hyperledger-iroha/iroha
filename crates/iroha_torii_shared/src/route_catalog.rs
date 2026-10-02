@@ -83,6 +83,8 @@ pub enum RouteTransport {
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
+    /// Require an actual owner listener token and an immutable private-root identity inside the handler.
+    PrivateRootOwnerToken,
     /// Apply listener token policy and require one dedicated signer-backed onboarding token.
     OnboardingToken,
     /// Require canonical `X-Iroha-*` authentication bound to an on-ledger account.
@@ -128,6 +130,7 @@ impl AuthenticationPolicy {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ToriiDefault => "torii_default",
+            Self::PrivateRootOwnerToken => "private_root_owner_token",
             Self::OnboardingToken => "onboarding_token",
             Self::CanonicalAccountSignature => "canonical_account_signature",
             Self::OptionalCanonicalAccountSignature => "optional_canonical_account_signature",
@@ -147,7 +150,8 @@ impl AuthenticationPolicy {
     pub const fn requires_private_no_store(self) -> bool {
         matches!(
             self,
-            Self::OnboardingToken
+            Self::PrivateRootOwnerToken
+                | Self::OnboardingToken
                 | Self::CanonicalAccountSignature
                 | Self::OptionalCanonicalAccountSignature
                 | Self::OperatorSignature
@@ -180,7 +184,7 @@ pub enum AdmissionPolicy {
     /// Anonymous callers may read public dataspaces; a verified ledger account
     /// may additionally read its current restricted-dataspace scope.
     DataspaceVisible,
-    /// A non-ledger protocol principal authenticated by the exact handshake is required.
+    /// A non-ledger principal authenticated by a protocol handshake or private-root owner token is required.
     AuthenticatedProtocolPrincipal,
     /// A current validator or roster member is required.
     ValidatorRosterMember,
@@ -714,8 +718,8 @@ pub enum CatalogValidationErrorKind {
     AuthenticatedAccountRequiresAuthentication,
     /// Dataspace-selected admission lacks optional or required canonical account authentication.
     DataspaceVisibleRequiresAccountAuthentication,
-    /// Protocol-principal admission lacks the exact protocol handshake.
-    AuthenticatedProtocolPrincipalRequiresHandshake,
+    /// Non-ledger principal admission lacks a protocol handshake or private-root owner token.
+    AuthenticatedProtocolPrincipalRequiresAuthentication,
     /// Validator/roster admission lacks a peer or operator identity boundary.
     ValidatorAdmissionRequiresAuthentication,
     /// Governed-auditor admission lacks an identity-bound signature boundary.
@@ -924,11 +928,15 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             });
         }
         if route.admission == AdmissionPolicy::AuthenticatedProtocolPrincipal
-            && route.authentication != AuthenticationPolicy::ProtocolHandshake
+            && !matches!(
+                route.authentication,
+                AuthenticationPolicy::ProtocolHandshake
+                    | AuthenticationPolicy::PrivateRootOwnerToken
+            )
         {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
-                kind: CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
+                kind: CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresAuthentication,
             });
         }
         if route.admission == AdmissionPolicy::ValidatorRosterMember
@@ -1176,8 +1184,8 @@ fn validate_feature_name(
 /// Universal KAGEMUSHA protocol route descriptors.
 pub mod kagemusha {
     use super::{
-        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
-        RouteDescriptor, RouteEffect, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
     };
     /// Fetch the node's universal KAGEMUSHA readiness contract.
     pub const READINESS_PATH: &str = "/v1/kagemusha/readiness";
@@ -1199,7 +1207,6 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for KAGEMUSHA top-up submission.
@@ -1213,7 +1220,6 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for KAGEMUSHA redemption submission.
@@ -1227,7 +1233,6 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for reading one KAGEMUSHA operation.
@@ -1240,7 +1245,6 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Data-only complete World publication; clients independently select finality authority.
@@ -1253,8 +1257,7 @@ pub mod kagemusha {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Complete name originals; the handler additionally requires the native genesis-issued read root.
     pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
@@ -1267,8 +1270,7 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Scoped account/fee originals for an existing native full-ledger read holder.
     pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
@@ -1281,10 +1283,23 @@ pub mod kagemusha {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::OPENAPI)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Canonical first-release KAGEMUSHA API catalog.
+    /// Exact current S/W originals under account authentication; no broad ledger-read grant.
+    pub const ORDINARY_WALLET_CURRENT: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.ordinary_wallet_current",
+        HttpMethod::Post,
+        "/v1/kagemusha/ordinary/current-wallet",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Complete first-release KAGEMUSHA route descriptor inventory.
     pub const ROUTES: &[RouteDescriptor] = &[
         READINESS,
         TOP_UP,
@@ -1293,6 +1308,7 @@ pub mod kagemusha {
         AUTHORITY_STATE,
         RESOURCE_NAMES_STATE,
         AUTHORITY_ORIGINALS,
+        ORDINARY_WALLET_CURRENT,
     ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
@@ -2703,6 +2719,37 @@ pub mod sumeragi {
     /// Read the consensus BLS key roster as an authenticated operator.
     pub const BLS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.bls_key.list", "/v1/sumeragi/bls-keys");
+    /// Read an exact active dataspace lease projection at a caller-selected native World cut.
+    pub const SNS_DATASPACE_LEASE: RouteDescriptor = public_get(
+        "sns.dataspace_lease.read",
+        "/v1/sns/dataspaces/{alias}/lease/{height}",
+    )
+    .with_projections(RouteProjections::SDK)
+    .with_private_no_store();
+    /// Read an original certified private-root registration or anchor record on its global parent.
+    pub const PRIVATE_DATASPACE_RECORD_PROOF: RouteDescriptor = public_get(
+        "private_dataspace.record_proof.read",
+        "/v1/private-dataspaces/{dataspace_id}/records/{height}/proof",
+    )
+    .with_projections(RouteProjections::SDK);
+    /// Export the immutable private root registration to its authenticated owner token.
+    pub const PRIVATE_ROOT_REGISTRATION: RouteDescriptor = public_get(
+        "private_root.registration.read",
+        "/v1/private-root/registration",
+    )
+    .with_authentication(AuthenticationPolicy::PrivateRootOwnerToken)
+    .with_admission(AdmissionPolicy::AuthenticatedProtocolPrincipal)
+    .with_private_no_store()
+    .with_projections(RouteProjections::SDK);
+    /// Export one body-free certified private-root anchor to its authenticated owner token.
+    pub const PRIVATE_ROOT_ANCHOR: RouteDescriptor = public_get(
+        "private_root.anchor.read",
+        "/v1/private-root/anchors/{height}",
+    )
+    .with_authentication(AuthenticationPolicy::PrivateRootOwnerToken)
+    .with_admission(AdmissionPolicy::AuthenticatedProtocolPrincipal)
+    .with_private_no_store()
+    .with_projections(RouteProjections::SDK);
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
         public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
@@ -2738,6 +2785,10 @@ pub mod sumeragi {
         STATUS_SSE,
         LANES,
         BLS_KEYS,
+        PRIVATE_DATASPACE_RECORD_PROOF,
+        SNS_DATASPACE_LEASE,
+        PRIVATE_ROOT_REGISTRATION,
+        PRIVATE_ROOT_ANCHOR,
         BRIDGE_FINALITY,
         BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_ATTESTATION_LATEST,
@@ -3259,6 +3310,13 @@ pub mod sorafs {
     /// List admitted `SoraFS` provider advertisements.
     pub const PROVIDERS: RouteDescriptor =
         documented_get("sorafs.provider.list", "/v1/sorafs/providers");
+    /// Read current certified provider authority and its exact signed advert at a selected height.
+    pub const PROVIDER_DISCOVERY: RouteDescriptor = public_get(
+        "sorafs.provider_discovery.read",
+        "/v1/sorafs/providers/{provider_id}/discovery/{height}",
+        RouteProjections::SDK,
+    )
+    .with_private_no_store();
     /// Submit a `SoraFS` provider advertisement.
     pub const PROVIDER_ADVERT: RouteDescriptor = documented_post(
         "sorafs.provider_advert.submit",
@@ -3585,6 +3643,15 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::OperatorSignature)
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::Operator);
+    /// Request an immutable-object token under the provider's explicit admitted account-read policy.
+    pub const STORAGE_ACCOUNT_TOKEN: RouteDescriptor = documented_post(
+        "sorafs.storage_account_token.issue",
+        "/v1/sorafs/storage/token/account",
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_effect(RouteEffect::Mutation)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    .with_private_no_store();
     /// Read CAR bytes for a stored manifest.
     pub const STORAGE_CAR: RouteDescriptor = documented_get(
         "sorafs.storage_car.read",
@@ -3668,6 +3735,7 @@ pub mod sorafs {
         STORAGE_PEERS,
         PROVIDERS,
         PROVIDER_ADVERT,
+        PROVIDER_DISCOVERY,
         ROUTING_PROVIDERS,
         ROUTING_PEERS,
         CAPACITY_STATE,
@@ -3732,6 +3800,7 @@ pub mod sorafs {
         PUBLISH_PREPARE,
         PUBLISH_PROOF,
         STORAGE_TOKEN,
+        STORAGE_ACCOUNT_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,
         PROOF_STREAM,
@@ -4438,7 +4507,7 @@ pub mod contracts_and_verification_keys {
         ZK_PROOFS_GET => app_get("contracts.zk_proofs_get", "/v1/zk/proofs");
         ZK_PROOFS_COUNT_GET => app_get("contracts.zk_proofs_count_get", "/v1/zk/proofs/count");
         ZK_PROOF_BY_BACKEND_BY_HASH_GET => app_get("contracts.zk_proof_by_backend_by_hash_get", "/v1/zk/proof/{backend}/{hash}");
-        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}");
+        CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_GET => app_account_read_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}");
         CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_CONTRACT_VIEW_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_contract_view_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/contract-view");
         CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST => app_account_mutation_sdk_post("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_post", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source/jobs");
         CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET => app_account_read_sdk_get("contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_by_job_id_get", "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source-jobs/{job_id}");

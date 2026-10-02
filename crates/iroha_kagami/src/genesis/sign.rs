@@ -1469,7 +1469,8 @@ pub mod tests {
                     assert_eq!(genesis.0.hash(), fixture.signed.0.hash());
                     Ok((
                         staged.world().sumeragi_lanes().clone(),
-                        iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                        iroha_core::sumeragi::lanes::lane_policy(staged.world())
+                            .wrap_err("read committed staged native policy")?,
                     ))
                 },
             )
@@ -3595,10 +3596,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
         let output_dir = fs::canonicalize(temp.path())
-            .expect("canonical localnet parent")
-            .join("localnet");
+            .expect("canonical localnet output parent")
+            .join("network");
         let seed = "localnet-resign-confidential-policy".to_owned();
         let options = iroha_deploy::localnet::LocalnetOptions {
+            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
             sora_profile: Some(iroha_deploy::localnet::SoraProfile::Nexus),
             perf_profile: None,
             peers: std::num::NonZeroU16::new(4).expect("non-zero peer count"),

@@ -94,27 +94,40 @@ internal object KagemushaSelectionFrameV1 {
         ) { "Core S differs from the selected lane or exact-next indices" }
     }
 
-    /** The financial u128 transition is independent of App Attest's signed u32 counter. */
-    fun requireAppAttest(frame: ByteArray) {
-        requireShape(frame, allowEnrollment = true)
+    /** Validate only Core S grammar; Apple counters are independent of financial indexes. */
+    fun requireAppAttestSubject(frame: ByteArray) {
+        require(frame.size == FRAME_BYTES) { "App Attest Core S width is invalid" }
+        val lane = frame.copyOfRange(LANE, LANE + 32)
+        if (frame[OPERATION] == 0.toByte()) {
+            requireOrdinaryBootstrapExact(frame, lane)
+            return
+        }
         val before = frame.copyOfRange(BEFORE, BEFORE + 16)
         val after = frame.copyOfRange(AFTER, AFTER + 16)
-        if (frame[OPERATION] == 0.toByte()) {
-            require(before.all { it == 0.toByte() } && after.all { it == 0.toByte() }) {
-                "App Attest enrollment has a financial transition"
-            }
-        } else {
-            val next = before.copyOf()
-            var carry = 1
-            for (offset in next.indices) {
-                val value = (next[offset].toInt() and 0xff) + carry
-                next[offset] = value.toByte()
-                carry = value ushr 8
-            }
-            require(carry == 0 && next.contentEquals(after)) {
-                "App Attest Core S has invalid exact-next financial indices"
-            }
+        requireExact(frame, lane, before, after)
+        require(BigInteger(1, after.reversedArray()) ==
+            BigInteger(1, before.reversedArray()).add(BigInteger.ONE)) {
+            "Core S financial indexes are not exact-next"
         }
+    }
+
+    /** Separate ordinary Bootstrap data layout; it never admits a monetary exact-next S. */
+    fun requireOrdinaryBootstrapExact(frame: ByteArray, lane: ByteArray) {
+        require(domain.size == 49 && frame.size == FRAME_BYTES &&
+            frame.copyOfRange(0, domain.size).contentEquals(domain)) { "Bootstrap S has the wrong V1 domain or width" }
+        require(frame.copyOfRange(domain.size, RELEASE - 2).contentEquals(
+            byteArrayOf(BODY_BYTES.toByte(), (BODY_BYTES ushr 8).toByte(), 0, 0, 0, 0, 0, 0)) &&
+            frame[RELEASE - 2] == 1.toByte() && frame[RELEASE - 1] == 0.toByte()) { "Bootstrap S has the wrong V1 framing" }
+        for (offset in intArrayOf(RELEASE, PROVIDER, APP_POLICY, CREDENTIAL, NETWORK, LANE,
+            PROFILE, HARDWARE_EPOCH, TRANSITION)) {
+            require(frame.copyOfRange(offset, offset + 32).any { it != 0.toByte() }) { "Bootstrap S has an absent identity or transition" }
+        }
+        require(frame.copyOfRange(POLICY_EPOCH, POLICY_EPOCH + 8).any { it != 0.toByte() } &&
+            frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() })
+        require(frame[OPERATION] == 0.toByte() && frame.copyOfRange(CANDIDATE, FRAME_BYTES).all { it == 0.toByte() }) {
+            "Ordinary Bootstrap requires absent outgoing commitments and zero logical indices"
+        }
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane)) { "Bootstrap S belongs to another original lane" }
     }
 }
 

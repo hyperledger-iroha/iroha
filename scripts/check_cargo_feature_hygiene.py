@@ -143,7 +143,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "zk-halo2": ("dep:kaigi_zk",),
         "zk-halo2-ipa": ("zk-ipa-native",),
         "zk-ipa-native": (),
-        "zk-stark": (),
+        "zk-stark": ("dep:fastpq_prover",),
         "circuit-params": ("halo2_proofs/circuit-params",),
         "zk-preverify": (),
         "halo2-dev-tests": (),
@@ -246,6 +246,12 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "bridge": (),
  "offline-visual-codecs": ("dep:image",)},
     "iroha": {
+        "dev-tools": ("kagemusha-ordinary-native",),
+        "kagemusha-ordinary-native": (
+            "dep:iroha_core_zk",
+            "iroha_core_zk/proofs-halo2",
+            "iroha_core_zk/kagemusha-production-prover",
+        ),
         "default": ("tls-rustls-native-roots", "gost", "sm"),
         "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
         "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
@@ -397,7 +403,7 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_torii": (),
     "irohad_lib": ("ivm-cuda",),
     "iroha_cli_lib": (),
-    "iroha": (),
+    "iroha": ("kagemusha-ordinary-native",),
     "iroha_config": (),
     "iroha_genesis": (),
     "iroha_telemetry": ("event-exporter", "metric-instrumentation", "sm"),
@@ -503,6 +509,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-stark"),
     "iroha_cli_lib": ("cli_integration_harness", "ids_projection"),
     "iroha": (
+        "dev-tools",
         "ids_projection",
         "test-fixtures",
         "test-network-private-settlement-evidence",
@@ -874,6 +881,18 @@ def _check_expected_features(
         errors.extend(_check_mandatory_model_json_dependencies(document, manifest_path))
     if package_name == "iroha_cli_lib":
         errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
+    if package_name == "iroha_core_zk":
+        dependencies = document.get("dependencies", {})
+        specification = (
+            dependencies.get("fastpq_prover")
+            if isinstance(dependencies, dict)
+            else None
+        )
+        if not isinstance(specification, dict) or specification.get("optional") is not True:
+            errors.append(
+                f"{manifest_path}: STARK field dependency `fastpq_prover` must be "
+                "an optional normal dependency enabled by `zk-stark`"
+            )
     try:
         actual_features = cargo_visible_features(document)
     except ValueError as error:

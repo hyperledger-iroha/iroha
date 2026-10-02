@@ -16,7 +16,11 @@ use sorafs_manifest::provider_admission::{
 };
 use thiserror::Error;
 
+/// Current finalized provider admission and signed advert projections.
+pub mod discovery;
 pub mod governance;
+/// Canonical retained provider-admission transition records.
+pub mod history;
 
 /// Sole first-release policy layout.
 pub const PROVIDER_ADMISSION_COUNCIL_POLICY_VERSION_V1: u16 = 1;

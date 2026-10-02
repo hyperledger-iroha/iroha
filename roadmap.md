@@ -12,8 +12,8 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
    measure repeated accepted settlements.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts, complete the authorized
-   fresh Taira cutover, then prove readiness, paid writes, restart and DPN/contracts.
+3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
+   four-validator readiness, paid writes and rolling restart to DPN/contracts.
 4. Validate the committed merge and follow-up fixture/runtime repairs through
    fresh workspace, genuine fixture and native SDK artifacts on one
    source candidate. Complete X509 verifier byte-source joins, terminal-claim privacy and its time failure;
@@ -118,7 +118,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | --- | --- | --- | --- |
 | P1 | Parliament | Governance/crypto/Torii | [18-event pipeline](specs/governance_pipeline.md), atomic policy/confirmation, beacon/ballot/deadline/retry and four-peer rollback; independent review/signed API. |
 | P13 | Standalone elections | Governance/circuits/SDKs | [Full statement](specs/zk_audit_matrix.md#election-statement-completion): credentials/nullifiers, weight/re-vote, encryption/custody and sound ballot/tally; V1 keys/fixtures and restore/finality. |
-| P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 24-hour load/resilience, 17 summaries and authenticated L2. |
+| P2 | SoraFS promotion | SoraFS/operators | [Reliability](specs/sorafs/first_release_reliability_goals.md), [V1 goals](specs/sorafs/v1_implementation_goals.md) and [closure](specs/sorafs/v1_closure_ledger.md); software signer, live multi-provider/dual-gateway L1, 17 summaries and authenticated L2. Load/resilience observations are optional diagnostics without a fixed deployment duration. |
 | P3 | Governance DAG | DAG/broker | [Two services](specs/sorafs_governance_dag_plan.md), authenticated ingress/signing/CAS, failover/recovery/corruption and five-target SBOM/L1/L2 artifacts. |
 | P4 | QUIC/relay/VPN | P2P/SoraNet/Linux | [Handshake](specs/soranet_handshake.md), bounded DATAGRAM/pre-auth/NAT and paid leases; real TUN/pidfd/DNS rollback, hostile peers/rotation/loss, fuzz/review. |
 | P5 | Musubi/contracts | Service/Core/Torii/deploy | [Publication](specs/musubi.md): lock/retention, atomic no-follow cache/recovery, memory/soak/four-peer. [Paid Taira workflow](specs/musubi_taira_workflow_goals.md): wallet/funding, immutable code, alias, Applied/readback, quote/video. |
@@ -127,7 +127,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | P8 | Inrou | Guest/runtime/deploy | Real Linux/AArch64/KVM escape/resource tests, authenticated bridge and four-replica canary; generated HF storage-only, governed guest compute. |
 | P9 | Taira/DPN/BPNG | CLI/daemon/operators | Signed observer join, disposable four-peer convergence/guest tests; current reset/readiness/write/restart, beacon custody and paid physical DPN. BPNG retained-history/catch-up, anchored quorum reads, additive catalog and API22/FE17 commissioning. |
 | P10 | Native Torii MCP | Routes/SDK/CLI | One protocol/listener, exact authority/mutation/retry registry, bounded prepare/external signing and scratch simulation; four-peer auth/cache/cancellation. |
-| P11 | Governed compute/developer tools | Mochi/Kagami/deploy/Core | [One-command developer experience](specs/kagami_mochi_devex_goals.md): persistent config-free localnet, owner-private Taira attachment and contract deployment; shared services, native Windows/macOS/Linux bundles, exact recovery and measured startup. [Mochi](specs/mochi_architecture_plan.md): governed catalog/auth/replay, real IVM metering and Kiso pricing. |
+| P11 | Governed compute/developer tools | Mochi/Kagami/deploy/Core | [One-command developer experience](specs/kagami_mochi_devex_goals.md): persistent config-free localnet, owner-private Taira attachment and contract deployment; shared services, native Windows/macOS/Linux bundles, exact recovery and measured startup. Qualify the combined native gateway/service graph and recovery, then a cold registry dependency with governed admission, normal TLS/DNS, revocation and the complete 64 MiB fetch-process RSS bound; retain signed native releases and reference-host p95 as separate gates. [Mochi](specs/mochi_architecture_plan.md): governed catalog/auth/replay, real IVM metering and Kiso pricing. |
 | P12 | Economic Constitution | Economics/oracle/governance | Basket/oracle/intervention/reserve specification, bounded Phoenix/Producer Credit policies and reproducible default/capture/cartel simulations before stability claims. |
 
 Taira qualification preserves signed genesis, native control keys, source/artifact

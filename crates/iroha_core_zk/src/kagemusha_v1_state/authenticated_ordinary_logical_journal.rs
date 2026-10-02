@@ -57,7 +57,52 @@ enum Record {
         counter_floor_before: Option<u32>,
         accepted_counter: Option<u32>,
     },
+    InitialPublicationIntent {
+        original: InitialPublicationIntent,
+    },
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::InitialOrdinaryPublicationIntentV1")]
+struct InitialPublicationIntent {
+    bootstrap_ticket: u64,
+    created_at_ms: u64,
+    enrollment_id: DigestV1,
+    release_id: DigestV1,
+    certificate_digest: DigestV1,
+    credential_digest: DigestV1,
+    approval_digest: DigestV1,
+    authorization_binding_digest: DigestV1,
+}
+
+/// One process-local permission from a newly fsynced original logical journal intent.
+/// Cold decoding cannot recreate it; a surviving intent selects recovery only.
+pub(crate) struct InitialPublicationPermit {
+    original: InitialPublicationIntent,
+    prefix: KagemushaRecoveryJournalPrefixV1,
+}
+impl InitialPublicationPermit {
+    pub(crate) fn consume_before_proving(
+        self,
+        journal: &KagemushaOrdinaryLogicalApprovalJournalV1,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if journal.publication_intent.as_ref() != Some(&self.original)
+            || journal.expected_initial_publication_intent(
+                self.original.bootstrap_ticket,
+                now,
+                self.original.created_at_ms,
+            )? != self.original
+            || journal.wal.recovery_prefix().map_err(storage)? != self.prefix
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        journal.wal.check_owned().map_err(storage)
+    }
+}
+
+#[path = "ordinary_logical_historical_custody.rs"]
+mod historical_custody;
 
 #[path = "captured_ordinary_bootstrap_approval.rs"]
 mod captured_bootstrap;
@@ -83,6 +128,7 @@ pub struct KagemushaOrdinaryLogicalApprovalJournalV1 {
     pending: Option<Pending>,
     counter_floor: Option<u32>,
     integrity_lease: Option<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    publication_intent: Option<InitialPublicationIntent>,
 }
 
 /// Borrowed original signature admission under the still-held durable native attempt.
@@ -125,6 +171,13 @@ impl KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_> {
     }
     pub(crate) fn original(&self) -> &[u8] {
         self.original.original()
+    }
+    /// Counter from the retained authenticated original; this does not renew its approval.
+    pub(crate) fn app_attest_counter(&self) -> Option<u32> {
+        self.original.app_attest_counter()
+    }
+    pub(crate) fn proof_binding_digest(&self) -> DigestV1 {
+        self.original.proof_binding_digest()
     }
     pub(crate) fn authorization_binding_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         iroha_data_model::kagemusha::kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
@@ -239,6 +292,7 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             bootstrap,
             pending: None,
             integrity_lease: None,
+            publication_intent: None,
         };
         journal.persist(&record)?;
         selection.recheck_at_trusted_time(now)?;
@@ -266,7 +320,29 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
         now: u64,
     ) -> Result<Self, KagemushaStateErrorV1> {
+        Self::open_existing_with_native_current_integrity_lease(
+            path,
+            selection,
+            enrollment,
+            integrity_leases,
+            None,
+            now,
+        )
+    }
+
+    /// Reauthenticate the entire historical WAL before adopting a Native-selected current lease.
+    /// The actual financial owner supplies this opaque capability and clock. Adoption cannot
+    /// change an original reservation, approval interval, capture time, counter or publication.
+    pub(crate) fn open_existing_with_native_current_integrity_lease(
+        path: &Path,
+        selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
+        enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+        integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+        current_integrity_lease: Option<&Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        now: u64,
+    ) -> Result<Self, KagemushaStateErrorV1> {
         validate_lease_input_budget(integrity_leases)?;
+        selection.recheck_at_trusted_time(now)?;
         let (release, bootstrap) = retain_selected_originals(selection, &enrollment)?;
         let expected = initial_record(&enrollment, &release, &bootstrap)?;
         let mut journal = Self {
@@ -277,130 +353,51 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             bootstrap,
             pending: None,
             integrity_lease: None,
+            publication_intent: None,
         };
-        let mut initialized = false;
-        while let Some((sequence, payload)) = journal.wal.replay_next().map_err(storage)? {
-            let record: Record = norito::decode_canonical(&payload).map_err(material)?;
-            if norito::encode_canonical(&record).map_err(material)? != payload {
-                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-            }
-            match record {
-                Record::Initialize { .. } if sequence == 0 && !initialized => {
-                    if record != expected {
-                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                    }
-                    initialized = true;
-                }
-                Record::Reserve {
-                    challenge,
-                    integrity_lease_digest,
-                } if initialized && journal.pending.is_none() => {
-                    if integrity_lease_digest
-                        != journal.integrity_lease.as_ref().map(|lease| lease.digest())
-                    {
-                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                    }
-                    journal.require_bootstrap_challenge(
-                        &challenge,
-                        journal.integrity_lease.as_deref(),
-                    )?;
-                    journal.pending = Some(Pending {
-                        accepted_at_ms: None,
-                        captured_at_ms: None,
-                        counter_floor_before: journal.counter_floor,
-                        challenge,
-                        approved: None,
-                        approval_integrity_lease: None,
-                        reserve_integrity_lease: journal.integrity_lease.as_ref().map(Arc::clone),
-                    });
-                }
-                Record::IntegrityLease { original } if initialized => {
-                    let admitted = integrity_leases
-                        .iter()
-                        .find(|lease| lease.original() == original)
-                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-                    journal.require_integrity_lease(admitted, admitted.authenticated_at_ms())?;
-                    journal.integrity_lease = Some(Arc::clone(admitted));
-                }
-                Record::Approval {
-                    accepted_at_ms,
-                    integrity_lease_digest,
-                    original,
-                    counter_floor_before,
-                    accepted_counter,
-                } if initialized => {
-                    if integrity_lease_digest
-                        != journal
-                            .pending
-                            .as_ref()
-                            .and_then(|pending| pending.reserve_integrity_lease.as_ref())
-                            .map(|lease| lease.digest())
-                        || counter_floor_before != journal.counter_floor
-                    {
-                        return Err(KagemushaStateErrorV1::SnapshotRollback);
-                    }
-                    if journal
-                        .pending
-                        .as_ref()
-                        .is_none_or(|pending| pending.approved.is_some())
-                    {
-                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                    }
-                    // The original admission instant and reservation-selected lease are fsynced.
-                    // A later current refresh cannot backdate or replace this exact lease,
-                    // extend the signed challenge, or renew it at reopen time.
-                    let verified = journal.authenticate_original_at(&original, accepted_at_ms)?;
-                    if verified.app_attest_counter() != accepted_counter {
-                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-                    }
-                    journal.counter_floor = accepted_counter.or(journal.counter_floor);
-                    let lease = journal
-                        .pending
-                        .as_ref()
-                        .and_then(|pending| pending.reserve_integrity_lease.as_ref())
-                        .map(Arc::clone);
-                    journal
-                        .pending
-                        .as_mut()
-                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
-                        .approval_integrity_lease = lease;
-                    let pending = journal
-                        .pending
-                        .as_mut()
-                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-                    pending.accepted_at_ms = Some(accepted_at_ms);
-                    pending.approved = Some(verified);
-                }
-                Record::CaptureBootstrap {
-                    captured_at_ms,
-                    approval_digest,
-                    authorization_binding_digest,
-                } if initialized => {
-                    if captured_at_ms > now {
-                        return Err(KagemushaStateErrorV1::SnapshotRollback);
-                    }
-                    journal.require_bootstrap_capture(
-                        captured_at_ms,
-                        approval_digest,
-                        authorization_binding_digest,
-                    )?;
-                    let pending = journal
-                        .pending
-                        .as_mut()
-                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-                    if pending.captured_at_ms.is_some() {
-                        return Err(KagemushaStateErrorV1::SnapshotRollback);
-                    }
-                    pending.captured_at_ms = Some(captured_at_ms);
-                }
-                _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
-            }
-        }
-        if !initialized {
-            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
-        }
-        journal.recheck_at_trusted_time(now)?;
+        journal.replay_initial_originals(expected, integrity_leases, now)?;
+        journal.finalize_replayed_native_current_integrity_lease(current_integrity_lease, now)?;
         Ok(journal)
+    }
+
+    fn finalize_replayed_native_current_integrity_lease(
+        &mut self,
+        current_integrity_lease: Option<&Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if let Some(lease) = current_integrity_lease {
+            // Full historical replay has completed. Current validation uses the independently
+            // admitted new original at Native now, never at an old approval/capture instant.
+            self.retain_integrity_lease(Arc::clone(lease), now)?;
+        }
+        self.recheck_at_trusted_time(now)
+    }
+
+    /// Exercise the actual native zero-State challenge producer with independently verified
+    /// known-public fixture originals. This test-only projection creates no journal or owner.
+    /// # Errors
+    /// Rejects invalid fixture enrollment, release, preview or challenge inputs.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn test_only_bootstrap_challenge_v1(
+        enrollment: &KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        state_nonce_commitment: DigestV1,
+        operation_id: DigestV1,
+        approval_nonce: DigestV1,
+        now: u64,
+    ) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+            enrollment, release,
+        )?;
+        let (_, preview) = derive_preview(
+            &floor,
+            state_nonce_commitment,
+            KagemushaDurableCapacityV1 {
+                inbox_bytes: KagemushaDurableCapacityV1::MINIMUM_INBOX_BYTES,
+                outbox_bytes: KagemushaDurableCapacityV1::MINIMUM_OUTBOX_BYTES,
+            },
+        )?;
+        derive_challenge_from_floor(&floor, &preview, operation_id, approval_nonce, now)
     }
 
     /// Data-only exact bootstrap S, derived from the same genuine owner and model serializer
@@ -641,6 +638,10 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         &self.bootstrap
     }
 
+    pub(super) fn retained_app_attest_counter_floor(&self) -> Option<u32> {
+        self.counter_floor
+    }
+
     fn credential_floor(
         &self,
     ) -> Result<KagemushaAuthenticatedOrdinaryCredentialFloorV1<'_>, KagemushaStateErrorV1> {
@@ -656,12 +657,242 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
             )
         }
     }
+    fn replay_initial_originals(
+        &mut self,
+        expected: Record,
+        integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let mut initialized = false;
+        while let Some((sequence, payload)) = self.wal.replay_next().map_err(storage)? {
+            let record: Record = norito::decode_canonical(&payload).map_err(material)?;
+            if norito::encode_canonical(&record).map_err(material)? != payload {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            match record {
+                Record::Initialize { .. } if sequence == 0 && !initialized => {
+                    if record != expected {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                    initialized = true;
+                }
+                Record::Reserve {
+                    challenge,
+                    integrity_lease_digest,
+                } if initialized && self.pending.is_none() => {
+                    if integrity_lease_digest
+                        != self.integrity_lease.as_ref().map(|lease| lease.digest())
+                    {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                    self.require_bootstrap_challenge(&challenge, self.integrity_lease.as_deref())?;
+                    self.pending = Some(Pending {
+                        accepted_at_ms: None,
+                        captured_at_ms: None,
+                        counter_floor_before: self.counter_floor,
+                        challenge,
+                        approved: None,
+                        approval_integrity_lease: None,
+                        reserve_integrity_lease: self.integrity_lease.as_ref().map(Arc::clone),
+                    });
+                }
+                Record::IntegrityLease { original } if initialized => {
+                    let admitted = integrity_leases
+                        .iter()
+                        .find(|lease| lease.original() == original)
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    self.require_integrity_lease(admitted, admitted.authenticated_at_ms())?;
+                    self.integrity_lease = Some(Arc::clone(admitted));
+                }
+                Record::Approval {
+                    accepted_at_ms,
+                    integrity_lease_digest,
+                    original,
+                    counter_floor_before,
+                    accepted_counter,
+                } if initialized => {
+                    if integrity_lease_digest
+                        != self
+                            .pending
+                            .as_ref()
+                            .and_then(|pending| pending.reserve_integrity_lease.as_ref())
+                            .map(|lease| lease.digest())
+                        || counter_floor_before != self.counter_floor
+                    {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    if self
+                        .pending
+                        .as_ref()
+                        .is_none_or(|pending| pending.approved.is_some())
+                    {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                    // The original admission instant and reservation-selected lease are fsynced.
+                    // A later current refresh cannot backdate or replace this exact lease,
+                    // extend the signed challenge, or renew it at reopen time.
+                    let verified = self.authenticate_original_at(&original, accepted_at_ms)?;
+                    if verified.app_attest_counter() != accepted_counter {
+                        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+                    }
+                    self.counter_floor = accepted_counter.or(self.counter_floor);
+                    let lease = self
+                        .pending
+                        .as_ref()
+                        .and_then(|pending| pending.reserve_integrity_lease.as_ref())
+                        .map(Arc::clone);
+                    self.pending
+                        .as_mut()
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
+                        .approval_integrity_lease = lease;
+                    let pending = self
+                        .pending
+                        .as_mut()
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    pending.accepted_at_ms = Some(accepted_at_ms);
+                    pending.approved = Some(verified);
+                }
+                Record::CaptureBootstrap {
+                    captured_at_ms,
+                    approval_digest,
+                    authorization_binding_digest,
+                } if initialized => {
+                    if captured_at_ms > now {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    self.require_bootstrap_capture(
+                        captured_at_ms,
+                        approval_digest,
+                        authorization_binding_digest,
+                    )?;
+                    let pending = self
+                        .pending
+                        .as_mut()
+                        .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                    if pending.captured_at_ms.is_some() {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    pending.captured_at_ms = Some(captured_at_ms);
+                }
+                Record::InitialPublicationIntent { original } if initialized => {
+                    self.restore_initial_publication_intent(original, now)?;
+                }
+                _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+            }
+        }
+        if !initialized {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
+    }
+
     fn persist(&mut self, record: &Record) -> Result<(), KagemushaStateErrorV1> {
         let bytes = norito::encode_canonical(record).map_err(material)?;
         if bytes.len() > FORMAT.maximum_payload_bytes as usize {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         self.wal.append(&bytes).map_err(storage)
+    }
+    fn expected_initial_publication_intent(
+        &self,
+        ticket: u64,
+        now: u64,
+        created_at_ms: u64,
+    ) -> Result<InitialPublicationIntent, KagemushaStateErrorV1> {
+        if ticket == 0 {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let captured = self.captured_bootstrap_at_native_time(now)?;
+        if created_at_ms > now || created_at_ms < captured.captured_at_ms() {
+            return Err(KagemushaStateErrorV1::SnapshotRollback);
+        }
+        Ok(InitialPublicationIntent {
+            bootstrap_ticket: ticket,
+            created_at_ms,
+            enrollment_id: self.enrollment.certificate().subject.enrollment_id,
+            release_id: self.release.release_id(),
+            certificate_digest: Sha256::digest(
+                self.enrollment
+                    .certificate()
+                    .canonical_bytes()
+                    .map_err(material)?,
+            )
+            .into(),
+            credential_digest: self.enrollment.app_credential().digest(),
+            approval_digest: captured.digest(),
+            authorization_binding_digest: captured.authorization_binding_digest()?,
+        })
+    }
+    fn restore_initial_publication_intent(
+        &mut self,
+        original: InitialPublicationIntent,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if self.publication_intent.is_some()
+            || original.created_at_ms > now
+            || self.expected_initial_publication_intent(
+                original.bootstrap_ticket,
+                original.created_at_ms,
+                original.created_at_ms,
+            )? != original
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.publication_intent = Some(original);
+        Ok(())
+    }
+    pub(crate) fn has_initial_publication_intent(
+        &self,
+        ticket: u64,
+        now: u64,
+    ) -> Result<bool, KagemushaStateErrorV1> {
+        if let Some(original) = &self.publication_intent {
+            let expected =
+                self.expected_initial_publication_intent(ticket, now, original.created_at_ms)?;
+            if original != &expected {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            return Ok(true);
+        }
+        self.expected_initial_publication_intent(ticket, now, now)?;
+        Ok(false)
+    }
+    pub(crate) fn begin_initial_publication(
+        &mut self,
+        ticket: u64,
+        now: u64,
+    ) -> Result<InitialPublicationPermit, KagemushaStateErrorV1> {
+        if self.publication_intent.is_some() {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let original = self.expected_initial_publication_intent(ticket, now, now)?;
+        self.persist(&Record::InitialPublicationIntent {
+            original: original.clone(),
+        })?;
+        self.publication_intent = Some(original.clone());
+        self.recheck_at_trusted_time(now)?;
+        Ok(InitialPublicationPermit {
+            original,
+            prefix: self.wal.recovery_prefix().map_err(storage)?,
+        })
+    }
+    pub(crate) fn initial_publication_intent_digest(
+        &self,
+        now: u64,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        let original = self
+            .publication_intent
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if self.expected_initial_publication_intent(
+            original.bootstrap_ticket,
+            now,
+            original.created_at_ms,
+        )? != *original
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(Sha256::digest(norito::encode_canonical(original).map_err(material)?).into())
     }
     fn bootstrap_challenge(
         &self,
@@ -903,6 +1134,7 @@ fn material(error: impl std::fmt::Display) -> KagemushaStateErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, Signature as EdSignature, SignatureOf};
     use iroha_data_model::{
         kagemusha::KagemushaAppOperationApprovalEvidenceV1,
         testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1,
@@ -915,15 +1147,14 @@ mod tests {
             outbox_bytes: KagemushaDurableCapacityV1::MINIMUM_OUTBOX_BYTES,
         }
     }
-    fn sign(
-        challenge: KagemushaAppOperationApprovalChallengeV1,
+    fn platform_signature(
+        message: &[u8],
         apple: bool,
         counter: u32,
-    ) -> KagemushaAppOperationApprovalV1 {
+    ) -> KagemushaAppOperationApprovalEvidenceV1 {
         // Known-public synthetic key matches the actual model fixture, never native provision.
         let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
-        let message = challenge.canonical_signing_bytes().unwrap();
-        let evidence = if apple {
+        if apple {
             let mut auth = [0; 37];
             auth[..32].copy_from_slice(&[2; 32]);
             auth[32] = 0x40;
@@ -943,11 +1174,22 @@ mod tests {
             raw.extend(auth);
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw }
         } else {
-            let signature: Signature = key.sign(&message);
+            let signature: Signature = key.sign(message);
             KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
                 signature_der: signature.to_der().as_bytes().to_vec(),
             }
-        };
+        }
+    }
+    fn sign(
+        challenge: KagemushaAppOperationApprovalChallengeV1,
+        apple: bool,
+        counter: u32,
+    ) -> KagemushaAppOperationApprovalV1 {
+        let evidence = platform_signature(
+            &challenge.canonical_signing_bytes().unwrap(),
+            apple,
+            counter,
+        );
         KagemushaAppOperationApprovalV1 {
             challenge,
             evidence,
@@ -973,6 +1215,439 @@ mod tests {
             derive_challenge_from_floor(&floor, &preview, [44; 32], [45; 32], 300).unwrap();
         run(&floor, &preview, expected);
     }
+
+    // Complete the actual native RNG/WAL reservation through real known-public C, platform,
+    // wallet and FI signatures. This is financial software custody only, not a State/Guard
+    // proof, device grant or physical attestation qualification.
+    fn publication_intent_fixture_financial(
+        path: &Path,
+        apple: bool,
+    ) -> (
+        KagemushaOrdinaryRetailEnrollmentFixtureV1,
+        KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) {
+        use iroha_data_model::kagemusha::{
+            kagemusha_core_authorization_key_reference_v1,
+            kagemusha_ordinary_app_enrollment_evidence_digest_v1,
+            kagemusha_ordinary_app_enrollment_possession_message_v1,
+        };
+        // Compute the protocol-fixed paired empty-tree hashes before the real fixture
+        // clock/reservation begins. Their OnceLock contains no enrollment inputs or
+        // authority; waiting on its cold initialization must not consume this fixture's
+        // unchanged original possession interval.
+        drop(ExactConsumedCreditIndex::empty());
+        let mut fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
+        let core = SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        let core_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            core.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap();
+        let selected = Arc::new(
+            KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
+                fixture.selection.owner.clone(),
+                fixture.release.clone(),
+                fixture.issuer_policy.clone(),
+                fixture.trust.clone(),
+                fixture.app_authority.clone(),
+                fixture.selection.preparation.challenge.hardware_profile_id,
+                &core_key,
+                300,
+            )
+            .unwrap(),
+        );
+        let root = path.with_file_name(format!(
+            "{}-financial",
+            path.file_name().unwrap().to_string_lossy(),
+        ));
+        std::fs::create_dir(&root).unwrap();
+        // Reserve before re-signing C at the same original epoch. The selected
+        // suspend-inclusive fixture clock advances from300 throughout admission.
+        let mut reservation =
+            KagemushaOrdinaryPreparationReservationV1::create(&root, selected, 300).unwrap();
+        let carrier = reservation.carrier().unwrap().clone();
+        let c = &mut fixture.selection.preparation.challenge;
+        c.client_nonce = carrier.client_nonce;
+        c.financial_authority_commitment = carrier.financial_authority_commitment;
+        c.issued_at_ms = 300;
+        let c = *c;
+        fixture.selection.preparation.signature =
+            EdSignature::try_new(issuer.private_key(), &c.canonical_signing_bytes().unwrap())
+                .unwrap();
+        let message = kagemusha_ordinary_app_enrollment_possession_message_v1(
+            &c,
+            &fixture.selection.issuance.credential.subject.app_public_key,
+            Sha256::digest(&fixture.proof.raw_attestation).into(),
+        )
+        .unwrap();
+        let evidence = platform_signature(&message, apple, 11);
+        let raw = match &evidence {
+            KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
+                raw_assertion
+            }
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
+                signature_der
+            }
+        };
+        let credential = &mut fixture.selection.issuance.credential;
+        credential.subject.client_nonce = c.client_nonce;
+        credential.subject.financial_authority_commitment = c.financial_authority_commitment;
+        credential.subject.issued_at_ms = 300;
+        credential.subject.enrollment_challenge_digest = c.attestation_challenge().unwrap();
+        credential.subject.platform_evidence_digest =
+            kagemusha_ordinary_app_enrollment_evidence_digest_v1(
+                &fixture.proof.raw_attestation,
+                raw,
+            )
+            .unwrap();
+        credential.signature = EdSignature::try_new(
+            issuer.private_key(),
+            &credential.subject.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
+        credential.circuit_admission = iroha_data_model::testing::ordinary_app_enrollment::ordinary_test_issuer_admission_v1(
+            iroha_data_model::kagemusha::KagemushaOrdinaryAppCredentialV1::circuit_admission_subject_for(
+                &credential.subject, &credential.signature,
+            ).unwrap(),
+        );
+        fixture.selection.issuance.core_authorization_key_reference =
+            kagemusha_core_authorization_key_reference_v1(&core_key);
+        fixture.challenge.preparation = fixture.selection.preparation.clone();
+        fixture.challenge.issuance = fixture.selection.issuance.clone();
+        fixture.challenge.issued_at_ms = 300;
+        fixture.proof.challenge = fixture.challenge.clone();
+        fixture.proof.app_possession = evidence;
+        fixture.proof.account_signature = SignatureOf::try_new(
+            wallet.private_key(),
+            &fixture.challenge.account_signing_payload().unwrap(),
+        )
+        .unwrap();
+        let app = fixture
+            .selection
+            .issuance
+            .credential
+            .authenticate(
+                &fixture.release,
+                &fixture.trust,
+                &fixture.app_authority,
+                &c,
+                &fixture.selection.issuance.credential.subject.app_public_key,
+                300,
+            )
+            .unwrap();
+        let possession = fixture
+            .proof
+            .authenticate(
+                &fixture.challenge,
+                &fixture.selection,
+                &fixture.issuer_policy,
+                &fixture.release,
+                &app,
+                if apple { Some(0) } else { None },
+                300,
+            )
+            .unwrap();
+        fixture.certificate.subject.issuance = fixture.selection.issuance.clone();
+        fixture.certificate.subject.challenge_evidence_digest = possession.evidence_digest();
+        fixture.certificate.subject.ordinary_app_credential_digest = app.digest();
+        fixture.certificate.signature = SignatureOf::try_new(
+            issuer.private_key(),
+            &fixture.certificate.subject.approval_payload().unwrap(),
+        )
+        .unwrap();
+        reservation
+            .retain_preparation(&fixture.selection.preparation.to_transport_bytes().unwrap())
+            .unwrap();
+        let enrollment = Arc::new(fixture.verify(300).unwrap());
+        let financial = reservation.complete_enrollment(enrollment).unwrap();
+        financial.recheck().unwrap();
+        (fixture, financial)
+    }
+
+    pub(super) fn publication_intent_fixture_journal(
+        path: &Path,
+        apple: bool,
+        capture: bool,
+    ) -> (
+        KagemushaOrdinaryLogicalApprovalJournalV1,
+        KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) {
+        let (fixture, financial) = publication_intent_fixture_financial(path, apple);
+        let enrollment = Arc::clone(financial.enrollment());
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+            enrollment.as_ref(),
+            Arc::clone(&fixture.release),
+        )
+        .unwrap();
+        let nonce = financial.bootstrap_state_nonce_commitment().unwrap();
+        let (_, bootstrap) = derive_preview(&floor, nonce, capacity()).unwrap();
+        let counter_floor = floor.app_attest_counter_floor();
+        let initial = initial_record(enrollment.as_ref(), &fixture.release, &bootstrap).unwrap();
+        drop(floor);
+        let mut journal = KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal: PrivateJournal::create_new(path, FORMAT).unwrap(),
+            enrollment,
+            release: fixture.release.clone(),
+            bootstrap,
+            pending: None,
+            counter_floor,
+            integrity_lease: None,
+            publication_intent: None,
+        };
+        journal.persist(&initial).unwrap();
+        let challenge = *journal
+            .reserve_bootstrap([44; 32], financial.trusted_time_ms().unwrap())
+            .unwrap();
+        let approval = sign(challenge, apple, 17);
+        journal
+            .accept_original(
+                &norito::encode_canonical(&approval).unwrap(),
+                financial.trusted_time_ms().unwrap(),
+            )
+            .unwrap();
+        if capture {
+            journal.capture_bootstrap_approval(&financial).unwrap();
+        }
+        (journal, financial)
+    }
+
+    fn publication_intent_fixture_reopen(
+        journal: KagemushaOrdinaryLogicalApprovalJournalV1,
+        path: &Path,
+        now: u64,
+    ) -> Result<KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaStateErrorV1> {
+        let KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal,
+            enrollment,
+            release,
+            bootstrap,
+            ..
+        } = journal;
+        let expected = initial_record(enrollment.as_ref(), &release, &bootstrap)?;
+        let counter_floor = enrollment.possession().app_attest_counter();
+        drop(wal);
+        let mut reopened = KagemushaOrdinaryLogicalApprovalJournalV1 {
+            wal: PrivateJournal::open_existing(path, FORMAT).map_err(storage)?,
+            enrollment,
+            release,
+            bootstrap,
+            pending: None,
+            counter_floor,
+            integrity_lease: None,
+            publication_intent: None,
+        };
+        reopened.replay_initial_originals(expected, &[], now)?;
+        reopened.recheck_at_trusted_time(now)?;
+        Ok(reopened)
+    }
+
+    #[test]
+    fn initial_publication_intent_cold_replay_keeps_original_and_cannot_reissue_permit() {
+        for apple in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("publication-intent");
+            let (journal, _financial) = publication_intent_fixture_journal(&path, apple, true);
+            let after_capture = journal.pending.as_ref().unwrap().captured_at_ms.unwrap() + 1;
+            let replay_at = after_capture + 1000;
+            let successor_at = replay_at + 1;
+            let original = journal
+                .pending
+                .as_ref()
+                .unwrap()
+                .approved
+                .as_ref()
+                .unwrap()
+                .original()
+                .to_vec();
+            assert!(
+                !journal
+                    .has_initial_publication_intent(17, after_capture)
+                    .unwrap()
+            );
+            let mut journal = publication_intent_fixture_reopen(journal, &path, replay_at).unwrap();
+            assert!(
+                !journal
+                    .has_initial_publication_intent(17, replay_at)
+                    .unwrap()
+            );
+            let permit = journal.begin_initial_publication(17, replay_at).unwrap();
+            permit.consume_before_proving(&journal, replay_at).unwrap();
+            let digest = journal
+                .initial_publication_intent_digest(replay_at)
+                .unwrap();
+            assert_ne!(digest, [0; 32]);
+            assert!(journal.begin_initial_publication(17, replay_at).is_err());
+            let mut reopened =
+                publication_intent_fixture_reopen(journal, &path, successor_at).unwrap();
+            assert!(
+                reopened
+                    .has_initial_publication_intent(17, successor_at)
+                    .unwrap()
+            );
+            assert_eq!(
+                reopened
+                    .initial_publication_intent_digest(successor_at)
+                    .unwrap(),
+                digest
+            );
+            assert_eq!(
+                reopened
+                    .pending
+                    .as_ref()
+                    .unwrap()
+                    .approved
+                    .as_ref()
+                    .unwrap()
+                    .original(),
+                original
+            );
+            assert!(
+                reopened
+                    .begin_initial_publication(17, successor_at)
+                    .is_err()
+            );
+            assert!(
+                reopened
+                    .has_initial_publication_intent(18, successor_at)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn initial_publication_intent_requires_capture_and_unchanged_descriptor_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("publication-permit");
+        let (mut journal, financial) = publication_intent_fixture_journal(&path, false, false);
+        let before_capture = financial.trusted_time_ms().unwrap();
+        let before = journal.wal.recovery_prefix().unwrap();
+        assert!(
+            journal
+                .begin_initial_publication(17, before_capture)
+                .is_err()
+        );
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), before);
+        let foreign_path = path.with_extension("foreign");
+        let (_, foreign) = publication_intent_fixture_financial(&foreign_path, false);
+        assert!(journal.capture_bootstrap_approval(&foreign).is_err());
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), before);
+        let captured_at = journal
+            .capture_bootstrap_approval(&financial)
+            .unwrap()
+            .captured_at_ms();
+        let after_capture = captured_at + 1;
+        let captured = journal.wal.recovery_prefix().unwrap();
+        assert!(journal.begin_initial_publication(0, after_capture).is_err());
+        assert!(
+            journal
+                .begin_initial_publication(17, captured_at - 1)
+                .is_err()
+        );
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), captured);
+        let permit = journal
+            .begin_initial_publication(17, after_capture)
+            .unwrap();
+        // A newly appended duplicate still invalidates the held prefix. It cannot grant
+        // another permit or be accepted by actual cold replay of the original WAL.
+        journal
+            .persist(&Record::InitialPublicationIntent {
+                original: journal.publication_intent.clone().unwrap(),
+            })
+            .unwrap();
+        assert!(
+            permit
+                .consume_before_proving(&journal, after_capture)
+                .is_err()
+        );
+        assert!(publication_intent_fixture_reopen(journal, &path, after_capture + 1).is_err());
+    }
+
+    #[test]
+    fn initial_publication_intent_replay_rejects_changed_original_bindings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("publication-bindings");
+        let (mut journal, _financial) = publication_intent_fixture_journal(&path, false, true);
+        let captured_at = journal.pending.as_ref().unwrap().captured_at_ms.unwrap();
+        let after_capture = captured_at + 1;
+        let replay_at = after_capture + 1000;
+        let original = journal
+            .expected_initial_publication_intent(17, after_capture, after_capture)
+            .unwrap();
+        for field in 0..9 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.bootstrap_ticket = 0,
+                1 => changed.created_at_ms = captured_at - 1,
+                2 => changed.created_at_ms = replay_at + 1,
+                3 => changed.enrollment_id[0] ^= 1,
+                4 => changed.release_id[0] ^= 1,
+                5 => changed.certificate_digest[0] ^= 1,
+                6 => changed.credential_digest[0] ^= 1,
+                7 => changed.approval_digest[0] ^= 1,
+                _ => changed.authorization_binding_digest[0] ^= 1,
+            }
+            assert!(
+                journal
+                    .restore_initial_publication_intent(changed, replay_at)
+                    .is_err()
+            );
+            assert!(journal.publication_intent.is_none());
+        }
+        let mut changed_ticket = original;
+        changed_ticket.bootstrap_ticket = 18;
+        journal
+            .restore_initial_publication_intent(changed_ticket, replay_at)
+            .unwrap();
+        // The independently recovered platform attempt retains ticket17. Its caller cannot
+        // select this altered logical intent by changing a coordinator frame or route handle.
+        assert!(
+            journal
+                .has_initial_publication_intent(17, replay_at)
+                .is_err()
+        );
+    }
+    #[cfg(feature = "kagemusha-production-prover")]
+    #[test]
+    fn ordinary_bootstrap_platform_receipt_binds_credential_and_survives_replay() {
+        for apple in [false, true] {
+            check(apple, |floor, _, challenge| {
+                // Reuse the actual zero-State producer and known-public fixture signer.
+                // Neither platform fixture constructs production or financial authority.
+                let approval = sign(challenge, apple, 17);
+                let verified = approval
+                    .authenticate(
+                        &challenge,
+                        floor.credential(),
+                        floor.app_attest_counter_floor(),
+                        301,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    verified.app_attest_counter(),
+                    if apple { Some(17) } else { None }
+                );
+                super::super::super::ordinary_bootstrap_owner::assert_bootstrap_platform_receipt_binding_and_replay(
+                    &approval,
+                    floor.credential().subject().app_release_digest,
+                    verified.app_attest_counter(),
+                );
+            });
+        }
+    }
+
     #[test]
     fn historical_publication_retains_original_admission_time_and_current_descriptor() {
         use std::io::Write as _;
@@ -990,7 +1665,7 @@ mod tests {
             .authenticate(&challenge, floor.credential(), None, 301)
             .unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("historical");
+        let path = temp.path().canonicalize().unwrap().join("historical");
         let mut wal = PrivateJournal::create_new(&path, FORMAT).unwrap();
         for record in [
             initial_record(enrollment.as_ref(), &fixture.release, &bootstrap).unwrap(),
@@ -1038,6 +1713,7 @@ mod tests {
             }),
             counter_floor: None,
             integrity_lease: None,
+            publication_intent: None,
         };
         assert!(
             journal
@@ -1211,7 +1887,7 @@ mod tests {
     #[test]
     fn reservation_deadline_is_frozen_to_its_exact_initial_or_refresh_original() {
         use iroha_crypto::{Algorithm, KeyPair};
-        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let enrollment = fixture.verify(300).unwrap();
         let original_floor =
             KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
@@ -1301,7 +1977,7 @@ mod tests {
     fn exact_descriptor_prefix_retains_full_original_and_refuses_atomic_replacement() {
         check(false, |floor, _, expected| {
             let temp = tempfile::tempdir().unwrap();
-            let path = temp.path().join("ordinary");
+            let path = temp.path().canonicalize().unwrap().join("ordinary");
             let original = sign(expected, false, 0);
             let verified = original
                 .authenticate(&expected, floor.credential(), None, 301)
@@ -1346,7 +2022,7 @@ mod tests {
         use std::io::{Seek as _, Write as _};
         check(false, |floor, _, expected| {
             let temp = tempfile::tempdir().unwrap();
-            let path = temp.path().join("ordinary");
+            let path = temp.path().canonicalize().unwrap().join("ordinary");
             let original = sign(expected, false, 0)
                 .authenticate(&expected, floor.credential(), None, 301)
                 .unwrap();
@@ -1373,5 +2049,89 @@ mod tests {
             let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
             assert!(reopened.replay_next().is_err());
         });
+    }
+
+    #[test]
+    fn native_bootstrap_rejects_genuine_preparation_without_consuming_reserved_attempt() {
+        for apple in [false, true] {
+            let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+            let enrollment = Arc::new(fixture.verify(300).unwrap());
+            let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+                enrollment.as_ref(),
+                Arc::clone(&fixture.release),
+            )
+            .unwrap();
+            let (_, bootstrap) = derive_preview(&floor, [43; 32], capacity()).unwrap();
+            let counter_floor = floor.app_attest_counter_floor();
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().canonicalize().unwrap().join("purpose-boundary");
+            let mut wal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+            wal.append(
+                &norito::encode_canonical(
+                    &initial_record(enrollment.as_ref(), &fixture.release, &bootstrap).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            drop(floor);
+            // Only this test constructs a journal from genuine model fixture admissions. Its
+            // real reserve/accept methods exercise native custody; no financial owner is made.
+            let mut journal = KagemushaOrdinaryLogicalApprovalJournalV1 {
+                wal,
+                enrollment,
+                release: Arc::clone(&fixture.release),
+                bootstrap,
+                pending: None,
+                counter_floor,
+                integrity_lease: None,
+                publication_intent: None,
+            };
+            let expected = *journal.reserve_bootstrap([44; 32], 300).unwrap();
+            assert_eq!(
+                expected.purpose,
+                KagemushaAppOperationApprovalPurposeV1::MonetaryTransition
+            );
+            let prefix = journal.wal.recovery_prefix().unwrap();
+            let mut preparation = expected;
+            preparation.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
+            preparation.subject_signing_digest =
+                Sha256::digest(preparation.canonical_subject_signing_bytes().unwrap()).into();
+            let original = sign(preparation, apple, 17);
+            // The freshly signed purpose2 message is valid under the actual enrolled key and
+            // scope. It must fail the independently reserved purpose1 Native consumer.
+            assert!(
+                original
+                    .authenticate(
+                        &preparation,
+                        journal.enrollment.app_credential(),
+                        counter_floor,
+                        301,
+                    )
+                    .is_ok()
+            );
+            assert!(
+                journal
+                    .require_bootstrap_challenge(&preparation, None)
+                    .is_err()
+            );
+            let raw = norito::encode_canonical(&original).unwrap();
+            assert!(journal.accept_original(&raw, 301).is_err());
+            assert!(journal.wal.recovery_prefix().unwrap() == prefix);
+            assert_eq!(journal.counter_floor, counter_floor);
+            assert_eq!(journal.pending.as_ref().unwrap().challenge, expected);
+            assert!(journal.pending.as_ref().unwrap().approved.is_none());
+            // Refusal consumed neither nonce nor Apple floor. The exact reserved purpose1
+            // original can still be durably admitted on this same native attempt.
+            let terminal = sign(expected, apple, 17);
+            let terminal_raw = norito::encode_canonical(&terminal).unwrap();
+            journal.accept_original(&terminal_raw, 301).unwrap();
+            let approved = journal.approved_at_trusted_time(301).unwrap();
+            assert_eq!(approved.challenge(), &expected);
+            assert_eq!(approved.original(), terminal_raw.as_slice());
+            assert_eq!(
+                approved.app_attest_counter(),
+                if apple { Some(17) } else { None }
+            );
+        }
     }
 }

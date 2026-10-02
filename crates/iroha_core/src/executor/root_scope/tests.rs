@@ -117,7 +117,9 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
         iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).expect("fixture PoP"),
     )
     .into();
-    for unreviewed in [no_scope, register_peer] {
+    let register_account: InstructionBox =
+        iroha_data_model::isi::Register::account(Account::new(ALICE_ID.clone())).into();
+    for unreviewed in [no_scope, register_peer, register_account] {
         assert!(
             matches!(ensure_instruction_scope(&unreviewed, &mut tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
         );

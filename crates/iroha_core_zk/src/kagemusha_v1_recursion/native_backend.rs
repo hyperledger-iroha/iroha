@@ -50,7 +50,10 @@ use super::{
         accumulator_limb_count, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
     },
     guard_bundle::{
-        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
+        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
         KagemushaGuardBundleEqCircuitV1,
     },
     mint_authority::{
@@ -653,6 +656,8 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     ep_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    eq_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    ep_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_commit_wrapper_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_mint_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
@@ -682,6 +687,33 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     terminal_authorization_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_eq_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
+}
+
+pub(super) struct OrdinaryBootstrapAuxiliaryMaterialV1<'a> {
+    pub(super) eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_authorization_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_authorization_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) genesis_authorization_id: DigestV1,
+}
+
+impl KagemushaAuthenticatedRecursiveVerifierV1 {
+    pub(super) fn ordinary_bootstrap_auxiliary_material(
+        &self,
+    ) -> Result<OrdinaryBootstrapAuxiliaryMaterialV1<'_>, String> {
+        self.monetary_release()?;
+        Ok(OrdinaryBootstrapAuxiliaryMaterialV1 {
+            eq_incoming_protocol: &self.eq_commit_wrapper_protocol,
+            ep_incoming_protocol: &self.ep_commit_wrapper_protocol,
+            eq_mint_authorization_protocol: &self.eq_mint_authorization_protocol,
+            ep_mint_authorization_protocol: &self.ep_mint_authorization_protocol,
+            eq_mint_protocol: &self.eq_mint_protocol,
+            ep_mint_protocol: &self.ep_mint_protocol,
+            genesis_authorization_id: self.mint_genesis_authorization_id,
+        })
+    }
 }
 
 impl KagemushaAuthenticatedRecursiveVerifierV1 {
@@ -1088,6 +1120,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ordinary_guard_protocol_digests,
             eq_state_protocol,
             ep_state_protocol,
+            eq_terminal_authorization_protocol,
+            ep_terminal_authorization_protocol,
             eq_commit_wrapper_protocol,
             ep_commit_wrapper_protocol,
             eq_mint_authorization_protocol,
@@ -1349,6 +1383,72 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             eq_protocol_digest: self.ordinary_guard_protocol_digests[0],
             ep_protocol_digest: self.ordinary_guard_protocol_digests[1],
         }
+    }
+
+    /// Borrow the actual common-role keys for the separate first-release ordinary cash family.
+    #[cfg(unix)]
+    pub(super) fn ordinary_cash_terminal_verifier_material(
+        &self,
+    ) -> Result<super::ordinary_cash_terminal_verifier::OrdinaryCashTerminalMaterialV1<'_>, String>
+    {
+        self.monetary_release()?;
+        for (binding, role) in [
+            (
+                &self.terminal_authorization_eq_binding,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+            ),
+            (
+                &self.terminal_authorization_ep_binding,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+            ),
+            (
+                &self.commit_wrapper_eq_binding,
+                KagemushaArtifactRoleV1::CommitWrapperVkEq,
+            ),
+            (
+                &self.commit_wrapper_ep_binding,
+                KagemushaArtifactRoleV1::CommitWrapperVkEp,
+            ),
+        ] {
+            if binding.role != role {
+                return Err("ordinary Terminal/Wrapper key-role mismatch".into());
+            }
+        }
+        let key_digests = [
+            self.terminal_authorization_eq_binding.sha256,
+            self.terminal_authorization_ep_binding.sha256,
+            self.commit_wrapper_eq_binding.sha256,
+            self.commit_wrapper_ep_binding.sha256,
+        ];
+        if key_digests
+            .iter()
+            .enumerate()
+            .any(|(i, d)| key_digests[i + 1..].contains(d))
+        {
+            return Err("ordinary Terminal/Wrapper key roles alias".into());
+        }
+        Ok(
+            super::ordinary_cash_terminal_verifier::OrdinaryCashTerminalMaterialV1 {
+                eq_parameters: &self.eq_parameters,
+                ep_parameters: &self.ep_parameters,
+                terminal_eq_protocol: &self.eq_terminal_authorization_protocol,
+                terminal_ep_protocol: &self.ep_terminal_authorization_protocol,
+                wrapper_eq_protocol: &self.eq_commit_wrapper_protocol,
+                wrapper_ep_protocol: &self.ep_commit_wrapper_protocol,
+                release_id: self.release_id,
+                suite_id: self.suite_id,
+                vk_set_digest: self.vk_set_digest,
+                artifact_manifest_digest: self.artifact_manifest_digest,
+                terminal_protocol_digests: [
+                    self.terminal_authorization_eq_protocol_digest,
+                    self.terminal_authorization_ep_protocol_digest,
+                ],
+                wrapper_protocol_digests: [
+                    self.commit_wrapper_eq_protocol_digest,
+                    self.commit_wrapper_ep_protocol_digest,
+                ],
+            },
+        )
     }
 
     /// Return the actual Eq state protocol identity derived from its authenticated key.
@@ -2656,6 +2756,60 @@ mod checked_loader_tests {
     }
 
     #[test]
+    fn platform_credential_native_reader_requires_complete_exact_hybrid_topology() {
+        // This proves layout admission only, not an accepted proof or credential owner.
+        let exact = [56, 8162, 8162];
+        for parity in ["Eq", "Ep"] {
+            require_platform_credential_hybrid_layout(16, 16, &exact, &exact, parity)
+                .expect("the current closed hybrid layout");
+            for wrong in [
+                vec![],
+                vec![42],
+                vec![56],
+                vec![56, 8162],
+                vec![56, 8162, 8162, 8162],
+            ] {
+                assert!(
+                    require_platform_credential_hybrid_layout(16, 16, &wrong, &exact, parity)
+                        .is_err()
+                );
+                assert!(
+                    require_platform_credential_hybrid_layout(16, 16, &exact, &wrong, parity)
+                        .is_err()
+                );
+            }
+            for column in 0..3 {
+                for delta in [-1_isize, 1] {
+                    let mut wrong = exact;
+                    wrong[column] = wrong[column].checked_add_signed(delta).unwrap();
+                    assert!(
+                        require_platform_credential_hybrid_layout(16, 16, &wrong, &exact, parity)
+                            .is_err()
+                    );
+                    assert!(
+                        require_platform_credential_hybrid_layout(16, 16, &exact, &wrong, parity)
+                            .is_err()
+                    );
+                }
+            }
+            for (k, domain_k) in [(15, 15), (17, 17), (16, 15), (16, 17)] {
+                assert!(
+                    require_platform_credential_hybrid_layout(k, domain_k, &exact, &exact, parity)
+                        .is_err()
+                );
+            }
+        }
+        validate_hybrid_commitment_limb_indices(56, &[[42, 43], [44, 45]], "Eq")
+            .expect("both actual Eq carrier commitments follow the semantic prefix");
+        validate_hybrid_commitment_limb_indices(56, &[[46, 47], [48, 49]], "Ep")
+            .expect("both actual Ep carrier commitments retain the common tail");
+        assert!(validate_hybrid_commitment_limb_indices(56, &[[97, 98], [99, 100]], "Eq").is_err());
+        assert!(
+            validate_hybrid_commitment_limb_indices(56, &[[101, 102], [103, 104]], "Ep").is_err()
+        );
+    }
+
+    #[test]
     fn hybrid_native_parser_counts_and_orders_proof_supplied_commitments() {
         assert_eq!(
             hybrid_proof_supplied_commitment_bytes::<EqAffine>(1, "Eq").expect("one Eq commitment"),
@@ -3559,7 +3713,7 @@ fn terminal_relation_public_instances<F: KagemushaPoseidonFieldV1>(
     Ok(public)
 }
 
-fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
+pub(super) fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
     request: &super::KagemushaMintFinalityHelperVerificationRequestV1<'_>,
     history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
 ) -> Result<Vec<F>, String> {
@@ -3972,6 +4126,114 @@ pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol_with_transcript
         ],
         "Ep mint-hash claim hybrid",
     )
+}
+
+/// Verify the complete Eq PlatformCredential with both authentic compact carriers.
+/// The exact three-column k16 profile is mandatory; no retired one-column proof is accepted.
+pub(super) fn verify_eq_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fp>],
+) -> Result<KagemushaNativeVerifiedProofV1<EqAffine>, String> {
+    require_platform_credential_hybrid_layout(
+        params.k(),
+        protocol.domain.k,
+        &protocol.num_instance,
+        &instances.iter().map(Vec::len).collect::<Vec<_>>(),
+        "Eq",
+    )?;
+    let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 1,
+            ],
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 2,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 3,
+            ],
+        ],
+        "Eq PlatformCredential hybrid",
+    )
+}
+
+/// Verify the complete Ep PlatformCredential with both authentic compact carriers.
+/// Return the actual final transcript squeeze as well as the genuine IPA accumulator.
+pub(super) fn verify_ep_platform_credential_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fq>],
+) -> Result<KagemushaNativeVerifiedProofV1<EpAffine>, String> {
+    require_platform_credential_hybrid_layout(
+        params.k(),
+        protocol.domain.k,
+        &protocol.num_instance,
+        &instances.iter().map(Vec::len).collect::<Vec<_>>(),
+        "Ep",
+    )?;
+    let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 4,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 5,
+            ],
+            [
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 6,
+                KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 + 7,
+            ],
+        ],
+        "Ep PlatformCredential hybrid",
+    )
+}
+
+fn require_platform_credential_hybrid_layout(
+    k: u32,
+    domain_k: usize,
+    protocol_columns: &[usize],
+    instance_columns: &[usize],
+    parity: &str,
+) -> Result<(), String> {
+    let expected = [
+        KAGEMUSHA_PLATFORM_CREDENTIAL_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if k != KAGEMUSHA_HALO2_K_V1
+        || usize::try_from(k).ok() != Some(domain_k)
+        || protocol_columns != expected
+        || instance_columns != expected
+    {
+        return Err(format!(
+            "Kagemusha {parity} PlatformCredential requires exactly k16 [56,8162,8162]"
+        ));
+    }
+    Ok(())
 }
 
 fn verify_hybrid_succinct_protocol<C, const N: usize>(

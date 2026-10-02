@@ -474,14 +474,21 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
     );
     {
         let view = chain.state().view();
-        let routing = RoutingSnapshot::of(&view);
+        let routing =
+            RoutingSnapshot::of(&view).expect("completed original private-root routing read");
         assert_eq!(
-            routing.inputs(view.world()).route(private_tx.payload(), 4),
+            routing
+                .inputs(view.world())
+                .route(private_tx.payload(), 4)
+                .expect("completed original pre-activation private route"),
             None,
             "concrete private work cannot escape to the global lane before activation"
         );
         assert_eq!(
-            routing.inputs(view.world()).route(private_tx.payload(), 5),
+            routing
+                .inputs(view.world())
+                .route(private_tx.payload(), 5)
+                .expect("completed original activated private route"),
             Some(PRIVATE_LANE)
         );
     }

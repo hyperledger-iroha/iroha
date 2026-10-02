@@ -102,7 +102,7 @@ Usage:
 Packages built mobile SDK artifacts into an explicit external cache directory:
   --apple    Package NoritoBridge.xcframework and its artifact manifest.
   --android  Package Kotlin core/client/kagemusha-wallet-android release outputs,
-             generated native bridge bytes, and their embedded provenance.
+             same-version Maven graph, generated native bridge bytes, and provenance.
 
 MOBILE_SDK_APPLE_ARTIFACT_DIR is required for Apple packaging and must select an
 external Apple artifact directory.
@@ -550,22 +550,6 @@ single_match() {
   printf '%s' "${matches[0]}"
 }
 
-resolve_core_jar() {
-  local stripped_version="${VERSION#v}"
-  local candidate
-
-  for candidate in \
-    "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-${VERSION}.jar" \
-    "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-${stripped_version}.jar"; do
-    if [[ -f "$candidate" ]]; then
-      printf '%s' "$candidate"
-      return
-    fi
-  done
-
-  single_match "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-*.jar" "core-jvm built jar"
-}
-
 resolve_android_native_mode() {
   local aar="$1"
   run_isolated_python - "$aar" <<'PY'
@@ -578,10 +562,9 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     manifest = json.loads(archive.read(entry))
 if "artifact_scope" in manifest:
     raise SystemExit("diagnostic Android artifact scope cannot enter release packaging")
-production = manifest.get("privacy_production_enabled")
-if type(production) is not bool:
-    raise SystemExit("native provenance privacy_production_enabled is not boolean")
-print("production" if production else "default")
+if manifest.get("privacy_production_enabled") is not True:
+    raise SystemExit("native provenance must include mandatory privacy support")
+print("production")
 PY
 }
 
@@ -603,19 +586,6 @@ record_artifact() {
   ARTIFACT_RECORDS+=("    {\"kind\":\"$kind\",\"name\":\"$name\",\"path\":\"$rel\",\"sha256\":\"$sha\",\"bytes\":$bytes}")
 }
 
-copy_android_artifact() {
-  local src="$1"
-  local dest="$2"
-  local stage="$3"
-  local stage_checksums="$4"
-  local sha
-
-  require_file "$src" "Android SDK package input"
-  mkdir -p "$(dirname "$stage/$dest")"
-  cp "$src" "$stage/$dest"
-  sha="$(hash_file "$stage/$dest")"
-  printf '%s  %s\n' "$sha" "$dest" >> "$stage_checksums"
-}
 
 write_manifest() {
   local index count pod_version
@@ -913,69 +883,57 @@ PY
   record_artifact "$podspec" "apple-cocoapods-podspec"
 }
 
+ANDROID_INPUT_SNAPSHOT=""
+ANDROID_INPUT_SNAPSHOT_SHA=""
+ANDROID_INPUT_STAGE=""
+ANDROID_INPUT_ARCHIVE=""
+
+verify_android_input_snapshot() {
+  [[ -n "$ANDROID_INPUT_SNAPSHOT" ]] || return 0
+  run_isolated_python "$ROOT_DIR/scripts/mobile_sdk_android_package_inputs.py" verify \
+    --snapshot "$ANDROID_INPUT_SNAPSHOT" --snapshot-sha256 "$ANDROID_INPUT_SNAPSHOT_SHA" \
+    --stage "$ANDROID_INPUT_STAGE" --archive "$ANDROID_INPUT_ARCHIVE"
+}
+
 package_android() {
   local stage_container
   stage_container="$(mktemp -d "$OUT_PARENT/.iroha-mobile-sdk-android-${VERSION}.stage.XXXXXXXX")"
   local stage="$stage_container/iroha-mobile-sdk-android-${VERSION}"
   local stage_checksums="$stage/SHA256SUMS.txt"
   local android_zip="$OUT_DIR/iroha-mobile-sdk-android-${VERSION}.zip"
-  local maven_repo="$ANDROID_MAVEN_REPO_DIR"
-  local client_build_root="$ANDROID_KOTLIN_BUILD_ROOT/client-android"
-  local client_aar="$client_build_root/outputs/aar/client-android-release.aar"
-  local core_jar
+  local client_aar="$ANDROID_KOTLIN_BUILD_ROOT/client-android/outputs/aar/client-android-release.aar"
   local native_mode
-  local generated_native_root
-  local generated_native_provenance
-  local rel
-
-  MOBILE_SDK_ANDROID_ARTIFACT_DIR="$ANDROID_ARTIFACT_DIR" \
-    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --android-only --require-built-android
+  local snapshot="$stage_container/android-source-inputs.json"
+  local snapshot_sha
   native_mode="$(resolve_android_native_mode "$client_aar")"
-  generated_native_root="$client_build_root/generated/jniLibs/$native_mode"
-  generated_native_provenance="$client_build_root/generated/nativeProvenance/$native_mode/iroha/native-build-provenance-v1.json"
-  mkdir -p "$stage"
+
+  # Capture the complete same-version input graph before the actual native
+  # checker, then require its original identities/bytes to remain unchanged.
+  snapshot_sha="$(run_isolated_python "$ROOT_DIR/scripts/mobile_sdk_android_package_inputs.py" capture \
+    --root "$ROOT_DIR" --artifact-dir "$ANDROID_ARTIFACT_DIR" \
+    --maven-repo "$ANDROID_MAVEN_REPO_DIR" --version "${VERSION#v}" \
+    --native-mode "$native_mode" --snapshot "$snapshot")"
+  MOBILE_SDK_ANDROID_ARTIFACT_DIR="$ANDROID_ARTIFACT_DIR" \
+    MOBILE_SDK_MAVEN_VERSION="${VERSION#v}" \
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --android-only --require-built-android
+  run_isolated_python "$ROOT_DIR/scripts/mobile_sdk_android_package_inputs.py" verify \
+    --snapshot "$snapshot" --snapshot-sha256 "$snapshot_sha"
+  mkdir -m 700 "$stage"
   : > "$stage_checksums"
-
-  core_jar="$(resolve_core_jar)"
-  copy_android_artifact \
-    "$core_jar" \
-    "core-jvm/$(basename "$core_jar")" \
-    "$stage" \
-    "$stage_checksums"
-  copy_android_artifact \
-    "$client_aar" \
-    "client-android/client-android-release.aar" \
-    "$stage" \
-    "$stage_checksums"
-  copy_android_artifact \
-    "$generated_native_root/arm64-v8a/libconnect_norito_bridge.so" \
-    "native/arm64-v8a/libconnect_norito_bridge.so" \
-    "$stage" \
-    "$stage_checksums"
-  copy_android_artifact \
-    "$generated_native_root/x86_64/libconnect_norito_bridge.so" \
-    "native/x86_64/libconnect_norito_bridge.so" \
-    "$stage" \
-    "$stage_checksums"
-  copy_android_artifact \
-    "$generated_native_provenance" \
-    "native/native-build-provenance-v1.json" \
-    "$stage" \
-    "$stage_checksums"
-
-  if [[ -d "$maven_repo" ]]; then
-    while IFS= read -r rel; do
-      rel="${rel#./}"
-      copy_android_artifact "$maven_repo/$rel" "maven/$rel" "$stage" "$stage_checksums"
-    done < <(cd "$maven_repo" && find . -type f | sort)
-  fi
-
+  run_isolated_python "$ROOT_DIR/scripts/mobile_sdk_android_package_inputs.py" copy \
+    --snapshot "$snapshot" --snapshot-sha256 "$snapshot_sha" --stage "$stage" > "$stage_checksums"
   (cd "$stage_container" && zip -qr "$android_zip" "$(basename "$stage")")
+  ANDROID_INPUT_SNAPSHOT="$snapshot"
+  ANDROID_INPUT_SNAPSHOT_SHA="$snapshot_sha"
+  ANDROID_INPUT_STAGE="$stage"
+  ANDROID_INPUT_ARCHIVE="$android_zip"
+  verify_android_input_snapshot
   echo "[mobile-sdk-package] retained Android package stage: $stage_container" >&2
   record_artifact "$android_zip" "android-sdk"
 }
 
 publish_package_stage() {
+  verify_android_input_snapshot
   authenticate_package_lock
   run_isolated_python - \
     "$PACKAGE_STAGE_DIR" "$PACKAGE_STAGE_BASELINE" \

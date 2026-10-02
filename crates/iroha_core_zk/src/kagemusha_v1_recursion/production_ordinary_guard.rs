@@ -11,18 +11,25 @@ use super::super::super::{
         KagemushaOrdinaryGuardCircuitParamsV1, OrdinaryGuardWitnessV1,
         build_ordinary_app_guard_pair_v1,
     },
-    ordinary_guard_verifier::{OrdinaryGuardProofWireV1, public_column},
+    ordinary_guard_verifier::{
+        OrdinaryGuardProofWireV1, preparation_digests, public_column, terminal_digests,
+        verify_ordinary_preparation_guard_v1, verify_ordinary_terminal_guard_v1,
+    },
 };
 use super::*;
+use crate::kagemusha_v1_recursion::KagemushaNormalizedGuardStatementV1;
 use crate::kagemusha_v1_state::{
     DigestV1, KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1, KagemushaStateV1,
     verify_ordinary_bootstrap_guard_v1,
 };
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalV1, KagemushaHardwarePlatformClassV1,
-    KagemushaOrdinaryAppCredentialV1,
+    KagemushaOrdinaryAppCredentialV1, KagemushaPlayIntegrityRefreshLeaseV1,
+    KagemushaVerifiedOrdinaryAppCredentialV1,
 };
 use zeroize::Zeroize as _;
 
@@ -56,6 +63,200 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
                 .as_ref(),
         )?;
         Ok(owner)
+    }
+
+    /// Resolve genuine released ordinary keys for the actual retained cash proof selection.
+    /// This private native entry point accepts no decoded owner, time or financial witness.
+    pub(crate) fn load_ordinary_cash(
+        selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        preparation_digests(selection).map_err(owner_error)?;
+        let owner = Self::from_selected_ordinary_release(
+            selection.authenticated_release().map_err(owner_error)?,
+            profile,
+            resolver,
+        )?;
+        owner.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(owner)
+    }
+
+    /// Prove the exact captured purpose2 selection with its separately held financial witness.
+    /// Real paired Guard verification is mandatory before these originals are exposed. A slow
+    /// proof keeps the original admission instant and never renews or reinterprets its approval.
+    pub(crate) fn prove_ordinary_preparation_guard(
+        &self,
+        selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
+    ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        let digests = preparation_digests(selection).map_err(owner_error)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        let (credential, original, lease) = decode_ordinary_originals(
+            selection.enrollment().app_credential().original(),
+            selection.original(),
+            selection
+                .original_approval_integrity_lease()
+                .map(|l| l.original()),
+        )?;
+        let mut entered = false;
+        let mut result = None;
+        selection
+            .with_borrowed_financial_secret(&mut |secret| {
+                if entered {
+                    return Err(
+                        crate::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity,
+                    );
+                }
+                entered = true;
+                result = Some((|| {
+                    let relation = derive_cash_relation(selection, secret)?;
+                    let seed = ordinary_guard_seed(
+                        secret,
+                        original.challenge.operation_id,
+                        original.challenge.nonce,
+                        digests[2],
+                    )?;
+                    self.prove_shared_originals(
+                        &relation.0,
+                        &credential,
+                        &original,
+                        lease.as_ref(),
+                        selection.previous_app_attest_counter(),
+                        digests,
+                        &seed,
+                    )
+                })());
+                Ok(())
+            })
+            .map_err(owner_error)?;
+        let raw = result.ok_or_else(|| proving_error("ordinary cash witness was not lent"))??;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        verify_ordinary_preparation_guard_v1(selection, &raw).map_err(owner_error)?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(raw)
+    }
+
+    /// Resolve actual released ordinary Guard keys for the separately captured purpose1 loan.
+    /// This grants no financial transition, output publication or terminal proof acceptance.
+    pub(crate) fn load_ordinary_terminal(
+        selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+        resolver: R,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        terminal_digests(selection).map_err(owner_error)?;
+        let owner = Self::from_selected_ordinary_release(
+            selection.authenticated_release().map_err(owner_error)?,
+            profile,
+            resolver,
+        )?;
+        owner.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(owner)
+    }
+
+    /// Prove actual purpose1 originals only after separately admitted preparation Guard and State.
+    /// The secret is the genuine Native financial witness; the app key's scalar never enters it.
+    pub(crate) fn prove_ordinary_terminal_guard(
+        &self,
+        selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
+    ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        let digests = terminal_digests(selection).map_err(owner_error)?;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        let (credential, original, lease) = decode_ordinary_originals(
+            selection.enrollment().app_credential().original(),
+            selection.original(),
+            selection
+                .original_approval_integrity_lease()
+                .map(|l| l.original()),
+        )?;
+        let mut entered = false;
+        let mut result = None;
+        selection
+            .with_borrowed_financial_secret(&mut |secret| {
+                if entered {
+                    return Err(
+                        crate::kagemusha_v1_state::KagemushaStateErrorV1::SnapshotIntegrity,
+                    );
+                }
+                entered = true;
+                result = Some((|| {
+                    let relation = derive_terminal_relation(selection, secret)?;
+                    let seed = ordinary_guard_seed(
+                        secret,
+                        original.challenge.operation_id,
+                        original.challenge.nonce,
+                        digests[2],
+                    )?;
+                    self.prove_shared_originals(
+                        &relation.0,
+                        &credential,
+                        &original,
+                        lease.as_ref(),
+                        selection.previous_app_attest_counter(),
+                        digests,
+                        &seed,
+                    )
+                })());
+                Ok(())
+            })
+            .map_err(owner_error)?;
+        let raw =
+            result.ok_or_else(|| proving_error("ordinary terminal witness was not lent"))??;
+        self.require_release_binding(
+            selection
+                .authenticated_release()
+                .map_err(owner_error)?
+                .as_ref(),
+        )?;
+        verify_ordinary_terminal_guard_v1(selection, &raw).map_err(owner_error)?;
+        selection
+            .recheck_selected_originals_and_current_custody()
+            .map_err(owner_error)?;
+        Ok(raw)
     }
 
     /// Prove both real ordinary Guards using the same held platform original and financial seed.
@@ -124,39 +325,53 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         approval: &KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_>,
         secret: &[u8; 32],
     ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
-        let credential: KagemushaOrdinaryAppCredentialV1 =
-            norito::decode_canonical(selection.enrollment().app_credential().original())
-                .map_err(ordinary_proving_error)?;
-        let original: KagemushaAppOperationApprovalV1 =
-            norito::decode_canonical(approval.original()).map_err(ordinary_proving_error)?;
-        let integrity_lease = approval
-            .original_approval_integrity_lease()
-            .map(|lease| {
-                if lease.original().is_empty() || lease.original().len() > 4096 {
-                    return Err(proving_error(
-                        "ordinary retained lease exceeds original bound",
-                    ));
-                }
-                let raw: iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseV1 =
-                    norito::decode_canonical(lease.original()).map_err(ordinary_proving_error)?;
-                if raw.canonical_bytes().map_err(ordinary_proving_error)? != lease.original() {
-                    return Err(proving_error(
-                        "ordinary retained lease canonical original differs",
-                    ));
-                }
-                Ok(raw)
-            })
-            .transpose()?;
-        if credential
-            .canonical_bytes()
-            .map_err(ordinary_proving_error)?
-            != selection.enrollment().app_credential().original()
-            || norito::encode_canonical(&original).map_err(ordinary_proving_error)?
-                != approval.original()
-        {
-            return Err(proving_error("ordinary proof original encoding differs"));
-        }
+        let (credential, original, integrity_lease) = decode_ordinary_originals(
+            selection.enrollment().app_credential().original(),
+            approval.original(),
+            approval
+                .original_approval_integrity_lease()
+                .map(|l| l.original()),
+        )?;
         let relation = derive_relation(selection, secret)?;
+        let digests = [
+            approval.challenge().normalized_guard_digest,
+            selection.enrollment().app_credential().digest(),
+            approval
+                .authorization_binding_digest()
+                .map_err(owner_error)?,
+            approval.challenge().subject_signing_digest,
+            self.release.provider_policy_root(),
+        ];
+        let seed = ordinary_guard_seed(
+            secret,
+            original.challenge.operation_id,
+            original.challenge.nonce,
+            digests[2],
+        )?;
+        self.prove_shared_originals(
+            &relation.0,
+            &credential,
+            &original,
+            integrity_lease.as_ref(),
+            approval.previous_app_attest_counter_floor(),
+            digests,
+            &seed,
+        )
+    }
+
+    // Bootstrap, purpose2 and purpose1 are separately selected before this common mathematical
+    // producer. All arguments are local copies of those closed selections; there is no public
+    // secret/raw witness/callback entry point. The same maintained released circuit relation runs.
+    fn prove_shared_originals(
+        &self,
+        relation: &KagemushaGuardBundleRelationWitnessV1,
+        credential: &KagemushaOrdinaryAppCredentialV1,
+        original: &KagemushaAppOperationApprovalV1,
+        integrity_lease: Option<&KagemushaPlayIntegrityRefreshLeaseV1>,
+        previous_app_attest_counter: Option<u32>,
+        digests: [DigestV1; 5],
+        seed: &KagemushaRecoverySeedV1,
+    ) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1> {
         let eq_parameters = self.artifacts.load_eq_params()?;
         let ep_parameters = self.artifacts.load_ep_params()?;
         let root = self.release.provider_policy_root();
@@ -232,11 +447,11 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             &eq_parameters,
             &ep_parameters,
             OrdinaryGuardWitnessV1 {
-                relation: &relation.0,
-                credential: &credential,
-                approval: &original,
-                previous_app_attest_counter: approval.previous_app_attest_counter_floor(),
-                integrity_lease: integrity_lease.as_ref(),
+                relation,
+                credential,
+                approval: original,
+                previous_app_attest_counter,
+                integrity_lease,
             },
             root,
             table,
@@ -255,36 +470,15 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             initial_kagemusha_eq_accumulator_v1(&eq_parameters).map_err(ordinary_proving_error)?;
         let ep_history =
             initial_kagemusha_ep_accumulator_v1(&ep_parameters).map_err(ordinary_proving_error)?;
-        let digests = [
-            approval.challenge().normalized_guard_digest,
-            selection.enrollment().app_credential().digest(),
-            approval
-                .authorization_binding_digest()
-                .map_err(owner_error)?,
-            approval.challenge().subject_signing_digest,
-            root,
-        ];
         let eq_instances = public_column::<Fp>(digests, eq_history.as_bytes());
         let ep_instances = public_column::<Fq>(digests, ep_history.as_bytes());
-        let mut seed = Sha256::new();
-        seed.update(b"iroha:kagemusha:v1:ordinary-guard-native-recovery-seed\0");
-        seed.update(secret);
-        seed.update(approval.challenge().operation_id);
-        seed.update(approval.challenge().nonce);
-        seed.update(
-            approval
-                .authorization_binding_digest()
-                .map_err(owner_error)?,
-        );
-        let seed = KagemushaRecoverySeedV1::from_unsealed(seed.finalize().into())
-            .map_err(ordinary_proving_error)?;
         let eq_proof = create_eq_proof_with_key_v1(
             &eq_parameters,
             &eq_pk,
             eq_circuit,
             &eq_instances,
             KagemushaProofRecoveryPhaseV1::OrdinaryAppGuard,
-            &seed,
+            seed,
         )?;
         let ep_proof = create_ep_proof_with_key_v1(
             &ep_parameters,
@@ -292,7 +486,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             ep_circuit,
             &ep_instances,
             KagemushaProofRecoveryPhaseV1::OrdinaryAppGuard,
-            &seed,
+            seed,
         )?;
         let material = self.verifier.ordinary_guard_verifier_material();
         let wire = OrdinaryGuardProofWireV1 {
@@ -332,14 +526,38 @@ pub(super) fn derive_relation(
             "native financial witness does not open ordinary enrollment",
         ));
     }
+    let mut relation = HeldRelation(public_relation(selection)?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
+    relation.0.validate().map_err(ordinary_proving_error)?;
+    Ok(relation)
+}
+
+pub(super) fn public_relation(
+    selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
+) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
     let release = selection.authenticated_release().map_err(owner_error)?;
+    let preview = selection.preview().map_err(owner_error)?;
+    public_relation_for_selected_state(
+        selection.enrollment().app_credential(),
+        &release,
+        &preview.state,
+        &preview.normalized_guard_statement,
+    )
+}
+
+fn public_relation_for_selected_state(
+    credential: &KagemushaVerifiedOrdinaryAppCredentialV1,
+    release: &iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1,
+    state: &KagemushaStateV1,
+    normalized: &KagemushaNormalizedGuardStatementV1,
+) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
+    let s = credential.subject();
     let policy = release
         .provider_policy()
         .iter()
         .find(|p| p.hardware_profile_id == s.hardware_profile_id)
         .ok_or_else(|| proving_error("ordinary profile is not independently released"))?;
-    let preview = selection.preview().map_err(owner_error)?;
-    let state = &preview.state;
     let platform_tag = match s.platform_class {
         KagemushaHardwarePlatformClassV1::AppleAppAttest => 4,
         KagemushaHardwarePlatformClassV1::AndroidKeyMint => 5,
@@ -373,16 +591,131 @@ pub(super) fn derive_relation(
         canonical_empty_effect_digest: canonical_empty_durable_effect(&release)?,
         provider_profile_index: policy.provider_profile_index,
     };
-    let relation = HeldRelation(KagemushaGuardBundleRelationWitnessV1 {
-        statement: preview.normalized_guard_statement.clone(),
+    let relation = KagemushaGuardBundleRelationWitnessV1 {
+        statement: *normalized,
         canonical_empty_effect_digest: projection.canonical_empty_effect_digest,
         predecessor_credential: projection,
         successor_credential: projection,
-        predecessor_device_authority_secret: *secret,
-        successor_device_authority_secret: *secret,
-    });
+        predecessor_device_authority_secret: [0; 32],
+        successor_device_authority_secret: [0; 32],
+    };
+    Ok(relation)
+}
+
+pub(super) fn derive_cash_relation(
+    selection: &KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
+    secret: &[u8; 32],
+) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
+    selection
+        .recheck_selected_originals_and_current_custody()
+        .map_err(owner_error)?;
+    preparation_digests(selection).map_err(owner_error)?;
+    let credential = selection.enrollment().app_credential();
+    if super::super::super::device_authority_commitment_v1(*secret)
+        != credential.subject().financial_authority_commitment
+    {
+        return Err(proving_error(
+            "native cash witness does not open the same enrolled authority",
+        ));
+    }
+    let release = selection.authenticated_release().map_err(owner_error)?;
+    let mut relation = HeldRelation(public_relation_for_selected_state(
+        credential,
+        &release,
+        selection.selected_successor_state(),
+        selection.normalized_guard_statement(),
+    )?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
     relation.0.validate().map_err(ordinary_proving_error)?;
     Ok(relation)
+}
+
+pub(super) fn derive_terminal_relation(
+    selection: &KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_>,
+    secret: &[u8; 32],
+) -> Result<HeldRelation, KagemushaArtifactGenerationErrorV1> {
+    selection
+        .recheck_selected_originals_and_current_custody()
+        .map_err(owner_error)?;
+    terminal_digests(selection).map_err(owner_error)?;
+    let credential = selection.enrollment().app_credential();
+    if super::super::super::device_authority_commitment_v1(*secret)
+        != credential.subject().financial_authority_commitment
+    {
+        return Err(proving_error(
+            "native terminal witness does not open the same enrolled authority",
+        ));
+    }
+    let release = selection.authenticated_release().map_err(owner_error)?;
+    let mut relation = HeldRelation(public_relation_for_selected_state(
+        credential,
+        &release,
+        selection.selected_successor_state(),
+        selection.normalized_guard_statement(),
+    )?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
+    relation.0.validate().map_err(ordinary_proving_error)?;
+    Ok(relation)
+}
+
+pub(super) fn decode_ordinary_originals(
+    credential_original: &[u8],
+    approval_original: &[u8],
+    lease_original: Option<&[u8]>,
+) -> Result<
+    (
+        KagemushaOrdinaryAppCredentialV1,
+        KagemushaAppOperationApprovalV1,
+        Option<KagemushaPlayIntegrityRefreshLeaseV1>,
+    ),
+    KagemushaArtifactGenerationErrorV1,
+> {
+    let credential: KagemushaOrdinaryAppCredentialV1 =
+        norito::decode_canonical(credential_original).map_err(ordinary_proving_error)?;
+    let approval: KagemushaAppOperationApprovalV1 =
+        norito::decode_canonical(approval_original).map_err(ordinary_proving_error)?;
+    if credential
+        .canonical_bytes()
+        .map_err(ordinary_proving_error)?
+        != credential_original
+        || norito::encode_canonical(&approval).map_err(ordinary_proving_error)? != approval_original
+    {
+        return Err(proving_error("ordinary proof original encoding differs"));
+    }
+    let lease = lease_original
+        .map(|raw| {
+            if raw.is_empty() || raw.len() > 4096 {
+                return Err(proving_error(
+                    "ordinary retained lease exceeds original bound",
+                ));
+            }
+            let lease: KagemushaPlayIntegrityRefreshLeaseV1 =
+                norito::decode_canonical(raw).map_err(ordinary_proving_error)?;
+            if lease.canonical_bytes().map_err(ordinary_proving_error)? != raw {
+                return Err(proving_error(
+                    "ordinary retained lease canonical original differs",
+                ));
+            }
+            Ok(lease)
+        })
+        .transpose()?;
+    Ok((credential, approval, lease))
+}
+fn ordinary_guard_seed(
+    secret: &[u8; 32],
+    operation_id: DigestV1,
+    nonce: DigestV1,
+    authorization: DigestV1,
+) -> Result<KagemushaRecoverySeedV1, KagemushaArtifactGenerationErrorV1> {
+    let mut seed = Sha256::new();
+    seed.update(b"iroha:kagemusha:v1:ordinary-guard-native-recovery-seed\0");
+    seed.update(secret);
+    seed.update(operation_id);
+    seed.update(nonce);
+    seed.update(authorization);
+    KagemushaRecoverySeedV1::from_unsealed(seed.finalize().into()).map_err(ordinary_proving_error)
 }
 
 fn canonical_empty_durable_effect(
@@ -400,6 +733,41 @@ fn ordinary_proving_error(error: impl core::fmt::Display) -> KagemushaArtifactGe
 mod tests {
     use super::*;
     use halo2_base::gates::circuit::BaseCircuitParams;
+
+    #[test]
+    fn ordinary_guard_recovery_seed_keeps_exact_native_operation_nonce_and_authorization() {
+        use rand_core_06::RngCore as _;
+        let bytes = |seed: KagemushaRecoverySeedV1| {
+            let mut rng = seed
+                .rng(b"cash-guard-mathematical-seed-test", &[31; 32])
+                .unwrap();
+            let mut bytes = [0; 64];
+            rng.fill_bytes(&mut bytes);
+            bytes
+        };
+        let actual = bytes(ordinary_guard_seed(&[1; 32], [2; 32], [3; 32], [4; 32]).unwrap());
+        let mut expected = Sha256::new();
+        expected.update(b"iroha:kagemusha:v1:ordinary-guard-native-recovery-seed\0");
+        for field in [[1; 32], [2; 32], [3; 32], [4; 32]] {
+            expected.update(field);
+        }
+        assert_eq!(
+            actual,
+            bytes(KagemushaRecoverySeedV1::from_unsealed(expected.finalize().into()).unwrap())
+        );
+        for fields in [
+            ([9; 32], [2; 32], [3; 32], [4; 32]),
+            ([1; 32], [9; 32], [3; 32], [4; 32]),
+            ([1; 32], [2; 32], [9; 32], [4; 32]),
+            ([1; 32], [2; 32], [3; 32], [9; 32]),
+        ] {
+            assert_ne!(
+                actual,
+                bytes(ordinary_guard_seed(&fields.0, fields.1, fields.2, fields.3).unwrap())
+            );
+        }
+        assert!(decode_ordinary_originals(&[], &[], None).is_err());
+    }
 
     #[test]
     fn ordinary_released_packing_checks_every_original_parameter() {

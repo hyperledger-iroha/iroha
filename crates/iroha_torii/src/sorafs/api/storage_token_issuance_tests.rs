@@ -244,7 +244,7 @@ async fn stream_token_enforcement_rejects_temporal_policy_and_binding_attacks() 
         .as_secs();
     let mut cases = Vec::new();
     let mut body = valid.body.clone();
-    body.issued_at = now + MAX_TOKEN_FUTURE_SKEW_SECS + 10;
+    body.issued_at = now + sorafs_manifest::token::STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1 + 10;
     body.ttl_epoch = body.issued_at + 60;
     cases.push((body, StatusCode::UNAUTHORIZED));
     let mut body = valid.body.clone();

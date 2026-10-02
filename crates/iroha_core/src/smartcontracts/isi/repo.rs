@@ -1182,6 +1182,10 @@ mod tests {
             );
             assert!(unowned.world.repo_agreements.get(&agreement_id).is_none());
         }
+        // A refused source poisons its disposable block owner. Start the positive
+        // control from an independent component block over the unchanged State.
+        drop(block);
+        let mut block = state.block(header);
         // The explicit finite callback fixture retains the original direct-execution slot.
         // It authenticates neither a signed Network input nor block publication.
         let mut owned = block.transaction_for_callback_testing();
@@ -1656,8 +1660,13 @@ mod tests {
     }
     #[test]
     fn repo_instruction_box_executes_via_instruction_dispatch() {
-        let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let (component, agreement_id, cash_def_id, collateral_def_id) = setup_state();
+        let state = crate::pipeline::overlay::test_support::state_after_genesis(component.world);
+        let parent = state
+            .view()
+            .latest_block_hash()
+            .expect("original genesis parent");
+        let header = BlockHeader::new(nonzero!(2_u64), Some(parent), None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction_for_callback_testing();
         let repo_instruction =

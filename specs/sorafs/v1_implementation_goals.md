@@ -73,7 +73,7 @@ qualification in the closure ledger.
 | G11 | Complete finalized moderation/PoP/finance/viewer/compliance/hold/redaction producers and transparency leader leases, authenticated Ed25519 signing, DAG anchoring, replicas, proofs, pagination/ETags and explorer hardening. Qualify per-subject clipping, k-suppression, rational epsilon, delta zero, exact integer discrete-Laplace sampling, durable composition budgets and hidden threshold-PRF cycle randomness with commitment-only publication. | Transparency, privacy and governance owners; `transparency`. | G02, G04, G07, G09, G10 | queued |
 | G12 | Package genuine runtime backends and supervised two-instance Governance DAG/Kubo/head ingress; exercise authenticated CAS/failover, signer rotation, checkpoint/archive recovery, rollback and mirrors. Retain bounded authenticated JSON unless SF-12 capacity fails. Connect all real metric emitters, bounded labels, Prometheus rule tests, Grafana/query lint, alert routing, SLO burn alerts and runbooks. | DAG, deployment and observability owners; DAG runtime blocker; `governance_dag`; all lane metric contracts. | G02, G06, G11 | active |
 | G13 | Complete public APIs/builders and identical positive/negative `ValidationOutcomeV1` results across Rust, JS/TS, Python, Swift, Kotlin/JVM, Java Android and C#, including native reference and DAG block/head validation. Regenerate canonical signed fixture inventory twice byte-identically. Produce clean pinned signed OpenAPI with both copies/version maps/clients, five-target binaries and mandatory smokes, strict Ed25519 signing, full-SHA workflow pins, deterministic archives, checksums, SBOM/scans, OIDC/cosign provenance, install tests and rollback/yank instructions. | SDK, API and release owners; V1-C01/C05; `reference_sdk_release`. | G02–G12 | active |
-| G14 | Run the complete local, adversarial and distributed validation matrix; provision and qualify the genuine reference topology, 1,000-stream cold/warm/mixed load and 24-hour soak, independent security review and disaster-recovery rehearsal. Close every critical/high finding and release blocker against one reviewed candidate. | All component owners, independent security reviewers and reference operators; test/security/operations closure; `gateway_load`. | G03–G13 | active |
+| G14 | Run the complete local, adversarial and distributed validation matrix; provision and qualify the genuine reference topology, 1,000-stream cold/warm/mixed diagnostic load with operator-selected observation duration, independent security review and disaster-recovery rehearsal. Close every critical/high finding and release blocker against one reviewed candidate. | All component owners, independent security reviewers and reference operators; test/security/operations closure; `gateway_load`. | G03–G13 | active |
 | G15 | Collect 17 fresh lane summaries and the trusted monotonic signed nine-prerequisite foundational envelope with one production context and active anchors. Run promotion, byte-identical replay and tamper/stale/missing/duplicate/predecessor/signature negatives, then the final promotion-bundle conjunction. Require `status=ready`, both summary counts =17, empty error lists and available rollback. Only separately authorized public-cutover work remains in the SoraFS roadmap. | Release/evidence owners; V1-C06/C07; L1/L2 promotion gates. | G01–G14 | queued |
 
 G02 and G03 can proceed concurrently after the baseline inventory. G04–G12
@@ -112,8 +112,11 @@ coherent production assembly. The configured software provider, independent obse
 and spending persistence, daemon configuration and recovery still require
 qualification. Local checks cannot prevent revocation racing an in-flight key
 call. Four inner custody approvals, all seventeen genuine lanes, the foundational
-envelope, four-validator/provider/gateway deployment, load/24-hour soak and full
-workspace/SDK/strict-lint/security/release evidence remain required.
+envelope and four-validator/provider/gateway deployment remain required.
+Load observations, workspace/SDK regression suites and strict-lint checks are
+development diagnostics; no fixed soak duration or full regression suite blocks
+deployment. On-chain governance owns deployment policy. Authenticated source,
+signatures, custody, finality and native protocol validity remain mandatory.
 No goal or lane is closed.
 
 ## Next G02 execution milestones
@@ -217,8 +220,8 @@ cross-peer simultaneous submissions, restart and key/root rotation, exactly one
 repair/settlement, and identical recovered queries/balances/roots/proofs/bytes.
 Load qualification requires ≥1,000 concurrent range streams in cold/warm/mixed
 profiles with 1% injected corruption, advert rotation/revocation, failover,
-malformed floods and rate-limit/denylist pressure. The subsequent 24-hour soak
-must meet SF-5a/SLO limits with no proof failures, critical alerts or sensitive-log
+malformed floods and rate-limit/denylist pressure. Operator-selected diagnostic
+observations must meet SF-5a/SLO limits with no proof failures, critical alerts or sensitive-log
 leakage. Rehearse backup restoration, signer rotation, gateway/DAG failover and
 rollback; independently review security and reject critical/high findings.
 

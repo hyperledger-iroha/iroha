@@ -108,21 +108,26 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
         (LaneId::new(1), DataSpaceId::new(7)),
     ]));
     let signed = TransactionBuilder::new(
-        *fixture.state.network_id_ref(), fixture.authority_id.clone(),
+        *fixture.state.network_id_ref(),
+        fixture.authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ).with_instructions([
-        Register::domain(Domain::new(DomainId::try_new("coordinator", "universal").unwrap())),
-        Register::domain(Domain::new(DomainId::try_new("participant", "test-dataspace-7").unwrap())),
-    ]).sign(fixture.authority_keypair.private_key());
+    )
+    .with_instructions([
+        Register::domain(Domain::new(
+            DomainId::try_new("coordinator", "universal").unwrap(),
+        )),
+        Register::domain(Domain::new(
+            DomainId::try_new("participant", "test-dataspace-7").unwrap(),
+        )),
+    ])
+    .sign(fixture.authority_keypair.private_key());
     let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
     let queue = Queue::test(config_factory(), &time);
     let actual = queue.route_plan_with_state(&tx, &fixture.state).unwrap();
     assert!(!matches!(actual, RoutingPlan::Single(_)));
     for boundary in 0..3 {
         let failure = match boundary {
-            0 => queue
-                .push(tx.clone(), fixture.state.view())
-                .map(|_| ()),
+            0 => queue.push(tx.clone(), fixture.state.view()).map(|_| ()),
             1 => queue
                 .push_with_lane_with_state_and_routing_plan(
                     tx.clone(),
@@ -158,22 +163,65 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
 
 #[test]
 fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
-    let busy_route = RoutingDecision::default();
+    use crate::sumeragi::{
+        lanes::{executor::LaneTransactions, global::QueueLaneTransactions},
+        test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators},
+    };
+    use iroha_data_model::sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
+    };
+    let busy_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
     let mut nexus = test_nexus_for_routes(&[
         (busy_route.lane_id, busy_route.dataspace_id),
-        (LaneId::new(1), DataSpaceId::new(7)),
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
     ]);
     nexus.routing_policy.default_lane = busy_route.lane_id;
     nexus.routing_policy.default_dataspace = busy_route.dataspace_id;
-    let NexusRoutingFixture {
-        mut state,
-        authority_id,
-        authority_keypair,
-    } = nexus_routing_fixture_with_nexus(nexus);
-    install_single_validator_topology_for_queue_test(&mut state, 0xB8);
+    let (authority_id, authority_keypair) = gen_account_in("full-block-gas-lane");
+    let mut committee = fixture_validators()
+        .into_iter()
+        .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+        .collect::<Vec<_>>();
+    committee.sort();
+    let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+        anchor_freshness: 4,
+        max_merge_blocks: 8,
+        stall_window: 1000,
+        lane_params: Default::default(),
+        fixed: vec![SumeragiFixedLane {
+            lane: busy_route.lane_id,
+            dataspace: busy_route.dataspace_id,
+            committee,
+        }],
+        routes: Vec::new(),
+        autoscale: None,
+    };
+    let world = World::with(
+        [],
+        [Account::new(authority_id.clone()).build(&authority_id)],
+        [],
+    );
+    let mut config = TestChainConfig::new(world, 1000);
+    config.nexus = Some(nexus);
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(policy.into_custom_parameter()));
+    let mut chain = CertifiedTestChain::start(config).expect("original signed native lane policy");
+    chain.commit_at(2000, Vec::new());
+    chain.commit_at(3000, Vec::new());
+    let state = Arc::clone(chain.state());
+    assert!(
+        state
+            .world_view()
+            .sumeragi_lanes()
+            .lane(busy_route.lane_id)
+            .unwrap()
+            .admits_anchor(3)
+    );
     assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 2);
     let block_gas = crate::state::gas_limit_from_parameters(state.world_view().parameters());
-    let (_, time) = TimeSource::new_mock(Duration::ZERO);
+    let (_, time) = TimeSource::new_mock(Duration::from_millis(3001));
     let queue = Arc::new(Queue::test(config_factory(), &time));
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         state.network_id_ref(),
@@ -213,36 +261,38 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
     let plan = queue.route_plan_with_state(&accepted, &state).unwrap();
     assert_eq!(plan, RoutingPlan::single(busy_route));
     queue
-        .push_with_lane_with_state_and_routing_plan(accepted, &state, plan.clone())
+        .push_with_lane_with_state_and_routing_plan(accepted.clone(), &state, plan.clone())
         .unwrap();
-    // The physical application fixture alone grants no native root route.
-    assert!(crate::sumeragi::payload::select(&state, &queue, max_bytes, 0).expect("completed routing read").is_empty());
-    {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-    }
-    assert_eq!(crate::sumeragi::lanes::routing::committed_root_scope(&state.world_view()),
-        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global));
-    // Explicit component root metadata permits selection; it does not authenticate
-    // genesis execution or grant finality. The actual gas and input owners stay intact.
+    let lane_inputs =
+        QueueLaneTransactions::new(busy_route.lane_id, Arc::clone(&queue), Arc::clone(&state));
+    // Fresh native-lane work belongs to its lane, while idle catalog lanes do
+    // not divide this original input's gas budget or transfer pending ownership.
     for _ in 0..2 {
-        let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes, 0).expect("completed routing read");
+        assert!(
+            crate::sumeragi::payload::select(&state, &queue, max_bytes, 0)
+                .expect("completed original routing read")
+                .is_empty(),
+            "the global chain cannot steal fresh native-lane work"
+        );
+        let selected = lane_inputs
+            .candidates(4, max_bytes, &BTreeSet::new())
+            .expect("completed original lane routing read");
         assert_eq!(
             selected.len(),
             1,
             "an idle catalog route must not split the gas budget"
         );
+        let original_signed: &SignedTransaction = accepted.as_ref();
+        assert_eq!(&selected[0], original_signed);
+        let pending = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+            .unwrap();
+        assert_eq!(pending.len(), 1);
         assert_eq!(
-            selected[0].entrypoint_bytes().as_slice(),
+            pending[0].entrypoint_bytes().as_slice(),
             original.as_slice()
         );
-        assert_eq!(
-            Queue::compute_proposal_gas_cost(&selected[0]),
-            Ok(block_gas)
-        );
+        assert_eq!(Queue::compute_proposal_gas_cost(&pending[0]), Ok(block_gas));
         assert_eq!(queue.routing_plans.get(&hash).unwrap().value(), &plan);
         assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
     }
@@ -301,7 +351,8 @@ fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack(
     let assert_retained = || {
         assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
         for _ in 0..2 {
-            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0).expect("completed routing read");
+            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0)
+                .expect("completed routing read");
             assert_eq!(
                 selected
                     .iter()

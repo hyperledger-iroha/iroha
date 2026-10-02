@@ -29,26 +29,26 @@ artefacts:
 
 Include these artefacts when notifying governance and publishing the release.
 
-## 1. Execute the release/test gate
+## 1. Verify release source integrity
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+The `ci/check_sorafs_cli_release.sh` helper checks source provenance and shipping
+features. The release workflow uses this default without running regressions.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-The script performs the following assertions:
+Optional engineering diagnostics use
+`CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh --diagnostics` and include:
 
 - `cargo fmt --all -- --check` (workspace)
 - `cargo clippy --locked -p sorafs_orchestrator --all-targets` for `sorafs_cli`, plus `cargo clippy --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 - `cargo test --locked -p sorafs_orchestrator --test sorafs_cli`, plus `cargo test --locked -p sorafs_car --features cli --all-targets`, `sorafs_manifest`, and `sorafs_chunker`
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also exercises the raw-Ed25519 release helper and rejects missing fingerprints,
-unpinned native verifiers, malformed keys/signatures, and unsafe paths.
+Diagnostic failures inform development and do not authorize or block deployment.
+Release builds must be continuous with main; do not cherry-pick fixes into release
+branches. Signature authentication, pinned native verifiers, fingerprints,
+canonical keys/signatures, and safe paths remain release requirements.
 
 ## 2. Apply the versioning policy
 

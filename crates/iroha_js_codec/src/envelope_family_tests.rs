@@ -197,11 +197,11 @@ const ROUTING_CASES: [(&str, &str); 52] = [
     ),
     (
         r#"{"RegisterSmartContractBytes":{}}"#,
-        "RegisterSmartContractBytes.artifact_id field missing",
+        "RegisterSmartContractBytes must contain exactly [artifact_id, code]; missing [artifact_id, code], unexpected []",
     ),
     (
         r#"{"RemoveSmartContractBytes":{}}"#,
-        "RemoveSmartContractBytes.artifact_id field missing",
+        "RemoveSmartContractBytes must contain exactly [artifact_id]; missing [artifact_id], unexpected []",
     ),
     (r#"{"zk":{}}"#, "unsupported zk instruction variant"),
     (

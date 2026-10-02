@@ -1,6 +1,6 @@
 //! Canonical wallet identities and native client configuration backed by private immutable files.
 
-use crate::custody_fs::{PrivateDirectory, read_external, resolved_target};
+use crate::custody_fs::{PrivateDirectory, read_external, remove_pending, resolved_target};
 use eyre::{Result, bail, eyre};
 use iroha::{
     config::Config,
@@ -10,6 +10,7 @@ use iroha::{
     },
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
+use iroha_fs::PublishMode;
 use iroha_model_base::chain::ChainId;
 use norito::json;
 use std::{
@@ -128,7 +129,8 @@ pub struct WalletStore {
 /// Derive the platform's persistent user-data wallet directory without consulting a project.
 ///
 /// macOS uses `~/Library/Application Support/Iroha/wallets`; other Unix platforms use
-/// `$XDG_DATA_HOME/iroha/wallets` or `~/.local/share/iroha/wallets`.
+/// `$XDG_DATA_HOME/iroha/wallets` or `~/.local/share/iroha/wallets`. Windows uses
+/// `%LOCALAPPDATA%/Iroha/wallets`, alongside the native developer state directory.
 ///
 /// # Errors
 /// Returns an error when the platform has no convention or its user-data base is absent/relative.
@@ -150,9 +152,16 @@ pub fn default_wallet_dir() -> Result<PathBuf> {
             &[".local", "share", "iroha", "wallets"],
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        bail!("private wallet custody requires a supported Unix user-data directory")
+        data_root(
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            &["Iroha", "wallets"],
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        bail!("private wallet custody requires a supported native user-data directory")
     }
 }
 
@@ -208,7 +217,7 @@ impl WalletStore {
 
     /// Return the absolute persistent wallet collection directory.
     pub fn root(&self) -> &Path {
-        &self.directory.path
+        self.directory.path()
     }
 
     /// Return one validated wallet's reusable native client file.
@@ -229,7 +238,7 @@ impl WalletStore {
         let (_, wallet) = self.read_record(name)?;
         let operations = wallet.ensure_child("operations")?;
         for _ in 0..16 {
-            let path = operations.path.join(format!(
+            let path = operations.path().join(format!(
                 "{kind}-{}",
                 hex::encode(rand::random::<[u8; 16]>())
             ));
@@ -257,6 +266,25 @@ impl WalletStore {
         let key =
             KeyPair::try_random().map_err(|_| eyre!("native wallet key generation failed"))?;
         self.install(name, network, &key)
+    }
+
+    /// Publish an existing native owner key under an independently supplied public network.
+    ///
+    /// This preserves the canonical account across child and parent ledgers. Only the key pair
+    /// is imported; listener tokens, endpoints and other child credentials cannot be forwarded.
+    /// The new client configuration is built from `network` and native wallet defaults.
+    ///
+    /// # Errors
+    /// Rejects invalid names or network context, existing wallets, and unsafe private storage.
+    pub fn import_key_pair(
+        &self,
+        name: &str,
+        network: &WalletNetwork,
+        key: &KeyPair,
+    ) -> Result<WalletInfo> {
+        validate_name(name)?;
+        network.validate()?;
+        self.install(name, network, key)
     }
 
     /// Import one canonical native private key from an owner-private regular file.
@@ -315,7 +343,7 @@ impl WalletStore {
     /// Rejects an absent, malformed, substituted, or unsafe wallet directory/configuration.
     pub fn show(&self, name: &str) -> Result<WalletInfo> {
         let (record, _) = self.read_record(name)?;
-        record.info(self.directory.path.join(name).join("client.toml"))
+        record.info(self.directory.path().join(name).join("client.toml"))
     }
 
     /// List public identities in canonical name order without reading any private keys.
@@ -325,7 +353,7 @@ impl WalletStore {
     pub fn list(&self) -> Result<Vec<WalletInfo>> {
         self.directory.revalidate()?;
         let mut names = Vec::new();
-        for (index, entry) in fs::read_dir(&self.directory.path)?.enumerate() {
+        for (index, entry) in fs::read_dir(self.directory.path())?.enumerate() {
             if index >= MAX_WALLETS {
                 bail!("wallet collection exceeds its fixed entry bound");
             }
@@ -359,7 +387,7 @@ impl WalletStore {
         let (record, directory) = self.read_record(name)?;
         let source = render_config(&record, None)?;
         let (config, _) = Config::load_bytes_with_musubi_publication(
-            directory.path.join("client.toml"),
+            directory.path().join("client.toml"),
             source.as_bytes(),
         )
         .map_err(|_| eyre!("retained native wallet configuration is invalid"))?;
@@ -378,7 +406,7 @@ impl WalletStore {
 
     fn read_record(&self, name: &str) -> Result<(WalletRecord, PrivateDirectory)> {
         validate_name(name)?;
-        let directory = self.directory.child(name, false)?;
+        let directory = self.directory.open_child(name)?;
         let bytes = directory.read("wallet.json", MAX_INFO_BYTES)?;
         let record: WalletRecord =
             json::from_slice(&bytes).map_err(|_| eyre!("wallet public record is invalid"))?;
@@ -409,24 +437,32 @@ impl WalletStore {
             json::to_vec(&record).map_err(|_| eyre!("cannot encode wallet identity"))?;
         let client = render_config(&record, None)?;
         let pending = format!(".pending-{}", hex::encode(rand::random::<[u8; 16]>()));
-        let directory = self.directory.child(&pending, true)?;
+        let directory = self.directory.create_child(&pending)?;
+        let identity = directory.identity()?;
         let result = (|| -> Result<()> {
             let secret = Zeroizing::new(format!(
                 "{}\n",
                 ExposedPrivateKey(key.private_key().clone())
             ));
-            directory.write_new("private.key", secret.as_bytes())?;
-            directory.write_new("client.toml", client.as_bytes())?;
-            directory.write_new("wallet.json", &public_bytes)?;
-            self.directory.publish(&directory, name)
+            directory.write_atomic("private.key", secret.as_bytes(), PublishMode::CreateNew)?;
+            directory.write_atomic("client.toml", client.as_bytes(), PublishMode::CreateNew)?;
+            directory.write_atomic("wallet.json", &public_bytes, PublishMode::CreateNew)?;
+            directory.sync()?;
+            Ok(())
         })();
         if let Err(error) = result {
-            // Remove only this still-unpublished private directory. A completed rename is never
-            // rolled back merely because a later directory sync reported an error.
-            if directory.revalidate().is_ok() {
-                self.directory.remove_pending(&directory)?;
-            }
+            remove_pending(&self.directory, directory)?;
             return Err(error);
+        }
+        if let Err(error) = directory.rename_to_sibling(name, PublishMode::CreateNew) {
+            // Publication can succeed before a later durability failure. Remove only the
+            // original still-unpublished identity, never a completed wallet or a substitute.
+            if let Ok(unpublished) = self.directory.open_child(&pending)
+                && unpublished.identity()? == identity
+            {
+                remove_pending(&self.directory, unpublished)?;
+            }
+            return Err(error.into());
         }
         self.show(name)
     }
@@ -558,3 +594,7 @@ fn resolve_import_sources(table: &mut toml::Table, path: &Path) -> Result<()> {
 #[cfg(all(test, unix))]
 #[path = "custody_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "custody_native_tests.rs"]
+mod native_tests;

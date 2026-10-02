@@ -1140,3 +1140,7 @@ mod ownership_summary_tests;
 #[cfg(test)]
 #[path = "call_frame/initialization_transition_tests.rs"]
 mod initialization_transition_tests;
+
+#[cfg(test)]
+#[path = "call_frame/native_equation_fixture_tests.rs"]
+pub(crate) mod native_equation_fixture_tests;

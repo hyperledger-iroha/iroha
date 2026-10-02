@@ -206,7 +206,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
         canonicalReply: Data(), authenticator: Data(), requestID: requestID)
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
+      core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try provider.prepareProveCommitPayment(
       operationID: preparation.operationID, canonicalRequest: f.archive.paymentRequest)) { error in
       XCTAssertEqual(error as? KagemushaAuthenticatedHardwareProviderErrorV1,
@@ -245,7 +245,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
           authenticator: responseSignature(operation), requestID: requestID)
       }
       return KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-        core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
+        core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     }
     let wallet = try KagemushaWalletV1.open(provider: provider(aggregate: f.aggregate),
       allowBootstrap: { false })
@@ -384,7 +384,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       return try testAuthenticatedDeviceResponse(operation: operation, status: .success,
         canonicalReply: operation == 1 ? qualificationReply : requestReply, authenticator: responseSignature(operation), requestID: requestID)
     }
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertEqual(try provider.createPaymentRequest(operationID: request.requestID, recipient: request.recipient,
       amount: request.amount, validityWindowMS: request.expiresAtMS - request.issuedAtMS), f.archive.paymentRequest)
     XCTAssertEqual(admitted.map { $0.0 }, [1, 22])
@@ -429,7 +429,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       return try testAuthenticatedDeviceResponse(operation: operation, status: .unavailable,
         canonicalReply: Data(), authenticator: Data(), requestID: requestID)
     }
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try provider.recordAcknowledgement(creditID: f.terminalID,
       canonicalRequest: f.archive.paymentRequest, canonicalPayment: f.archive.payment,
       canonicalAcknowledgement: f.archive.acknowledgement)) { error in
@@ -503,10 +503,10 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       }
     }
     let original = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try original.rotateHardwareEpoch())
     let restarted = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertEqual(try restarted.rotateHardwareEpoch(), installed)
     XCTAssertEqual(rotationRequests.count, 2)
     XCTAssertEqual(rotationRequests[0], rotationRequests[1])
@@ -527,7 +527,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     let reopenedEndpoint = Endpoint()
     reopenedEndpoint.responseHandler = endpoint.responseHandler
     let reopened = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(reopenedEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      core: try adapter(reopenedEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     store.failAfterSave = true
     XCTAssertThrowsError(try reopened.recover())
     let interrupted = try XCTUnwrap(store.records.values.first { $0.operation == 19 })
@@ -603,12 +603,12 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
           canonicalReply: bytes, authenticator: responseSignature(observed), requestID: id)
       }
       let original = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-        intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+        intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
       if operation == 19 { XCTAssertThrowsError(try original.rotateHardwareEpoch()) }
       else { XCTAssertThrowsError(try original.foldPendingCredit(selector: selector)) }
       XCTAssertNil(store.records.values.first?.canonicalReply)
       let restarted = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-        intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+        intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
       XCTAssertEqual(try restarted.recover().aggregateState, installed)
       XCTAssertEqual(commands.count, 2)
       XCTAssertEqual(commands[0], commands[1])
@@ -661,7 +661,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     }
     func provider() throws -> KagemushaAuthenticatedHardwareProviderV1 {
       KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-        intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+        intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     }
     XCTAssertThrowsError(try provider().createPaymentRequest(operationID: request.requestID,
       recipient: request.recipient, amount: request.amount,
@@ -726,14 +726,14 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       return endpoint
     }
     let original = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint(seed: 40)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      core: try adapter(endpoint(seed: 40)), intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try original.recover())
     XCTAssertNil(try original.recover().aggregateState)
     XCTAssertTrue(store.records.isEmpty, "Reads never allocate durable host intents")
     replayOld = true
     let staleResponseEndpoint = endpoint(seed: 80)
     let recreated = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(staleResponseEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      core: try adapter(staleResponseEndpoint), intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try recreated.recover(), "Prior-owner signature cannot satisfy the new nonce")
     let callsBeforeReopen = staleResponseEndpoint.calls
     let requestsBeforeReopen = requests.count
@@ -744,7 +744,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertEqual(staleResponseEndpoint.closeCalls, 1)
     XCTAssertEqual(requests.count, requestsBeforeReopen, "Revoked owner cannot issue another device read")
     let reopened = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint(seed: 120)), intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      core: try adapter(endpoint(seed: 120)), intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertNil(try reopened.recover().aggregateState)
     XCTAssertEqual(Set(requests).count, 4)
     XCTAssertTrue(store.records.isEmpty)
@@ -806,7 +806,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       return response
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try provider.prepareProveCommitPayment(operationID: id,
       canonicalRequest: fixture.archive.paymentRequest))
     XCTAssertEqual(operations, [1, 5, 5])
@@ -878,7 +878,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       return response
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: try adapter(endpoint),
-      intentOwner: KagemushaOperationIntentOwnerV1(store: store))
+      intentOwner: KagemushaOperationIntentOwnerV1(store: store), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try provider.prepareProveCommitPayment(operationID: id,
       canonicalRequest: fixture.archive.paymentRequest))
     XCTAssertEqual(operations, [1, 5, 7, 7])
@@ -961,19 +961,40 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.calls, 3)
   }
 
-  func testMissingIncomingEvidenceProviderRefusesBeforeNativePreparationOrPhysicalDispatch() throws {
-    let endpoint = Endpoint(), f = try Fixture()
-    var dispatches = 0
+  func testRefusingIncomingOriginalOwnerCannotCompletePreparedWorkOrDispatchDevice() throws {
+    final class RefusingOriginals: KagemushaIncomingFoldEvidenceProviderV1 {
+      var checks = 0, acquisitions = 0
+      func recheckOriginals(for work: KagemushaNativeIncomingFoldWorkV1) throws {
+        checks += 1
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+      func originalEvidence(for work: KagemushaNativeIncomingFoldWorkV1) throws -> KagemushaOriginalIncomingFoldEvidenceV1 {
+        acquisitions += 1
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+    }
+    let endpoint = Endpoint(), f = try Fixture(), evidence = RefusingOriginals()
+    let selector = try KagemushaPendingCreditSelectorV1(kind: .receive, creditID: digest(41))
+    let fields = try incomingFields(selector.creditID)
+    var preparations = 0, completions = 0, dispatches = 0
+    endpoint.responseHandler = { method, _ in
+      if method == .prepareIncomingFold { preparations += 1; return fields }
+      if method == .completeIncomingFold { completions += 1 }
+      throw TestError.unexpectedCall
+    }
     let transport = Transport(qualification: try f.qualification) { _, _, _, _ in
       dispatches += 1; throw TestError.unexpectedCall
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint), intentOwner: testOperationIntentOwner())
-    let selector = try KagemushaPendingCreditSelectorV1(kind: .receive, creditID: digest(41))
-    XCTAssertThrowsError(try provider.foldPendingCredit(selector: selector)) {
-      XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+      core: try adapter(endpoint), intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: evidence)
+    for _ in 0..<2 {
+      XCTAssertThrowsError(try provider.foldPendingCredit(selector: selector)) {
+        XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
+      }
     }
-    XCTAssertEqual(endpoint.calls, 0); XCTAssertEqual(dispatches, 0)
+    XCTAssertEqual(preparations, 1); XCTAssertEqual(endpoint.calls, 1)
+    XCTAssertEqual(evidence.checks, 2); XCTAssertEqual(evidence.acquisitions, 0)
+    XCTAssertEqual(completions, 0); XCTAssertEqual(dispatches, 0)
   }
 
   func testIncomingFoldRetainsNativeProofAndOriginalEvidenceThroughUncertainCompletionAndSnapshot() throws {
@@ -1041,7 +1062,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       dispatches += 1; throw TestError.unexpectedCall
     }
     let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport,
-      core: try adapter(endpoint), intentOwner: owner)
+      core: try adapter(endpoint), intentOwner: owner, incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     XCTAssertThrowsError(try provider.recover()) {
       XCTAssertEqual($0 as? KagemushaCoreCoordinatorErrorV1, .unavailable)
     }

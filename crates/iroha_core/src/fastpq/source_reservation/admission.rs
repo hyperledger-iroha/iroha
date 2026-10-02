@@ -1,8 +1,9 @@
-//! Checked ordinary/mandatory source ledgers prepared from one frozen policy.
+//! Checked ordinary/native/mandatory source ledgers prepared from one frozen policy.
 //!
 //! State freezes the authenticated profile before block-start work. Its execution
-//! producer retains ordinary E; the retained governance sweep owns the disjoint
-//! mandatory pool. Caller-supplied hashes alone never grant invocation authority.
+//! producer retains ordinary E; the original SNS Time sweep owns the native pool
+//! and the retained governance sweep owns the mandatory pool. Caller-supplied
+//! hashes alone never grant invocation authority.
 
 use iroha_crypto::Hash;
 use iroha_data_model::parameter::{
@@ -19,19 +20,22 @@ use crate::fastpq::FastpqSourceStatementBuildLimits;
 use iroha_data_model::fastpq::TransferTranscript;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Two disjoint pools whose combined ceilings fit the authenticated block policy.
-/// Ordinary work cannot consume retained mandatory capacity, even before a sweep.
+/// Three disjoint pools whose combined ceilings fit the authenticated block policy.
+/// Native maintenance cannot consume trigger or retained governance capacity.
 pub(crate) struct PreparedSourceQuota {
     ordinary: EntryBundleReservationLedger,
+    native: EntryBundleReservationLedger,
     mandatory: EntryBundleReservationLedger,
     ordinary_context: ReservationContext,
+    native_context: ReservationContext,
     mandatory_context: ReservationContext,
     #[cfg(test)]
     ordinary_ceiling: SourceUsage,
     #[cfg(test)]
+    native_ceiling: SourceUsage,
+    #[cfg(test)]
     mandatory_ceiling: SourceUsage,
     profile: FastpqSourcePolicyV1,
-    sns_time_started: bool,
 }
 
 /// Disposable physical contribution whose failed preparation cannot be ignored.
@@ -100,14 +104,16 @@ enum SourceQuotaFailure {
     Invariant(String),
 }
 
-/// Both pool journals stay owned by the same physical State overlay.
+/// All three pool journals stay owned by the same physical State overlay.
 /// Logical ordinary E was retained by the producer before opening this scope.
 pub(crate) struct SourceQuotaTransaction<'a> {
     ordinary: Option<EntryBundleReservationTransaction<'a>>,
+    native: Option<EntryBundleReservationTransaction<'a>>,
     mandatory: Option<EntryBundleReservationTransaction<'a>>,
+    // Set only after the original SNS sweep permit and live quote are authenticated.
+    // Merely authorizing a purpose does not retain an unapplied E entry.
+    native_purpose: Option<Hash>,
     allow_governance_purposes: bool,
-    sns_purpose: Option<(Hash, EntryBundleOwner)>,
-    sns_time_started: bool,
     failed: bool,
     failure: Option<SourceQuotaFailure>,
 }
@@ -117,10 +123,10 @@ impl SourceQuotaTransaction<'_> {
     pub(crate) fn unavailable(error: String) -> Self {
         Self {
             ordinary: None,
+            native: None,
             mandatory: None,
+            native_purpose: None,
             allow_governance_purposes: false,
-            sns_purpose: None,
-            sns_time_started: false,
             failed: true,
             failure: Some(SourceQuotaFailure::Invariant(error)),
         }
@@ -163,13 +169,10 @@ impl SourceQuotaTransaction<'_> {
         if self.failed {
             return Err("FASTPQ source transaction was poisoned".into());
         }
-        let journal = if protocol_purpose {
-            if !self.allow_governance_purposes
-                && !self
-                    .sns_purpose
-                    .as_ref()
-                    .is_some_and(|(entry, _)| *entry == hash)
-            {
+        let journal = if protocol_purpose && self.native_purpose == Some(hash) {
+            &self.native
+        } else if protocol_purpose {
+            if !self.allow_governance_purposes {
                 return Err("quantity capture has no retained mandatory owner".into());
             }
             &self.mandatory
@@ -185,51 +188,62 @@ impl SourceQuotaTransaction<'_> {
         Ok(())
     }
 
+    /// Authenticate one original sweep purpose before its numeric movement.
+    /// State verifies the move-only SNS permit before this mechanical journal selection.
+    /// E is opened only by a nonempty transcript inside the same disposable transaction.
+    pub(crate) fn authorize_native_purpose(&mut self, hash: Hash) -> Result<(), String> {
+        let result: Result<(), String> = (|| {
+            if self.failed || self.native_purpose.is_some() || self.allow_governance_purposes {
+                return Err("native source purpose is repeated or has a foreign owner".into());
+            }
+            for journal in [&self.ordinary, &self.mandatory] {
+                if journal
+                    .as_ref()
+                    .ok_or("source journal is unavailable")?
+                    .existing_entry(hash)
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
+                    return Err("native source purpose has dual quota ownership".into());
+                }
+            }
+            let native = self
+                .native
+                .as_ref()
+                .ok_or("native source journal is unavailable")?;
+            if native
+                .existing_entry(hash)
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                return Err("native source purpose was already applied".into());
+            }
+            self.native_purpose = Some(hash);
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            self.fail_preparation(error.clone());
+        }
+        result
+    }
+
+    /// Exact authenticated native membership; the public ProtocolPurpose kind alone
+    /// never selects a quota pool or grants an invocation.
+    pub(crate) fn is_native_purpose(&self, hash: Hash) -> bool {
+        self.native_purpose == Some(hash)
+    }
+
+    pub(crate) fn has_native_purpose(&self) -> bool {
+        self.native_purpose.is_some()
+    }
+
     /// Allow the private block-start governance sweep's retained-purpose entries.
     pub(crate) fn authorize_governance_purposes(&mut self) {
+        if self.native_purpose.is_some() {
+            self.fail_preparation("native source cannot authorize retained governance work".into());
+            return;
+        }
         self.allow_governance_purposes = true;
-    }
-
-    /// Consumed releases remain charged while new configurations can still reach Time.
-    pub(crate) fn pending_time_consumed_usage(&self) -> Result<Option<SourceUsage>, String> {
-        if self.failed {
-            return Err("FASTPQ source transaction was poisoned".into());
-        }
-        if self.sns_time_started {
-            return Ok(None);
-        }
-        self.mandatory
-            .as_ref()
-            .map(|ledger| Some(ledger.usage()))
-            .ok_or_else(|| "SNS mandatory source journal is unavailable".into())
-    }
-
-    /// Retain one exact renewal purpose from the authenticated Time transaction.
-    /// The original mandatory ledger owns both the entry and its rollback.
-    pub(crate) fn retain_sns_purpose(&mut self, hash: Hash) -> Result<(), String> {
-        if self.failed
-            || !self.sns_time_started
-            || self.allow_governance_purposes
-            || self.sns_purpose.is_some()
-        {
-            return Err("SNS source requires one fresh Time-maintenance transaction".into());
-        }
-        let result = self
-            .mandatory
-            .as_mut()
-            .ok_or_else(|| "SNS mandatory source journal is unavailable".to_owned())?
-            .open_entry(hash)
-            .map_err(|error| error.to_string());
-        match result {
-            Ok(owner) => {
-                self.sns_purpose = Some((hash, owner));
-                Ok(())
-            }
-            Err(error) => {
-                self.fail_preparation(error.clone());
-                Err(error)
-            }
-        }
     }
 
     /// Measure the exact whole committed/pending/candidate bundle before movement.
@@ -246,13 +260,37 @@ impl SourceQuotaTransaction<'_> {
             return Err("FASTPQ source transaction was poisoned".into());
         }
         let result = (|| {
-            let transaction = if protocol_purpose {
-                if !self.allow_governance_purposes
-                    && !self
-                        .sns_purpose
+            let native = protocol_purpose && self.native_purpose == Some(hash);
+            if cfg!(all(test, sumeragi_core_mutation = "HC34")) && native {
+                return Ok(());
+            }
+            let mut bundle = bundle.into_iter().peekable();
+            if native && bundle.peek().is_none() {
+                return Err(SourceQuotaFailure::Invariant(
+                    "native source requires an applied nonempty transcript".into(),
+                ));
+            }
+            if protocol_purpose && !native {
+                for journal in [&self.native, &self.ordinary] {
+                    if journal
                         .as_ref()
-                        .is_some_and(|(entry, _)| *entry == hash)
-                {
+                        .ok_or_else(|| {
+                            SourceQuotaFailure::Invariant("source journal is unavailable".into())
+                        })?
+                        .existing_entry(hash)
+                        .map_err(|error| SourceQuotaFailure::Invariant(error.to_string()))?
+                        .is_some()
+                    {
+                        return Err(SourceQuotaFailure::Invariant(
+                            "protocol source has dual quota ownership".into(),
+                        ));
+                    }
+                }
+            }
+            let transaction = if native {
+                &mut self.native
+            } else if protocol_purpose {
+                if !self.allow_governance_purposes {
                     return Err(SourceQuotaFailure::Invariant(
                         "protocol source has no authenticated mandatory owner".into(),
                     ));
@@ -267,15 +305,15 @@ impl SourceQuotaTransaction<'_> {
             let invariant =
                 |error: ReservationError| SourceQuotaFailure::Invariant(error.to_string());
             let owner = if protocol_purpose {
-                if let Some((_, owner)) = self
-                    .sns_purpose
-                    .as_ref()
-                    .filter(|(entry, _)| *entry == hash)
-                {
-                    owner.clone()
-                } else {
-                    transaction.open_entry(hash).map_err(invariant)?
-                }
+                transaction.open_entry(hash).map_err(|error| match error {
+                    ReservationError::Intrinsic { .. }
+                    | ReservationError::RemainingBlock { .. }
+                        if native =>
+                    {
+                        SourceQuotaFailure::Intrinsic
+                    }
+                    error => invariant(error),
+                })?
             } else {
                 transaction
                     .existing_entry(hash)
@@ -292,7 +330,7 @@ impl SourceQuotaTransaction<'_> {
                     EntryBundleReservationError::Capacity(_)
                     | EntryBundleReservationError::Reservation(ReservationError::Intrinsic {
                         ..
-                    }) if !protocol_purpose => SourceQuotaFailure::Intrinsic,
+                    }) if !protocol_purpose || native => SourceQuotaFailure::Intrinsic,
                     _ => SourceQuotaFailure::Invariant(error.to_string()),
                 })?;
             Ok(())
@@ -338,11 +376,14 @@ impl SourceQuotaTransaction<'_> {
         !self.failed
     }
 
-    /// Publish both already checked journals with their State/source owner.
+    /// Publish all three already checked journals with their State/source owner.
     pub(crate) fn commit(self) {
         debug_assert!(!self.failed, "State source preflight precedes publication");
         if let Some(ordinary) = self.ordinary {
             ordinary.commit();
+        }
+        if let Some(native) = self.native {
+            native.commit();
         }
         if let Some(mandatory) = self.mandatory {
             mandatory.commit();
@@ -377,25 +418,16 @@ fn construction(value: FastpqSourceLimitsV1) -> Result<FastpqSourceStatementBuil
 }
 
 impl PreparedSourceQuota {
-    /// Enter the one checked Time phase before any renewal transaction is opened.
-    pub(crate) fn begin_sns_time(&mut self) -> Result<(), String> {
-        if self.sns_time_started {
-            return Err("SNS Time phase cannot repeat".into());
-        }
-        self.sns_time_started = true;
-        Ok(())
-    }
-
     /// Prepare conservative ceilings from an already frozen canonical policy.
     ///
-    /// Reserve every potential Pipeline/Time call and the complete retained
-    /// mandatory pool before any business attempt. No unused mandatory capacity
-    /// is lent to ordinary work. `scope` is selected by State from its frozen
+    /// Reserve every potential Pipeline/Time call, the complete optional native
+    /// sweep and the complete retained mandatory pool before any business attempt.
+    /// Unused capacity is never lent between pools. `scope` is selected by State from its frozen
     /// network/height/proposal; the private ledger identity also rejects foreign
     /// capabilities, including a second ledger with identical public inputs.
     ///
     /// Framing is bounded by each validated intrinsic profile. Typed framing-cap
-    /// failures become ordinary intrinsic refusals only in the ordinary pool;
+    /// failures become optional intrinsic refusals in ordinary/native pools;
     /// a mandatory overflow contradicts the retained custody admission invariant.
     pub(crate) fn new(
         profile: FastpqSourcePolicyV1,
@@ -415,8 +447,10 @@ impl PreparedSourceQuota {
             .and_then(|calls| calls.checked_add(output.max_time_invocations))
             .ok_or("FASTPQ complete invocation count overflows u32")?;
         let ordinary = profile.intrinsic.checked_repeat_entries(invocations)?;
+        let native = profile.native_maintenance_reservation()?;
         let mandatory = profile.mandatory.reservation()?;
         if !ordinary
+            .checked_add_entries(native)?
             .checked_add_entries(mandatory)?
             .fits_within(profile.block)
         {
@@ -435,6 +469,10 @@ impl PreparedSourceQuota {
             scope_tag: 1,
             ..ordinary_context
         };
+        let native_context = ReservationContext {
+            scope_tag: 2,
+            ..ordinary_context
+        };
         let ledger = |context, intrinsic, block| {
             EntryBundleReservationLedger::new(
                 context,
@@ -448,23 +486,26 @@ impl PreparedSourceQuota {
         };
         Ok(Self {
             ordinary: ledger(ordinary_context, profile.intrinsic, ordinary)?,
+            native: ledger(native_context, profile.intrinsic, native)?,
             mandatory: ledger(
                 mandatory_context,
                 profile.mandatory.per_obligation,
                 mandatory,
             )?,
             ordinary_context,
+            native_context,
             mandatory_context,
             #[cfg(test)]
             ordinary_ceiling: usage(ordinary),
             #[cfg(test)]
+            native_ceiling: usage(native),
+            #[cfg(test)]
             mandatory_ceiling: usage(mandatory),
             profile,
-            sns_time_started: false,
         })
     }
 
-    /// Borrow both source pools for one disposable State transaction.
+    /// Borrow all three source pools for one disposable State transaction.
     pub(crate) fn transaction(&mut self) -> Result<SourceQuotaTransaction<'_>, String> {
         let ordinary = self
             .ordinary
@@ -474,12 +515,16 @@ impl PreparedSourceQuota {
             .mandatory
             .transaction(self.mandatory_context)
             .map_err(|error| error.to_string())?;
+        let native = self
+            .native
+            .transaction(self.native_context)
+            .map_err(|error| error.to_string())?;
         Ok(SourceQuotaTransaction {
             ordinary: Some(ordinary),
+            native: Some(native),
             mandatory: Some(mandatory),
+            native_purpose: None,
             allow_governance_purposes: false,
-            sns_purpose: None,
-            sns_time_started: self.sns_time_started,
             failed: false,
             failure: None,
         })
@@ -495,8 +540,12 @@ impl PreparedSourceQuota {
         let mut identities = BTreeSet::new();
         let mut ordinary = BTreeSet::new();
         let mut mandatory = BTreeSet::new();
+        let mut native = BTreeSet::new();
         let mut ordinary_usage = FastpqSourceLimitsV1::ZERO;
         let mut mandatory_usage = FastpqSourceLimitsV1::ZERO;
+        let mut native_usage = FastpqSourceLimitsV1::ZERO;
+        let owned_native: BTreeSet<_> = self.native.entry_hashes().collect();
+        let owned_mandatory: BTreeSet<_> = self.mandatory.entry_hashes().collect();
         for entry in entries {
             if !identities.insert(entry.entry_hash) {
                 return Err("FASTPQ source inventory repeats an entry".into());
@@ -534,20 +583,35 @@ impl PreparedSourceQuota {
                 }
                 FastpqSourceExecutionKindV1::ProtocolPurpose => {
                     if measured.max_transcripts == 0 {
-                        return Err(
-                            "mandatory source inventory contains an unapplied purpose".into()
-                        );
+                        return Err("native source inventory contains an unapplied purpose".into());
                     }
-                    mandatory.insert(entry.entry_hash);
-                    mandatory_usage = mandatory_usage.checked_add_entries(measured)?;
+                    let owns_native = owned_native.contains(&entry.entry_hash);
+                    let owns_mandatory = owned_mandatory.contains(&entry.entry_hash);
+                    match (owns_native, owns_mandatory) {
+                        (true, false) => {
+                            native.insert(entry.entry_hash);
+                            native_usage = native_usage.checked_add_entries(measured)?;
+                        }
+                        (false, true) => {
+                            mandatory.insert(entry.entry_hash);
+                            mandatory_usage = mandatory_usage.checked_add_entries(measured)?;
+                        }
+                        _ => {
+                            return Err(
+                                "protocol purpose has unknown or dual quota ownership".into()
+                            );
+                        }
+                    }
                 }
             }
         }
         if transcripts.keys().any(|hash| !identities.contains(hash))
             || !self.ordinary.entry_hashes().eq(ordinary)
-            || !self.mandatory.entry_hashes().eq(mandatory)
+            || owned_mandatory != mandatory
+            || owned_native != native
             || usage(ordinary_usage) != self.ordinary.usage()
             || usage(mandatory_usage) != self.mandatory.usage()
+            || usage(native_usage) != self.native.usage()
         {
             return Err(
                 "FASTPQ final source archive differs from its execution-owned quota journals"
@@ -624,6 +688,16 @@ impl PreparedSourceQuota {
     /// Exact committed applied-purpose usage; retained obligations are separate.
     pub(crate) fn mandatory_usage(&self) -> SourceUsage {
         self.mandatory.usage()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_usage(&self) -> SourceUsage {
+        self.native.usage()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_ceiling(&self) -> SourceUsage {
+        self.native_ceiling
     }
 
     #[cfg(test)]

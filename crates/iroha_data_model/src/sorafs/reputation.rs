@@ -14,6 +14,9 @@
 //! caller-signed custom parameter with a strict digest-linked sequence and exact committed target;
 //! it intentionally contains no automatic age, capacity, or process-local retention policy.
 
+/// Native immutable stream-token append recipes and permanent delivery dispositions.
+pub mod stream_token_delivery;
+
 use crate::parameter::{CustomParameter, CustomParameterId};
 use crate::{
     NetworkId,
@@ -503,6 +506,7 @@ pub enum ReputationJournalSourceKindV1 {
     crate :: DeriveJsonDeserialize,
     norito::NoritoSchema,
 )]
+#[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyV1")]
 pub struct ReputationJournalAuthorityPolicyV1 {
     /// Schema version.
@@ -518,6 +522,8 @@ pub struct ReputationJournalAuthorityPolicyV1 {
     pub dispute_recorder_authority: AccountId,
     /// Exact governed regional-gateway authority allowed to record token outcomes.
     pub token_recorder_authority: AccountId,
+    /// Governed exact gateway fee delegation and source-derived finite append lifetime.
+    pub stream_token_delivery: stream_token_delivery::StreamTokenReputationDeliveryTemplateV1,
     /// Maximum age of an authenticated source decision or observation at commit.
     pub max_source_age_ms: u64,
 }
@@ -535,6 +541,16 @@ impl ReputationJournalAuthorityPolicyV1 {
                     found: self.version,
                 },
             );
+        }
+        self.stream_token_delivery
+            .validate()
+            .map_err(|_| ReputationJournalValidationError::InvalidStreamTokenDelivery)?;
+        if self
+            .token_recorder_authority
+            .try_signatory()
+            .is_none_or(|key| key.algorithm() != iroha_crypto::Algorithm::Ed25519)
+        {
+            return Err(ReputationJournalValidationError::InvalidStreamTokenDelivery);
         }
         if self.revision == 0 {
             return Err(ReputationJournalValidationError::ZeroAuthorityPolicyRevision);
@@ -574,6 +590,68 @@ impl ReputationJournalAuthorityPolicyV1 {
         }
     }
 }
+/// Exact original native source of a governed recorder-policy activation.
+///
+/// Values remain claims. Core authenticates genuine genesis custody or a sole direct ordinary
+/// SetPolicy input, and finalized readers verify that exact signed execution and successful output.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(
+    tag = "origin",
+    content = "execution",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[norito_schema(name = "iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1")]
+pub enum ReputationJournalPolicyOriginV1 {
+    /// An exact original instruction in the authenticated signed genesis input at height one.
+    Genesis(crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1),
+    /// A sole direct SetPolicy in an ordinary signed external transaction after genesis.
+    Network(crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1),
+}
+impl ReputationJournalPolicyOriginV1 {
+    /// Borrow the exact source coordinates; no block hash is stored while that block executes.
+    #[must_use]
+    pub fn execution(
+        &self,
+    ) -> &crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        match self {
+            Self::Genesis(execution) | Self::Network(execution) => execution,
+        }
+    }
+    /// Check closed origin shape without authenticating source or finality.
+    ///
+    /// # Errors
+    /// Rejects inert coordinates, impossible genesis height or non-sole ordinary instruction.
+    pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
+        let execution = self.execution();
+        let invalid = ReputationJournalValidationError::InvalidPolicyOrigin;
+        if execution.transaction_hash == [0; 32]
+            || execution.recorded_at_unix_ms == 0
+            || execution.recorded_at_unix_ms == u64::MAX
+        {
+            return Err(invalid);
+        }
+        match self {
+            Self::Genesis(_) if execution.height == 1 => Ok(()),
+            Self::Network(_) if execution.height > 1 && execution.instruction_index == 0 => Ok(()),
+            _ => Err(invalid),
+        }
+    }
+}
+
 /// Auditable activation record for one governed recorder-policy revision.
 #[derive(
     Clone,
@@ -589,6 +667,7 @@ impl ReputationJournalAuthorityPolicyV1 {
     crate :: DeriveJsonDeserialize,
     norito::NoritoSchema,
 )]
+#[norito(deny_unknown_fields)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1"
 )]
@@ -602,6 +681,8 @@ pub struct ReputationJournalAuthorityPolicyRecordV1 {
     pub activated_by: AccountId,
     /// Exact committing block timestamp in milliseconds since Unix epoch.
     pub activated_at_unix_ms: u64,
+    /// Exact signed activation provenance; timestamp and author alone cannot identify an input.
+    pub origin: ReputationJournalPolicyOriginV1,
 }
 impl ReputationJournalAuthorityPolicyRecordV1 {
     /// Construct and validate an auditable policy activation record.
@@ -613,16 +694,20 @@ impl ReputationJournalAuthorityPolicyRecordV1 {
         policy: ReputationJournalAuthorityPolicyV1,
         activated_by: AccountId,
         activated_at_unix_ms: u64,
+        origin: ReputationJournalPolicyOriginV1,
     ) -> Result<Self, ReputationJournalValidationError> {
         let policy_digest = policy.canonical_digest()?;
         ensure_digest(policy_digest, "policy_digest")?;
         ensure_timestamp(activated_at_unix_ms, "activated_at_unix_ms")?;
-        Ok(Self {
+        let value = Self {
             policy,
             policy_digest,
             activated_by,
             activated_at_unix_ms,
-        })
+            origin,
+        };
+        value.validate()?;
+        Ok(value)
     }
     /// Validate the canonical policy digest and activation timestamp.
     ///
@@ -632,6 +717,12 @@ impl ReputationJournalAuthorityPolicyRecordV1 {
     pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
         ensure_digest(self.policy_digest, "policy_digest")?;
         ensure_timestamp(self.activated_at_unix_ms, "activated_at_unix_ms")?;
+        self.origin.validate()?;
+        if self.origin.execution().authority != self.activated_by
+            || self.origin.execution().recorded_at_unix_ms != self.activated_at_unix_ms
+        {
+            return Err(ReputationJournalValidationError::InvalidPolicyOrigin);
+        }
         if self.policy_digest != self.policy.canonical_digest()? {
             return Err(ReputationJournalValidationError::AuthorityPolicyDigestMismatch);
         }
@@ -2513,6 +2604,12 @@ impl ReputationJournalFinalizedEventPageV1 {
 /// Structural and semantic validation failures for the V1 journal.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ReputationJournalValidationError {
+    /// Policy activation lacks exact structurally valid original signed execution coordinates.
+    #[error("invalid native reputation policy activation origin")]
+    InvalidPolicyOrigin,
+    /// Delivery template is malformed or token recorder is not a single Ed25519 account.
+    #[error("invalid governed stream-token delivery template or recorder")]
+    InvalidStreamTokenDelivery,
     /// Recorder policy version is unsupported.
     #[error("unsupported reputation journal authority-policy version {found}")]
     UnsupportedAuthorityPolicyVersion {
@@ -3056,6 +3153,7 @@ mod tests {
             por_recorder_authority: account(1),
             dispute_recorder_authority: account(2),
             token_recorder_authority: account(3),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
@@ -3274,8 +3372,7 @@ mod tests {
         .expect("valid PoR entry")
     }
 
-    #[test]
-    fn reputation_event_id_identity_projection_matches_capture() {
+    fn reputation_event_id_identity_fixture_values() -> norito::json::Value {
         let rows = [0x31, 0x52].map(|seed| {
             let entry = por_entry(seed);
             let mut material = entry.clone();
@@ -3293,11 +3390,37 @@ mod tests {
             );
             crate::concrete_identity_tests::projected_record(&projection, &material)
         });
+        norito::json!({"projections": (rows.to_vec())})
+    }
+
+    #[test]
+    fn reputation_event_id_identity_projection_matches_capture() {
         assert_eq!(
-            norito::json!({"projections": (rows.to_vec())}),
+            reputation_event_id_identity_fixture_values(),
             crate::concrete_identity_tests::fixture_values(include_str!(
                 "../../tests/fixtures/reputation_event_id_identity_frames.json"
             )),
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit maintenance command prints current reputation event-id projection frames"]
+    fn print_reputation_event_id_identity_fixture() {
+        assert!(cfg!(feature = "governance"), "capture requires governance");
+        assert!(cfg!(feature = "http"), "capture requires HTTP");
+        assert!(
+            !cfg!(feature = "ids_projection"),
+            "capture requires the concrete identity profile"
+        );
+        let fixture = norito::json!({
+            "governance": (cfg!(feature = "governance")),
+            "http": (cfg!(feature = "http")),
+            "ids_projection": (cfg!(feature = "ids_projection")),
+            "values": (reputation_event_id_identity_fixture_values()),
+        });
+        println!(
+            "REPUTATION_EVENT_ID_FIXTURE={}",
+            norito::json::to_json(&fixture).expect("current event-id projection capture")
         );
     }
     #[test]
@@ -3433,8 +3556,18 @@ mod tests {
         let policy = policy();
         let activation = ReputationJournalAuthorityPolicyRecordV1::try_new(
             policy.clone(),
-            account(9),
+            (account(9)).clone(),
             SOURCE_TIME,
+            crate::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+                crate::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+                    height: 2,
+                    transaction_hash: [0x61; 32],
+                    entry_index: 0,
+                    instruction_index: 0,
+                    recorded_at_unix_ms: SOURCE_TIME,
+                    authority: (account(9)).clone(),
+                },
+            ),
         )
         .expect("canonical policy activation");
         activation.validate().expect("activation validates");

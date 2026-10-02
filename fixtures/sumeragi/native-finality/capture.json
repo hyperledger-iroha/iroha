@@ -2,44 +2,52 @@
   "format": "iroha.native-finality.checkpoint-fixture-capture",
   "version": 1,
   "chain_id": "portable-native-fixture",
-  "network_id": "hash:CC5B7A93328338ED805FA7D5DA89B32BA4E2793A0F4019CE28887A1533B17659#EE57",
+  "network_id": "hash:29B206F46FD584175943C2AEAE45744DE42D98F3311A263563CE575D48D450FD#5B28",
   "generator": {
     "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
-    "source_sha256": "d90db6e81047bef5c72c0b82372665cd9a477d9b46209b2f9e4d87ecbb986543",
+    "source_sha256": "9bee8e3830c4b550caf484b0a9dc8264acef93b7496ff08cb7a455019bcbe31b",
     "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
-    "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-    "compiled_harness_path": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96",
-    "compiled_harness_sha256": "5949fba2100ed5dc0b9607cefdcdc91ab5a61ad34e22fb93807257d66fe82139",
-    "source_commit": "4032051e02fa9782cefe21e8f5b9761c9281cc34",
+    "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-6781c17f2d8284ef --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+    "compiled_harness_path": "target/cargo-fast/kot/debug/deps/iroha_data_model-6781c17f2d8284ef",
+    "compiled_harness_sha256": "d99a03a990bb13a741965006e6902e02c83c99cbd0485410043ce4c742d19d47",
+    "source_commit": "a40f3f05f26825ba8cc7a4b88ac573b13cf1b557",
     "result_codec_sources": [
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
-        "sha256": "6f11b52173563e26f41784b20f05d9af7b2cd6d6e1706a47fc6c6bff4c176a7b"
+        "sha256": "a7ef33684e32e71bece2b86004cf0bf039a4e0445433f6bbd224ac4b3f027167"
       },
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment/wire.rs",
         "sha256": "28499d642222c685e5d0eadc628368faac9f51da624f12e8b68a8167ff4e7808"
+      },
+      {
+        "path": "crates/iroha_data_model/src/block/consensus.rs",
+        "sha256": "55b65bee940b64ec8e40fb899b20fedfd312beb064c4e9abd6b6f37dbb904a8f"
+      },
+      {
+        "path": "crates/iroha_data_model/src/block/consensus/root_scope.rs",
+        "sha256": "ad6be30e63e85fb95cf1970e7bd51abfb607348f71958a0853fa64d2057405e9"
       }
     ],
     "source_tree_clean": false
   },
   "captures": [
     {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-1.log",
-      "sha256": "19fa562bfa65ae48c460c79d652de075d092f79311ad2de33b06890018934b56",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "output/android-device-support-native-20261001/finality-capture-current-1.log",
+      "sha256": "59040b56c15192744e1e150e0d85eba89a8c56511e24e4df86f5098b46d4ce4a",
+      "command": "cargo iroha-fast --target-slot kot --stable-local-metadata --incremental -- test --locked --offline -p iroha_data_model --lib --features test-fixtures sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --exact --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     },
     {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-2.log",
-      "sha256": "e4e077ce33502195bf38869122375966bbfe72e48b4d2590c7e2baa3cd1d8b5a",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "output/android-device-support-native-20261001/finality-capture-current-2.log",
+      "sha256": "1fe11881709447bc946bff756583142a8e051293c0472c7fa4a3cf8f908be5b1",
+      "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-6781c17f2d8284ef --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     },
     {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-3.log",
-      "sha256": "54c37c82fe8e50f6c4046396233124976a1ccd3904c76e9053809eca740d41ff",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "output/android-device-support-native-20261001/finality-capture-current-3.log",
+      "sha256": "65e93afee334ebee9ccdf0a2e11d2d83651fbaabb7ff89475bdf9bf682bd01c4",
+      "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-6781c17f2d8284ef --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     }
   ],
@@ -48,14 +56,14 @@
     {
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
       "height": 1,
-      "bytes": 27575,
-      "sha256": "d000307202e5b2daacb247b87c8d583dcdc361507213af9e183f5e13b74d1b19"
+      "bytes": 27666,
+      "sha256": "cc99319f06b03e4b86ee711f30c5232fbe494656f1e4d11735df1ab9f6f68588"
     },
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
-      "bytes": 31792,
-      "sha256": "20e368bdec9749e164e0ad4ce06d919c2916f00bb533d110d9c66f41ffec4c0f"
+      "bytes": 31838,
+      "sha256": "e6a91812fc3f4399e53fa799f4cb2f8ae368b0f5a791070996a3e70399ff001e"
     }
   ],
   "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate plus genuine signed RS16 availability over synthetic outputs, using the sole compact ExecutionResultCommitment schedule projection. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."

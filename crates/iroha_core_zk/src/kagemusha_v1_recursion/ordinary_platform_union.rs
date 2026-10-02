@@ -9,7 +9,9 @@ use super::{
     ordinary_app_guard_binding::OrdinaryCredentialOriginalCellsV1,
     ordinary_platform_equation::{
         OrdinaryPlatformSignatureCellsV1, constrain_original_android_approval_stream_v1,
+        constrain_original_android_signed_message_stream_v1,
         constrain_original_apple_approval_stream_v1,
+        constrain_original_apple_signed_message_stream_v1,
     },
 };
 use crate::{
@@ -64,7 +66,7 @@ fn be<T: PrimeField>(v: T) -> Vec<u8> {
     b
 }
 struct Pad {
-    wrapper: [u8; A::TOTAL_BYTES],
+    wrapper: Vec<u8>,
     key: [u8; 65],
     auth: [u8; 37],
     der: Vec<u8>,
@@ -77,6 +79,10 @@ fn pad(apple: bool) -> Result<Pad, String> {
     wrapper[A::BODY_LENGTH].copy_from_slice(&(A::BODY.len() as u64).to_le_bytes());
     wrapper[A::VERSION].copy_from_slice(&1_u16.to_le_bytes());
     wrapper[A::PURPOSE.start] = 1;
+    pad_for_message(apple, wrapper.to_vec())
+}
+/// Fixed public inactive signature equation. Its point/scalar are never an app/receiver key.
+fn pad_for_message(apple: bool, wrapper: Vec<u8>) -> Result<Pad, String> {
     let (x, y) = Secp256r1Affine::generator().into_coordinates();
     let mut key = [0; 65];
     key[0] = 4;
@@ -87,7 +93,7 @@ fn pad(apple: bool) -> Result<Pad, String> {
     auth[33..].copy_from_slice(&1_u32.to_be_bytes());
     let message = if apple {
         let mut bytes = auth.to_vec();
-        bytes.extend(Sha256::digest(wrapper));
+        bytes.extend(Sha256::digest(&wrapper));
         Sha256::digest(bytes).to_vec()
     } else {
         wrapper.to_vec()
@@ -133,25 +139,108 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
     apple: AssignedValue<F>,
     previous_counter: Option<u32>,
 ) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
-    let actual_apple = matches!(
+    let native = approval.challenge.canonical_signing_bytes()?;
+    constrain_ordinary_signed_message_union_v1(
+        builder,
+        jobs,
+        credential,
+        original_key,
+        expected_release_digest,
         &approval.evidence,
+        &native,
+        wrapper,
+        apple,
+        previous_counter,
+        None,
+        true,
+    )
+    .map(|streams| streams.active_original)
+}
+
+/// Private deterministic codec operand for the disabled receiver branch only. Its generator
+/// signature is mathematical padding, never an original receiver/platform assertion or grant.
+pub(super) fn inactive_receiver_codec_evidence_v1(
+    apple: bool,
+) -> Result<KagemushaAppOperationApprovalEvidenceV1, String> {
+    let pad = pad_for_message(
+        apple,
+        vec![
+            0;
+            iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_PAYMENT_REQUEST_DOMAIN_V1.len()
+                + 8
+                + 390
+        ],
+    )?;
+    Ok(if apple {
+        KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+            raw_assertion: pad.assertion,
+        }
+    } else {
+        KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+            signature_der: pad.der,
+        }
+    })
+}
+
+/// Mathematical stream outputs. Only active_original can carry an original receiver grant.
+/// Disabled mathematical_codec_original contains a fixed public padding equation's bytes;
+/// enclosing public digest bindings must independently require the assigned Send selector.
+pub(super) struct OrdinarySignedMessageStreamsV1<F: KagemushaPoseidonFieldV1> {
+    pub(super) active_original: KagemushaBoundedByteStreamV1<F>,
+    pub(super) mathematical_codec_original: KagemushaBoundedByteStreamV1<F>,
+}
+
+/// Fixed two-platform equation over a separately framed, fully assigned signing message.
+/// Optional enabled only selects a zero inactive output; public pads grant no receiver authority.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn constrain_ordinary_signed_message_union_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    credential: &OrdinaryCredentialOriginalCellsV1<F>,
+    original_key: &[u8; 65],
+    expected_release_digest: [u8; 32],
+    evidence: &KagemushaAppOperationApprovalEvidenceV1,
+    native_message: &[u8],
+    wrapper: &[PastaSha256ByteV1<F>],
+    apple: AssignedValue<F>,
+    previous_counter: Option<u32>,
+    enabled: Option<(AssignedValue<F>, bool)>,
+    operation_wrapper: bool,
+) -> Result<OrdinarySignedMessageStreamsV1<F>, String> {
+    let actual_apple = matches!(
+        evidence,
         KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { .. }
     );
-    if actual_apple && previous_counter.is_none() {
+    let native_enabled = enabled.is_none_or(|(_, v)| v);
+    if native_message.len() != wrapper.len() || wrapper.is_empty() || wrapper.len() > 1024 {
+        return Err("ordinary signed message fixed capacity differs".into());
+    }
+    if actual_apple && native_enabled && previous_counter.is_none() {
         return Err("ordinary Apple independent counter floor absent".into());
     }
     let mut streams = Vec::new();
     for branch_apple in [false, true] {
-        let pad = pad(branch_apple)?;
+        let pad = if operation_wrapper {
+            pad(branch_apple)?
+        } else {
+            pad_for_message(branch_apple, vec![0; wrapper.len()])?
+        };
         let active = if branch_apple {
             apple
         } else {
             let range = builder.range_chip();
             range.gate().not(builder.main(0), apple)
         };
-        let is_active = branch_apple == actual_apple;
+        let active = if let Some((enabled, _)) = enabled {
+            let range = builder.range_chip();
+            range.gate().assert_bit(builder.main(0), enabled);
+            range.gate().mul(builder.main(0), active, enabled)
+        } else {
+            active
+        };
+        let is_active = native_enabled && branch_apple == actual_apple;
         let (raw, auth, der) = if is_active {
-            match &approval.evidence {
+            match evidence {
                 KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
                     (signature_der.as_slice(), None, signature_der.as_slice())
                 }
@@ -179,9 +268,9 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
             )
         };
         let native_wrapper = if is_active {
-            approval.challenge.canonical_signing_bytes()?
+            native_message.to_vec()
         } else {
-            pad.wrapper.to_vec()
+            pad.wrapper.clone()
         };
         let native_key = if is_active { *original_key } else { pad.key };
         let sig = Signature::from_der(der).map_err(|_| "ordinary original DER shape")?;
@@ -214,15 +303,19 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
                 active,
             )
         });
-        let selected_wrapper = core::array::from_fn(|i| {
-            let b = range.gate().select(
-                ctx,
-                wrapper[i].quantum_cell(),
-                Constant(F::from(u64::from(pad.wrapper[i]))),
-                active,
-            );
-            PastaSha256ByteV1::range_checked(ctx, &range, b)
-        });
+        let selected_wrapper = wrapper
+            .iter()
+            .enumerate()
+            .map(|(i, byte)| {
+                let b = range.gate().select(
+                    ctx,
+                    byte.quantum_cell(),
+                    Constant(F::from(u64::from(pad.wrapper[i]))),
+                    active,
+                );
+                PastaSha256ByteV1::range_checked(ctx, &range, b)
+            })
+            .collect::<Vec<_>>();
         let signature = OrdinaryPlatformSignatureCellsV1 {
             signature_public_key: &key,
             enrolled_public_key: &key,
@@ -278,26 +371,64 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
             let counter = ctx.load_witness(F::from(u64::from(u32::from_be_bytes(
                 auth_raw[33..].try_into().unwrap(),
             ))));
-            let selected_wrapper = selected_wrapper.map(|b| b.assigned().unwrap());
-            constrain_original_apple_approval_stream_v1(
+            let selected_wrapper = selected_wrapper
+                .into_iter()
+                .map(|b| b.assigned().unwrap())
+                .collect::<Vec<_>>();
+            if operation_wrapper {
+                constrain_original_apple_approval_stream_v1(
+                    builder,
+                    jobs,
+                    raw,
+                    selected_wrapper
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| "ordinary approval message width")?,
+                    &auth_cells,
+                    &rp,
+                    if is_active {
+                        expected_release_digest
+                    } else {
+                        [0; 32]
+                    },
+                    &release,
+                    floor,
+                    counter,
+                    &signature,
+                )?
+            } else {
+                constrain_original_apple_signed_message_stream_v1(
+                    builder,
+                    jobs,
+                    raw,
+                    &selected_wrapper,
+                    None,
+                    &auth_cells,
+                    &rp,
+                    if is_active {
+                        expected_release_digest
+                    } else {
+                        [0; 32]
+                    },
+                    &release,
+                    floor,
+                    counter,
+                    &signature,
+                )?
+            }
+        } else if operation_wrapper {
+            constrain_original_android_approval_stream_v1(
                 builder,
                 jobs,
                 raw,
-                &selected_wrapper,
-                &auth_cells,
-                &rp,
-                if is_active {
-                    expected_release_digest
-                } else {
-                    [0; 32]
-                },
-                &release,
-                floor,
-                counter,
+                selected_wrapper
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "ordinary approval message width")?,
                 &signature,
             )?
         } else {
-            constrain_original_android_approval_stream_v1(
+            constrain_original_android_signed_message_stream_v1(
                 builder,
                 jobs,
                 raw,
@@ -328,7 +459,33 @@ pub(super) fn constrain_ordinary_platform_union_v1<F: KagemushaPoseidonFieldV1>(
             PastaSha256ByteV1::range_checked(ctx, &range, selected)
         })
         .collect();
-    KagemushaBoundedByteStreamV1::constrain(ctx, &range, bytes, length)
+    let mathematical_codec_original =
+        KagemushaBoundedByteStreamV1::constrain(ctx, &range, bytes, length)?;
+    let active_original = if let Some((enabled, _)) = enabled {
+        let bytes = mathematical_codec_original
+            .bytes()
+            .iter()
+            .map(|b| {
+                let cell = range
+                    .gate()
+                    .select(ctx, b.quantum_cell(), Constant(F::ZERO), enabled);
+                PastaSha256ByteV1::range_checked(ctx, &range, cell)
+            })
+            .collect();
+        let length = range.gate().select(
+            ctx,
+            mathematical_codec_original.actual_len(),
+            Constant(F::ZERO),
+            enabled,
+        );
+        KagemushaBoundedByteStreamV1::constrain(ctx, &range, bytes, length)?
+    } else {
+        mathematical_codec_original.clone()
+    };
+    Ok(OrdinarySignedMessageStreamsV1 {
+        active_original,
+        mathematical_codec_original,
+    })
 }
 
 #[cfg(test)]
@@ -344,7 +501,7 @@ mod tests {
             let signature = Signature::from_der(&pad.der).unwrap();
             let message = if apple {
                 let mut b = pad.auth.to_vec();
-                b.extend(Sha256::digest(pad.wrapper));
+                b.extend(Sha256::digest(&pad.wrapper));
                 Sha256::digest(b).to_vec()
             } else {
                 pad.wrapper.to_vec()
@@ -362,6 +519,28 @@ mod tests {
                     parts.release_measurement,
                     iroha_data_model::kagemusha::KagemushaAppAttestReleaseMeasurementV1::Unavailable,
                 );
+            }
+        }
+    }
+    #[test]
+    fn fixed_receiver_message_pads_verify_only_exact_public_math_messages() {
+        for width in [390, 448, 511] {
+            let message = (0..width)
+                .map(|i| (i as u8).wrapping_mul(7))
+                .collect::<Vec<_>>();
+            for apple in [false, true] {
+                let pad = pad_for_message(apple, message.clone()).unwrap();
+                let key = VerifyingKey::from_sec1_bytes(&pad.key).unwrap();
+                let sig = Signature::from_der(&pad.der).unwrap();
+                let mut signing = message.clone();
+                if apple {
+                    let mut b = pad.auth.to_vec();
+                    b.extend(Sha256::digest(&signing));
+                    signing = Sha256::digest(b).to_vec();
+                }
+                key.verify(&signing, &sig).unwrap();
+                signing[0] ^= 1;
+                assert!(key.verify(&signing, &sig).is_err());
             }
         }
     }

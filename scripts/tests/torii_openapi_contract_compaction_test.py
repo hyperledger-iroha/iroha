@@ -71,6 +71,7 @@ FINALITY_TESTS = (
     "alias_openapi_documents_optional_public_and_exact_restricted_auth",
     "protected_contract_identity_openapi_is_signed_and_exact",
     "multisig_read_auth_contract_is_path_specific",
+    "scoped_artifact_openapi_binds_network_full_dataspace_and_content",
 )
 SORAFS_TESTS = (
     "evidence_audit_openapi_requires_and_returns_exact_cursors",
@@ -84,6 +85,7 @@ SORAFS_TESTS = (
     "moderation_dead_letter_openapi_is_typed_bounded_and_dual_control",
     "hedging_billing_openapi_is_authenticated_bounded_and_private",
     "proof_stream_openapi_matches_the_closed_canonical_envelope",
+    "sorafs_account_storage_token_declares_exact_account_auth_and_explicit_policy",
 )
 
 

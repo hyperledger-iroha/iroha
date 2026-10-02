@@ -203,7 +203,6 @@ use crate::{json_entry, json_object, json_value};
 /// `can_read_all` is kept separately because unscoped protocol records must
 /// fail closed for ordinary dataspace readers, even when every currently
 /// configured dataspace happens to be visible.
-#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
@@ -211,7 +210,6 @@ pub(crate) struct DataspaceReadVisibility {
     exact_account: Option<AccountId>,
 }
 
-#[cfg(feature = "app_api")]
 impl DataspaceReadVisibility {
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
@@ -283,9 +281,11 @@ impl DataspaceReadVisibility {
             .map(|entry| entry.id)
     }
 
-    /// Return whether every dataspace materializing an account is visible.
+    /// Return whether the account's authenticated physical root is visible.
     ///
-    /// Account metadata is one global record and cannot be redacted per binding.
+    /// An independent private root materializes its accounts only in its signed
+    /// dataspace, even though canonical account identities remain universal.
+    /// On a Global root, account metadata is one global record and cannot be redacted per binding.
     /// Requiring the complete binding set prevents a public alias from exposing
     /// metadata associated with the same account in a restricted dataspace.
     /// Account-scope derivation defaults unknown identities to the universal
@@ -304,6 +304,14 @@ impl DataspaceReadVisibility {
         }
         if world.accounts().get(account_id).is_none() {
             return false;
+        }
+        match iroha_core::sumeragi::lanes::routing::committed_root_scope(world) {
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+                dataspace_id,
+                ..
+            }) => return self.allows_dataspace(dataspace_id),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global) => {}
+            None => return false,
         }
         world
             .account_dataspaces(account_id)
@@ -3611,7 +3619,7 @@ fn application_json_response(body: impl Into<Body>) -> Response {
     );
     response
 }
-fn pretty_json_response<T: json::JsonSerialize + ?Sized>(value: &T) -> Result<Response> {
+pub(crate) fn pretty_json_response<T: json::JsonSerialize + ?Sized>(value: &T) -> Result<Response> {
     json::to_json_pretty(value)
         .map(application_json_response)
         .map_err(norito_internal_error)
@@ -8099,17 +8107,54 @@ fn bind_account_alias_for_test(
         iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    // Alias repair validates the parent namespace before the existing child lease.
+    // These fixtures register universal accounts first and seed the independently
+    // owned parent lease explicitly instead of relying on catalog membership.
+    let resolved_alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::resolve_catalog(
+        alias_literal,
+        &catalog,
+    )
+    .expect("resolved account alias");
+    let parent_selector = if let Some(domain) = resolved_alias.parent_domain() {
+        iroha_core::sns::selector_for_domain(&domain.canonical_name)
+    } else {
+        iroha_core::sns::selector_for_dataspace_alias(
+            resolved_alias.canonical_name.dataspace.as_ref(),
+        )
+    }
+    .expect("account alias parent selector");
+    let mut parent_metadata = iroha_model_base::metadata::Metadata::default();
+    if resolved_alias.parent_domain().is_none() {
+        parent_metadata.insert(
+            iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace metadata key"),
+            iroha_primitives::json::Json::new(label.dataspace.as_u64()),
+        );
+    }
+    let parent_record = iroha_data_model::sns::NameRecordV1::new(
+        parent_selector.clone(),
+        account_id.clone(),
+        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        parent_metadata,
+    );
+    tx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::record_storage_key(&parent_selector),
+            norito::codec::Encode::encode(&parent_record),
+        );
     tx.world_mut_for_testing()
         .smart_contract_state_mut_for_testing()
         .insert(
             iroha_core::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
-    let resolved_alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::resolve_catalog(
-        alias_literal,
-        &catalog,
-    )
-    .expect("resolved account alias");
     iroha_data_model::isi::alias_setup::EnsureAlias::new(
         iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
             iroha_data_model::alias_setup::AliasAccountIntentV1 {
@@ -9292,7 +9337,11 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
 fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
     let native = rec.evidence.decode_native().map_err(|error| match error {
-        iroha_sumeragi::message::CodecError::Resource(_) => history_capacity_error(),
+        iroha_sumeragi::message::CodecError::Resource(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        }
         other => conversion_error(format!("stored native evidence is not canonical: {other}")),
     })?;
     let class = match native {
@@ -18863,6 +18912,35 @@ fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
             })
         })
         .or_else(|| {
+            // A single typed transfer exposes transport/display fields without
+            // making a partial projection of a multi-instruction proposal.
+            let [instruction] = proposal.instructions.as_slice() else {
+                return None;
+            };
+            let iroha_data_model::isi::TransferBox::Asset(transfer) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::TransferBox>()?
+            else {
+                return None;
+            };
+            let mut payload = Map::new();
+            payload.insert("kind".into(), Value::from("TRANSFER"));
+            payload.insert(
+                "asset_id".into(),
+                Value::from(transfer.source().definition().to_string()),
+            );
+            payload.insert("amount".into(), Value::from(transfer.object().to_string()));
+            payload.insert(
+                "from_account_id".into(),
+                Value::from(transfer.source().account().to_string()),
+            );
+            payload.insert(
+                "to_account_id".into(),
+                Value::from(transfer.destination().to_string()),
+            );
+            Some(IrohaJson::new(Value::Object(payload)))
+        })
+        .or_else(|| {
             proposal.instructions.first().and_then(|instruction| {
                 let Ok(
                     iroha_executor_data_model::isi::multisig::MultisigInstructionBox::InvalidateOutstanding(invalidate),
@@ -21423,6 +21501,50 @@ mod multisig_selector_tests {
             MultisigProposalStatus::CollectingSignatures,
             "only a native terminal record may prove final execution",
         );
+    }
+    #[test]
+    fn single_asset_transfer_has_exact_typed_intent_and_rejects_partial_projection() {
+        let source = checked_multisig_selector_account_id(0x77, "derive transfer intent source");
+        let destination =
+            checked_multisig_selector_account_id(0x78, "derive transfer intent destination");
+        let definition = test_asset_definition_id();
+        let instruction: dm::InstructionBox = dm::Transfer::asset_quantity(
+            dm::AssetId::new(definition.clone(), source.clone()),
+            25_u32,
+            destination.clone(),
+        )
+        .into();
+        let mut proposal = MultisigProposalValue::new(
+            vec![instruction.clone()],
+            100,
+            200,
+            BTreeSet::new(),
+            None,
+        );
+        let world = World::default();
+        let world_view = world.view();
+        assert_eq!(
+            multisig_proposal_operation_type(&world_view, &source, &proposal),
+            "TRANSFER",
+        );
+        let intent = multisig_proposal_intent(&world_view, &source, &proposal)
+            .expect("single transfer intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("transfer intent value");
+        assert_eq!(
+            intent,
+            norito::json!({
+                "kind": "TRANSFER",
+                "asset_id": (definition.to_string()),
+                "amount": "25",
+                "from_account_id": (source.to_string()),
+                "to_account_id": (destination.to_string()),
+            }),
+        );
+        proposal.instructions.push(instruction);
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
+        proposal.instructions.clear();
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
     }
     #[test]
     fn policy_change_invalidation_has_explicit_operation_type_and_exact_account_intent() {
@@ -35304,6 +35426,7 @@ pub(crate) fn committed_transactions_snapshot(
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
+app_api_items! {
 struct HistoryVisibilityReads {
     state: Arc<CoreState>,
     height: u64,
@@ -35446,6 +35569,7 @@ fn committed_transaction_is_visible_in_block(
 ) -> bool {
     visibility.can_read_all()
         || visibility.allows_external_entrypoint_hash(block, *transaction.entrypoint_hash())
+}
 }
 include!("routing/committed_transaction_pagination.rs");
 app_api_items! {
@@ -39787,13 +39911,12 @@ mod explorer_lookup_tests {
         let public_dataspace = DataSpaceId::new(7);
         let restricted_dataspace = DataSpaceId::new(8);
         let account = dm::Account::new(account_id.clone()).build(&account_id);
-        let world = World::with([], [account], []);
-        let mut state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
+        let mut world = World::with([], [account], []);
+        crate::private_account_routing_tests::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
-        state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: public_dataspace,
@@ -39809,6 +39932,14 @@ mod explorer_lookup_tests {
             },
         ])
         .expect("mixed-binding dataspace catalog");
+        let state = State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus {
+                dataspace_catalog: catalog,
+                ..Default::default()
+            },
+            LiveQueryStore::start_test(),
+        );
         let state = Arc::new(state);
         bind_account_alias_for_test(&state, &account_id, "mixed@public");
         bind_account_alias_for_test(&state, &account_id, "mixed@restricted");
@@ -39846,19 +39977,18 @@ mod explorer_lookup_tests {
             dm::AssetId::new(definition_id.clone(), escrow_id.clone()),
             iroha_primitives::numeric::Quantity::from(40_u32),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [owner, escrow],
             [definition],
             [escrow_asset],
             [],
         );
-        let mut state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
+        crate::private_account_routing_tests::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
         );
-        state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: public_dataspace,
@@ -39874,6 +40004,14 @@ mod explorer_lookup_tests {
             },
         ])
         .expect("governance visibility dataspace catalog");
+        let mut state = State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus {
+                dataspace_catalog: catalog,
+                ..Default::default()
+            },
+            LiveQueryStore::start_test(),
+        );
         state.gov.voting_asset_id = definition_id.clone();
         state.gov.bond_escrow_account = escrow_id.clone();
         let state = Arc::new(state);
@@ -55598,6 +55736,7 @@ fn verify_faucet_pow(
 #[path = "routing/faucet_pow_tests.rs"]
 mod faucet_pow_tests;
 }
+#[cfg(feature = "app_api")]
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
     account_id: AccountId,
@@ -58448,12 +58587,39 @@ mod space_directory_manifest_helper_tests {
         record.lifecycle.mark_activated(13);
         record
     }
-    fn manifest_state(world: World, catalog: Option<DataSpaceCatalog>) -> Arc<CoreState> {
-        let kura = Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let mut state = CoreState::new_for_testing(world, kura, query);
-        if let Some(catalog) = catalog {
-            state.nexus.get_mut().dataspace_catalog = catalog;
+    fn manifest_state(mut world: World, catalog: Option<DataSpaceCatalog>) -> Arc<CoreState> {
+        let bindings: Vec<_> = world
+            .uaid_dataspaces_mut_for_testing()
+            .view()
+            .iter()
+            .map(|(id, value)| (*id, value.clone()))
+            .collect();
+        let manifests: Vec<_> = world
+            .space_directory_manifests_mut_for_testing()
+            .view()
+            .iter()
+            .map(|(id, value)| (*id, value.clone()))
+            .collect();
+        crate::private_account_routing_tests::bind_fixture_root(
+            &mut world,
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let mut state = CoreState::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus {
+                dataspace_catalog: catalog.unwrap_or_default(),
+                ..Default::default()
+            },
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        // Startup reconciles configured physical geometry. Projection tests also
+        // exercise historical directory rows without a current catalog alias, so
+        // install their explicit query cut after that startup reconciliation.
+        for (id, value) in bindings {
+            state.world.uaid_dataspaces_mut_for_testing().insert(id, value);
+        }
+        for (id, value) in manifests {
+            state.world.space_directory_manifests_mut_for_testing().insert(id, value);
         }
         Arc::new(state)
     }
@@ -60344,6 +60510,7 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
     NonZeroUsize::new(height_usize)
 }
 
+app_api_items! {
 /// Maximum historical blocks decoded by one Explorer cursor request.
 const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
@@ -60497,6 +60664,7 @@ fn instruction_history_filter_digest(
             filters.asset_id.as_ref().map(ToString::to_string),
         ],
     )
+}
 }
 app_api_items! {
 #[cfg(test)]

@@ -631,11 +631,11 @@ def test_core_fee_selector_gate_requires_original_account_and_currency_read_cont
     assert not rule.scenarios
     assert gate.has_switch("HC37", core=True)
     assert not gate.has_switch("HC37")
-def test_sns_time_owner_requires_consumed_capacity_and_both_restore_generations():
+def test_native_source_owner_requires_applied_transcripts_and_isolated_capacity():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC34"]
     assert rule.tests == (
-        'smartcontracts::isi::sns::tests::sns_configuration_keeps_consumed_governance_capacity_until_the_original_time_sweep',
-        'state::fastpq_governance_source::runtime_tests::sns_restore_admits_original_current_and_undo_obligations_without_erasing_refusal',
+        'fastpq::source_reservation::admission::tests::native_authorization_has_no_entry_until_an_applied_transcript_and_drops_atomically',
+        'fastpq::source_reservation::admission::tests::native_pool_overflow_cannot_borrow_ordinary_or_governance_reservations',
     )
     assert not rule.scenarios
     assert gate.has_switch("HC34", core=True)

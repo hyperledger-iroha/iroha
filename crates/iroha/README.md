@@ -20,6 +20,13 @@ HTTP 429 responses repeat only the status read, respecting Torii's delta-seconds
 `Retry-After` and the original wait deadline. They never resubmit the transaction;
 an exhausted deadline retains the last backpressure diagnostic.
 
+With `kagemusha-ordinary-native`, installed inventory metadata retains its 16-GiB
+artifact and aggregate limit as `u64`, including on 32-bit targets. Held originals
+are hashed through bounded streaming reads. Loading bytes and resolving artifacts
+still require checked address-sized allocation bounds; the metadata limit does
+not promise a 16-GiB allocation. Host component tests do not admit an Android
+release or establish hardware or monetary qualification.
+
 ## Setup
 
 **Requirements:** install

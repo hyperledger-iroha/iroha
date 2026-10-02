@@ -1005,7 +1005,6 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1::ZERO,
         attempt: 0,
         idempotency_key: [0; 32],
-        instruction_kind: 0,
         canonical_instruction: Vec::new(),
     };
     let malformed_submit = reputation_request(
@@ -1017,7 +1016,8 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
     );
     assert_eq!(
         validate_operation_request(&malformed_submit),
-        Err(BrokerError::Rejected)
+        Err(BrokerError::Protocol),
+        "the missing mandatory typed instruction fails canonical decoding before request validation"
     );
     for outcome in [
         ReputationJournalTransactionSubmitOutcomeV1::Queued {

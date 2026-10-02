@@ -346,9 +346,9 @@ mod fastpq_quantity_capture;
 mod fastpq_rejection_tail;
 #[cfg(test)]
 mod fastpq_source_quota_tests;
+pub(crate) mod native_maintenance;
 mod prepared_transfer_transcript;
 mod replay_outputs;
-pub(crate) mod sns_maintenance;
 pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
@@ -1452,6 +1452,7 @@ mod world_commit;
 )]
 mod world_journals;
 pub(crate) mod world_projection;
+pub use world_projection::world_state_accumulator::ProviderAdmissionSnapshotOriginalsV1;
 
 /// Exercise actual World capture while retaining journals through a test observation.
 #[cfg(test)]
@@ -2915,9 +2916,9 @@ pub enum LaneLifecycleError {
     /// Relay worker requires asynchronous lane-relay-burn fee settlement.
     #[error("nexus.relay_worker.enabled requires lane-relay-burn fee settlement")]
     RelayWorkerFeeConfig,
-    /// Nexus fee asset selector must be the exact canonical XOR asset or exact XOR alias.
+    /// Nexus fee selector must be canonical; execution pins its identity to the signed root policy.
     #[error(
-        "invalid nexus.fees.fee_asset_id; expected exact XOR canonical asset definition id or exact xor#universal alias"
+        "invalid nexus.fees.fee_asset_id; expected a canonical asset definition id or exact xor#universal alias"
     )]
     NexusFeeAssetIdInvalid,
     /// Nexus fee sink account literal must be non-empty.
@@ -12814,18 +12815,7 @@ impl<'state> StateBlock<'state> {
                 self.world.governance_locks.iter(),
                 None,
                 None,
-            )?
-            .with_sns(&self.world.smart_contract_state, None)
-            .map_err(|error| match error {
-                crate::sns::SnsError::Deferred(reason) => {
-                    if self.local_storage_refusal.is_none() {
-                        self.local_storage_refusal =
-                            Some(StateStorageAdmissionError::SnsMaintenance(reason));
-                    }
-                    "local retained SNS admission did not complete".into()
-                }
-                error => error.to_string(),
-            })?;
+            )?;
             let scope = Hash::new(
                 norito::encode_canonical(&(self.network_id, height, self._curr_block.hash()))
                     .map_err(|error| error.to_string())?,
@@ -13991,6 +13981,14 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// One-use ordinal of a directly signed role-11 instruction, absent for nested effects.
     pub(crate) current_direct_stream_token_instruction_index: Option<u32>,
+    /// One-use ordinal of an exact directly signed gateway ISI, absent for nested effects.
+    pub(crate) current_direct_stream_token_gateway_instruction_index: Option<u32>,
+    /// One-use complete sole external append payload; absent for nested or substituted execution.
+    pub(crate) current_direct_stream_token_reputation_payload:
+        Option<iroha_data_model::transaction::TransactionPayload>,
+    /// One-use exact signed recorder-policy source; genuine genesis has separate opaque custody.
+    pub(crate) current_direct_reputation_policy_origin:
+        Option<iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1>,
     /// One-use marker set only for the exact directly signed genesis admission initializer.
     pub(crate) current_direct_sorafs_admission_initialization: bool,
     /// One-use source of a sole directly signed role-15 Reserve/Complete instruction.
@@ -30520,6 +30518,11 @@ impl State {
     pub(crate) fn consensus_publication_lease(&self) -> PublicationGuard<'_> {
         self.state_commit_lock.lock()
     }
+    /// Exclude committed publication only for the gateway's final synchronous capture handoff.
+    /// Native proof/Kura reads, network waits and callback reconciliation must precede this lease.
+    pub(crate) fn stream_token_gateway_publication_lease(&self) -> PublicationGuard<'_> {
+        self.state_commit_lock.lock()
+    }
     #[inline]
     fn note_view_generation_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
@@ -32197,7 +32200,7 @@ impl State {
             &previous_nexus.dataspace_catalog,
             &dataspace_aliases,
         )?;
-        if !nexus_fee_asset_selector_is_xor(&nexus.fees.fee_asset_id) {
+        if !nexus_fee_asset_selector_is_canonical(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
         if let Some(params) = self.world.view().sumeragi_npos_parameters() {
@@ -34267,7 +34270,7 @@ fn ensure_autoscale_managed_created_heights_not_future(
     }
     Ok(())
 }
-fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
+fn nexus_fee_asset_selector_is_canonical(value: &str) -> bool {
     value.trim() == value
         && (AssetDefinitionId::parse_address_literal(value).is_ok() || value == "xor#universal")
 }
@@ -37407,6 +37410,9 @@ impl<'state> StateBlock<'state> {
             private_settlement_carrier_binding: None,
             current_entrypoint_index: None,
             current_direct_stream_token_instruction_index: None,
+            current_direct_stream_token_gateway_instruction_index: None,
+            current_direct_stream_token_reputation_payload: None,
+            current_direct_reputation_policy_origin: None,
             current_direct_final_promotion_operation_origin: None,
             current_direct_sorafs_admission_initialization: false,
             rwa_generated_id_ordinal: 0,
@@ -38078,12 +38084,6 @@ impl<'state> StateBlock<'state> {
         {
             return Err("Time phase requires the exact active output owner".into());
         }
-        self.fastpq_source_quota
-            .as_mut()
-            .ok_or("SNS Time source quota is absent")?
-            .as_mut()
-            .map_err(|error| error.clone())?
-            .begin_sns_time()?;
         let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
@@ -38108,11 +38108,8 @@ impl<'state> StateBlock<'state> {
         // Owner-authorized alias lease renewal is native block maintenance, not a
         // synthetic client transaction or subscription trigger. The sweep is
         // bounded and advances a durable cursor in canonical storage-key order.
-        if let Err(error) =
-            crate::sns::process_alias_auto_renewals(sns_maintenance::SnsTimeMaintenance {
-                block: self,
-            })
-        {
+        let native_scope = self.native_maintenance_time_scope()?;
+        if let Err(error) = crate::sns::process_alias_auto_renewals(self, &native_scope) {
             return Err(match error {
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
@@ -39725,6 +39722,24 @@ mod fastpq_tx_set_hash_tests {
         collections::{BTreeMap, BTreeSet},
         time::Duration,
     };
+    // Bind the actual original recorder before State applies any start effects.
+    // These internal-call component controls carry no Network inputs or finality.
+    fn recorded_component_fixture(
+        state: &State,
+        header: BlockHeader,
+    ) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
+        state
+            .block_with_owned_start_stages(
+                header,
+                |block| {
+                    let recording = crate::exec_witness::begin_exec_witness_capture()?;
+                    block.bind_original_execution_recorder()?;
+                    Ok::<_, String>(recording)
+                },
+                |_, recording| Ok(recording),
+            )
+            .expect("original recorder retained before component effects")
+    }
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -39798,9 +39813,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -39938,9 +39951,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -40016,9 +40027,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -43673,6 +43682,7 @@ pub(crate) use telemetry_status::{
 /// Execute canonical phases from an original recorder acquired before block creation.
 /// The caller retains the recorder for the entire component block lifetime;
 /// neither the component carrier nor this helper grants publication authority.
+/// The Network commitment comes from this exact source's ordered canonical entrypoints.
 pub(crate) fn run_empty_network_owner_fixture<'state>(
     state: &'state State,
     source: &SignedBlock,
@@ -43692,6 +43702,11 @@ pub(crate) fn run_empty_network_owner_fixture<'state>(
     let fragments_before = block.committed_fragment_count();
     block.reserve_ordinary_execution_outputs(source).unwrap();
     block.execute_ordinary_output_plan(source, None).unwrap();
+    let tx_set_hash = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+        source.external_entrypoints_slice().iter(),
+    )
+    .expect("canonical original component transaction wires");
+    block.set_fastpq_tx_set_hash(tx_set_hash.into());
     let outputs = block
         .retained_execution_outputs_for_test()
         .unwrap()

@@ -16,7 +16,7 @@
 #[path = "mint_hash_claim_global_inventory.rs"]
 mod global_inventory;
 
-use ff::{Field as _, PrimeField};
+use ff::{Field as _, PrimeField as _};
 #[cfg(test)]
 use halo2_base::QuantumCell::Witness;
 use halo2_base::{
@@ -24,34 +24,52 @@ use halo2_base::{
     QuantumCell::{Constant, Existing},
     gates::{
         GateInstructions as _, RangeInstructions as _,
-        circuit::{BaseCircuitParams, BaseConfig, MaybeRangeConfig, builder::BaseCircuitBuilder},
+        circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
     },
     utils::{BigPrimeField, CurveAffineExt},
 };
 use halo2_proofs::{
-    arithmetic::best_multiexp,
-    circuit::{Cell, Layouter, V1, Value},
+    circuit::{Layouter, V1},
     halo2curves::{
         CurveAffine,
-        group::{Curve as _, prime::PrimeCurveAffine as _},
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
-    plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Expression, Fixed,
-        TableColumn,
-    },
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError},
     poly::{
-        Rotation,
         commitment::{Params as _, ParamsProver as _},
         ipa::commitment::ParamsIPA,
     },
 };
-use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256};
 use snark_verifier::{
     loader::{ScalarLoader as _, native::NativeLoader},
     pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
     verifier::plonk::PlonkProtocol,
 };
+
+use super::carrier_binding::{
+    KagemushaCarrierBindingLayoutV1, KagemushaCarrierBindingV1 as ClaimCarrierBindingV1,
+    KagemushaCarrierCommitmentsV1 as ClaimCarrierCommitmentsV1,
+    placeholder_carrier_binding_v1 as placeholder_claim_carrier_binding_v1,
+};
+use super::carrier_rlc::{streaming as rlc_streaming, *};
+const CLAIM_CARRIER_BINDING_LAYOUT_V1: KagemushaCarrierBindingLayoutV1 =
+    KagemushaCarrierBindingLayoutV1 {
+        domain: CLAIM_CARRIER_RLC_DOMAIN_V1,
+        version: CLAIM_CARRIER_RLC_VERSION_V1,
+        capacity: KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        semantic_prefix: KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+    };
+
+// The Claim protocol retains its original two-carrier, 4090-cell fixed schedule.
+type ClaimCarrierRlcMachineV1<F> = KagemushaCarrierRlcMachineV1<
+    F,
+    KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+    2,
+    {
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+            .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1)
+    },
+>;
 
 use super::{
     DigestV1, KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1,
@@ -95,12 +113,6 @@ const CLAIM_BATCH_TRANSCRIPT_BINDING_COUNT_V1: usize = 4;
 // Version 2 uses canonical Mersenne residues plus packed ternary quotients.
 const CLAIM_CARRIER_RLC_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmrlc_2");
 const CLAIM_CARRIER_RLC_VERSION_V1: u64 = 2;
-const CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1: usize = 125;
-const CLAIM_CARRIER_RLC_MODULUS_V1: u128 = (1_u128 << 127) - 1;
-/// Quotients of a `u128` by the 127-bit RLC modulus are ternary digits.
-/// Packing eighty of them is canonical because `3^80 - 1 < 2^127 - 1`.
-const CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1: u128 = 3;
-const CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1: usize = 80;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1: usize = 2;
 // Two lanes retain the existing 1,008-source envelope with both protocol identities: the
@@ -146,958 +158,6 @@ macro_rules! profile_claim_completion_cells {
             );
         }
     };
-}
-
-// The common-prime carrier binding used to run through BaseCircuitBuilder. At the real claim
-// width, its generic vertical gates occupied another ~4 million advice cells and materialized one
-// selector plus one permutation column for almost every 65,527-row slice. This fixed machine keeps
-// the exact same two-challenge V2 polynomial, but schedules all divisions in one narrow region.
-// Only BUS participates in the permutation argument; the remaining columns are local state.
-const CLAIM_RLC_BUS: usize = 0;
-const CLAIM_RLC_VALUE: usize = 1;
-const CLAIM_RLC_COEFFICIENT: usize = 2;
-const CLAIM_RLC_QUOTIENT_BIT_0: usize = 3;
-const CLAIM_RLC_QUOTIENT_BIT_1: usize = 4;
-const CLAIM_RLC_RAW_REMAINDER: usize = 5;
-const CLAIM_RLC_REMAINDER_INVERSE: usize = 6;
-const CLAIM_RLC_CHALLENGE_A: usize = 7;
-const CLAIM_RLC_CHALLENGE_B: usize = 8;
-const CLAIM_RLC_ACCUMULATOR_A: usize = 9;
-const CLAIM_RLC_ACCUMULATOR_B: usize = 10;
-const CLAIM_RLC_QUOTIENT_PACK: usize = 11;
-const CLAIM_RLC_DIVISION_QUOTIENT: usize = 12;
-const CLAIM_RLC_DIVISION_REMAINDER: usize = 13;
-const CLAIM_RLC_RANGE_START: usize = 14;
-const CLAIM_RLC_RANGE_LIMBS: usize = 18;
-const CLAIM_RLC_SCALED_FIRST_TOP: usize = CLAIM_RLC_RANGE_START + CLAIM_RLC_RANGE_LIMBS;
-const CLAIM_RLC_SCALED_SECOND_TOP: usize = CLAIM_RLC_SCALED_FIRST_TOP + 1;
-const CLAIM_RLC_COLUMNS: usize = CLAIM_RLC_SCALED_SECOND_TOP + 1;
-// Logical witness records remain unchanged for the host oracle and mutation fixtures.
-// Each record is assigned into two physical rows with one shared ten-column range bank.
-const CLAIM_RLC_ROWS_PER_LOGICAL_ROW: usize = 2;
-const CLAIM_RLC_PHYSICAL_STATE_COLUMNS: usize = 4;
-const CLAIM_RLC_PHYSICAL_RANGE_COLUMNS: usize = 10;
-const CLAIM_RLC_PHYSICAL_COLUMNS: usize =
-    CLAIM_RLC_PHYSICAL_STATE_COLUMNS + CLAIM_RLC_PHYSICAL_RANGE_COLUMNS;
-// (logical value, physical column, half-row). Only the head BUS has external copies.
-const CLAIM_RLC_STATE_LAYOUT: [(usize, usize, usize); 8] = [
-    (CLAIM_RLC_BUS, 0, 0),
-    (CLAIM_RLC_CHALLENGE_A, 1, 0),
-    (CLAIM_RLC_CHALLENGE_B, 2, 0),
-    (CLAIM_RLC_ACCUMULATOR_A, 3, 0),
-    (CLAIM_RLC_REMAINDER_INVERSE, 0, 1),
-    (CLAIM_RLC_COEFFICIENT, 1, 1),
-    (CLAIM_RLC_ACCUMULATOR_B, 2, 1),
-    (CLAIM_RLC_QUOTIENT_PACK, 3, 1),
-];
-const CLAIM_RLC_RADIX_BITS: usize = 15;
-const CLAIM_RLC_RADIX: u128 = 1_u128 << CLAIM_RLC_RADIX_BITS;
-
-#[derive(Clone, Debug)]
-struct KagemushaClaimCarrierRlcConfigV1 {
-    advice: [Column<Advice>; CLAIM_RLC_PHYSICAL_COLUMNS],
-    range_table: TableColumn,
-    owns_range_table: bool,
-    mode_bit_0: Column<Fixed>,
-    mode_bit_1: Column<Fixed>,
-    payload: Column<Fixed>,
-}
-
-impl KagemushaClaimCarrierRlcConfigV1 {
-    #[cfg(test)]
-    fn configure<F: KagemushaPoseidonFieldV1>(meta: &mut ConstraintSystem<F>) -> Self {
-        Self::configure_with_base(meta, None)
-    }
-
-    fn configure_with_base<F: KagemushaPoseidonFieldV1>(
-        meta: &mut ConstraintSystem<F>,
-        base: Option<&BaseConfig<F>>,
-    ) -> Self {
-        let advice = std::array::from_fn(|_| meta.advice_column());
-        meta.enable_equality(advice[CLAIM_RLC_BUS]);
-        // Base synthesis assigns its table before this machine. Share only an actually
-        // configured table with the exact same 15-bit contents, and assign it exactly once.
-        // Base can omit its range table when no Base lookup advice is configured, or use a
-        // different range width; those configurations retain this machine's owned table.
-        let shared_range_table = base.and_then(|base| match &base.base {
-            MaybeRangeConfig::WithRange(range) if range.lookup_bits() == CLAIM_RLC_RADIX_BITS => {
-                Some(range.lookup)
-            }
-            _ => None,
-        });
-        let owns_range_table = shared_range_table.is_none();
-        let range_table = shared_range_table.unwrap_or_else(|| meta.lookup_table_column());
-        // Two fixed mode bits select inactive/boundary/preprocess/evaluate rows. The third fixed
-        // column is a mode-local payload: a boundary subtype, the preprocess ternary power, or an
-        // evaluate-side/load/store opcode. Unassigned rows decode as inactive (0, 0, 0).
-        let mode_bit_0 = meta.fixed_column();
-        let mode_bit_1 = meta.fixed_column();
-        let payload = meta.fixed_column();
-
-        meta.create_gate("Kagemusha claim carrier RLC state machine", |meta| {
-            let mut current: [Expression<F>; CLAIM_RLC_COLUMNS] =
-                std::array::from_fn(|_| Expression::Constant(F::ZERO));
-            let mut next: [Expression<F>; CLAIM_RLC_COLUMNS] =
-                std::array::from_fn(|_| Expression::Constant(F::ZERO));
-            for (logical, physical, half) in CLAIM_RLC_STATE_LAYOUT {
-                current[logical] = meta.query_advice(advice[physical], Rotation(half as i32));
-                if logical != CLAIM_RLC_BUS && logical != CLAIM_RLC_REMAINDER_INVERSE {
-                    next[logical] = meta.query_advice(
-                        advice[physical],
-                        Rotation((half + CLAIM_RLC_ROWS_PER_LOGICAL_ROW) as i32),
-                    );
-                }
-            }
-            for half in 0..CLAIM_RLC_ROWS_PER_LOGICAL_ROW {
-                for limb in 0..9 {
-                    current[CLAIM_RLC_RANGE_START + half * 9 + limb] = meta.query_advice(
-                        advice[CLAIM_RLC_PHYSICAL_STATE_COLUMNS + limb],
-                        Rotation(half as i32),
-                    );
-                }
-                current[CLAIM_RLC_SCALED_FIRST_TOP + half] = meta.query_advice(
-                    advice[CLAIM_RLC_PHYSICAL_COLUMNS - 1],
-                    Rotation(half as i32),
-                );
-            }
-            let one = Expression::Constant(F::ONE);
-            let zero = Expression::Constant(F::ZERO);
-            let two = Expression::Constant(F::from(2));
-            let three = Expression::Constant(F::from(3));
-            let inverse_two = Expression::Constant(F::from(2).invert().unwrap());
-            let inverse_six = Expression::Constant(F::from(6).invert().unwrap());
-            let bit_0 = meta.query_fixed(mode_bit_0, Rotation::cur());
-            let bit_1 = meta.query_fixed(mode_bit_1, Rotation::cur());
-            let power = meta.query_fixed(payload, Rotation::cur());
-
-            let boundary = (one.clone() - bit_0.clone()) * bit_1.clone();
-            let preprocess = bit_0.clone() * (one.clone() - bit_1.clone());
-            let evaluate = bit_0 * bit_1;
-            let payload_minus_one = power.clone() - one.clone();
-            let payload_minus_two = power.clone() - two.clone();
-            let payload_minus_three = power.clone() - three;
-            let payload_plus_one = power.clone() + one.clone();
-
-            // Boundary payload 0/1/2/3 selects start-A/start-B/end-A/end-B. Cubic Lagrange
-            // indicators multiplied by the quadratic boundary mode keep every gated relation at
-            // degree six or less.
-            let start_a = boundary.clone()
-                * (zero.clone()
-                    - payload_minus_one.clone()
-                        * payload_minus_two.clone()
-                        * payload_minus_three.clone()
-                        * inverse_six.clone());
-            let start_b = boundary.clone()
-                * power.clone()
-                * payload_minus_two.clone()
-                * payload_minus_three.clone()
-                * inverse_two.clone();
-            let end_a = boundary.clone()
-                * (zero.clone()
-                    - power.clone()
-                        * payload_minus_one.clone()
-                        * payload_minus_three
-                        * inverse_two.clone());
-            let end_b = boundary
-                * power.clone()
-                * payload_minus_one.clone()
-                * payload_minus_two.clone()
-                * inverse_six.clone();
-
-            // Evaluation payload 0/1 is side A (normal/load); 2/-1 is side B
-            // (normal/store). The two exceptional cubic indicators recover load/store directly.
-            let evaluate_b_side = power.clone() * payload_minus_one.clone() * inverse_two.clone();
-            let evaluate_a = evaluate.clone() * (one.clone() - evaluate_b_side.clone());
-            let evaluate_b = evaluate.clone() * evaluate_b_side;
-            let load_pack = evaluate.clone()
-                * (zero.clone()
-                    - power.clone() * payload_minus_two.clone() * payload_plus_one * inverse_two);
-            let store_pack = evaluate.clone()
-                * (zero - power.clone() * payload_minus_one * payload_minus_two * inverse_six);
-            let modulus = Expression::Constant(F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1));
-            let transition = start_a.clone()
-                + start_b.clone()
-                + preprocess.clone()
-                + evaluate_a.clone()
-                + evaluate_b.clone()
-                + end_a.clone();
-            let idle = start_a.clone() + start_b.clone() + end_a.clone();
-
-            let compose = |limbs: std::ops::Range<usize>| {
-                limbs
-                    .enumerate()
-                    .fold(Expression::Constant(F::ZERO), |sum, (position, index)| {
-                        sum + current[CLAIM_RLC_RANGE_START + index].clone()
-                            * Expression::Constant(F::from_u128(
-                                1_u128 << (CLAIM_RLC_RADIX_BITS * position),
-                            ))
-                    })
-            };
-            let first_range = compose(0..9);
-            let second_range = compose(9..18);
-            let first_top = current[CLAIM_RLC_RANGE_START + 8].clone();
-            let second_top = current[CLAIM_RLC_RANGE_START + 17].clone();
-            // On preprocess rows V and R are the independently range-constrained integers.
-            // q=(V-R)/M is ternary, and V=q*M+R cannot wrap in either Pasta field:
-            // V<2^128, R<M and q in {0,1,2} imply both integer sides are below 2^129.
-            let quotient = (first_range.clone() - second_range.clone())
-                * Expression::Constant(
-                    F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1)
-                        .invert()
-                        .expect("claim RLC modulus is nonzero"),
-                );
-            vec![
-                start_a.clone()
-                    * (current[CLAIM_RLC_CHALLENGE_A].clone() - current[CLAIM_RLC_BUS].clone()),
-                start_b.clone()
-                    * (current[CLAIM_RLC_CHALLENGE_B].clone() - current[CLAIM_RLC_BUS].clone()),
-                start_a.clone() * current[CLAIM_RLC_ACCUMULATOR_A].clone(),
-                start_a.clone() * current[CLAIM_RLC_ACCUMULATOR_B].clone(),
-                start_a.clone() * current[CLAIM_RLC_QUOTIENT_PACK].clone(),
-                end_a.clone()
-                    * (current[CLAIM_RLC_ACCUMULATOR_A].clone() - current[CLAIM_RLC_BUS].clone()),
-                end_b.clone()
-                    * (current[CLAIM_RLC_ACCUMULATOR_B].clone() - current[CLAIM_RLC_BUS].clone()),
-                transition.clone()
-                    * (next[CLAIM_RLC_CHALLENGE_A].clone()
-                        - current[CLAIM_RLC_CHALLENGE_A].clone()),
-                transition
-                    * (next[CLAIM_RLC_CHALLENGE_B].clone()
-                        - current[CLAIM_RLC_CHALLENGE_B].clone()),
-                idle.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_A].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_A].clone()),
-                idle.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_B].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_B].clone()),
-                idle * (next[CLAIM_RLC_QUOTIENT_PACK].clone()
-                    - current[CLAIM_RLC_QUOTIENT_PACK].clone()),
-                preprocess.clone() * (current[CLAIM_RLC_BUS].clone() - first_range.clone()),
-                preprocess.clone()
-                    * quotient.clone()
-                    * (quotient.clone() - one.clone())
-                    * (quotient.clone() - two),
-                preprocess.clone()
-                    * ((second_range.clone() - modulus.clone())
-                        * current[CLAIM_RLC_REMAINDER_INVERSE].clone()
-                        - one.clone()),
-                preprocess.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_A].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_A].clone()),
-                preprocess.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_B].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_B].clone()),
-                preprocess.clone() * (next[CLAIM_RLC_COEFFICIENT].clone() - second_range.clone()),
-                preprocess.clone()
-                    * (next[CLAIM_RLC_QUOTIENT_PACK].clone()
-                        - current[CLAIM_RLC_QUOTIENT_PACK].clone()
-                        - quotient * power),
-                evaluate.clone()
-                    * ((second_range.clone() - modulus.clone())
-                        * current[CLAIM_RLC_REMAINDER_INVERSE].clone()
-                        - one),
-                preprocess.clone()
-                    * (current[CLAIM_RLC_SCALED_FIRST_TOP].clone()
-                        - first_top.clone() * Expression::Constant(F::from(128))),
-                evaluate.clone()
-                    * (current[CLAIM_RLC_SCALED_FIRST_TOP].clone()
-                        - first_top * Expression::Constant(F::from(512))),
-                (preprocess + evaluate.clone())
-                    * (current[CLAIM_RLC_SCALED_SECOND_TOP].clone()
-                        - second_top * Expression::Constant(F::from(256))),
-                evaluate_a.clone()
-                    * (current[CLAIM_RLC_ACCUMULATOR_A].clone()
-                        * current[CLAIM_RLC_CHALLENGE_A].clone()
-                        + current[CLAIM_RLC_COEFFICIENT].clone()
-                        - first_range.clone() * modulus.clone()
-                        - second_range.clone()),
-                evaluate_b.clone()
-                    * (current[CLAIM_RLC_ACCUMULATOR_B].clone()
-                        * current[CLAIM_RLC_CHALLENGE_B].clone()
-                        + current[CLAIM_RLC_COEFFICIENT].clone()
-                        - first_range.clone() * modulus
-                        - second_range.clone()),
-                evaluate_a.clone() * (next[CLAIM_RLC_ACCUMULATOR_A].clone() - second_range.clone()),
-                evaluate_a.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_B].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_B].clone()),
-                evaluate_a.clone()
-                    * (next[CLAIM_RLC_COEFFICIENT].clone()
-                        - current[CLAIM_RLC_COEFFICIENT].clone()),
-                evaluate_a
-                    * (next[CLAIM_RLC_QUOTIENT_PACK].clone()
-                        - current[CLAIM_RLC_QUOTIENT_PACK].clone()),
-                evaluate_b.clone()
-                    * (next[CLAIM_RLC_ACCUMULATOR_A].clone()
-                        - current[CLAIM_RLC_ACCUMULATOR_A].clone()),
-                evaluate_b.clone() * (next[CLAIM_RLC_ACCUMULATOR_B].clone() - second_range.clone()),
-                evaluate_b.clone()
-                    * (next[CLAIM_RLC_QUOTIENT_PACK].clone()
-                        - current[CLAIM_RLC_QUOTIENT_PACK].clone())
-                    + store_pack.clone() * current[CLAIM_RLC_QUOTIENT_PACK].clone(),
-                store_pack
-                    * (current[CLAIM_RLC_BUS].clone() - current[CLAIM_RLC_QUOTIENT_PACK].clone()),
-                load_pack
-                    * (current[CLAIM_RLC_BUS].clone() - current[CLAIM_RLC_COEFFICIENT].clone()),
-            ]
-        });
-
-        // Each physical column is independently range-checked on both row halves.
-        // The last column is the scaled high limb. These remain unconditional linear
-        // lookups, so a tuple lookup cannot accidentally weaken either integer bound.
-        for position in 0..CLAIM_RLC_PHYSICAL_RANGE_COLUMNS {
-            meta.lookup("Kagemusha claim carrier RLC range limb", |meta| {
-                let cell = meta.query_advice(
-                    advice[CLAIM_RLC_PHYSICAL_STATE_COLUMNS + position],
-                    Rotation::cur(),
-                );
-                vec![(cell, range_table)]
-            });
-        }
-
-        Self {
-            advice,
-            range_table,
-            owns_range_table,
-            mode_bit_0,
-            mode_bit_1,
-            payload,
-        }
-    }
-
-    fn load_range_table<F: KagemushaPoseidonFieldV1>(
-        &self,
-        layouter: &mut impl Layouter<F>,
-    ) -> Result<(), PlonkError> {
-        if !self.owns_range_table {
-            return Ok(());
-        }
-        layouter.assign_table(
-            || "Kagemusha claim carrier RLC range",
-            |mut table| {
-                for value in 0..CLAIM_RLC_RADIX as usize {
-                    table.assign_cell(
-                        || "claim carrier RLC range value",
-                        self.range_table,
-                        value,
-                        || Value::known(F::from(value as u64)),
-                    )?;
-                }
-                Ok(())
-            },
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ClaimRlcRowModeV1 {
-    StartA,
-    StartB,
-    Preprocess,
-    EvaluateA,
-    EvaluateB,
-    EndA,
-    EndB,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-enum ClaimRlcBusBindingV1<F: PrimeField> {
-    Virtual(AssignedValue<F>),
-    PackStore { carrier: usize, pack: usize },
-    PackLoad { carrier: usize, pack: usize },
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-struct ClaimRlcRawRowV1<F: PrimeField> {
-    values: [F; CLAIM_RLC_COLUMNS],
-    mode: ClaimRlcRowModeV1,
-    store_pack: bool,
-    load_pack: bool,
-    ternary_power: F,
-    binding: Option<ClaimRlcBusBindingV1<F>>,
-    #[cfg(test)]
-    physical_mutation: Option<ClaimRlcPhysicalMutationV1>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-enum ClaimRlcPhysicalMutationV1 {
-    Advice { half: usize, column: usize },
-    Fixed { half: usize, column: usize },
-}
-
-#[cfg(test)]
-fn claim_rlc_physical_values_v1<F: PrimeField>(
-    row: &ClaimRlcRawRowV1<F>,
-) -> [[F; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW] {
-    let mut values = [[F::ZERO; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW];
-    for (logical, physical, half) in CLAIM_RLC_STATE_LAYOUT {
-        values[half][physical] = row.values[logical];
-    }
-    for (half, values) in values.iter_mut().enumerate() {
-        values[CLAIM_RLC_PHYSICAL_STATE_COLUMNS..CLAIM_RLC_PHYSICAL_COLUMNS - 1].copy_from_slice(
-            &row.values[CLAIM_RLC_RANGE_START + 9 * half..CLAIM_RLC_RANGE_START + 9 * (half + 1)],
-        );
-        values[CLAIM_RLC_PHYSICAL_COLUMNS - 1] = row.values[CLAIM_RLC_SCALED_FIRST_TOP + half];
-    }
-    values
-}
-
-#[cfg(test)]
-fn claim_rlc_fixed_encoding_v1<F: PrimeField>(row: &ClaimRlcRawRowV1<F>) -> Result<[F; 3], String> {
-    if row.store_pack && !matches!(row.mode, ClaimRlcRowModeV1::EvaluateB) {
-        return Err("claim RLC store opcode is not on an evaluation-B row".to_owned());
-    }
-    if row.load_pack && !matches!(row.mode, ClaimRlcRowModeV1::EvaluateA) {
-        return Err("claim RLC load opcode is not on an evaluation-A row".to_owned());
-    }
-    if !matches!(row.mode, ClaimRlcRowModeV1::Preprocess) && row.ternary_power != F::ZERO {
-        return Err("claim RLC ternary power is not on a preprocess row".to_owned());
-    }
-
-    let encoding = match row.mode {
-        ClaimRlcRowModeV1::StartA => [F::ZERO, F::ONE, F::ZERO],
-        ClaimRlcRowModeV1::StartB => [F::ZERO, F::ONE, F::ONE],
-        ClaimRlcRowModeV1::Preprocess => {
-            if row.ternary_power == F::ZERO {
-                return Err("claim RLC preprocess ternary power is zero".to_owned());
-            }
-            [F::ONE, F::ZERO, row.ternary_power]
-        }
-        ClaimRlcRowModeV1::EvaluateA => {
-            [F::ONE, F::ONE, if row.load_pack { F::ONE } else { F::ZERO }]
-        }
-        ClaimRlcRowModeV1::EvaluateB => [
-            F::ONE,
-            F::ONE,
-            if row.store_pack {
-                F::ZERO - F::ONE
-            } else {
-                F::from(2)
-            },
-        ],
-        ClaimRlcRowModeV1::EndA => [F::ZERO, F::ONE, F::from(2)],
-        ClaimRlcRowModeV1::EndB => [F::ZERO, F::ONE, F::from(3)],
-    };
-    Ok(encoding)
-}
-
-#[derive(Clone, Copy)]
-struct ClaimRlcStateV1 {
-    challenge_a: u128,
-    challenge_b: u128,
-    accumulator_a: u128,
-    accumulator_b: u128,
-    quotient_pack: u128,
-    coefficient: u128,
-}
-
-#[derive(Clone, Debug)]
-struct ClaimRlcCarrierV1<F: PrimeField> {
-    values: Vec<AssignedValue<F>>,
-    expected_a: AssignedValue<F>,
-    expected_b: AssignedValue<F>,
-}
-
-#[derive(Clone, Debug)]
-struct KagemushaClaimCarrierRlcMachineV1<F: KagemushaPoseidonFieldV1> {
-    challenge_a: AssignedValue<F>,
-    challenge_b: AssignedValue<F>,
-    carriers: [ClaimRlcCarrierV1<F>; 2],
-    use_unknown: bool,
-}
-
-impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
-    fn unknown(&self) -> Self {
-        let mut unknown = self.clone();
-        unknown.use_unknown = true;
-        unknown
-    }
-
-    fn required_rows(&self) -> Result<usize, String> {
-        self.required_rows_with_capacity(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1)
-    }
-
-    fn required_rows_with_capacity(&self, fixed_capacity: usize) -> Result<usize, String> {
-        if fixed_capacity == 0 {
-            return Err("mint-hash claim RLC fixed capacity is zero".to_owned());
-        }
-        let fixed_packs = fixed_capacity.div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
-        self.carriers.iter().try_fold(0_usize, |total, carrier| {
-            if carrier.values.len() != fixed_capacity {
-                return Err(
-                    "mint-hash claim RLC carrier does not fill its fixed schedule".to_owned(),
-                );
-            }
-            total
-                .checked_add(
-                    (4 + 3 * fixed_capacity + 2 * fixed_packs)
-                        .checked_mul(CLAIM_RLC_ROWS_PER_LOGICAL_ROW)
-                        .ok_or_else(|| "mint-hash claim RLC row count overflowed".to_owned())?,
-                )
-                .ok_or_else(|| "mint-hash claim RLC row count overflowed".to_owned())
-        })
-    }
-
-    fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
-        let required = self.required_rows()?;
-        if required > usable_rows {
-            return Err(format!(
-                "mint-hash claim RLC requires {required} rows, exceeding {usable_rows}"
-            ));
-        }
-        Ok(())
-    }
-
-    fn synthesize(
-        &self,
-        config: &KagemushaClaimCarrierRlcConfigV1,
-        layouter: &mut impl Layouter<F>,
-        copy_manager: &halo2_base::virtual_region::copy_constraints::SharedCopyConstraintManager<F>,
-        witness_gen_only: bool,
-        usable_rows: usize,
-    ) -> Result<(), PlonkError> {
-        self.validate_capacity(usable_rows)
-            .map_err(|_| PlonkError::Synthesis)?;
-        config.load_range_table(layouter)?;
-        rlc_streaming::synthesize_with_capacity(
-            self,
-            config,
-            layouter,
-            copy_manager,
-            witness_gen_only,
-            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
-        )
-    }
-
-    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
-    #[cfg(test)]
-    fn synthesize_rows(
-        &self,
-        config: &KagemushaClaimCarrierRlcConfigV1,
-        layouter: &mut impl Layouter<F>,
-        copy_manager: &halo2_base::virtual_region::copy_constraints::SharedCopyConstraintManager<F>,
-        witness_gen_only: bool,
-        rows: &[ClaimRlcRawRowV1<F>],
-    ) -> Result<(), PlonkError> {
-        let physical_cells = if witness_gen_only {
-            None
-        } else {
-            Some(copy_manager.lock().map_err(|_| PlonkError::Synthesis)?)
-        };
-        layouter.assign_region(
-            || "Kagemusha claim carrier fixed-row RLC",
-            |mut region| {
-                let mut pack_stores = std::collections::BTreeMap::<(usize, usize), Cell>::new();
-                let mut pack_loads = std::collections::BTreeMap::<(usize, usize), Cell>::new();
-                for (logical_row, row) in rows.iter().enumerate() {
-                    let physical_start = logical_row
-                        .checked_mul(CLAIM_RLC_ROWS_PER_LOGICAL_ROW)
-                        .ok_or(PlonkError::Synthesis)?;
-                    let head_fixed =
-                        claim_rlc_fixed_encoding_v1(row).map_err(|_| PlonkError::Synthesis)?;
-                    let physical_values = claim_rlc_physical_values_v1(row);
-                    let mut bus = None;
-                    for (half, values) in physical_values.iter().enumerate() {
-                        let row_index = physical_start + half;
-                        let fixed = if half == 0 { head_fixed } else { [F::ZERO; 3] };
-                        for (position, column) in [config.mode_bit_0, config.mode_bit_1, config.payload]
-                            .into_iter()
-                            .enumerate()
-                        {
-                            let value = fixed[position];
-                            #[cfg(test)]
-                            let value = if matches!(row.physical_mutation, Some(ClaimRlcPhysicalMutationV1::Fixed { half: target_half, column: target_column }) if target_half == half && target_column == position) {
-                                value + F::ONE
-                            } else {
-                                value
-                            };
-                            region.assign_fixed(column, row_index, value);
-                        }
-                        for (column_index, column) in config.advice.iter().copied().enumerate() {
-                            let value = values[column_index];
-                            #[cfg(test)]
-                            let value = if matches!(row.physical_mutation, Some(ClaimRlcPhysicalMutationV1::Advice { half: target_half, column: target_column }) if target_half == half && target_column == column_index) {
-                                value + F::ONE
-                            } else {
-                                value
-                            };
-                            let value = if self.use_unknown {
-                                Value::unknown()
-                            } else {
-                                Value::known(value)
-                            };
-                            let assigned = region.assign_advice_discarding_value(column, row_index, value);
-                            if half == 0 && column_index == 0 {
-                                bus = Some(assigned);
-                            }
-                        }
-                    }
-                    let bus = bus.expect("claim RLC always assigns its bus column");
-                    if let Some(binding) = row.binding {
-                        match binding {
-                            ClaimRlcBusBindingV1::Virtual(virtual_value) => {
-                                if let Some(physical_cells) = &physical_cells {
-                                    let virtual_cell =
-                                        virtual_value.cell.ok_or(PlonkError::Synthesis)?;
-                                    let physical = physical_cells
-                                        .assigned_advices
-                                        .resolve(&virtual_cell)
-                                        .ok_or(PlonkError::Synthesis)?;
-                                    region.constrain_equal(bus, physical);
-                                }
-                            }
-                            ClaimRlcBusBindingV1::PackStore { carrier, pack } => {
-                                if pack_stores.insert((carrier, pack), bus).is_some() {
-                                    return Err(PlonkError::Synthesis);
-                                }
-                            }
-                            ClaimRlcBusBindingV1::PackLoad { carrier, pack } => {
-                                if pack_loads.insert((carrier, pack), bus).is_some() {
-                                    return Err(PlonkError::Synthesis);
-                                }
-                            }
-                        }
-                    }
-                }
-                if pack_stores.len() != pack_loads.len() {
-                    return Err(PlonkError::Synthesis);
-                }
-                for (key, stored) in pack_stores {
-                    let loaded = pack_loads.remove(&key).ok_or(PlonkError::Synthesis)?;
-                    region.constrain_equal(stored, loaded);
-                }
-                if !pack_loads.is_empty() {
-                    return Err(PlonkError::Synthesis);
-                }
-                Ok(())
-            },
-        )
-    }
-
-    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
-    #[cfg(test)]
-    fn build_rows(&self) -> Result<Vec<ClaimRlcRawRowV1<F>>, String> {
-        self.build_rows_with_capacity(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1)
-    }
-
-    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
-    #[cfg(test)]
-    fn build_rows_with_capacity(
-        &self,
-        fixed_capacity: usize,
-    ) -> Result<Vec<ClaimRlcRawRowV1<F>>, String> {
-        // Key generation must depend only on the fixed schedule. `without_witnesses` retains the
-        // virtual cell identities needed by the equality bridge, but all arithmetic rows are
-        // built from a canonical dummy witness and assigned as unknown values.
-        let challenge_a = if self.use_unknown {
-            1
-        } else {
-            assigned_u128_cell_v1(self.challenge_a, "claim RLC challenge A")?
-        };
-        let challenge_b = if self.use_unknown {
-            1
-        } else {
-            assigned_u128_cell_v1(self.challenge_b, "claim RLC challenge B")?
-        };
-        if challenge_a == 0
-            || challenge_b == 0
-            || challenge_a > (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1)
-            || challenge_b > (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1)
-        {
-            return Err("mint-hash claim RLC challenge is outside its canonical range".to_owned());
-        }
-        let physical_rows = self.required_rows_with_capacity(fixed_capacity)?;
-        let logical_rows = physical_rows / CLAIM_RLC_ROWS_PER_LOGICAL_ROW;
-        let mut rows = Vec::with_capacity(logical_rows);
-        for (carrier_index, carrier) in self.carriers.iter().enumerate() {
-            self.build_carrier_rows(
-                &mut rows,
-                carrier_index,
-                carrier,
-                challenge_a,
-                challenge_b,
-                fixed_capacity,
-            )?;
-        }
-        if rows.len() != logical_rows {
-            return Err("mint-hash claim RLC row schedule drifted".to_owned());
-        }
-        Ok(rows)
-    }
-
-    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
-    #[cfg(test)]
-    fn build_carrier_rows(
-        &self,
-        rows: &mut Vec<ClaimRlcRawRowV1<F>>,
-        carrier_index: usize,
-        carrier: &ClaimRlcCarrierV1<F>,
-        challenge_a: u128,
-        challenge_b: u128,
-        fixed_capacity: usize,
-    ) -> Result<(), String> {
-        let mut state = ClaimRlcStateV1 {
-            challenge_a,
-            challenge_b,
-            accumulator_a: 0,
-            accumulator_b: 0,
-            quotient_pack: 0,
-            coefficient: 0,
-        };
-        let mut start_a = claim_rlc_state_row_v1(
-            state,
-            ClaimRlcRowModeV1::StartA,
-            Some(ClaimRlcBusBindingV1::Virtual(self.challenge_a)),
-        );
-        // The local challenge state and its equality bus must contain the same value. The bus
-        // copies the original Base challenge cell; leaving it at the generic row's zero value
-        // makes every nonzero challenge fail both the boundary gate and the permutation check.
-        start_a.values[CLAIM_RLC_BUS] = F::from_u128(challenge_a);
-        rows.push(start_a);
-        let mut start_b = claim_rlc_state_row_v1(
-            state,
-            ClaimRlcRowModeV1::StartB,
-            Some(ClaimRlcBusBindingV1::Virtual(self.challenge_b)),
-        );
-        start_b.values[CLAIM_RLC_BUS] = F::from_u128(challenge_b);
-        rows.push(start_b);
-
-        let mut packs = Vec::with_capacity(
-            carrier
-                .values
-                .len()
-                .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1),
-        );
-        let mut ternary_power = 1_u128;
-        for (value_index, assigned) in carrier.values.iter().copied().enumerate() {
-            let value = if self.use_unknown {
-                0
-            } else {
-                assigned_u128_cell_v1(assigned, "claim RLC carrier value")?
-            };
-            let quotient = value / CLAIM_CARRIER_RLC_MODULUS_V1;
-            let remainder = value % CLAIM_CARRIER_RLC_MODULUS_V1;
-            if quotient >= CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1 {
-                return Err("mint-hash claim RLC quotient is not ternary".to_owned());
-            }
-            let mut preprocess = claim_rlc_state_row_v1(
-                state,
-                ClaimRlcRowModeV1::Preprocess,
-                Some(ClaimRlcBusBindingV1::Virtual(assigned)),
-            );
-            preprocess.values[CLAIM_RLC_BUS] = F::from_u128(value);
-            preprocess.values[CLAIM_RLC_VALUE] = F::from_u128(value);
-            preprocess.values[CLAIM_RLC_QUOTIENT_BIT_0] = F::from_u128(quotient & 1);
-            preprocess.values[CLAIM_RLC_QUOTIENT_BIT_1] = F::from_u128(quotient >> 1);
-            preprocess.values[CLAIM_RLC_RAW_REMAINDER] = F::from_u128(remainder);
-            preprocess.values[CLAIM_RLC_REMAINDER_INVERSE] =
-                claim_rlc_non_modulus_inverse_v1::<F>(remainder)?;
-            preprocess.ternary_power = F::from_u128(ternary_power);
-            claim_rlc_set_range_limbs_v1(&mut preprocess, value, remainder);
-            rows.push(preprocess);
-            state.quotient_pack = state
-                .quotient_pack
-                .checked_add(
-                    quotient
-                        .checked_mul(ternary_power)
-                        .ok_or_else(|| "claim RLC quotient pack overflowed".to_owned())?,
-                )
-                .ok_or_else(|| "claim RLC quotient pack overflowed".to_owned())?;
-            state.coefficient = remainder;
-            claim_rlc_push_evaluation_rows_v1(rows, &mut state, None)?;
-
-            let pack_end = (value_index + 1) % CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1 == 0
-                || value_index + 1 == carrier.values.len();
-            if pack_end {
-                let pack_index = packs.len();
-                packs.push(state.quotient_pack);
-                let row = rows
-                    .last_mut()
-                    .expect("an evaluation-B row precedes every pack boundary");
-                row.store_pack = true;
-                row.values[CLAIM_RLC_BUS] = F::from_u128(state.quotient_pack);
-                row.binding = Some(ClaimRlcBusBindingV1::PackStore {
-                    carrier: carrier_index,
-                    pack: pack_index,
-                });
-                state.quotient_pack = 0;
-                ternary_power = 1;
-            } else {
-                ternary_power = ternary_power
-                    .checked_mul(CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1)
-                    .ok_or_else(|| "claim RLC ternary power overflowed".to_owned())?;
-            }
-        }
-
-        for (pack_index, pack) in packs.iter().copied().enumerate() {
-            state.coefficient = pack;
-            claim_rlc_push_evaluation_rows_v1(rows, &mut state, Some((carrier_index, pack_index)))?;
-        }
-        let fixed_pack_count =
-            fixed_capacity.div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
-        if packs.len() != fixed_pack_count {
-            return Err("claim RLC fixed quotient-pack schedule drifted".to_owned());
-        }
-
-        let expected_a = if self.use_unknown {
-            state.accumulator_a
-        } else {
-            assigned_u128_cell_v1(carrier.expected_a, "claim RLC expected A")?
-        };
-        let expected_b = if self.use_unknown {
-            state.accumulator_b
-        } else {
-            assigned_u128_cell_v1(carrier.expected_b, "claim RLC expected B")?
-        };
-        if expected_a >= CLAIM_CARRIER_RLC_MODULUS_V1 || expected_b >= CLAIM_CARRIER_RLC_MODULUS_V1
-        {
-            return Err("mint-hash claim RLC expected result is not canonical".to_owned());
-        }
-        let mut end_a = claim_rlc_state_row_v1(
-            state,
-            ClaimRlcRowModeV1::EndA,
-            Some(ClaimRlcBusBindingV1::Virtual(carrier.expected_a)),
-        );
-        end_a.values[CLAIM_RLC_BUS] = F::from_u128(expected_a);
-        rows.push(end_a);
-        let mut end_b = claim_rlc_state_row_v1(
-            state,
-            ClaimRlcRowModeV1::EndB,
-            Some(ClaimRlcBusBindingV1::Virtual(carrier.expected_b)),
-        );
-        end_b.values[CLAIM_RLC_BUS] = F::from_u128(expected_b);
-        rows.push(end_b);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-fn claim_rlc_state_row_v1<F: KagemushaPoseidonFieldV1>(
-    state: ClaimRlcStateV1,
-    mode: ClaimRlcRowModeV1,
-    binding: Option<ClaimRlcBusBindingV1<F>>,
-) -> ClaimRlcRawRowV1<F> {
-    let mut values = [F::ZERO; CLAIM_RLC_COLUMNS];
-    values[CLAIM_RLC_CHALLENGE_A] = F::from_u128(state.challenge_a);
-    values[CLAIM_RLC_CHALLENGE_B] = F::from_u128(state.challenge_b);
-    values[CLAIM_RLC_ACCUMULATOR_A] = F::from_u128(state.accumulator_a);
-    values[CLAIM_RLC_ACCUMULATOR_B] = F::from_u128(state.accumulator_b);
-    values[CLAIM_RLC_QUOTIENT_PACK] = F::from_u128(state.quotient_pack);
-    values[CLAIM_RLC_COEFFICIENT] = F::from_u128(state.coefficient);
-    ClaimRlcRawRowV1 {
-        values,
-        mode,
-        store_pack: false,
-        load_pack: false,
-        ternary_power: F::ZERO,
-        binding,
-        #[cfg(test)]
-        physical_mutation: None,
-    }
-}
-
-// Frozen vector evaluation order; production uses the guarded streaming emitter.
-#[cfg(test)]
-fn claim_rlc_push_evaluation_rows_v1<F: KagemushaPoseidonFieldV1>(
-    rows: &mut Vec<ClaimRlcRawRowV1<F>>,
-    state: &mut ClaimRlcStateV1,
-    pack_load: Option<(usize, usize)>,
-) -> Result<(), String> {
-    let (quotient_a, remainder_a) =
-        claim_rlc_native_step_v1(state.accumulator_a, state.challenge_a, state.coefficient)?;
-    let binding = pack_load.map(|(carrier, pack)| ClaimRlcBusBindingV1::PackLoad { carrier, pack });
-    let mut evaluate_a = claim_rlc_state_row_v1(*state, ClaimRlcRowModeV1::EvaluateA, binding);
-    evaluate_a.values[CLAIM_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_a);
-    evaluate_a.values[CLAIM_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_a);
-    evaluate_a.values[CLAIM_RLC_REMAINDER_INVERSE] =
-        claim_rlc_non_modulus_inverse_v1::<F>(remainder_a)?;
-    if pack_load.is_some() {
-        evaluate_a.load_pack = true;
-        evaluate_a.values[CLAIM_RLC_BUS] = F::from_u128(state.coefficient);
-    }
-    claim_rlc_set_range_limbs_v1(&mut evaluate_a, quotient_a, remainder_a);
-    rows.push(evaluate_a);
-    state.accumulator_a = remainder_a;
-
-    let (quotient_b, remainder_b) =
-        claim_rlc_native_step_v1(state.accumulator_b, state.challenge_b, state.coefficient)?;
-    let mut evaluate_b = claim_rlc_state_row_v1(*state, ClaimRlcRowModeV1::EvaluateB, None);
-    evaluate_b.values[CLAIM_RLC_DIVISION_QUOTIENT] = F::from_u128(quotient_b);
-    evaluate_b.values[CLAIM_RLC_DIVISION_REMAINDER] = F::from_u128(remainder_b);
-    evaluate_b.values[CLAIM_RLC_REMAINDER_INVERSE] =
-        claim_rlc_non_modulus_inverse_v1::<F>(remainder_b)?;
-    claim_rlc_set_range_limbs_v1(&mut evaluate_b, quotient_b, remainder_b);
-    rows.push(evaluate_b);
-    state.accumulator_b = remainder_b;
-    Ok(())
-}
-
-fn claim_rlc_native_step_v1(
-    accumulator: u128,
-    challenge: u128,
-    coefficient: u128,
-) -> Result<(u128, u128), String> {
-    let modulus = U256::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1);
-    let divisor = Option::<NonZero<U256>>::from(NonZero::new(modulus))
-        .expect("fixed claim RLC modulus is nonzero");
-    let numerator = U256::from_u128(accumulator)
-        .wrapping_mul(&U256::from_u128(challenge))
-        .wrapping_add(&U256::from_u128(coefficient));
-    let (quotient, remainder) = numerator.div_rem(&divisor);
-    let to_u128 = |value: U256| {
-        let bytes: [u8; 32] = value.to_le_bytes();
-        if bytes[16..].iter().any(|byte| *byte != 0) {
-            return Err("claim RLC division output exceeds u128".to_owned());
-        }
-        Ok(u128::from_le_bytes(
-            bytes[..16]
-                .try_into()
-                .expect("U256 low half has sixteen bytes"),
-        ))
-    };
-    let quotient = to_u128(quotient)?;
-    let remainder = to_u128(remainder)?;
-    if quotient >= (1_u128 << 126) || remainder >= CLAIM_CARRIER_RLC_MODULUS_V1 {
-        return Err("claim RLC division output exceeds its proven bound".to_owned());
-    }
-    Ok((quotient, remainder))
-}
-
-fn claim_rlc_non_modulus_inverse_v1<F: KagemushaPoseidonFieldV1>(
-    remainder: u128,
-) -> Result<F, String> {
-    Option::<F>::from(
-        (F::from_u128(remainder) - F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1)).invert(),
-    )
-    .ok_or_else(|| "claim RLC remainder is not canonical".to_owned())
-}
-
-#[cfg(test)]
-fn claim_rlc_set_range_limbs_v1<F: KagemushaPoseidonFieldV1>(
-    row: &mut ClaimRlcRawRowV1<F>,
-    first: u128,
-    second: u128,
-) {
-    let first_top_bits = match row.mode {
-        ClaimRlcRowModeV1::Preprocess => 8,
-        ClaimRlcRowModeV1::EvaluateA | ClaimRlcRowModeV1::EvaluateB => 6,
-        _ => unreachable!("range limbs only occur on claim RLC arithmetic rows"),
-    };
-    row.values[CLAIM_RLC_SCALED_FIRST_TOP] =
-        F::from_u128((first >> 120) << (CLAIM_RLC_RADIX_BITS - first_top_bits));
-    row.values[CLAIM_RLC_SCALED_SECOND_TOP] =
-        F::from_u128((second >> 120) << (CLAIM_RLC_RADIX_BITS - 7));
-    for (half, mut value) in [first, second].into_iter().enumerate() {
-        for limb in 0..9 {
-            row.values[CLAIM_RLC_RANGE_START + half * 9 + limb] =
-                F::from_u128(value & (CLAIM_RLC_RADIX - 1));
-            value >>= CLAIM_RLC_RADIX_BITS;
-        }
-        debug_assert_eq!(value, 0);
-    }
 }
 
 /// Typed, parity-specific plan commitment consumed by every shard and claim step.
@@ -2054,7 +1114,7 @@ pub(crate) struct KagemushaMintHashClaimPairWitnessV1<'a> {
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaMintHashClaimConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    carrier_rlc: KagemushaClaimCarrierRlcConfigV1,
+    carrier_rlc: KagemushaCarrierRlcConfigV1,
     dense: PastaDenseMsmConfigV1,
     native_poseidon: PastaNativePoseidonConfigV1,
 }
@@ -2063,7 +1123,7 @@ pub(crate) struct KagemushaMintHashClaimConfigV1<F: halo2_base::utils::ScalarFie
 #[derive(Clone)]
 pub(crate) struct KagemushaMintHashClaimEqCircuitV1 {
     pub(crate) builder: BaseCircuitBuilder<Fp>,
-    carrier_rlc: KagemushaClaimCarrierRlcMachineV1<Fp>,
+    carrier_rlc: ClaimCarrierRlcMachineV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
     native_poseidon_jobs: PastaNativePoseidonJobsV1<Fp>,
 }
@@ -2072,7 +1132,7 @@ pub(crate) struct KagemushaMintHashClaimEqCircuitV1 {
 #[derive(Clone)]
 pub(crate) struct KagemushaMintHashClaimEpCircuitV1 {
     pub(crate) builder: BaseCircuitBuilder<Fq>,
-    carrier_rlc: KagemushaClaimCarrierRlcMachineV1<Fq>,
+    carrier_rlc: ClaimCarrierRlcMachineV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
     native_poseidon_jobs: PastaNativePoseidonJobsV1<Fq>,
 }
@@ -2105,7 +1165,7 @@ macro_rules! impl_claim_circuit {
                 let mut base = BaseConfig::configure(meta, params);
                 base.set_usable_rows(usable_rows);
                 let carrier_rlc =
-                    KagemushaClaimCarrierRlcConfigV1::configure_with_base(meta, Some(&base));
+                    KagemushaCarrierRlcConfigV1::configure_with_base(meta, Some(&base));
                 KagemushaMintHashClaimConfigV1 {
                     base,
                     carrier_rlc,
@@ -2209,42 +1269,6 @@ pub(crate) struct KagemushaMintHashClaimDeferredAuditsV1 {
     eq_carrier: Vec<u128>,
     ep_carrier: Vec<u128>,
     carrier_binding: ClaimCarrierBindingV1,
-}
-
-#[derive(Clone, Copy)]
-struct ClaimCarrierCommitmentsV1 {
-    eq_proof_eq_carrier: EqAffine,
-    eq_proof_ep_carrier: EqAffine,
-    ep_proof_eq_carrier: EpAffine,
-    ep_proof_ep_carrier: EpAffine,
-}
-
-#[derive(Clone, Copy)]
-struct ClaimCarrierBindingV1 {
-    commitments: ClaimCarrierCommitmentsV1,
-    eq_challenge: u128,
-    ep_challenge: u128,
-    eq_at_eq_challenge: u128,
-    eq_at_ep_challenge: u128,
-    ep_at_eq_challenge: u128,
-    ep_at_ep_challenge: u128,
-}
-
-fn placeholder_claim_carrier_binding_v1() -> ClaimCarrierBindingV1 {
-    ClaimCarrierBindingV1 {
-        commitments: ClaimCarrierCommitmentsV1 {
-            eq_proof_eq_carrier: EqAffine::generator(),
-            eq_proof_ep_carrier: EqAffine::generator(),
-            ep_proof_eq_carrier: EpAffine::generator(),
-            ep_proof_ep_carrier: EpAffine::generator(),
-        },
-        eq_challenge: 1,
-        ep_challenge: 1,
-        eq_at_eq_challenge: 0,
-        eq_at_ep_challenge: 0,
-        ep_at_eq_challenge: 0,
-        ep_at_ep_challenge: 0,
-    }
 }
 
 impl KagemushaMintHashClaimDeferredAuditsV1 {
@@ -2372,150 +1396,17 @@ where
     Ok(values)
 }
 
-fn assigned_u128_cell_v1<F: halo2_base::utils::ScalarField>(
-    cell: AssignedValue<F>,
-    label: &str,
-) -> Result<u128, String> {
-    use halo2_base::utils::fe_to_biguint;
-
-    let integer = fe_to_biguint(cell.value());
-    if integer.bits() > 128 {
-        return Err(format!("{label} value exceeds u128"));
-    }
-    let digits = integer.to_u64_digits();
-    Ok(u128::from(digits.first().copied().unwrap_or(0))
-        | (u128::from(digits.get(1).copied().unwrap_or(0)) << 64))
-}
-
-fn canonical_claim_carrier_commitment_v1<C>(
-    parameters: &ParamsIPA<C>,
-    values: &[u128],
-) -> Result<C, String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
-{
-    if values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 {
-        return Err("mint-hash claim padded carrier has the wrong shape".to_owned());
-    }
-    let bases = parameters
-        .get_g_lagrange()
-        .get(..values.len())
-        .ok_or_else(|| "mint-hash claim carrier exceeds the IPA domain".to_owned())?;
-    let scalars = values
-        .iter()
-        .copied()
-        .map(C::ScalarExt::from_u128)
-        .collect::<Vec<_>>();
-    let commitment =
-        (best_multiexp::<C>(&scalars, bases) + parameters.get_blind_base().to_curve()).to_affine();
-    if bool::from(commitment.is_identity()) {
-        return Err("mint-hash claim carrier commitment is the identity".to_owned());
-    }
-    Ok(commitment)
-}
-
-fn point_u128_limbs_v1<C: CurveAffine>(point: C) -> [u128; 2] {
-    let bytes = point.to_bytes();
-    let bytes = bytes.as_ref();
-    std::array::from_fn(|half| {
-        u128::from_le_bytes(
-            bytes[half * 16..(half + 1) * 16]
-                .try_into()
-                .expect("Pasta compressed point half has sixteen bytes"),
-        )
-    })
-}
-
-fn claim_carrier_commitment_limbs_v1(commitments: ClaimCarrierCommitmentsV1) -> [u128; 8] {
-    let [eq_eq_0, eq_eq_1] = point_u128_limbs_v1(commitments.eq_proof_eq_carrier);
-    let [eq_ep_0, eq_ep_1] = point_u128_limbs_v1(commitments.eq_proof_ep_carrier);
-    let [ep_eq_0, ep_eq_1] = point_u128_limbs_v1(commitments.ep_proof_eq_carrier);
-    let [ep_ep_0, ep_ep_1] = point_u128_limbs_v1(commitments.ep_proof_ep_carrier);
-    [
-        eq_eq_0, eq_eq_1, eq_ep_0, eq_ep_1, ep_eq_0, ep_eq_1, ep_ep_0, ep_ep_1,
-    ]
-}
-
 fn claim_carrier_binding_values_v1(binding: ClaimCarrierBindingV1) -> [u128; 14] {
-    let commitments = claim_carrier_commitment_limbs_v1(binding.commitments);
-    [
-        commitments[0],
-        commitments[1],
-        commitments[2],
-        commitments[3],
-        commitments[4],
-        commitments[5],
-        commitments[6],
-        commitments[7],
-        binding.eq_challenge,
-        binding.ep_challenge,
-        binding.eq_at_eq_challenge,
-        binding.eq_at_ep_challenge,
-        binding.ep_at_eq_challenge,
-        binding.ep_at_ep_challenge,
-    ]
+    super::carrier_binding::carrier_binding_values_v1(binding)
 }
 
-fn native_claim_carrier_challenge_v1<F: KagemushaPoseidonFieldV1>(
-    commitments: ClaimCarrierCommitmentsV1,
-    parity: KagemushaPastaParityV1,
-) -> u128 {
-    let mut inputs = Vec::with_capacity(13);
-    inputs.extend([
-        F::from(CLAIM_CARRIER_RLC_VERSION_V1),
-        F::from(match parity {
-            KagemushaPastaParityV1::Eq => 1,
-            KagemushaPastaParityV1::Ep => 2,
-        }),
-        F::from(u64::from(KAGEMUSHA_RECURSION_IPA_K_V1)),
-        F::from(
-            u64::try_from(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1)
-                .expect("fixed carrier length fits u64"),
-        ),
-        F::from(2),
-    ]);
-    inputs.extend(
-        claim_carrier_commitment_limbs_v1(commitments)
-            .into_iter()
-            .map(F::from_u128),
-    );
-    let digest = encode(hash::<F>(CLAIM_CARRIER_RLC_DOMAIN_V1, &inputs));
-    let low = u128::from_le_bytes(
-        digest[..16]
-            .try_into()
-            .expect("Pasta scalar low half has sixteen bytes"),
-    );
-    (low & ((1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1) - 1)) + 1
-}
-
+#[cfg(test)]
 fn native_claim_carrier_rlc_v1(values: &[u128], challenge: u128) -> Result<u128, String> {
-    if values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-        || challenge == 0
-        || challenge > (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1)
-    {
-        return Err("mint-hash carrier RLC input shape is invalid".to_owned());
-    }
-    let modulus = U256::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1);
-    let divisor = Option::<NonZero<U256>>::from(NonZero::new(modulus))
-        .expect("fixed Mersenne RLC modulus is nonzero");
-    let challenge = U256::from_u128(challenge);
-    let mut accumulator = U256::ZERO;
-    for coefficient in native_claim_carrier_coefficients_v1(values)? {
-        let product = accumulator.wrapping_mul(&challenge);
-        let numerator = product.wrapping_add(&U256::from_u128(coefficient));
-        accumulator = numerator.div_rem(&divisor).1;
-    }
-    let bytes: [u8; 32] = accumulator.to_le_bytes();
-    if bytes[16..].iter().any(|byte| *byte != 0) {
-        return Err("mint-hash carrier RLC result exceeds u128".to_owned());
-    }
-    Ok(u128::from_le_bytes(
-        bytes[..16]
-            .try_into()
-            .expect("RLC low half has sixteen bytes"),
-    ))
+    super::carrier_binding::native_carrier_rlc_v1(
+        values,
+        challenge,
+        CLAIM_CARRIER_BINDING_LAYOUT_V1,
+    )
 }
 
 /// Injectively encode a fixed `u128` carrier as coefficients below the common modulus.
@@ -2524,48 +1415,9 @@ fn native_claim_carrier_rlc_v1(values: &[u128], challenge: u128) -> Result<u128,
 /// with the quotient in `{0, 1, 2}`. All remainders come first, followed by base-three
 /// packs of eighty quotients. This cuts the polynomial from 8,180 to 4,142 coefficients
 /// without introducing the `0 == M` alias that direct reduction would permit.
+#[cfg(test)]
 fn native_claim_carrier_coefficients_v1(values: &[u128]) -> Result<Vec<u128>, String> {
-    if values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 {
-        return Err("mint-hash carrier coefficient input shape is invalid".to_owned());
-    }
-    let mut coefficients = Vec::with_capacity(
-        values.len()
-            + values
-                .len()
-                .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1),
-    );
-    let mut quotients = Vec::with_capacity(values.len());
-    for value in values.iter().copied() {
-        coefficients.push(value % CLAIM_CARRIER_RLC_MODULUS_V1);
-        let quotient = value / CLAIM_CARRIER_RLC_MODULUS_V1;
-        if quotient >= CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1 {
-            return Err("mint-hash carrier quotient is not a ternary digit".to_owned());
-        }
-        quotients.push(quotient);
-    }
-    for chunk in quotients.chunks(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
-        let mut packed = 0_u128;
-        let mut power = 1_u128;
-        for (index, quotient) in chunk.iter().copied().enumerate() {
-            packed = packed
-                .checked_add(
-                    quotient
-                        .checked_mul(power)
-                        .ok_or_else(|| "mint-hash quotient pack overflowed".to_owned())?,
-                )
-                .ok_or_else(|| "mint-hash quotient pack overflowed".to_owned())?;
-            if index + 1 != chunk.len() {
-                power = power
-                    .checked_mul(CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1)
-                    .ok_or_else(|| "mint-hash quotient radix overflowed".to_owned())?;
-            }
-        }
-        if packed >= CLAIM_CARRIER_RLC_MODULUS_V1 {
-            return Err("mint-hash quotient pack exceeds the RLC modulus".to_owned());
-        }
-        coefficients.push(packed);
-    }
-    Ok(coefficients)
+    super::carrier_binding::native_carrier_coefficients_v1(values, CLAIM_CARRIER_BINDING_LAYOUT_V1)
 }
 
 fn derive_claim_carrier_binding_v1(
@@ -2574,25 +1426,13 @@ fn derive_claim_carrier_binding_v1(
     eq_carrier: &[u128],
     ep_carrier: &[u128],
 ) -> Result<ClaimCarrierBindingV1, String> {
-    let commitments = ClaimCarrierCommitmentsV1 {
-        eq_proof_eq_carrier: canonical_claim_carrier_commitment_v1(eq_parameters, eq_carrier)?,
-        eq_proof_ep_carrier: canonical_claim_carrier_commitment_v1(eq_parameters, ep_carrier)?,
-        ep_proof_eq_carrier: canonical_claim_carrier_commitment_v1(ep_parameters, eq_carrier)?,
-        ep_proof_ep_carrier: canonical_claim_carrier_commitment_v1(ep_parameters, ep_carrier)?,
-    };
-    let eq_challenge =
-        native_claim_carrier_challenge_v1::<Fp>(commitments, KagemushaPastaParityV1::Eq);
-    let ep_challenge =
-        native_claim_carrier_challenge_v1::<Fq>(commitments, KagemushaPastaParityV1::Ep);
-    Ok(ClaimCarrierBindingV1 {
-        commitments,
-        eq_challenge,
-        ep_challenge,
-        eq_at_eq_challenge: native_claim_carrier_rlc_v1(eq_carrier, eq_challenge)?,
-        eq_at_ep_challenge: native_claim_carrier_rlc_v1(eq_carrier, ep_challenge)?,
-        ep_at_eq_challenge: native_claim_carrier_rlc_v1(ep_carrier, eq_challenge)?,
-        ep_at_ep_challenge: native_claim_carrier_rlc_v1(ep_carrier, ep_challenge)?,
-    })
+    super::carrier_binding::derive_carrier_binding_v1(
+        eq_parameters,
+        ep_parameters,
+        eq_carrier,
+        ep_carrier,
+        CLAIM_CARRIER_BINDING_LAYOUT_V1,
+    )
 }
 
 fn append_inner_carrier_binding_v1<F: KagemushaPoseidonFieldV1>(
@@ -2672,54 +1512,12 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    let commitment_cells = public
-        .get(
-            public_instance::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO
-                ..public_instance::CARRIER_RLC_EQ_CHALLENGE,
-        )
-        .ok_or_else(|| "mint-hash carrier commitment binding is truncated".to_owned())?;
-    if commitment_cells.len() != 8 {
-        return Err("mint-hash carrier commitment binding shape drifted".to_owned());
-    }
-    let chip = loader.ecc_chip();
-    let range = chip.range();
-    let mut ctx = loader.ctx_mut();
-    let mut inputs = Vec::with_capacity(13);
-    inputs.extend([
-        ctx.main()
-            .load_constant(C::ScalarExt::from(CLAIM_CARRIER_RLC_VERSION_V1)),
-        ctx.main().load_constant(C::ScalarExt::from(match parity {
-            KagemushaPastaParityV1::Eq => 1,
-            KagemushaPastaParityV1::Ep => 2,
-        })),
-        ctx.main()
-            .load_constant(C::ScalarExt::from(u64::from(KAGEMUSHA_RECURSION_IPA_K_V1))),
-        ctx.main().load_constant(C::ScalarExt::from(
-            u64::try_from(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1)
-                .expect("fixed carrier length fits u64"),
-        )),
-        ctx.main().load_constant(C::ScalarExt::from(2)),
-    ]);
-    inputs.extend_from_slice(commitment_cells);
-    let poseidon = KagemushaPoseidonChipV1::new(ctx.main(), range);
-    let digest = poseidon.hash(ctx.main(), range, CLAIM_CARRIER_RLC_DOMAIN_V1, &inputs);
-    let low_limb = chip.assigned_scalar_u128_limbs(&mut ctx, digest)[0];
-    let (_, low_125) = range.div_mod(
-        ctx.main(),
-        Existing(low_limb),
-        1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1,
-        128,
-    );
-    let challenge = range
-        .gate()
-        .add(ctx.main(), Existing(low_125), Constant(C::ScalarExt::ONE));
-    let expected_offset = match parity {
-        KagemushaPastaParityV1::Eq => public_instance::CARRIER_RLC_EQ_CHALLENGE,
-        KagemushaPastaParityV1::Ep => public_instance::CARRIER_RLC_EP_CHALLENGE,
-    };
-    ctx.main()
-        .constrain_equal(&challenge, &public[expected_offset]);
-    Ok(challenge)
+    super::carrier_binding::constrain_carrier_challenge_v1(
+        loader,
+        public,
+        parity,
+        CLAIM_CARRIER_BINDING_LAYOUT_V1,
+    )
 }
 
 /// Divide by `M = 2^127 - 1` with the narrow bounds proved by the carrier gadget.
@@ -2740,14 +1538,14 @@ fn constrain_claim_carrier_division_v1<F: KagemushaPoseidonFieldV1>(
     use halo2_base::utils::{biguint_to_fe, fe_to_biguint};
 
     assert!(quotient_bits <= 127);
-    let modulus = der_parser::num_bigint::BigUint::from(CLAIM_CARRIER_RLC_MODULUS_V1);
+    let modulus = der_parser::num_bigint::BigUint::from(CARRIER_RLC_MODULUS_V1);
     let integer = fe_to_biguint(value.value());
     let quotient = &integer / &modulus;
     let remainder = integer % &modulus;
     ctx.assign_region(
         [
             Witness(biguint_to_fe(&remainder)),
-            Constant(F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1)),
+            Constant(F::from_u128(CARRIER_RLC_MODULUS_V1)),
             Witness(biguint_to_fe(&quotient)),
             Existing(value),
         ],
@@ -2767,7 +1565,7 @@ fn constrain_claim_carrier_division_v1<F: KagemushaPoseidonFieldV1>(
     let is_modulus = range.gate().is_equal(
         ctx,
         Existing(remainder),
-        Constant(F::from_u128(CLAIM_CARRIER_RLC_MODULUS_V1)),
+        Constant(F::from_u128(CARRIER_RLC_MODULUS_V1)),
     );
     range.gate().assert_is_const(ctx, &is_modulus, &F::ZERO);
     (quotient, remainder)
@@ -2801,16 +1599,16 @@ fn canonical_claim_carrier_coefficients_v1<F: KagemushaPoseidonFieldV1>(
     }
     let active_quotient_pack_count = values
         .len()
-        .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
+        .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
     let mut active_quotient_packs = Vec::with_capacity(active_quotient_pack_count);
-    for chunk in quotients.chunks(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
+    for chunk in quotients.chunks(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
         let mut power = 1_u128;
         let powers = (0..chunk.len())
             .map(|index| {
                 let coefficient = Constant(F::from_u128(power));
                 if index + 1 != chunk.len() {
                     power = power
-                        .checked_mul(CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1)
+                        .checked_mul(CARRIER_RLC_QUOTIENT_RADIX_V1)
                         .expect("fixed ternary quotient pack fits u128");
                 }
                 coefficient
@@ -2822,7 +1620,7 @@ fn canonical_claim_carrier_coefficients_v1<F: KagemushaPoseidonFieldV1>(
         active_quotient_packs.push(packed);
     }
     let fixed_quotient_pack_count = KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-        .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
+        .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
     Ok(AssignedClaimCarrierCoefficientsV1 {
         active_remainders,
         remainder_zero_tail: KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 - values.len(),
@@ -2930,7 +1728,7 @@ fn constrain_claim_carrier_binding_v1<F: KagemushaPoseidonFieldV1>(
     public: &[AssignedValue<F>],
     eq_carrier: &[AssignedValue<F>],
     ep_carrier: &[AssignedValue<F>],
-) -> Result<KagemushaClaimCarrierRlcMachineV1<F>, String> {
+) -> Result<ClaimCarrierRlcMachineV1<F>, String> {
     if eq_carrier.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
         || ep_carrier.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
     {
@@ -2940,33 +1738,32 @@ fn constrain_claim_carrier_binding_v1<F: KagemushaPoseidonFieldV1>(
     let ctx = builder.main(0);
     let eq_challenge = public[public_instance::CARRIER_RLC_EQ_CHALLENGE];
     let ep_challenge = public[public_instance::CARRIER_RLC_EP_CHALLENGE];
-    let upper_exclusive = ctx.load_constant(F::from_u128(
-        (1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1) + 1,
-    ));
+    let upper_exclusive =
+        ctx.load_constant(F::from_u128((1_u128 << CARRIER_RLC_CHALLENGE_BITS_V1) + 1));
     for challenge in [eq_challenge, ep_challenge] {
-        range.range_check(ctx, challenge, CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1 + 1);
+        range.range_check(ctx, challenge, CARRIER_RLC_CHALLENGE_BITS_V1 + 1);
         let is_zero = range.gate().is_zero(ctx, challenge);
         range.gate().assert_is_const(ctx, &is_zero, &F::ZERO);
         let within_canonical_range = range.is_less_than(
             ctx,
             challenge,
             upper_exclusive,
-            CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1 + 1,
+            CARRIER_RLC_CHALLENGE_BITS_V1 + 1,
         );
         range
             .gate()
             .assert_is_const(ctx, &within_canonical_range, &F::ONE);
     }
-    let machine = KagemushaClaimCarrierRlcMachineV1 {
+    let machine = ClaimCarrierRlcMachineV1 {
         challenge_a: eq_challenge,
         challenge_b: ep_challenge,
         carriers: [
-            ClaimRlcCarrierV1 {
+            CarrierRlcCarrierV1 {
                 values: eq_carrier.to_vec(),
                 expected_a: public[public_instance::EQ_CARRIER_AT_EQ_CHALLENGE],
                 expected_b: public[public_instance::EQ_CARRIER_AT_EP_CHALLENGE],
             },
-            ClaimRlcCarrierV1 {
+            CarrierRlcCarrierV1 {
                 values: ep_carrier.to_vec(),
                 expected_a: public[public_instance::EP_CARRIER_AT_EQ_CHALLENGE],
                 expected_b: public[public_instance::EP_CARRIER_AT_EP_CHALLENGE],
@@ -4928,8 +3725,6 @@ const _: () = {
     assert!(SHARD_TO_HISTORY_ZERO_ROUNDS_V1 == 4);
 };
 
-mod rlc_streaming;
-
 #[cfg(test)]
 #[path = "mint_hash_claim_fold/bounded_claim_roots_tests.rs"]
 mod bounded_claim_roots_tests;
@@ -4941,10 +3736,12 @@ mod tests {
     use super::super::deferred_parent::accumulator_limb_count;
     use super::*;
     use ff::Field;
+    use halo2_base::gates::circuit::MaybeRangeConfig;
     use halo2_proofs::{
+        circuit::Value,
         dev::MockProver,
         halo2curves::{
-            group::Group as _,
+            group::{Curve as _, Group as _},
             pasta::{Eq, EqAffine, Fp, Fq},
         },
     };
@@ -4963,7 +3760,7 @@ mod tests {
                 };
                 let mut previous = ConstraintSystem::<$field>::default();
                 let base = BaseConfig::configure(&mut previous, params.clone());
-                KagemushaClaimCarrierRlcConfigV1::configure_with_base(&mut previous, Some(&base));
+                KagemushaCarrierRlcConfigV1::configure_with_base(&mut previous, Some(&base));
                 PastaDenseMsmConfigV1::configure_with_lanes::<$opposite>(
                     &mut previous,
                     KAGEMUSHA_MINT_HASH_CLAIM_DENSE_LANES_V1,
@@ -5053,35 +3850,35 @@ mod tests {
         check::<Fq>();
     }
 
-    const CLAIM_RLC_TEST_K: usize = 9;
-    const CLAIM_RLC_TEST_CAPACITY: usize = 4;
+    const CARRIER_RLC_TEST_K: usize = 9;
+    const CARRIER_RLC_TEST_CAPACITY: usize = 4;
 
     #[derive(Clone, Debug)]
-    struct ClaimRlcTestConfig<F: halo2_base::utils::ScalarField> {
+    struct CarrierRlcTestConfig<F: halo2_base::utils::ScalarField> {
         base: BaseConfig<F>,
-        carrier_rlc: KagemushaClaimCarrierRlcConfigV1,
+        carrier_rlc: KagemushaCarrierRlcConfigV1,
     }
 
     #[derive(Clone)]
-    struct ClaimRlcTestCircuit<F: KagemushaPoseidonFieldV1> {
+    struct CarrierRlcTestCircuit<F: KagemushaPoseidonFieldV1> {
         builder: BaseCircuitBuilder<F>,
-        machine: KagemushaClaimCarrierRlcMachineV1<F>,
+        machine: ClaimCarrierRlcMachineV1<F>,
         tamper_padding: bool,
         tamper_start_bus: Option<usize>,
-        physical_mutation: Option<(usize, ClaimRlcPhysicalMutationV1)>,
+        physical_mutation: Option<(usize, CarrierRlcPhysicalMutationV1)>,
         domain_remainder: Option<u128>,
     }
 
     #[derive(Clone)]
-    struct ClaimRlcSharedTableTestCircuit<F: KagemushaPoseidonFieldV1, const SHARED: bool> {
-        inner: ClaimRlcTestCircuit<F>,
+    struct CarrierRlcSharedTableTestCircuit<F: KagemushaPoseidonFieldV1, const SHARED: bool> {
+        inner: CarrierRlcTestCircuit<F>,
         tamper_range_limb: bool,
     }
 
     impl<F: KagemushaPoseidonFieldV1, const SHARED: bool> Circuit<F>
-        for ClaimRlcSharedTableTestCircuit<F, SHARED>
+        for CarrierRlcSharedTableTestCircuit<F, SHARED>
     {
-        type Config = ClaimRlcTestConfig<F>;
+        type Config = CarrierRlcTestConfig<F>;
         type FloorPlanner = V1;
         type Params = BaseCircuitParams;
 
@@ -5104,12 +3901,12 @@ mod tests {
             let mut base = BaseConfig::configure(meta, params);
             base.set_usable_rows(usable_rows);
             let carrier_rlc = if SHARED {
-                KagemushaClaimCarrierRlcConfigV1::configure_with_base(meta, Some(&base))
+                KagemushaCarrierRlcConfigV1::configure_with_base(meta, Some(&base))
             } else {
-                KagemushaClaimCarrierRlcConfigV1::configure(meta)
+                KagemushaCarrierRlcConfigV1::configure(meta)
             };
             assert_eq!(carrier_rlc.owns_range_table, !SHARED);
-            ClaimRlcTestConfig { base, carrier_rlc }
+            CarrierRlcTestConfig { base, carrier_rlc }
         }
 
         fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
@@ -5140,11 +3937,11 @@ mod tests {
             let mut rows = self
                 .inner
                 .machine
-                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .build_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                 .map_err(|_| PlonkError::Synthesis)?;
             if self.tamper_range_limb {
-                rows.first_mut().ok_or(PlonkError::Synthesis)?.values[CLAIM_RLC_RANGE_START] =
-                    F::from_u128(CLAIM_RLC_RADIX);
+                rows.first_mut().ok_or(PlonkError::Synthesis)?.values[CARRIER_RLC_RANGE_START] =
+                    F::from_u128(CARRIER_RLC_RADIX);
             }
             self.inner.machine.synthesize_rows(
                 &config.carrier_rlc,
@@ -5156,8 +3953,8 @@ mod tests {
         }
     }
 
-    impl<F: KagemushaPoseidonFieldV1> Circuit<F> for ClaimRlcTestCircuit<F> {
-        type Config = ClaimRlcTestConfig<F>;
+    impl<F: KagemushaPoseidonFieldV1> Circuit<F> for CarrierRlcTestCircuit<F> {
+        type Config = CarrierRlcTestConfig<F>;
         type FloorPlanner = V1;
         type Params = BaseCircuitParams;
 
@@ -5183,9 +3980,9 @@ mod tests {
             let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
             let mut base = BaseConfig::configure(meta, params);
             base.set_usable_rows(usable_rows);
-            ClaimRlcTestConfig {
+            CarrierRlcTestConfig {
                 base,
-                carrier_rlc: KagemushaClaimCarrierRlcConfigV1::configure(meta),
+                carrier_rlc: KagemushaCarrierRlcConfigV1::configure(meta),
             }
         }
 
@@ -5228,17 +4025,17 @@ mod tests {
             )?;
             let mut rows = self
                 .machine
-                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .build_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                 .map_err(|_| PlonkError::Synthesis)?;
             if self.tamper_padding {
                 let padding = rows
                     .iter_mut()
                     .find(|row| {
-                        matches!(row.mode, ClaimRlcRowModeV1::Preprocess)
-                            && row.values[CLAIM_RLC_VALUE] == F::ZERO
+                        matches!(row.mode, CarrierRlcRowModeV1::Preprocess)
+                            && row.values[CARRIER_RLC_VALUE] == F::ZERO
                     })
                     .ok_or(PlonkError::Synthesis)?;
-                padding.values[CLAIM_RLC_RANGE_START] = F::ONE;
+                padding.values[CARRIER_RLC_RANGE_START] = F::ONE;
             }
             if let Some(start_index) = self.tamper_start_bus {
                 let start = rows
@@ -5246,12 +4043,12 @@ mod tests {
                     .filter(|row| {
                         matches!(
                             row.mode,
-                            ClaimRlcRowModeV1::StartA | ClaimRlcRowModeV1::StartB
+                            CarrierRlcRowModeV1::StartA | CarrierRlcRowModeV1::StartB
                         )
                     })
                     .nth(start_index)
                     .ok_or(PlonkError::Synthesis)?;
-                start.values[CLAIM_RLC_BUS] += F::ONE;
+                start.values[CARRIER_RLC_BUS] += F::ONE;
             }
             if let Some(remainder) = self.domain_remainder {
                 // Gate-unit segment: fill every transition consistently so only the
@@ -5259,29 +4056,29 @@ mod tests {
                 // This deliberately shortened segment is not a complete carrier proof.
                 let mut preprocess = rows
                     .iter()
-                    .find(|row| matches!(row.mode, ClaimRlcRowModeV1::Preprocess))
+                    .find(|row| matches!(row.mode, CarrierRlcRowModeV1::Preprocess))
                     .cloned()
                     .ok_or(PlonkError::Synthesis)?;
-                let value = CLAIM_CARRIER_RLC_MODULUS_V1;
-                preprocess.values[CLAIM_RLC_RAW_REMAINDER] = F::from_u128(remainder);
-                preprocess.values[CLAIM_RLC_REMAINDER_INVERSE] = if remainder == value {
+                let value = CARRIER_RLC_MODULUS_V1;
+                preprocess.values[CARRIER_RLC_RAW_REMAINDER] = F::from_u128(remainder);
+                preprocess.values[CARRIER_RLC_REMAINDER_INVERSE] = if remainder == value {
                     F::ZERO
                 } else {
-                    claim_rlc_non_modulus_inverse_v1::<F>(remainder)
+                    carrier_rlc_non_modulus_inverse_v1::<F>(remainder)
                         .map_err(|_| PlonkError::Synthesis)?
                 };
-                claim_rlc_set_range_limbs_v1(&mut preprocess, value, remainder);
+                carrier_rlc_set_range_limbs_v1(&mut preprocess, value, remainder);
                 let quotient = (F::from_u128(value) - F::from_u128(remainder))
                     * F::from_u128(value).invert().unwrap();
                 let mut end = preprocess.clone();
-                end.mode = ClaimRlcRowModeV1::EndB;
+                end.mode = CarrierRlcRowModeV1::EndB;
                 end.ternary_power = F::ZERO;
                 end.binding = None;
-                end.values[CLAIM_RLC_BUS] = F::ZERO;
-                end.values[CLAIM_RLC_REMAINDER_INVERSE] = F::ZERO;
-                end.values[CLAIM_RLC_COEFFICIENT] = F::from_u128(remainder);
-                end.values[CLAIM_RLC_QUOTIENT_PACK] = quotient;
-                end.values[CLAIM_RLC_RANGE_START..].fill(F::ZERO);
+                end.values[CARRIER_RLC_BUS] = F::ZERO;
+                end.values[CARRIER_RLC_REMAINDER_INVERSE] = F::ZERO;
+                end.values[CARRIER_RLC_COEFFICIENT] = F::from_u128(remainder);
+                end.values[CARRIER_RLC_QUOTIENT_PACK] = quotient;
+                end.values[CARRIER_RLC_RANGE_START..].fill(F::ZERO);
                 rows = vec![preprocess, end];
             }
             if let Some((logical_row, mutation)) = self.physical_mutation {
@@ -5299,51 +4096,46 @@ mod tests {
         }
     }
 
-    fn claim_rlc_test_value_v1(values: &[u128], challenge: u128) -> u128 {
+    fn carrier_rlc_test_value_v1(values: &[u128], challenge: u128) -> u128 {
         let mut padded = values.to_vec();
-        padded.resize(CLAIM_RLC_TEST_CAPACITY, 0);
+        padded.resize(CARRIER_RLC_TEST_CAPACITY, 0);
         let mut coefficients = padded
             .iter()
-            .map(|value| value % CLAIM_CARRIER_RLC_MODULUS_V1)
+            .map(|value| value % CARRIER_RLC_MODULUS_V1)
             .collect::<Vec<_>>();
-        for chunk in padded.chunks(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
+        for chunk in padded.chunks(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1) {
             let mut power = 1_u128;
             let mut pack = 0_u128;
             for value in chunk {
-                pack += (value / CLAIM_CARRIER_RLC_MODULUS_V1) * power;
-                power *= CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1;
+                pack += (value / CARRIER_RLC_MODULUS_V1) * power;
+                power *= CARRIER_RLC_QUOTIENT_RADIX_V1;
             }
             coefficients.push(pack);
         }
         let mut accumulator = 0;
         for coefficient in coefficients {
-            accumulator = claim_rlc_native_step_v1(accumulator, challenge, coefficient)
+            accumulator = carrier_rlc_native_step_v1(accumulator, challenge, coefficient)
                 .expect("small test RLC step")
                 .1;
         }
         accumulator
     }
 
-    fn claim_rlc_test_circuit_v1<F: KagemushaPoseidonFieldV1>(
+    fn carrier_rlc_test_circuit_v1<F: KagemushaPoseidonFieldV1>(
         tamper_expected: bool,
         tamper_padding: bool,
-    ) -> ClaimRlcTestCircuit<F> {
-        claim_rlc_test_circuit_with_challenges_v1(tamper_expected, tamper_padding, [2, 3])
+    ) -> CarrierRlcTestCircuit<F> {
+        carrier_rlc_test_circuit_with_challenges_v1(tamper_expected, tamper_padding, [2, 3])
     }
 
-    fn claim_rlc_test_circuit_with_challenges_v1<F: KagemushaPoseidonFieldV1>(
+    fn carrier_rlc_test_circuit_with_challenges_v1<F: KagemushaPoseidonFieldV1>(
         tamper_expected: bool,
         tamper_padding: bool,
         [challenge_a_value, challenge_b_value]: [u128; 2],
-    ) -> ClaimRlcTestCircuit<F> {
-        let mut builder = BaseCircuitBuilder::<F>::new(false).use_k(CLAIM_RLC_TEST_K);
+    ) -> CarrierRlcTestCircuit<F> {
+        let mut builder = BaseCircuitBuilder::<F>::new(false).use_k(CARRIER_RLC_TEST_K);
         let carrier_values = [
-            vec![
-                CLAIM_CARRIER_RLC_MODULUS_V1,
-                2 * CLAIM_CARRIER_RLC_MODULUS_V1,
-                0,
-                0,
-            ],
+            vec![CARRIER_RLC_MODULUS_V1, 2 * CARRIER_RLC_MODULUS_V1, 0, 0],
             vec![u128::MAX, 0, 0, 0],
         ];
         let challenge_a = builder
@@ -5352,13 +4144,13 @@ mod tests {
         let challenge_b = builder
             .main(0)
             .load_witness(F::from_u128(challenge_b_value));
-        let carriers = carrier_values.map(|values| ClaimRlcCarrierV1 {
+        let carriers = carrier_values.map(|values| CarrierRlcCarrierV1 {
             expected_a: builder.main(0).load_witness(F::from_u128(
-                claim_rlc_test_value_v1(&values, challenge_a_value) + u128::from(tamper_expected),
+                carrier_rlc_test_value_v1(&values, challenge_a_value) + u128::from(tamper_expected),
             )),
             expected_b: builder
                 .main(0)
-                .load_witness(F::from_u128(claim_rlc_test_value_v1(
+                .load_witness(F::from_u128(carrier_rlc_test_value_v1(
                     &values,
                     challenge_b_value,
                 ))),
@@ -5368,9 +4160,9 @@ mod tests {
                 .collect(),
         });
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-        ClaimRlcTestCircuit {
+        CarrierRlcTestCircuit {
             builder,
-            machine: KagemushaClaimCarrierRlcMachineV1 {
+            machine: ClaimCarrierRlcMachineV1 {
                 challenge_a,
                 challenge_b,
                 carriers,
@@ -5383,24 +4175,24 @@ mod tests {
         }
     }
 
-    fn claim_rlc_shared_table_test_circuit_v1<F: KagemushaPoseidonFieldV1, const SHARED: bool>(
+    fn carrier_rlc_shared_table_test_circuit_v1<F: KagemushaPoseidonFieldV1, const SHARED: bool>(
         base_range_value: u64,
         tamper_expected: bool,
         tamper_range_limb: bool,
-    ) -> ClaimRlcSharedTableTestCircuit<F, SHARED> {
-        let mut inner = claim_rlc_test_circuit_v1(tamper_expected, false);
+    ) -> CarrierRlcSharedTableTestCircuit<F, SHARED> {
+        let mut inner = carrier_rlc_test_circuit_v1(tamper_expected, false);
         inner.builder = inner
             .builder
             .use_k(16)
-            .use_lookup_bits(CLAIM_RLC_RADIX_BITS);
+            .use_lookup_bits(CARRIER_RLC_RADIX_BITS);
         let range = inner.builder.range_chip();
         let value = inner
             .builder
             .main(0)
             .load_witness(F::from(base_range_value));
-        range.range_check(inner.builder.main(0), value, CLAIM_RLC_RADIX_BITS);
+        range.range_check(inner.builder.main(0), value, CARRIER_RLC_RADIX_BITS);
         inner.builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-        ClaimRlcSharedTableTestCircuit {
+        CarrierRlcSharedTableTestCircuit {
             inner,
             tamper_range_limb,
         }
@@ -5540,25 +4332,23 @@ mod tests {
             u64::from_le_bytes(*b"kgmrlc_2")
         );
         assert_eq!(CLAIM_CARRIER_RLC_VERSION_V1, 2);
-        assert_eq!(CLAIM_CARRIER_RLC_MODULUS_V1, (1_u128 << 127) - 1);
-        assert_eq!(CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1, 3);
-        assert_eq!(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1, 80);
+        assert_eq!(CARRIER_RLC_MODULUS_V1, (1_u128 << 127) - 1);
+        assert_eq!(CARRIER_RLC_QUOTIENT_RADIX_V1, 3);
+        assert_eq!(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1, 80);
         assert!(
-            CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1
-                .pow(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1 as u32)
-                - 1
-                < CLAIM_CARRIER_RLC_MODULUS_V1
+            CARRIER_RLC_QUOTIENT_RADIX_V1.pow(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1 as u32) - 1
+                < CARRIER_RLC_MODULUS_V1
         );
         assert_eq!(
             KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
                 + KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-                    .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1),
+                    .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1),
             4_142,
         );
         let fixed_packs = KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-            .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
+            .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
         assert_eq!(
-            2 * CLAIM_RLC_ROWS_PER_LOGICAL_ROW
+            2 * CARRIER_RLC_ROWS_PER_LOGICAL_ROW
                 * (4 + 3 * KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 + 2 * fixed_packs),
             49_512,
             "the two-carrier custom machine must retain its fully padded row schedule",
@@ -5592,8 +4382,7 @@ mod tests {
                 let before_selectors = meta.num_selectors();
                 let before_permutation = meta.permutation().get_columns().len();
                 let before_lookups = meta.lookups().len();
-                let rlc =
-                    KagemushaClaimCarrierRlcConfigV1::configure_with_base(&mut meta, Some(&base));
+                let rlc = KagemushaCarrierRlcConfigV1::configure_with_base(&mut meta, Some(&base));
                 assert_eq!(rlc.owns_range_table, !shared);
                 if let MaybeRangeConfig::WithRange(range) = &base.base {
                     assert_eq!(rlc.range_table == range.lookup, shared);
@@ -5604,7 +4393,7 @@ mod tests {
                 );
                 assert_eq!(
                     meta.num_advice_columns() - before_advice,
-                    CLAIM_RLC_PHYSICAL_COLUMNS
+                    CARRIER_RLC_PHYSICAL_COLUMNS
                 );
                 assert_eq!(meta.num_selectors(), before_selectors);
                 assert_eq!(
@@ -5613,7 +4402,7 @@ mod tests {
                 );
                 assert_eq!(
                     meta.lookups().len() - before_lookups,
-                    CLAIM_RLC_PHYSICAL_RANGE_COLUMNS
+                    CARRIER_RLC_PHYSICAL_RANGE_COLUMNS
                 );
                 assert_eq!(meta.degree(), 6);
             }
@@ -5630,14 +4419,14 @@ mod tests {
             // the independent host polynomial used by the existing four-element fixture.
             MockProver::run(
                 16,
-                &claim_rlc_shared_table_test_circuit_v1::<F, false>(32_767, false, false),
+                &carrier_rlc_shared_table_test_circuit_v1::<F, false>(32_767, false, false),
                 vec![],
             )
             .expect("owned full-range RLC positive control")
             .assert_satisfied();
             MockProver::run(
                 16,
-                &claim_rlc_shared_table_test_circuit_v1::<F, true>(32_767, false, false),
+                &carrier_rlc_shared_table_test_circuit_v1::<F, true>(32_767, false, false),
                 vec![],
             )
             .expect("shared full-range RLC positive control")
@@ -5645,7 +4434,7 @@ mod tests {
             assert!(
                 MockProver::run(
                     16,
-                    &claim_rlc_shared_table_test_circuit_v1::<F, true>(32_767, true, false),
+                    &carrier_rlc_shared_table_test_circuit_v1::<F, true>(32_767, true, false),
                     vec![],
                 )
                 .expect("shared-table RLC corrupted result")
@@ -5655,7 +4444,7 @@ mod tests {
             for (base_range_value, tamper_range_limb) in [(32_768, false), (32_767, true)] {
                 let failures = MockProver::run(
                     16,
-                    &claim_rlc_shared_table_test_circuit_v1::<F, true>(
+                    &carrier_rlc_shared_table_test_circuit_v1::<F, true>(
                         base_range_value,
                         false,
                         tamper_range_limb,
@@ -5684,16 +4473,16 @@ mod tests {
             ($curve:ty, $field:ty) => {{
                 let params = ParamsIPA::<$curve>::new(16);
                 let measure = |shared| {
-                    let circuit_params = claim_rlc_shared_table_test_circuit_v1::<$field, true>(
+                    let circuit_params = carrier_rlc_shared_table_test_circuit_v1::<$field, true>(
                         32_767, false, false,
                     ).params();
                     let mut meta = ConstraintSystem::<$field>::default();
                     let config = if shared {
-                        ClaimRlcSharedTableTestCircuit::<$field, true>::configure_with_params(
+                        CarrierRlcSharedTableTestCircuit::<$field, true>::configure_with_params(
                             &mut meta, circuit_params,
                         )
                     } else {
-                        ClaimRlcSharedTableTestCircuit::<$field, false>::configure_with_params(
+                        CarrierRlcSharedTableTestCircuit::<$field, false>::configure_with_params(
                             &mut meta, circuit_params,
                         )
                     };
@@ -5705,14 +4494,14 @@ mod tests {
                     let (key, profile) = if shared {
                         halo2_proofs::plonk::keygen_pk2_consuming_with_profile(
                             &params,
-                            claim_rlc_shared_table_test_circuit_v1::<$field, true>(32_767, false, false),
+                            carrier_rlc_shared_table_test_circuit_v1::<$field, true>(32_767, false, false),
                             true,
                             |_circuit, profile| Ok::<_, String>(profile),
                         )
                     } else {
                         halo2_proofs::plonk::keygen_pk2_consuming_with_profile(
                             &params,
-                            claim_rlc_shared_table_test_circuit_v1::<$field, false>(32_767, false, false),
+                            carrier_rlc_shared_table_test_circuit_v1::<$field, false>(32_767, false, false),
                             true,
                             |_circuit, profile| Ok::<_, String>(profile),
                         )
@@ -5775,9 +4564,9 @@ mod tests {
     #[test]
     fn carrier_rlc_configuration_has_three_fixed_mode_columns() {
         let mut meta = ConstraintSystem::<Fp>::default();
-        let config = KagemushaClaimCarrierRlcConfigV1::configure(&mut meta);
-        assert_eq!(config.advice.len(), CLAIM_RLC_PHYSICAL_COLUMNS);
-        assert_eq!(meta.num_advice_columns(), CLAIM_RLC_PHYSICAL_COLUMNS);
+        let config = KagemushaCarrierRlcConfigV1::configure(&mut meta);
+        assert_eq!(config.advice.len(), CARRIER_RLC_PHYSICAL_COLUMNS);
+        assert_eq!(meta.num_advice_columns(), CARRIER_RLC_PHYSICAL_COLUMNS);
         assert_eq!(
             meta.num_fixed_columns(),
             4,
@@ -5790,7 +4579,7 @@ mod tests {
 
     #[test]
     fn carrier_rlc_fixed_mode_payload_encoding_is_injective() {
-        let state = ClaimRlcStateV1 {
+        let state = CarrierRlcStateV1 {
             challenge_a: 1,
             challenge_b: 1,
             accumulator_a: 0,
@@ -5801,63 +4590,63 @@ mod tests {
         let negative_one = Fp::ZERO - Fp::ONE;
         let cases = [
             (
-                ClaimRlcRowModeV1::StartA,
+                CarrierRlcRowModeV1::StartA,
                 false,
                 false,
                 Fp::ZERO,
                 [Fp::ZERO, Fp::ONE, Fp::ZERO],
             ),
             (
-                ClaimRlcRowModeV1::StartB,
+                CarrierRlcRowModeV1::StartB,
                 false,
                 false,
                 Fp::ZERO,
                 [Fp::ZERO, Fp::ONE, Fp::ONE],
             ),
             (
-                ClaimRlcRowModeV1::Preprocess,
+                CarrierRlcRowModeV1::Preprocess,
                 false,
                 false,
                 Fp::from(9),
                 [Fp::ONE, Fp::ZERO, Fp::from(9)],
             ),
             (
-                ClaimRlcRowModeV1::EvaluateA,
+                CarrierRlcRowModeV1::EvaluateA,
                 false,
                 false,
                 Fp::ZERO,
                 [Fp::ONE, Fp::ONE, Fp::ZERO],
             ),
             (
-                ClaimRlcRowModeV1::EvaluateA,
+                CarrierRlcRowModeV1::EvaluateA,
                 false,
                 true,
                 Fp::ZERO,
                 [Fp::ONE, Fp::ONE, Fp::ONE],
             ),
             (
-                ClaimRlcRowModeV1::EvaluateB,
+                CarrierRlcRowModeV1::EvaluateB,
                 false,
                 false,
                 Fp::ZERO,
                 [Fp::ONE, Fp::ONE, Fp::from(2)],
             ),
             (
-                ClaimRlcRowModeV1::EvaluateB,
+                CarrierRlcRowModeV1::EvaluateB,
                 true,
                 false,
                 Fp::ZERO,
                 [Fp::ONE, Fp::ONE, negative_one],
             ),
             (
-                ClaimRlcRowModeV1::EndA,
+                CarrierRlcRowModeV1::EndA,
                 false,
                 false,
                 Fp::ZERO,
                 [Fp::ZERO, Fp::ONE, Fp::from(2)],
             ),
             (
-                ClaimRlcRowModeV1::EndB,
+                CarrierRlcRowModeV1::EndB,
                 false,
                 false,
                 Fp::ZERO,
@@ -5866,11 +4655,11 @@ mod tests {
         ];
         let mut encodings = Vec::with_capacity(cases.len());
         for (mode, store_pack, load_pack, ternary_power, expected) in cases {
-            let mut row = claim_rlc_state_row_v1::<Fp>(state, mode, None);
+            let mut row = carrier_rlc_state_row_v1::<Fp>(state, mode, None);
             row.store_pack = store_pack;
             row.load_pack = load_pack;
             row.ternary_power = ternary_power;
-            let encoding = claim_rlc_fixed_encoding_v1(&row).expect("valid fixed mode encoding");
+            let encoding = carrier_rlc_fixed_encoding_v1(&row).expect("valid fixed mode encoding");
             assert_eq!(encoding, expected);
             encodings.push(encoding);
         }
@@ -5881,11 +4670,12 @@ mod tests {
             );
         }
 
-        let mut invalid = claim_rlc_state_row_v1::<Fp>(state, ClaimRlcRowModeV1::EvaluateA, None);
+        let mut invalid =
+            carrier_rlc_state_row_v1::<Fp>(state, CarrierRlcRowModeV1::EvaluateA, None);
         invalid.store_pack = true;
-        assert!(claim_rlc_fixed_encoding_v1(&invalid).is_err());
-        let invalid = claim_rlc_state_row_v1::<Fp>(state, ClaimRlcRowModeV1::Preprocess, None);
-        assert!(claim_rlc_fixed_encoding_v1(&invalid).is_err());
+        assert!(carrier_rlc_fixed_encoding_v1(&invalid).is_err());
+        let invalid = carrier_rlc_state_row_v1::<Fp>(state, CarrierRlcRowModeV1::Preprocess, None);
+        assert!(carrier_rlc_fixed_encoding_v1(&invalid).is_err());
     }
 
     #[test]
@@ -5894,11 +4684,11 @@ mod tests {
         let zero_coefficients = native_claim_carrier_coefficients_v1(&zero).unwrap();
         let boundaries = [
             0,
-            CLAIM_CARRIER_RLC_MODULUS_V1 - 1,
-            CLAIM_CARRIER_RLC_MODULUS_V1,
-            CLAIM_CARRIER_RLC_MODULUS_V1 + 1,
-            2 * CLAIM_CARRIER_RLC_MODULUS_V1 - 1,
-            2 * CLAIM_CARRIER_RLC_MODULUS_V1,
+            CARRIER_RLC_MODULUS_V1 - 1,
+            CARRIER_RLC_MODULUS_V1,
+            CARRIER_RLC_MODULUS_V1 + 1,
+            2 * CARRIER_RLC_MODULUS_V1 - 1,
+            2 * CARRIER_RLC_MODULUS_V1,
             u128::MAX,
         ];
         for &position in &[0, 79, 80, 159, 4_089] {
@@ -5909,12 +4699,12 @@ mod tests {
                 assert_eq!(coefficients.len(), 4_142);
                 let quotient_pack = coefficients
                     [KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 + position / 80];
-                let ternary_power = CLAIM_CARRIER_RLC_QUOTIENT_RADIX_V1.pow((position % 80) as u32);
+                let ternary_power = CARRIER_RLC_QUOTIENT_RADIX_V1.pow((position % 80) as u32);
                 let quotient = (quotient_pack / ternary_power) % 3;
-                assert_eq!(coefficients[position], value % CLAIM_CARRIER_RLC_MODULUS_V1);
-                assert_eq!(quotient, value / CLAIM_CARRIER_RLC_MODULUS_V1);
+                assert_eq!(coefficients[position], value % CARRIER_RLC_MODULUS_V1);
+                assert_eq!(quotient, value / CARRIER_RLC_MODULUS_V1);
                 assert_eq!(
-                    coefficients[position] + quotient * CLAIM_CARRIER_RLC_MODULUS_V1,
+                    coefficients[position] + quotient * CARRIER_RLC_MODULUS_V1,
                     value,
                 );
                 if value == 0 {
@@ -5926,8 +4716,7 @@ mod tests {
         }
 
         let mut modulus = zero;
-        modulus[KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 - 1] =
-            CLAIM_CARRIER_RLC_MODULUS_V1;
+        modulus[KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1 - 1] = CARRIER_RLC_MODULUS_V1;
         assert_ne!(
             native_claim_carrier_rlc_v1(
                 &vec![0_u128; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],
@@ -5953,19 +4742,19 @@ mod tests {
                 let mut carrier = vec![0_u128; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1];
                 for (index, value) in carrier[..active_len].iter_mut().enumerate() {
                     *value = match index % 4 {
-                        0 => CLAIM_CARRIER_RLC_MODULUS_V1,
-                        1 => 2 * CLAIM_CARRIER_RLC_MODULUS_V1,
+                        0 => CARRIER_RLC_MODULUS_V1,
+                        1 => 2 * CARRIER_RLC_MODULUS_V1,
                         2 => u128::MAX,
-                        _ => CLAIM_CARRIER_RLC_MODULUS_V1 + index as u128 + 1,
+                        _ => CARRIER_RLC_MODULUS_V1 + index as u128 + 1,
                     };
                 }
                 carrier[active_len - 1] = if trailing_active_zero {
                     0
                 } else {
-                    CLAIM_CARRIER_RLC_MODULUS_V1 + 17
+                    CARRIER_RLC_MODULUS_V1 + 17
                 };
                 let expected_coefficients = native_claim_carrier_coefficients_v1(&carrier).unwrap();
-                let challenge = 1_u128 << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1;
+                let challenge = 1_u128 << CARRIER_RLC_CHALLENGE_BITS_V1;
                 let expected_rlc_value = native_claim_carrier_rlc_v1(&carrier, challenge).unwrap();
                 let assigned = carrier[..active_len]
                     .iter()
@@ -5991,7 +4780,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 let quotient_pack_count =
-                    active_len.div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
+                    active_len.div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1);
                 assert_eq!(
                     active_remainders,
                     expected_coefficients[..active_len].to_vec()
@@ -6010,7 +4799,7 @@ mod tests {
                 assert_eq!(
                     coefficients.quotient_pack_zero_tail,
                     KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
-                        .div_ceil(CLAIM_CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1)
+                        .div_ceil(CARRIER_RLC_QUOTIENTS_PER_COEFFICIENT_V1)
                         - quotient_pack_count
                 );
                 let challenge = builder.main(0).load_constant(F::from_u128(challenge));
@@ -6034,10 +4823,10 @@ mod tests {
                     KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
                     padding_zero,
                 );
-                let machine = KagemushaClaimCarrierRlcMachineV1 {
+                let machine = ClaimCarrierRlcMachineV1 {
                     challenge_a: challenge,
                     challenge_b: challenge,
-                    carriers: std::array::from_fn(|_| ClaimRlcCarrierV1 {
+                    carriers: std::array::from_fn(|_| CarrierRlcCarrierV1 {
                         values: fixed_values.clone(),
                         expected_a: expected_rlc,
                         expected_b: expected_rlc,
@@ -6047,24 +4836,27 @@ mod tests {
                 let rows = machine.build_rows().expect("fixed-machine RLC rows");
                 assert_eq!(machine.required_rows().unwrap(), 49_512);
                 assert_eq!(
-                    rows.len() * CLAIM_RLC_ROWS_PER_LOGICAL_ROW,
+                    rows.len() * CARRIER_RLC_ROWS_PER_LOGICAL_ROW,
                     machine.required_rows().unwrap()
                 );
                 let terminal_rows = rows
                     .iter()
                     .filter(|row| {
-                        matches!(row.mode, ClaimRlcRowModeV1::EndA | ClaimRlcRowModeV1::EndB)
+                        matches!(
+                            row.mode,
+                            CarrierRlcRowModeV1::EndA | CarrierRlcRowModeV1::EndB
+                        )
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(terminal_rows.len(), 4);
                 for row in terminal_rows {
                     let accumulator = match row.mode {
-                        ClaimRlcRowModeV1::EndA => row.values[CLAIM_RLC_ACCUMULATOR_A],
-                        ClaimRlcRowModeV1::EndB => row.values[CLAIM_RLC_ACCUMULATOR_B],
+                        CarrierRlcRowModeV1::EndA => row.values[CARRIER_RLC_ACCUMULATOR_A],
+                        CarrierRlcRowModeV1::EndB => row.values[CARRIER_RLC_ACCUMULATOR_B],
                         _ => unreachable!(),
                     };
                     assert_eq!(accumulator, F::from_u128(expected_rlc_value));
-                    assert_eq!(row.values[CLAIM_RLC_BUS], accumulator);
+                    assert_eq!(row.values[CARRIER_RLC_BUS], accumulator);
                 }
             }
             builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -6080,15 +4872,15 @@ mod tests {
     #[test]
     fn carrier_rlc_fixed_machine_accepts_distinct_limbs_in_both_pasta_fields() {
         MockProver::run(
-            CLAIM_RLC_TEST_K as u32,
-            &claim_rlc_test_circuit_v1::<Fp>(false, false),
+            CARRIER_RLC_TEST_K as u32,
+            &carrier_rlc_test_circuit_v1::<Fp>(false, false),
             vec![],
         )
         .expect("Fp fixed-machine carrier RLC mock prover")
         .assert_satisfied();
         MockProver::run(
-            CLAIM_RLC_TEST_K as u32,
-            &claim_rlc_test_circuit_v1::<Fq>(false, false),
+            CARRIER_RLC_TEST_K as u32,
+            &carrier_rlc_test_circuit_v1::<Fq>(false, false),
             vec![],
         )
         .expect("Fq fixed-machine carrier RLC mock prover")
@@ -6101,8 +4893,8 @@ mod tests {
             for (tamper_expected, tamper_padding) in [(true, false), (false, true)] {
                 assert!(
                     MockProver::run(
-                        CLAIM_RLC_TEST_K as u32,
-                        &claim_rlc_test_circuit_v1::<F>(tamper_expected, tamper_padding),
+                        CARRIER_RLC_TEST_K as u32,
+                        &carrier_rlc_test_circuit_v1::<F>(tamper_expected, tamper_padding),
                         vec![],
                     )
                     .expect("tampered carrier RLC mock prover")
@@ -6119,32 +4911,35 @@ mod tests {
     #[test]
     fn carrier_rlc_fixed_machine_binds_both_start_challenges_for_each_carrier() {
         fn check<F: KagemushaPoseidonFieldV1>() {
-            let circuit = claim_rlc_test_circuit_v1::<F>(false, false);
+            let circuit = carrier_rlc_test_circuit_v1::<F>(false, false);
             let rows = circuit
                 .machine
-                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .build_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                 .expect("honest fixed RLC schedule");
             let starts = rows
                 .iter()
                 .filter(|row| {
                     matches!(
                         row.mode,
-                        ClaimRlcRowModeV1::StartA | ClaimRlcRowModeV1::StartB
+                        CarrierRlcRowModeV1::StartA | CarrierRlcRowModeV1::StartB
                     )
                 })
                 .collect::<Vec<_>>();
             assert_eq!(starts.len(), 4);
             for (start_index, start) in starts.iter().enumerate() {
                 let challenge_column = if start_index % 2 == 0 {
-                    CLAIM_RLC_CHALLENGE_A
+                    CARRIER_RLC_CHALLENGE_A
                 } else {
-                    CLAIM_RLC_CHALLENGE_B
+                    CARRIER_RLC_CHALLENGE_B
                 };
-                assert_eq!(start.values[CLAIM_RLC_BUS], start.values[challenge_column]);
-                let mut substituted = claim_rlc_test_circuit_v1::<F>(false, false);
+                assert_eq!(
+                    start.values[CARRIER_RLC_BUS],
+                    start.values[challenge_column]
+                );
+                let mut substituted = carrier_rlc_test_circuit_v1::<F>(false, false);
                 substituted.tamper_start_bus = Some(start_index);
                 assert!(
-                    MockProver::run(CLAIM_RLC_TEST_K as u32, &substituted, vec![])
+                    MockProver::run(CARRIER_RLC_TEST_K as u32, &substituted, vec![])
                         .expect("substituted start-challenge bus mock prover")
                         .verify()
                         .is_err(),
@@ -6214,9 +5009,9 @@ mod tests {
 
         fn assert_field_bounds<F: KagemushaPoseidonFieldV1>() {
             let one = BigUint::from(1_u8);
-            let modulus_m = BigUint::from(CLAIM_CARRIER_RLC_MODULUS_V1);
+            let modulus_m = BigUint::from(CARRIER_RLC_MODULUS_V1);
             let maximum_remainder = &modulus_m - &one;
-            let maximum_challenge = &one << CLAIM_CARRIER_RLC_CHALLENGE_BITS_V1;
+            let maximum_challenge = &one << CARRIER_RLC_CHALLENGE_BITS_V1;
             let maximum_honest_numerator =
                 &maximum_remainder * maximum_challenge + &maximum_remainder;
             let maximum_constrained_recomposition =
@@ -6281,8 +5076,8 @@ mod tests {
         let second = native_claim_carrier_rlc_v1(&carrier, 13).unwrap();
         assert_ne!(first, native_claim_carrier_rlc_v1(&reordered, 7).unwrap());
         assert_ne!(first, second);
-        assert!(first < CLAIM_CARRIER_RLC_MODULUS_V1);
-        assert!(second < CLAIM_CARRIER_RLC_MODULUS_V1);
+        assert!(first < CARRIER_RLC_MODULUS_V1);
+        assert!(second < CARRIER_RLC_MODULUS_V1);
     }
 
     #[test]
@@ -6509,67 +5304,67 @@ mod tests {
     #[test]
     fn carrier_rlc_two_row_layout_retains_state_ranges_and_row_capacity() {
         fn check<F: KagemushaPoseidonFieldV1 + ff::WithSmallOrderMulGroup<3>>() {
-            let circuit = claim_rlc_test_circuit_v1::<F>(false, false);
+            let circuit = carrier_rlc_test_circuit_v1::<F>(false, false);
             let rows = circuit
                 .machine
-                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .build_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                 .unwrap();
             assert_eq!(rows.len(), 36);
             assert_eq!(
                 circuit
                     .machine
-                    .required_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                    .required_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                     .unwrap(),
                 72
             );
-            assert_eq!(CLAIM_RLC_PHYSICAL_COLUMNS, 14);
+            assert_eq!(CARRIER_RLC_PHYSICAL_COLUMNS, 14);
             for row in &rows {
-                let physical = claim_rlc_physical_values_v1(row);
+                let physical = carrier_rlc_physical_values_v1(row);
                 assert_eq!(
                     &physical[0][..4],
                     &[
-                        row.values[CLAIM_RLC_BUS],
-                        row.values[CLAIM_RLC_CHALLENGE_A],
-                        row.values[CLAIM_RLC_CHALLENGE_B],
-                        row.values[CLAIM_RLC_ACCUMULATOR_A],
+                        row.values[CARRIER_RLC_BUS],
+                        row.values[CARRIER_RLC_CHALLENGE_A],
+                        row.values[CARRIER_RLC_CHALLENGE_B],
+                        row.values[CARRIER_RLC_ACCUMULATOR_A],
                     ]
                 );
                 assert_eq!(
                     &physical[1][..4],
                     &[
-                        row.values[CLAIM_RLC_REMAINDER_INVERSE],
-                        row.values[CLAIM_RLC_COEFFICIENT],
-                        row.values[CLAIM_RLC_ACCUMULATOR_B],
-                        row.values[CLAIM_RLC_QUOTIENT_PACK],
+                        row.values[CARRIER_RLC_REMAINDER_INVERSE],
+                        row.values[CARRIER_RLC_COEFFICIENT],
+                        row.values[CARRIER_RLC_ACCUMULATOR_B],
+                        row.values[CARRIER_RLC_QUOTIENT_PACK],
                     ]
                 );
                 assert_eq!(
                     &physical[0][4..13],
-                    &row.values[CLAIM_RLC_RANGE_START..CLAIM_RLC_RANGE_START + 9]
+                    &row.values[CARRIER_RLC_RANGE_START..CARRIER_RLC_RANGE_START + 9]
                 );
                 assert_eq!(
                     &physical[1][4..13],
-                    &row.values[CLAIM_RLC_RANGE_START + 9..CLAIM_RLC_RANGE_START + 18]
+                    &row.values[CARRIER_RLC_RANGE_START + 9..CARRIER_RLC_RANGE_START + 18]
                 );
-                assert_eq!(physical[0][13], row.values[CLAIM_RLC_SCALED_FIRST_TOP]);
-                assert_eq!(physical[1][13], row.values[CLAIM_RLC_SCALED_SECOND_TOP]);
+                assert_eq!(physical[0][13], row.values[CARRIER_RLC_SCALED_FIRST_TOP]);
+                assert_eq!(physical[1][13], row.values[CARRIER_RLC_SCALED_SECOND_TOP]);
                 // Logical oracle duplicates are deliberately not separate circuit witnesses.
                 // Their former tampering hooks must target the range/BUS projection instead.
                 let mut oracle_only = row.clone();
                 for column in [
-                    CLAIM_RLC_VALUE,
-                    CLAIM_RLC_RAW_REMAINDER,
-                    CLAIM_RLC_DIVISION_QUOTIENT,
-                    CLAIM_RLC_DIVISION_REMAINDER,
-                    CLAIM_RLC_QUOTIENT_BIT_0,
-                    CLAIM_RLC_QUOTIENT_BIT_1,
+                    CARRIER_RLC_VALUE,
+                    CARRIER_RLC_RAW_REMAINDER,
+                    CARRIER_RLC_DIVISION_QUOTIENT,
+                    CARRIER_RLC_DIVISION_REMAINDER,
+                    CARRIER_RLC_QUOTIENT_BIT_0,
+                    CARRIER_RLC_QUOTIENT_BIT_1,
                 ] {
                     oracle_only.values[column] += F::ONE;
                 }
-                assert_eq!(claim_rlc_physical_values_v1(&oracle_only), physical);
+                assert_eq!(carrier_rlc_physical_values_v1(&oracle_only), physical);
             }
             let mut meta = ConstraintSystem::<F>::default();
-            let config = KagemushaClaimCarrierRlcConfigV1::configure(&mut meta);
+            let config = KagemushaCarrierRlcConfigV1::configure(&mut meta);
             assert_eq!(meta.advice_queries().len(), 34);
             for (index, column) in config.advice.iter().enumerate() {
                 let mut rotations = meta
@@ -6607,7 +5402,7 @@ mod tests {
     #[test]
     fn carrier_rlc_derived_ternary_quotient_has_the_original_integer_domain() {
         fn check<F: KagemushaPoseidonFieldV1>() {
-            let modulus = CLAIM_CARRIER_RLC_MODULUS_V1;
+            let modulus = CARRIER_RLC_MODULUS_V1;
             let inverse = F::from_u128(modulus).invert().unwrap();
             let cubic = |q: F| q * (q - F::ONE) * (q - F::from(2));
             for value in [
@@ -6640,8 +5435,8 @@ mod tests {
     fn carrier_rlc_two_row_machine_binds_both_halves_and_pack_copies() {
         fn check<F: KagemushaPoseidonFieldV1>() {
             MockProver::run(
-                CLAIM_RLC_TEST_K as u32,
-                &claim_rlc_test_circuit_with_challenges_v1::<F>(false, false, [3, 2]),
+                CARRIER_RLC_TEST_K as u32,
+                &carrier_rlc_test_circuit_with_challenges_v1::<F>(false, false, [3, 2]),
                 vec![],
             )
             .expect("changed-witness two-row RLC positive control")
@@ -6649,40 +5444,70 @@ mod tests {
             // The first preprocess/evaluate-A/evaluate-B rows are 2/3/4. Exercise every
             // state position, including the tail BUS inverse and the interleaved recurrences.
             let mut faults = vec![
-                (0, ClaimRlcPhysicalMutationV1::Advice { half: 0, column: 0 }),
-                (2, ClaimRlcPhysicalMutationV1::Advice { half: 0, column: 1 }),
-                (2, ClaimRlcPhysicalMutationV1::Advice { half: 0, column: 2 }),
-                (3, ClaimRlcPhysicalMutationV1::Advice { half: 0, column: 3 }),
-                (2, ClaimRlcPhysicalMutationV1::Advice { half: 1, column: 0 }),
-                (3, ClaimRlcPhysicalMutationV1::Advice { half: 1, column: 1 }),
-                (4, ClaimRlcPhysicalMutationV1::Advice { half: 1, column: 2 }),
-                (2, ClaimRlcPhysicalMutationV1::Advice { half: 1, column: 3 }),
-                (2, ClaimRlcPhysicalMutationV1::Fixed { half: 1, column: 0 }),
-                (2, ClaimRlcPhysicalMutationV1::Fixed { half: 1, column: 1 }),
+                (
+                    0,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 0, column: 0 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 0, column: 1 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 0, column: 2 },
+                ),
+                (
+                    3,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 0, column: 3 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 1, column: 0 },
+                ),
+                (
+                    3,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 1, column: 1 },
+                ),
+                (
+                    4,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 1, column: 2 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Advice { half: 1, column: 3 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Fixed { half: 1, column: 0 },
+                ),
+                (
+                    2,
+                    CarrierRlcPhysicalMutationV1::Fixed { half: 1, column: 1 },
+                ),
             ];
             for half in 0..2 {
                 for column in 4..14 {
-                    faults.push((2, ClaimRlcPhysicalMutationV1::Advice { half, column }));
+                    faults.push((2, CarrierRlcPhysicalMutationV1::Advice { half, column }));
                 }
             }
-            let honest = claim_rlc_test_circuit_v1::<F>(false, false);
+            let honest = carrier_rlc_test_circuit_v1::<F>(false, false);
             let rows = honest
                 .machine
-                .build_rows_with_capacity(CLAIM_RLC_TEST_CAPACITY)
+                .build_rows_with_capacity(CARRIER_RLC_TEST_CAPACITY)
                 .unwrap();
             for (index, row) in rows.iter().enumerate() {
                 if row.store_pack || row.load_pack {
                     faults.push((
                         index,
-                        ClaimRlcPhysicalMutationV1::Advice { half: 0, column: 0 },
+                        CarrierRlcPhysicalMutationV1::Advice { half: 0, column: 0 },
                     ));
                 }
             }
             for (logical_row, mutation) in faults {
-                let mut circuit = claim_rlc_test_circuit_v1::<F>(false, false);
+                let mut circuit = carrier_rlc_test_circuit_v1::<F>(false, false);
                 circuit.physical_mutation = Some((logical_row, mutation));
                 assert!(
-                    MockProver::run(CLAIM_RLC_TEST_K as u32, &circuit, vec![])
+                    MockProver::run(CARRIER_RLC_TEST_K as u32, &circuit, vec![])
                         .expect("mutated two-row RLC synthesis")
                         .verify()
                         .is_err(),
@@ -6714,8 +5539,8 @@ mod tests {
         };
         macro_rules! check {
             ($curve:ty, $field:ty) => {{
-                let params = ParamsIPA::<$curve>::new(CLAIM_RLC_TEST_K as u32);
-                let circuit = claim_rlc_test_circuit_v1::<$field>(false, false);
+                let params = ParamsIPA::<$curve>::new(CARRIER_RLC_TEST_K as u32);
+                let circuit = carrier_rlc_test_circuit_v1::<$field>(false, false);
                 let circuit_params = circuit.params();
                 let pk = keygen_pk2(&params, &circuit, true).expect("two-row RLC proving key");
                 let break_points = circuit.builder.break_points();
@@ -6731,10 +5556,10 @@ mod tests {
                 );
                 let mut input = pk_bytes.as_slice();
                 let restored_pk =
-                    ProvingKey::<$curve>::read_checked::<_, ClaimRlcTestCircuit<$field>>(
+                    ProvingKey::<$curve>::read_checked::<_, CarrierRlcTestCircuit<$field>>(
                         &mut input,
                         SerdeFormat::Processed,
-                        CLAIM_RLC_TEST_K as u32,
+                        CARRIER_RLC_TEST_K as u32,
                         circuit_params.clone(),
                     )
                     .expect("checked RLC PK reload");
@@ -6742,10 +5567,10 @@ mod tests {
                 assert_eq!(restored_pk.to_bytes(SerdeFormat::Processed), pk_bytes);
                 let mut input = vk_bytes.as_slice();
                 let restored_vk =
-                    VerifyingKey::<$curve>::read_checked::<_, ClaimRlcTestCircuit<$field>>(
+                    VerifyingKey::<$curve>::read_checked::<_, CarrierRlcTestCircuit<$field>>(
                         &mut input,
                         SerdeFormat::Processed,
-                        CLAIM_RLC_TEST_K as u32,
+                        CARRIER_RLC_TEST_K as u32,
                         circuit_params.clone(),
                     )
                     .expect("checked RLC VK reload");
@@ -6754,7 +5579,7 @@ mod tests {
                 assert_eq!(restored_vk.cs().degree(), 6);
                 assert_eq!(restored_vk.cs().blinding_factors(), 6);
                 for challenges in [[2, 3], [3, 2]] {
-                    let mut witness = claim_rlc_test_circuit_with_challenges_v1::<$field>(
+                    let mut witness = carrier_rlc_test_circuit_with_challenges_v1::<$field>(
                         false, false, challenges,
                     );
                     witness.builder.set_params(circuit_params.clone());
@@ -6812,10 +5637,10 @@ mod tests {
     #[test]
     fn carrier_rlc_two_row_gate_rejects_nonternary_quotients_and_modulus_remainders() {
         fn check<F: KagemushaPoseidonFieldV1>() {
-            for remainder in [0, 1, CLAIM_CARRIER_RLC_MODULUS_V1] {
-                let mut circuit = claim_rlc_test_circuit_v1::<F>(false, false);
+            for remainder in [0, 1, CARRIER_RLC_MODULUS_V1] {
+                let mut circuit = carrier_rlc_test_circuit_v1::<F>(false, false);
                 circuit.domain_remainder = Some(remainder);
-                let prover = MockProver::run(CLAIM_RLC_TEST_K as u32, &circuit, vec![])
+                let prover = MockProver::run(CARRIER_RLC_TEST_K as u32, &circuit, vec![])
                     .expect("actual two-row RLC preprocess-domain gate");
                 if remainder == 0 {
                     prover.assert_satisfied();

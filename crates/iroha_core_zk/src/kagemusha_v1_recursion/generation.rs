@@ -105,6 +105,21 @@ use super::artifacts::CanonicalArtifactDigestWriterV1;
 #[path = "production_prover.rs"]
 pub(super) mod production_prover;
 
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-real-proof-harness")
+))]
+#[path = "ordinary_guard_generation.rs"]
+pub(crate) mod ordinary_guard_generation;
+
+#[cfg(all(
+    unix,
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+#[path = "ordinary_cash_terminal_generation.rs"]
+pub(super) mod ordinary_cash_terminal_generation;
+
 /// Return an owned Eq parameter set backed by one process-local canonical derivation.
 ///
 /// `ParamsIPA::new(k)` is deterministic but expensive at `k = 16`. Artifact stages require the
@@ -562,6 +577,29 @@ pub struct KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a> {
         Option<&'a iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseV1>,
     /// Independent prior Apple assertion counter, never a financial logical index.
     pub previous_app_attest_counter: Option<u32>,
+    /// Exact ordinary outgoing original and both complete sealed streams, absent otherwise.
+    /// These data alone authorize no Native preparation, cash operation or proof publication.
+    pub prepared: Option<KagemushaOrdinaryRecursivePreparedOpeningV1<'a>>,
+}
+
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    )
+))]
+/// Exact mathematical preparation original borrowed from the separately held Native cash owner.
+/// All State/W2/Guard/stream joins and complete SHA proof realization remain mandatory.
+#[derive(Clone, Copy)]
+pub struct KagemushaOrdinaryRecursivePreparedOpeningV1<'a> {
+    /// Sole shared-model prepared record selected after purpose2 admission.
+    pub record: &'a iroha_data_model::kagemusha::KagemushaOrdinaryPreparedOutgoingV1,
+    /// Every byte of the original bounded sealed transition stream.
+    pub sealed_transition_inputs: &'a [u8],
+    /// Every byte of the original bounded sealed recovery stream.
+    pub sealed_recovery_seeds: &'a [u8],
 }
 
 #[cfg(any(
@@ -3574,6 +3612,28 @@ pub fn prove_kagemusha_recursive_state_hash_claim_v1(
     mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
+    prove_kagemusha_recursive_state_hash_claim_v1_with_construction(
+        eq,
+        ep,
+        witness,
+        recovery_seed,
+        super::composite::RecursiveStateConstructionV1::Production,
+    )
+}
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_kagemusha_recursive_state_hash_claim_v1_with_construction(
+    eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    recovery_seed: &KagemushaRecoverySeedV1,
+    construction: super::composite::RecursiveStateConstructionV1,
+) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
     validate_loaded_typed_sha_pair_v1(eq, ep)?;
     if witness.state.successor.release_id != eq.release_id {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
@@ -3596,12 +3656,23 @@ pub fn prove_kagemusha_recursive_state_hash_claim_v1(
     let ep_incoming = witness
         .ep_incoming_credits
         .map(KagemushaRecursiveIncomingEpGenerationWitnessV1::into_composite);
-    let (eq_messages, ep_messages) = super::composite::recursive_state_sha_messages_v1(
+    witness.hash_claim = None;
+    let (eq_messages, ep_messages) = match super::composite::build_recursive_state_pair_impl_v1(
         &eq.carrier_parameters,
         &ep.carrier_parameters,
         witness.into_recursive(&eq_incoming, &ep_incoming),
+        true,
+        construction,
     )
-    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?
+    {
+        super::composite::RecursiveStateBuildV1::Messages(eq, ep) => (eq, ep),
+        _ => {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "SHA discovery unexpectedly returned a circuit".into(),
+            ));
+        }
+    };
     prove_kagemusha_typed_sha_claim_v1(
         eq,
         ep,
@@ -5296,6 +5367,7 @@ fn build_recursive_generation_pair_v1(
     eq_parameters: &ParamsIPA<EqAffine>,
     ep_parameters: &ParamsIPA<EpAffine>,
     witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    construction: super::composite::RecursiveStateConstructionV1,
 ) -> Result<
     (
         KagemushaRecursiveStateEqCircuitV1,
@@ -5311,11 +5383,18 @@ fn build_recursive_generation_pair_v1(
     let ep_incoming_credits = witness
         .ep_incoming_credits
         .map(KagemushaRecursiveIncomingEpGenerationWitnessV1::into_composite);
-    build_kagemusha_recursive_state_pair_v1(
+    match super::composite::build_recursive_state_pair_impl_v1(
         eq_parameters,
         ep_parameters,
         witness.into_recursive(&eq_incoming_credits, &ep_incoming_credits),
-    )
+        false,
+        construction,
+    )? {
+        super::composite::RecursiveStateBuildV1::Authenticated(eq, ep, eq_audit, ep_audit) => {
+            Ok((eq, ep, eq_audit, ep_audit))
+        }
+        _ => Err("State proof construction unexpectedly returned messages".into()),
+    }
 }
 
 #[cfg(any(
@@ -5341,6 +5420,7 @@ struct KagemushaPrivateCarrierProofV1 {
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_arguments)]
 fn prove_private_recursive_carrier_v1(
+    construction: super::composite::RecursiveStateConstructionV1,
     eq_parameters: &ParamsIPA<EqAffine>,
     ep_parameters: &ParamsIPA<EpAffine>,
     eq_proving_key: &ProvingKey<EqAffine>,
@@ -5356,9 +5436,13 @@ fn prove_private_recursive_carrier_v1(
     witness.state.ep_protocol_digest = ep_protocol_digest;
     witness.state.eq_deferred_audit = [1; 32];
     witness.state.ep_deferred_audit = [2; 32];
-    let (_, _, eq_deferred_audit, ep_deferred_audit) =
-        build_recursive_generation_pair_v1(eq_parameters, ep_parameters, witness.clone())
-            .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let (_, _, eq_deferred_audit, ep_deferred_audit) = build_recursive_generation_pair_v1(
+        eq_parameters,
+        ep_parameters,
+        witness.clone(),
+        construction,
+    )
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     witness.state.eq_deferred_audit = eq_deferred_audit;
     witness.state.ep_deferred_audit = ep_deferred_audit;
     let eq_instances =
@@ -5368,7 +5452,7 @@ fn prove_private_recursive_carrier_v1(
     let eq_history = witness.eq_successor_history.clone();
     let ep_history = witness.ep_successor_history.clone();
     let (eq_circuit, ep_circuit, rebuilt_eq_audit, rebuilt_ep_audit) =
-        build_recursive_generation_pair_v1(eq_parameters, ep_parameters, witness)
+        build_recursive_generation_pair_v1(eq_parameters, ep_parameters, witness, construction)
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     if rebuilt_eq_audit != eq_deferred_audit || rebuilt_ep_audit != ep_deferred_audit {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
@@ -5466,6 +5550,20 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
     witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaArtifactGenerationErrorV1> {
+    generate_kagemusha_recursive_state_artifacts_v1_with_construction(
+        witness,
+        recovery_seed,
+        super::composite::RecursiveStateConstructionV1::Production,
+    )
+}
+
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(feature = "zk-halo2-ipa")]
+fn generate_kagemusha_recursive_state_artifacts_v1_with_construction(
+    witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    recovery_seed: &KagemushaRecoverySeedV1,
+    construction: super::composite::RecursiveStateConstructionV1,
+) -> Result<KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaArtifactGenerationErrorV1> {
     require_recursive_state_bootstrap_keygen_v1(witness.state.operation)?;
     let eq_parameters = canonical_kagemusha_eq_parameters_v1();
     let ep_parameters = canonical_kagemusha_ep_parameters_v1();
@@ -5497,9 +5595,13 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
         candidate.state.ep_protocol_digest =
             native_parent_protocol_digest_v1(&ep_seed_protocol, KagemushaPastaParityV1::Ep)
                 .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-        let (eq_circuit, ep_circuit, _, _) =
-            build_recursive_generation_pair_v1(&eq_parameters, &ep_parameters, candidate)
-                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        let (eq_circuit, ep_circuit, _, _) = build_recursive_generation_pair_v1(
+            &eq_parameters,
+            &ep_parameters,
+            candidate,
+            construction,
+        )
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         validate_recursive_profile(KagemushaPastaParityV1::Eq, &eq_circuit.params())?;
         validate_recursive_profile(KagemushaPastaParityV1::Ep, &ep_circuit.params())?;
         let eq_vk = keygen_vk(&eq_parameters, &eq_circuit).map_err(|error| {
@@ -5615,6 +5717,7 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
     // decider's actual verifier workload and prevents a release from authenticating a compact
     // key generated against a dummy or native-preprocessed inner transcript.
     let private = prove_private_recursive_carrier_v1(
+        construction,
         &eq_parameters,
         &ep_parameters,
         &inner_eq_pk,
@@ -6057,6 +6160,7 @@ pub fn prove_kagemusha_recursive_state_v1(
     }
 
     let private = prove_private_recursive_carrier_v1(
+        super::composite::RecursiveStateConstructionV1::Production,
         &eq.parameters,
         &ep.parameters,
         &eq.inner_proving_key,
@@ -7256,39 +7360,40 @@ fn preflight_kagemusha_terminal_authorization_key_configuration_v1()
     Ok(())
 }
 
-/// Qualify the fixed PlatformCredential claim-consumer auxiliaries before the real-proof fixture
-/// builds either parity's Base graph or calls raw Halo2 key generation.
+/// Inventory the complete PlatformCredential graph before proving its typed SHA claim.
+///
+/// The private shape builder uses the same protocol parser, hash queue, history fold, deferred
+/// audit and reciprocal MSM as real construction. Its fixed-shape parser bytes are not proofs:
+/// no synthesis, key generation, proof verification or authority-bearing value is returned.
+/// Passing this configure-only check still requires exact synthesized key sizing and genuine
+/// proof verification. The actual producer checks its full Base parameters against this result.
+#[cfg(all(
+    any(test, feature = "kagemusha-real-proof-harness"),
+    feature = "zk-halo2-ipa"
+))]
+#[path = "platform_credential_geometry.rs"]
+mod platform_credential_geometry;
+
 #[cfg(all(
     any(test, feature = "kagemusha-real-proof-harness"),
     feature = "zk-halo2-ipa"
 ))]
 pub(super) fn preflight_kagemusha_platform_credential_key_configuration_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
+    relation: &super::KagemushaPlatformCredentialRelationWitnessV1,
     provider_policy_root: [u8; 32],
-) -> Result<(), KagemushaArtifactGenerationErrorV1> {
-    let params = super::KagemushaProviderRootCircuitParamsV1::new(
-        auxiliary_only_k16_base_params_v1(),
+) -> Result<(BaseCircuitParams, BaseCircuitParams), KagemushaArtifactGenerationErrorV1> {
+    platform_credential_geometry::preflight_complete_graph_v1(
+        eq_params,
+        ep_params,
+        eq_hash,
+        ep_hash,
+        relation,
         provider_policy_root,
     )
-    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    preflight_helper_key_configuration_v1::<
-        EqAffine,
-        super::KagemushaPlatformCredentialRelationCircuitV1<Fp>,
-    >(
-        KAGEMUSHA_HALO2_K_V1 as usize,
-        params.clone(),
-        KagemushaPastaParityV1::Eq,
-        "PlatformCredential claim-consumer auxiliary geometry",
-    )?;
-    preflight_helper_key_configuration_v1::<
-        EpAffine,
-        super::KagemushaPlatformCredentialRelationCircuitV1<Fq>,
-    >(
-        KAGEMUSHA_HALO2_K_V1 as usize,
-        params,
-        KagemushaPastaParityV1::Ep,
-        "PlatformCredential claim-consumer auxiliary geometry",
-    )?;
-    Ok(())
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -8910,7 +9015,11 @@ enum KagemushaProofRecoveryPhaseV1 {
     TerminalAuthorization,
     #[cfg(any(test, feature = "kagemusha-production-prover"))]
     CommitWrapper,
-    #[cfg(feature = "kagemusha-production-prover")]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     OrdinaryAppGuard,
     MintAuthorization,
     MintAuthorizationTransport,
@@ -8940,7 +9049,11 @@ impl KagemushaProofRecoveryPhaseV1 {
             }
             #[cfg(any(test, feature = "kagemusha-production-prover"))]
             Self::CommitWrapper => "iroha:kagemusha:v1:proof-recovery:commit-wrapper",
-            #[cfg(feature = "kagemusha-production-prover")]
+            #[cfg(any(
+                test,
+                feature = "kagemusha-real-proof-harness",
+                feature = "kagemusha-production-prover"
+            ))]
             Self::OrdinaryAppGuard => "iroha:kagemusha:v1:proof-recovery:ordinary-app-guard",
             Self::MintAuthorization => "iroha:kagemusha:v1:proof-recovery:mint-authorization",
             Self::MintAuthorizationTransport => {
@@ -10557,11 +10670,16 @@ mod tests {
                 &context
             )
         );
+        assert_eq!(
+            KagemushaProofRecoveryPhaseV1::OrdinaryAppGuard.label(),
+            "iroha:kagemusha:v1:proof-recovery:ordinary-app-guard"
+        );
         let phases = [
             KagemushaProofRecoveryPhaseV1::StateCarrier,
             KagemushaProofRecoveryPhaseV1::StateTransport,
             KagemushaProofRecoveryPhaseV1::TerminalAuthorization,
             KagemushaProofRecoveryPhaseV1::CommitWrapper,
+            KagemushaProofRecoveryPhaseV1::OrdinaryAppGuard,
             KagemushaProofRecoveryPhaseV1::MintAuthorization,
             KagemushaProofRecoveryPhaseV1::MintAuthorizationTransport,
             KagemushaProofRecoveryPhaseV1::MintHashShard,
@@ -11217,9 +11335,19 @@ mod tests {
             num_instance_columns: 1,
         };
         assert!(same_base_params(&profile, &profile));
-        let mut substituted = profile.clone();
-        substituted.num_fixed += 1;
-        assert!(!same_base_params(&profile, &substituted));
+        let mutations: [fn(&mut BaseCircuitParams); 6] = [
+            |p| p.k += 1,
+            |p| p.num_advice_per_phase.push(0),
+            |p| p.num_fixed += 1,
+            |p| p.num_lookup_advice_per_phase.push(0),
+            |p| p.lookup_bits = None,
+            |p| p.num_instance_columns += 1,
+        ];
+        for mutate in mutations {
+            let mut substituted = profile.clone();
+            mutate(&mut substituted);
+            assert!(!same_base_params(&profile, &substituted));
+        }
     }
 
     #[cfg(feature = "zk-halo2-ipa")]
@@ -11260,3 +11388,11 @@ mod mint_transport_tests;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 #[path = "generation_lookup_recovery_tests.rs"]
 mod lookup_recovery_tests;
+
+#[cfg(all(
+    test,
+    feature = "zk-halo2-ipa",
+    feature = "kagemusha-production-prover"
+))]
+#[path = "ordinary_zero_bootstrap_qualification_tests.rs"]
+mod ordinary_zero_bootstrap_qualification_tests;

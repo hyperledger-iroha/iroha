@@ -1378,11 +1378,11 @@ fn transaction_details_authority_is_involved(
         )
     })
 }
-fn canonical_carrier_hash_for_indexed_transaction_identity(
+fn canonical_transaction_details_for_indexed_identity(
     app: &AppState,
     block_height: NonZeroUsize,
     indexed_identity: &HashOf<TransactionEntrypoint>,
-) -> Result<HashOf<TransactionEntrypoint>, Error> {
+) -> Result<CommittedTransaction, Error> {
     let expected_hash = app
         .state
         .view()
@@ -1393,34 +1393,42 @@ fn canonical_carrier_hash_for_indexed_transaction_identity(
             pipeline_status_projection_error("indexed carrier is outside canonical history")
         })?;
     let work = routing::app_query_limits().max_fetch_size;
+    let bytes = iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work);
+    let carrier = app
+        .state
+        .read_finalized_execution_carrier(block_height, work, bytes)
+        .map_err(pipeline_status_projection_error)?;
+    if carrier.block().hash() != expected_hash {
+        return Err(pipeline_status_projection_error(
+            "native carrier differs from its exact committed binding",
+        ));
+    }
     let mut matched = None;
     let mut duplicate = false;
-    iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
-        &app.state,
-        block_height,
-        expected_hash,
-        work,
-        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
-        |entrypoint, _| {
-            if transaction_entrypoint_matches_indexed_identity(entrypoint, indexed_identity) {
-                duplicate |= matched.replace(entrypoint.hash()).is_some();
-            }
-        },
-    )
-    .map_err(pipeline_status_projection_error)?;
+    for (input_index, entrypoint) in carrier.block().network_entrypoints().enumerate() {
+        if transaction_entrypoint_matches_indexed_identity(entrypoint, indexed_identity) {
+            let input_index =
+                u32::try_from(input_index).map_err(pipeline_status_projection_error)?;
+            duplicate |= matched.replace(input_index).is_some();
+        }
+    }
     if duplicate {
         return Err(pipeline_status_projection_error(
             "indexed identity selects multiple Network inputs",
         ));
     }
+    let input_index = matched.ok_or_else(|| {
+        pipeline_status_projection_error("indexed identity is absent from its finalized carrier")
+    })?;
+    let transaction = carrier
+        .transaction_at(input_index, bytes)
+        .map_err(pipeline_status_projection_error)?;
     if app.state.view().block_hashes().get(block_height.get() - 1) != Some(&expected_hash) {
         return Err(pipeline_status_projection_error(
             "canonical carrier changed during identity lookup",
         ));
     }
-    matched.ok_or_else(|| {
-        pipeline_status_projection_error("indexed identity is absent from its finalized carrier")
-    })
+    Ok(transaction)
 }
 /// This code is reserved for absence of the one authenticated committed proof.
 /// Generic route/account failures must never masquerade as delayed proof visibility.
@@ -1435,7 +1443,6 @@ fn pipeline_transaction_details_response(
     authority: &AccountId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<PipelineTransactionDetailsResponse, Error> {
-    use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
     let state_view = app.state.view();
     let world = state_view.world();
     world.account(authority).map_err(|_| {
@@ -1449,45 +1456,13 @@ fn pipeline_transaction_details_response(
         .state
         .committed_entrypoint_height(&entrypoint_hash)
         .ok_or_else(transaction_details_not_found_error)?;
-    let canonical_entrypoint_hash = canonical_carrier_hash_for_indexed_transaction_identity(
+    // State already binds this exact carrier. Its authenticated Network projection must not
+    // depend on a complete auxiliary index of every unrelated historical transaction.
+    let transaction = canonical_transaction_details_for_indexed_identity(
         app.as_ref(),
         block_height,
         &entrypoint_hash,
     )?;
-    let state_view = app.state.view();
-    let mut transactions =
-        iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
-            &state_view,
-            CompoundPredicate::from_filters(CommittedTxFilters {
-                entry_eq: Some(canonical_entrypoint_hash),
-                ..CommittedTxFilters::default()
-            }),
-            iroha_core::smartcontracts::isi::tx::TransactionHistoryWorkLimits {
-                max_carrier_work: routing::app_query_limits().max_fetch_size,
-                max_total_work: routing::app_query_limits().max_fetch_size,
-                max_bytes: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
-                    routing::app_query_limits().max_fetch_size,
-                ),
-            },
-            routing::app_query_limits().max_fetch_size,
-            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
-                routing::app_query_limits().max_fetch_size,
-            ),
-        )
-        .map_err(pipeline_status_projection_error)?;
-    if transactions.len() != 1 {
-        return if transactions.is_empty() {
-            Err(transaction_details_not_found_error())
-        } else {
-            Err(pipeline_status_projection_error(format!(
-                "entrypoint hash resolved to {} committed transactions",
-                transactions.len()
-            )))
-        };
-    }
-    let transaction = transactions
-        .pop()
-        .expect("length checked before committed transaction extraction");
     if !is_operator && !transaction_details_authority_is_involved(authority, &transaction) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted(

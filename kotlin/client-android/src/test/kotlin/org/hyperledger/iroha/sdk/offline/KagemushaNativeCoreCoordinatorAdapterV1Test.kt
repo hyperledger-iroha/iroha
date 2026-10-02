@@ -94,7 +94,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             }
         }
         val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-prepare", endpoint), store, {})
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-prepare", endpoint), store, {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         if (secondStatus == KagemushaAuthenticatedDeviceStatusV1.SUCCESS) {
             assertFailsWith<IllegalStateException> { provider.commitPayment(f.id, f.requestBytes) }
         } else {
@@ -185,7 +185,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 }
             }
             return KagemushaAuthenticatedHardwareProviderV1(transport,
-                KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {})
+                KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         }
         val first = assertFailsWith<KagemushaOriginalCommitResponseUnavailableV1> { provider().commitPayment(f.id, f.requestBytes) }
         val second = assertFailsWith<KagemushaOriginalCommitResponseUnavailableV1> { provider().commitPayment(f.id, f.requestBytes) }
@@ -230,7 +230,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 = error("no repeated hardware dispatch")
         }
         val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {})
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/exact-commit", endpoint), store, {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         assertFailsWith<IllegalStateException> { provider.commitPayment(f.id, f.requestBytes) }
         assertTrue(endpoint.invoked)
         assertContentEquals(original, store.load(7, f.id)!!.canonicalResponseFrame())
@@ -262,12 +262,26 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/enrollment", endpoint)
         val selected = KagemushaNativeEnrollmentPhasesV1.Selection("unused", u64(1), digest(1),
             f.q.releaseId(), f.q.profile.hardwareProfileId(), f.credential.laneCommitment(), digest(2), u64(100))
+        var deviceCalls = 0
+        // Structurally admitted test endpoint only; no cryptographic or monetary authority.
+        val device = KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(object : KagemushaDeviceLifecycleBridgeV1.Endpoint {
+            override fun capabilities() = KagemushaDeviceLifecycleBridgeV1.Codec.encodeCapabilitiesForTests(
+                1, f.q.hardwarePolicyDigest(), f.q.profile.qualificationReportDigest())
+            override fun execute(commandFrame: ByteArray): ByteArray {
+                deviceCalls++; error("retired owner cannot dispatch device work")
+            }
+            override fun verifyCommandResponse(response: ByteArray, canonicalCommand: ByteArray,
+                operation: KagemushaDeviceLifecycleBridgeV1.Operation, requestId: ByteArray,
+                hardwarePolicyId: ByteArray, qualificationReportDigest: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): Boolean = false
+        })
         assertFailsWith<IllegalStateException> {
-            core.prepareInitialEnrollmentQualification(selected, KagemushaDeviceLifecycleBridgeV1.onlineOnly()) {
+            core.prepareInitialEnrollmentQualification(selected, device) {
                 error("retired owner")
             }
         }
         assertEquals(0, endpoint.calls)
+        assertEquals(0, deviceCalls)
     }
 
     /** Scripted signatures/native callbacks exercise mapping only, not release/hardware authority. */
@@ -598,7 +612,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         }
         val store = TestOperationIntentStoreV1()
         val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint), store, {})
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint), store, {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         assertContentEquals(f.requestBytes, provider.createPaymentRequest(f.request.requestId(),
             f.request.recipient.canonicalPayload(), f.request.amount, f.request.expiresAtMs - f.request.issuedAtMs))
         assertEquals(listOf(1, 22), admitted.map { it.first })
@@ -634,7 +648,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 = error("host acknowledgement must not dispatch")
         }
         val provider = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", Endpoint()), store, {})
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", Endpoint()), store, {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         assertFailsWith<IllegalArgumentException> { provider.acknowledgeDurableResult(creditId, f.requestBytes) }
         assertFalse(store.load(11, creditId)!!.acknowledged)
         provider.acknowledgeDurableResult(creditId, f.ackBytes)
@@ -710,7 +724,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                     KagemushaDeviceSenderPublicInputsV1.RedeemSplit(BigInteger.ONE, f.request.recipient.canonicalPayload()),
                     f.paymentBytes, byteArrayOf(12))
         }
-        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {})
+        val provider = KagemushaAuthenticatedHardwareProviderV1(transport, core, TestOperationIntentStoreV1(), {}, TestOnlyRequiredIncomingEvidenceOwnerV1())
         assertFailsWith<IllegalArgumentException> {
             provider.recordAcknowledgement(f.terminal, f.requestBytes, f.paymentBytes, f.ackBytes)
         }
@@ -869,10 +883,38 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         }
     }
 
-    @Test fun `missing physical incoming owner fails before native preparation or any device observation`() {
+    @Test fun `refusing original owner cannot complete prepared incoming work or dispatch a device`() {
         val lane = IncomingFoldLane()
-        assertFailsWith<KagemushaIncomingFoldEvidenceUnavailableV1> { lane.provider(physical = false).foldPendingCredit(lane.selector) }
-        assertTrue(lane.nativeMethods.isEmpty())
+        var checks = 0
+        var acquisitions = 0
+        val refusing = object : KagemushaIncomingFoldEvidenceProviderV1 {
+            override fun recheckOriginals(preparation: KagemushaNativeIncomingFoldPreparationV1) {
+                checks++
+                throw KagemushaIncomingFoldEvidenceUnavailableV1()
+            }
+            override fun obtainOrRecoverOriginal(preparation: KagemushaNativeIncomingFoldPreparationV1): KagemushaIncomingFoldEvidenceV1 {
+                acquisitions++
+                error("refused custody cannot issue originals")
+            }
+        }
+        val provider = lane.provider(refusing)
+        // Establish the independently authenticated credential before exercising original-owner refusal.
+        // The scripted endpoint tests call ordering only and grants no hardware or monetary authority.
+        provider.qualification()
+        assertEquals(listOf(11, 2, 3), lane.nativeMethods)
+        assertEquals(listOf(1), lane.operations)
+        assertEquals(0, checks)
+        assertEquals(0, acquisitions)
+        lane.nativeMethods.clear()
+        lane.operations.clear()
+        repeat(2) {
+            assertFailsWith<KagemushaIncomingFoldEvidenceUnavailableV1> { provider.foldPendingCredit(lane.selector) }
+        }
+        // Each retry resolves the same native preparation before rechecking its retained originals.
+        assertEquals(listOf(15, 15), lane.nativeMethods)
+        assertEquals(2, checks)
+        assertEquals(0, acquisitions)
+        assertTrue(lane.completed.isEmpty())
         assertTrue(lane.operations.isEmpty())
         assertEquals(0, lane.physicalIssues)
     }
@@ -1053,8 +1095,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             }
         }
         fun core() = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/native-incoming", endpoint)
-        fun provider(physical: Boolean = true) = KagemushaAuthenticatedHardwareProviderV1(transport, core(), store, {},
-            if (physical) this.physical else null)
+        fun provider(evidenceOwner: KagemushaIncomingFoldEvidenceProviderV1 = this.physical) =
+            KagemushaAuthenticatedHardwareProviderV1(transport, core(), store, {}, evidenceOwner)
         private fun incomingPair(semantic: Int = 13) = KagemushaNoritoV1.encodePairedProofShape(KagemushaPairedProofV1(1,
             digest(11), digest(12), digest(semantic), digest(14), digest(15), digest(16), digest(17),
             byteArrayOf(18), byteArrayOf(19), ByteArray(544) { 20 }, ByteArray(544) { 21 }))
@@ -1180,9 +1222,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             id.copyInto(it, 1, 0, 31); it[63] = 1
         }
         fun provider() = KagemushaAuthenticatedHardwareProviderV1(transport,
-            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/durable-store", endpoint), store) {
-                check(approved) { "MiBank approval required" }
-            }
+            KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/durable-store", endpoint), store,
+            { check(approved) { "MiBank approval required" } }, TestOnlyRequiredIncomingEvidenceOwnerV1())
         private fun nextAggregate(sequence: Long) = KagemushaNoritoV1.encodeAggregateStateShape(
             KagemushaAggregateStateCommitmentV1(1, active.releaseId(), fixture.request.networkId, fixture.request.asset,
                 fixture.request.assetIncarnation, fixture.request.scale, fixture.request.liabilityPoolId(),

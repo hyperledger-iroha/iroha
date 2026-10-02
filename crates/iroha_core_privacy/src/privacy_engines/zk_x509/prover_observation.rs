@@ -35,8 +35,12 @@ pub(super) enum PhaseV1 {
     CompositionResiduesAndFold,
     CompositionInverseTransform,
     CompositionDegreeChunks,
+    InitialJoinedSourceBatch,
+    InitialJoinedTransform,
+    QueryJoinedSourceBatch,
+    QueryJoinedTransform,
 }
-const PHASES: [PhaseV1; 24] = [
+const PHASES: [PhaseV1; 28] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -61,6 +65,10 @@ const PHASES: [PhaseV1; 24] = [
     PhaseV1::CompositionResiduesAndFold,
     PhaseV1::CompositionInverseTransform,
     PhaseV1::CompositionDegreeChunks,
+    PhaseV1::InitialJoinedSourceBatch,
+    PhaseV1::InitialJoinedTransform,
+    PhaseV1::QueryJoinedSourceBatch,
+    PhaseV1::QueryJoinedTransform,
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -525,6 +533,42 @@ mod tests {
         }
         assert_eq!(receipt.phases[PhaseV1::Composition as usize].calls, 0);
         assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+    }
+
+    #[test]
+    fn joined_replay_observation_separates_initial_query_and_failed_work() {
+        let phases = [
+            PhaseV1::InitialJoinedSourceBatch,
+            PhaseV1::InitialJoinedTransform,
+            PhaseV1::QueryJoinedSourceBatch,
+            PhaseV1::QueryJoinedTransform,
+        ];
+        let observation = ObservationV1::begin_v1();
+        for phase in phases {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+            drop(PhaseTimerV1::start_v1(phase));
+            let _ = std::panic::catch_unwind(|| {
+                let _timer = PhaseTimerV1::start_v1(phase);
+                panic!("synthetic public replay interruption");
+            });
+        }
+        let stale = PhaseTimerV1::start_v1(PhaseV1::QueryJoinedTransform);
+        let receipt = observation.finish_v1();
+        for phase in phases {
+            let count = receipt.phases[phase as usize];
+            assert_eq!(count.calls, 3);
+            assert_eq!(count.completed, 1);
+            assert_eq!(count.interrupted, 2);
+            assert_eq!(count.unwound, 1);
+        }
+        assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
+        assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
+        let next = ObservationV1::begin_v1();
+        stale.complete_v1();
+        let receipt = next.finish_v1();
+        for phase in phases {
+            assert_eq!(receipt.phases[phase as usize].calls, 0);
+        }
     }
 
     #[test]

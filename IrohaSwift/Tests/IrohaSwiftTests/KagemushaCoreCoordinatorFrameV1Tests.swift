@@ -93,9 +93,10 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     }
   }
 
-  func testPublishedCoordinatorFixturesMatchCurrentSchema() throws {
+  func testSharedCoordinatorFixturesMatchCurrentSchema() throws {
     let cases = try fixtures()
-    // The shared native fixture covers every current coordinator method.
+    // The official native framing corpus includes all current methods 1...21.
+    // Structural vectors do not establish hardware or monetary qualification.
     XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(21)))
     XCTAssertEqual(cases.count, 28)
     for item in cases {

@@ -12,16 +12,38 @@ claim about a participant's server hardware or private-key exportability.
 The complete [public-pin template](snippets/stream_token_signer_binding.toml)
 contains the required table hierarchy. Its placeholders and zero generations or
 intervals are deliberately invalid: replace every reviewed public pin before
-admission. No signing-seed file, key path, or environment enablement is accepted.
-Credentials, private keys and any optional device sessions or PINs remain with the
-configured runtime provider. Public configuration identifies the authorized key
+admission. Key bytes and environment enablement are never configuration. Explicit
+native custody tables name owner-only runtime credential paths; external adapters
+retain their credentials and any optional device sessions or PINs. Public configuration identifies the authorized key
 and its scope without prescribing the operator's key-storage implementation.
 
 - `sorafs.storage.stream_tokens.enabled` defaults to false. Disabled issuance
   rejects configured signer pins and injected signer, observer or approved
   anchor dependencies. Enabled issuance also requires storage, its nonzero
-  `provider_id_hex`, operator-signature authentication and the existing governed
-  admission capture.
+  `provider_id_hex`, operator-signature authentication and native governed gateway
+  admission.
+- `admission_native` is required whenever issuance is enabled and forbidden when
+  disabled. It names independent direct Ed25519 `operator`, `observer` and
+  `reputation_recorder` accounts with distinct absolute owner-only credential paths
+  (`operator_credential`, `observer_credential`, `reputation_recorder_credential`),
+  an explicit valid Norito `fee_payment_json` for operator/observer actions, and explicit
+  `clock_uncertainty_ms` within 0–5,000. The daemon authenticates the configured
+  gateway policy and current permissions from its own finalized State; injected
+  or broker-provided gateway admission adapters are rejected. These account and
+  credential references are separate from the signer custody configuration below.
+- Native reputation delivery signs only the complete payload retained by the original
+  governed admission intent. The source-time recorder policy fixes its fee payer and
+  finite lifetime. Delivery proves the original Append or another permanent terminal
+  disposition before native acknowledgement; an Accepted serving attempt additionally
+  requires Delivered. Recorder key rotation must retain custody and permission for
+  pending originals, or governance must explicitly cancel them. Recovery never changes
+  their payloads. This callback is independent of general reputation publication and PoR.
+- `admission_reconcile_interval_ms` defaults to 1,000 and accepts 1–60,000. It
+  schedules bounded native callback recovery without enabling unrelated services.
+- `admission_operation_timeout_ms` defaults to 30,000 and accepts 1–60,000. One
+  absolute monotonic deadline begins before the admission worker queue and covers
+  native transactions, callbacks, acknowledgements and final serving confirmation.
+  A later phase cannot renew it; token and lease expiry remain independent limits.
 - `signer` is all-or-nothing: runtime/key handles, signer service/administrator,
   strong Ed25519 key, key/policy revisions and policy digest, plus independently
   configured `attester` and `observer` tables. All six service/administrator

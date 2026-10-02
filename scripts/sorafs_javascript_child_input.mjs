@@ -11,7 +11,7 @@ export const CHILD_TOOL_FILES = Object.freeze([
   "sorafs_javascript_child_loads.mjs", "sorafs_javascript_child_session.mjs",
   "sorafs_javascript_native_cache.mjs", "sorafs_javascript_test_events.mjs",
 ]);
-const CATALOG_SHA256 = "e8eaa0593b6b8a47b83be6da7ebff6422a8422b8348910804fa66c0811e51910";
+const CATALOG_SHA256 = "4817c3d70245e30e8c4d3bfa30ac8954bdc50c4b133258a2b8f850984236756f";
 const MAX_INPUT = 8 * 1024 * 1024;
 const FULL = ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"];
 const CONTRACT = "javascript/iroha_js/test/fixtures/sorafs_native_suite_contract_v1.json";

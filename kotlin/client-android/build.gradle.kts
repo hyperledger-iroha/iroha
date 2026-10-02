@@ -1,3 +1,4 @@
+import java.net.URI
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
@@ -43,6 +44,17 @@ plugins {
 private object NativeBridgeBuildContract {
     val abis = listOf("arm64-v8a", "x86_64")
     val rustTargets = listOf("aarch64-linux-android", "x86_64-linux-android")
+    const val armv7DiagnosticPlatform = "android-armv7-diagnostic"
+    fun buildAbis(platform: String): List<String> = when (platform) {
+        "android" -> abis
+        armv7DiagnosticPlatform -> listOf("armeabi-v7a")
+        else -> throw GradleException("Unsupported Android native build profile: $platform")
+    }
+    fun buildTargets(platform: String): List<String> = when (platform) {
+        "android" -> rustTargets
+        armv7DiagnosticPlatform -> listOf("armv7-linux-androideabi")
+        else -> throw GradleException("Unsupported Android native source-seal profile: $platform")
+    }
     const val libraryName = "libconnect_norito_bridge.so"
     const val sourceSealSchema = "iroha.norito-bridge-source-seal.v1"
     const val buildEnvironmentSchema = "iroha.mobile-native-build-environment.v1"
@@ -916,6 +928,7 @@ private object NativeBridgeBuildContract {
         irohaRoot: java.io.File,
         sourceSealScript: java.io.File,
         tools: BuildTools,
+        platform: String = "android",
     ): ByteArray {
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
@@ -931,7 +944,7 @@ private object NativeBridgeBuildContract {
                 "--root",
                 irohaRoot.absolutePath,
                 "--platform",
-                "android",
+                platform,
                 "--lockfile-path",
                 tools.cargoLock.toString(),
             )
@@ -955,6 +968,7 @@ private object NativeBridgeBuildContract {
         sourceSealFile: java.io.File,
         phase: String,
         tools: BuildTools,
+        platform: String = "android",
     ) {
         val stderr = ByteArrayOutputStream()
         val result = execOperations.exec {
@@ -969,7 +983,7 @@ private object NativeBridgeBuildContract {
                 "--root",
                 irohaRoot.absolutePath,
                 "--platform",
-                "android",
+                platform,
                 "--snapshot",
                 sourceSealFile.absolutePath,
                 "--lockfile-path",
@@ -993,7 +1007,15 @@ abstract class CompileNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
-    abstract val privacyProductionEnabled: Property<Boolean>
+    abstract val sourceSealPlatform: Property<String>
+
+    @get:Input
+    abstract val localIntegration: Property<Boolean>
+
+    init {
+        sourceSealPlatform.convention("android")
+        localIntegration.convention(false)
+    }
 
     @get:Internal
     abstract val irohaDirectory: DirectoryProperty
@@ -1024,6 +1046,11 @@ abstract class CompileNativeBridgeTask @Inject constructor(
 
     @TaskAction
     fun compile() {
+        val platform = sourceSealPlatform.get()
+        val selectedAbis = NativeBridgeBuildContract.buildAbis(platform)
+        require(platform == "android" || localIntegration.get()) {
+            "Armv7 diagnostics require the owned local Android integration scope"
+        }
         val irohaRoot = irohaDirectory.get().asFile
         val sealScript = sourceSealScript.get().asFile
         require(Files.isRegularFile(sealScript.toPath(), LinkOption.NOFOLLOW_LINKS)) {
@@ -1045,7 +1072,14 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             irohaRoot,
             sealScript,
             tools,
+            platform,
         )
+        val capturedSeal = JsonSlurper().parse(sourceSeal) as? Map<*, *>
+            ?: throw GradleException("Native source seal must be an object")
+        require(capturedSeal["platform"] == platform &&
+            capturedSeal["targets"] == NativeBridgeBuildContract.buildTargets(platform)) {
+            "Native source seal target inventory differs from the selected build profile"
+        }
         val buildEnvironment = NativeBridgeBuildContract.buildEnvironmentBytes(tools)
         val outputRoot = outputDirectory.get().asFile
         val stagingRoot = cargoNdkStagingDirectory.get().asFile
@@ -1087,8 +1121,9 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             sealFile,
             "build start",
             tools,
+            sourceSealPlatform.get(),
         )
-        NativeBridgeBuildContract.abis.forEachIndexed { index, abi ->
+        selectedAbis.forEachIndexed { index, abi ->
             val abiStagingRoot = stagingRoot.resolve(abi)
             fileSystemOperations.delete { delete(abiStagingRoot) }
             require(abiStagingRoot.mkdirs() || abiStagingRoot.isDirectory) {
@@ -1172,9 +1207,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "connect_norito_bridge",
                     ),
                 )
-                if (privacyProductionEnabled.get()) {
-                    addAll(listOf("--features", "privacy-production-enabled"))
-                }
+                addAll(listOf("--features", "privacy-production-enabled"))
             }
             execOperations.exec {
                 workingDir(irohaRoot)
@@ -1196,6 +1229,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                 sealFile,
                 "$abi Cargo build",
                 tools,
+                sourceSealPlatform.get(),
             )
 
             // cargo-ndk can copy unrelated cdylib workspace outputs into its
@@ -1222,6 +1256,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                 sealFile,
                 "$abi immediate pre-promotion authentication",
                 tools,
+                sourceSealPlatform.get(),
             )
             Files.copy(
                 stagedLibrary.toPath(),
@@ -1232,7 +1267,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             )
             NativeBridgeBuildContract.requireLibraries(
                 outputRoot,
-                NativeBridgeBuildContract.abis.take(index + 1),
+                selectedAbis.take(index + 1),
             )
             NativeBridgeBuildContract.assertSourceSeal(
                 execOperations,
@@ -1241,9 +1276,10 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                 sealFile,
                 "$abi immediate post-promotion authentication",
                 tools,
+                sourceSealPlatform.get(),
             )
         }
-        NativeBridgeBuildContract.requireLibraries(outputRoot)
+        NativeBridgeBuildContract.requireLibraries(outputRoot, NativeBridgeBuildContract.buildAbis(sourceSealPlatform.get()))
         NativeBridgeBuildContract.assertSourceSeal(
             execOperations,
             irohaRoot,
@@ -1251,6 +1287,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             sealFile,
             "native compile completion",
             tools,
+            sourceSealPlatform.get(),
         )
     }
 
@@ -1265,7 +1302,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
         )
-        NativeBridgeBuildContract.requireLibraries(outputRoot)
+        NativeBridgeBuildContract.requireLibraries(outputRoot, NativeBridgeBuildContract.buildAbis(sourceSealPlatform.get()))
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS))
         require(Files.isRegularFile(environmentFile.toPath(), LinkOption.NOFOLLOW_LINKS))
         require(
@@ -1282,9 +1319,139 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             sealFile,
             "up-to-date authentication",
             tools,
+            sourceSealPlatform.get(),
         )
         true
     }.getOrDefault(false)
+}
+
+@DisableCachingByDefault(because = "Diagnostic observations authenticate live original outputs")
+abstract class InspectArmv7DiagnosticTask @Inject constructor(
+    private val execOperations: ExecOperations,
+) : DefaultTask() {
+    @get:Input abstract val localIntegration: Property<Boolean>
+    @get:Internal abstract val irohaDirectory: DirectoryProperty
+    @get:Internal abstract val hermeticRunner: RegularFileProperty
+    @get:Internal abstract val androidNdkDirectory: DirectoryProperty
+    @get:Internal abstract val cargoTargetDirectory: DirectoryProperty
+    @get:Internal abstract val sourceSealScript: RegularFileProperty
+    @get:Internal abstract val inspectionScript: RegularFileProperty
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val rawDirectory: DirectoryProperty
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val sourceSealFile: RegularFileProperty
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val buildEnvironmentFile: RegularFileProperty
+    @get:OutputFile abstract val reportFile: RegularFileProperty
+
+    @TaskAction
+    fun inspect() {
+        require(localIntegration.get()) {
+            "Armv7 diagnostics require -PirohaAndroidLocalIntegration=true"
+        }
+        val root = irohaDirectory.get().asFile
+        val tools = NativeBridgeBuildContract.resolveBuildTools(
+            execOperations, root, hermeticRunner.get().asFile,
+            androidNdkDirectory.get().asFile, cargoTargetDirectory.get().asFile,
+        )
+        val profile = NativeBridgeBuildContract.armv7DiagnosticPlatform
+        val sealFile = sourceSealFile.get().asFile
+        val sealScript = sourceSealScript.get().asFile
+        val inspectScript = inspectionScript.get().asFile
+        NativeBridgeBuildContract.requireRegularFileInside(root, inspectScript, "armv7 inspector")
+        val libraries = NativeBridgeBuildContract.requireLibraries(
+            rawDirectory.get().asFile, NativeBridgeBuildContract.buildAbis(profile),
+        )
+        val sealBytes = sealFile.readBytes()
+        val seal = JsonSlurper().parse(sealBytes) as? Map<*, *>
+            ?: throw GradleException("Armv7 source seal must be an object")
+        require(seal["platform"] == profile &&
+            seal["targets"] == NativeBridgeBuildContract.buildTargets(profile)) {
+            "Armv7 diagnostic source seal has another target profile"
+        }
+        val environmentBytes = buildEnvironmentFile.get().asFile.readBytes()
+        require(environmentBytes.contentEquals(NativeBridgeBuildContract.buildEnvironmentBytes(tools))) {
+            "Armv7 diagnostic build environment changed before inspection"
+        }
+        val prebuiltRoot = tools.androidNdk.resolve("toolchains/llvm/prebuilt").toFile()
+        require(Files.isDirectory(prebuiltRoot.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(prebuiltRoot.toPath())) { "NDK prebuilt root must be original" }
+        val inspectors = prebuiltRoot.listFiles().orEmpty().filter { host ->
+            Files.isDirectory(host.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(host.toPath())
+        }.map { it.resolve("bin/llvm-nm") }.filter { candidate ->
+            Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                Files.isExecutable(candidate.toPath())
+        }
+        require(inspectors.size == 1) { "Armv7 diagnostics require one original NDK llvm-nm" }
+        val inspector = inspectors.single()
+        NativeBridgeBuildContract.requireRegularFileInside(tools.androidNdk.toFile(), inspector, "NDK llvm-nm")
+        val output = ByteArrayOutputStream()
+        val errors = ByteArrayOutputStream()
+        NativeBridgeBuildContract.assertSourceSeal(
+            execOperations, root, sealScript, sealFile, "armv7 pre-inspection", tools, profile,
+        )
+        val result = execOperations.exec {
+            workingDir(root)
+            setEnvironment(mapOf("PATH" to "/usr/bin:/bin", "LANG" to "C", "LC_ALL" to "C"))
+            commandLine(tools.python.toString(), "-I", "-S", inspectScript.absolutePath,
+                "--library", libraries.single().absolutePath,
+                "--symbol-inspector", inspector.absolutePath)
+            standardOutput = output
+            errorOutput = errors
+            isIgnoreExitValue = true
+        }
+        require(result.exitValue == 0) {
+            "Armv7 diagnostic inspection failed: ${errors.toString(Charsets.UTF_8.name()).trim()}"
+        }
+        NativeBridgeBuildContract.assertSourceSeal(
+            execOperations, root, sealScript, sealFile, "armv7 post-inspection", tools, profile,
+        )
+        val observation = JsonSlurper().parse(output.toByteArray()) as? Map<*, *>
+            ?: throw GradleException("Armv7 inspection must return an object")
+        require(observation["schema"] == "iroha.android-armv7-diagnostic.v1" &&
+            observation["artifact_scope"] == "android-local-diagnostic" &&
+            observation["release_admitted"] == false && observation["kagemusha_qualified"] == false) {
+            "Armv7 inspection must remain explicitly diagnostic"
+        }
+        val report = linkedMapOf<String, Any>(
+            "schema" to "iroha.android-armv7-diagnostic.v1",
+            "artifact_scope" to "android-local-diagnostic",
+            "release_admitted" to false,
+            "kagemusha_qualified" to false,
+            "privacy_production_enabled" to true,
+            "cargo_features" to listOf("privacy-production-enabled"),
+            "source_seal" to seal,
+            "source_seal_sha256" to NativeBridgeBuildContract.sha256Hex(sealBytes),
+            "build_environment" to NativeBridgeBuildContract.buildEnvironmentDocument(tools),
+            "build_environment_sha256" to NativeBridgeBuildContract.sha256Hex(environmentBytes),
+            "inspection_script_sha256" to NativeBridgeBuildContract.sha256Hex(inspectScript.toPath()),
+            "observation" to observation,
+        )
+        val reportPath = reportFile.get().asFile.toPath()
+        require(reportPath.parent.toFile().mkdirs() || Files.isDirectory(reportPath.parent)) {
+            "Cannot create armv7 diagnostic report directory"
+        }
+        require(reportPath.parent.toRealPath() == reportPath.parent &&
+            !Files.isSymbolicLink(reportPath.parent)) {
+            "Armv7 report directory must remain canonical and original"
+        }
+        val staged = reportPath.resolveSibling(reportPath.fileName.toString() + ".staged")
+        Files.write(staged,
+            (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + "\n").toByteArray(Charsets.UTF_8),
+            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        try {
+            NativeBridgeBuildContract.assertSourceSeal(
+                execOperations, root, sealScript, sealFile, "armv7 report publication", tools, profile,
+            )
+            Files.move(staged, reportPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(staged)
+        }
+    }
 }
 
 @DisableCachingByDefault(
@@ -1296,9 +1463,6 @@ abstract class StripNativeBridgeTask @Inject constructor(
 ) : DefaultTask() {
     @get:Input
     abstract val localIntegration: Property<Boolean>
-
-    @get:Input
-    abstract val privacyProductionEnabled: Property<Boolean>
 
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -1539,17 +1703,13 @@ abstract class StripNativeBridgeTask @Inject constructor(
                 "sha256" to NativeBridgeBuildContract.sha256Hex(outputLibrary.toPath()),
             )
         }
-        val cargoFeatures = if (privacyProductionEnabled.get()) {
-            listOf("privacy-production-enabled")
-        } else {
-            emptyList<String>()
-        }
+        val cargoFeatures = listOf("privacy-production-enabled")
         val manifest = linkedMapOf<String, Any?>(
             "schema" to "iroha.android-native-build-provenance.v1",
             "native_bridge_abi_version" to 25,
             "build_profile" to "release",
             "cargo_locked" to true,
-            "privacy_production_enabled" to privacyProductionEnabled.get(),
+            "privacy_production_enabled" to true,
             "cargo_features" to cargoFeatures,
             "build_environment" to NativeBridgeBuildContract.buildEnvironmentDocument(tools),
             "source_commit" to sourceCommit,
@@ -1668,6 +1828,30 @@ publishing {
             name = "mobileSdk"
             url = uri(mobileSdkRepoDir.get())
         }
+        providers.environmentVariable("IROHA_SDK_MAVEN_URL").orNull?.let { remoteUrl ->
+            val endpoint = URI(remoteUrl)
+            require(endpoint.scheme == "https" && !endpoint.host.isNullOrBlank() &&
+                endpoint.rawUserInfo == null && endpoint.rawQuery == null && endpoint.rawFragment == null) {
+                "IROHA_SDK_MAVEN_URL must be an HTTPS repository without embedded credentials"
+            }
+            val remoteUsername = providers.environmentVariable("IROHA_SDK_MAVEN_USERNAME").orNull
+            val remotePassword = providers.environmentVariable("IROHA_SDK_MAVEN_PASSWORD").orNull
+            require((remoteUsername == null) == (remotePassword == null) &&
+                (remoteUsername == null || remoteUsername.isNotBlank() && remotePassword!!.isNotBlank())) {
+                "Remote Maven credentials must be a complete runtime-only pair"
+            }
+            maven {
+                name = "remoteSdk"
+                url = endpoint
+                isAllowInsecureProtocol = false
+                if (remoteUsername != null) {
+                    credentials {
+                        username = remoteUsername
+                        password = remotePassword
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1752,24 +1936,16 @@ fun irohaDir(): String {
     return props.getProperty("iroha.dir") ?: rootProject.file("..").absolutePath
 }
 
-val privacyProductionEnabledInput =
-    providers.gradleProperty("privacyProductionEnabled").orNull ?: "false"
-if (privacyProductionEnabledInput != "true" && privacyProductionEnabledInput != "false") {
-    throw GradleException(
-        "privacyProductionEnabled must be exactly 'true' or 'false'; " +
-            "received '$privacyProductionEnabledInput'",
-    )
+// KAGEMUSHA is mandatory. This retired selector cannot introduce an off profile.
+require(!providers.gradleProperty("privacyProductionEnabled").isPresent) {
+    "privacyProductionEnabled has been removed; the native bridge always includes privacy support"
 }
-val privacyProductionEnabledValue = privacyProductionEnabledInput == "true"
-val nativeBuildMode = if (privacyProductionEnabledValue) "production" else "default"
-// JVM-only Debug tests do not need an Android native library. Device builds
-// can explicitly request the same sealed/stripped bridge used by Release.
-val includeDebugNativeBridgeInput =
-    providers.gradleProperty("irohaDebugNativeBridge").orNull ?: "false"
-require(includeDebugNativeBridgeInput == "true" || includeDebugNativeBridgeInput == "false") {
-    "irohaDebugNativeBridge must be exactly 'true' or 'false'"
+val nativeBuildMode = "production"
+// Native app and instrumentation packages always include the sealed bridge.
+// The ordinary JVM unit-test task graph does not execute these packaging owners.
+require(!providers.gradleProperty("irohaDebugNativeBridge").isPresent) {
+    "irohaDebugNativeBridge has been removed; every native app variant includes the bridge"
 }
-val includeDebugNativeBridge = includeDebugNativeBridgeInput == "true"
 fun validateLocalAndroidArtifactDirectory(root: Path, artifacts: Path) {
     val rawPython = System.getenv("MOBILE_SDK_PYTHON_BINARY")
         ?: throw GradleException("Local Android integration requires MOBILE_SDK_PYTHON_BINARY")
@@ -2114,7 +2290,6 @@ tasks.register("verifyAndroidNdkIdentityContract") {
 val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLibs") {
     group = "native"
     description = "Compile connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
-    privacyProductionEnabled.set(privacyProductionEnabledValue)
     irohaDirectory.set(file(irohaDir()))
     cargoTargetDirectory.set(
         layout.buildDirectory.dir("native/cargo-target/$nativeBuildMode"),
@@ -2140,11 +2315,67 @@ val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLi
     dependsOn(requireAndroidArtifactDirectory)
 }
 
+// Explicit development-only armv7 lane. It shares the pinned native recipe but
+// never supplies generated JNI directories, AAR contents or admitted provenance.
+val compileArmv7DiagnosticRaw = tasks.register<CompileNativeBridgeTask>("compileArmv7DiagnosticRaw") {
+    group = "native"
+    description = "Compile the sealed armv7 bridge in the owned diagnostic scope"
+    // A fixed warm lane must never reuse artifacts from another feature recipe.
+    sourceSealPlatform.set(NativeBridgeBuildContract.armv7DiagnosticPlatform)
+    sourceSealPlatform.disallowChanges()
+    localIntegration.set(localAndroidIntegration)
+    irohaDirectory.set(file(irohaDir()))
+    cargoTargetDirectory.set(layout.buildDirectory.dir("native/cargo-target/armv7-diagnostic"))
+    cargoNdkStagingDirectory.set(layout.buildDirectory.dir("native/cargo-ndk-staging/armv7-diagnostic"))
+    sourceSealScript.set(file(irohaDir()).resolve("scripts/norito_bridge_source_seal.py"))
+    hermeticRunner.set(file(irohaDir()).resolve("scripts/run_mobile_hermetic_command.py"))
+    androidNdkDirectory.set(layout.dir(androidNdkRoot.map { file(it) }))
+    outputDirectory.set(layout.buildDirectory.dir("native/armv7-diagnostic/raw"))
+    sourceSealFile.set(layout.buildDirectory.file("native/sourceSeal/armv7-diagnostic/source-seal-v1.json"))
+    buildEnvironmentFile.set(layout.buildDirectory.file("native/buildEnvironment/armv7-diagnostic/build-environment-v1.json"))
+    outputs.upToDateWhen { hasReusableSealedOutput() }
+    dependsOn(requireAndroidArtifactDirectory)
+}
+val compileArmv7Diagnostic = tasks.register<InspectArmv7DiagnosticTask>("compileArmv7Diagnostic") {
+    group = "native"
+    description = "Build and inspect an armv7 diagnostic; no AAR/JNI or release promotion"
+    localIntegration.set(localAndroidIntegration)
+    irohaDirectory.set(file(irohaDir()))
+    hermeticRunner.set(file(irohaDir()).resolve("scripts/run_mobile_hermetic_command.py"))
+    androidNdkDirectory.set(layout.dir(androidNdkRoot.map { file(it) }))
+    cargoTargetDirectory.set(compileArmv7DiagnosticRaw.flatMap { it.cargoTargetDirectory })
+    sourceSealScript.set(file(irohaDir()).resolve("scripts/norito_bridge_source_seal.py"))
+    inspectionScript.set(file(irohaDir()).resolve("scripts/inspect_android_armv7_diagnostic.py"))
+    rawDirectory.set(compileArmv7DiagnosticRaw.flatMap { it.outputDirectory })
+    sourceSealFile.set(compileArmv7DiagnosticRaw.flatMap { it.sourceSealFile })
+    buildEnvironmentFile.set(compileArmv7DiagnosticRaw.flatMap { it.buildEnvironmentFile })
+    reportFile.set(layout.buildDirectory.file("native/armv7-diagnostic/diagnostic-manifest.json"))
+    outputs.upToDateWhen { false }
+    dependsOn(compileArmv7DiagnosticRaw, requireAndroidArtifactDirectory)
+}
+tasks.register("verifyArmv7DiagnosticContract") {
+    group = "verification"
+    description = "Check armv7 diagnostic routing without invoking native compilation"
+    doLast {
+        val diagnostic = NativeBridgeBuildContract.armv7DiagnosticPlatform
+        check(NativeBridgeBuildContract.abis == listOf("arm64-v8a", "x86_64"))
+        check(NativeBridgeBuildContract.rustTargets == listOf("aarch64-linux-android", "x86_64-linux-android"))
+        check(NativeBridgeBuildContract.buildAbis(diagnostic) == listOf("armeabi-v7a"))
+        check(NativeBridgeBuildContract.buildTargets(diagnostic) == listOf("armv7-linux-androideabi"))
+        val raw = compileArmv7DiagnosticRaw.get()
+        check(raw.sourceSealPlatform.get() == diagnostic)
+        check(raw.cargoTargetDirectory.get().asFile == layout.buildDirectory.dir("native/cargo-target/armv7-diagnostic").get().asFile)
+        check(raw.outputDirectory.get().asFile == layout.buildDirectory.dir("native/armv7-diagnostic/raw").get().asFile)
+        check(raw.outputDirectory.get().asFile != compileNativeLibs.get().outputDirectory.get().asFile)
+        check(compileArmv7Diagnostic.get().reportFile.get().asFile.name == "diagnostic-manifest.json")
+        check(runCatching { NativeBridgeBuildContract.buildAbis("unreviewed") }.isFailure)
+    }
+}
+
 val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     group = "native"
     description = "Canonically strip the compiled Android native bridge libraries"
     localIntegration.set(localAndroidIntegration)
-    privacyProductionEnabled.set(privacyProductionEnabledValue)
     inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })
     sourceSealFile.set(compileNativeLibs.flatMap { it.sourceSealFile })
     buildEnvironmentFile.set(compileNativeLibs.flatMap { it.buildEnvironmentFile })
@@ -2168,23 +2399,17 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
 // This library's instrumentation APK targets itself. Its compiled Kotlin classes are
 // supplied above, but AGP does not copy the library variant's JNI payload into that
 // self-targeted APK. Physical native probes must carry the same generated bridge.
-if (includeDebugNativeBridge) {
-    android.sourceSets.getByName("androidTest").jniLibs.srcDir(
-        layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode"),
-    )
-    tasks.matching { it.name == "mergeDebugAndroidTestJniLibFolders" }.configureEach {
-        dependsOn(stripNativeLibs)
-    }
+android.sourceSets.getByName("androidTest").jniLibs.srcDir(
+    layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode"),
+)
+tasks.matching { it.name == "mergeDebugAndroidTestJniLibFolders" }.configureEach {
+    dependsOn(stripNativeLibs)
 }
 
-// Release always consumes the shipping bridge. Debug device integration can
-// opt in without making ordinary JVM-only test compilation launch Cargo/NDK.
-// Both variants use the same authenticated build, stripping and provenance;
-// the opt-in neither changes privacyProductionEnabled nor admits a provider.
+// Every app variant uses the same authenticated native build and provenance.
+// Ordinary JVM unit-test compilation does not launch Cargo or the Android NDK.
+
 androidComponents.onVariants { variant ->
-    if (variant.buildType != "release" &&
-        !(variant.buildType == "debug" && includeDebugNativeBridge)
-    ) return@onVariants
     requireNotNull(variant.sources.jniLibs) {
         "AGP did not expose jniLibs sources for ${variant.name}"
     }.addGeneratedSourceDirectory(stripNativeLibs, StripNativeBridgeTask::outputDirectory)

@@ -148,6 +148,8 @@ public protocol KagemushaAppAttestAssertionIntentStoringV1: Sendable {
     rawAssertion: Data, receipt: KagemushaNativeAppApprovalReceiptV1) throws
   func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32, signingDigest: Data,
     rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) throws
+  func advanceAfterNativeBootstrapCapture(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeCapturedBootstrapAppApprovalReceiptV1) throws
 }
 
 /// A store without the native ordinary-approval consumer cannot release a W lane.
@@ -158,6 +160,10 @@ public extension KagemushaAppAttestAssertionIntentStoringV1 {
   }
   func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32, signingDigest: Data,
     rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) throws {
+    throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+  }
+  func advanceAfterNativeBootstrapCapture(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeCapturedBootstrapAppApprovalReceiptV1) throws {
     throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
   }
 }

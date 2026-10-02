@@ -47,18 +47,14 @@ fn fixture_with_fee_asset(
         if let Some(asset) = fee_asset {
             use iroha_data_model::{
                 asset::{AssetBalancePolicy, AssetDefinition, AssetId},
-                domain::Domain,
                 isi::Mint,
             };
             use iroha_primitives::numeric::Quantity;
             Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut transaction)
                 .unwrap();
-            Register::domain(Domain::new(
-                DomainId::try_new("network-fee", "universal").unwrap(),
-            ))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
+            // Global fee assets have no owning domain or alias; their custody
+            // uses universal accounts and the exact canonical asset definition.
             Register::asset_definition(AssetDefinition::numeric(
                 asset.clone(),
                 "Network fee".to_owned(),

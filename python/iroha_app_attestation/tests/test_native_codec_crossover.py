@@ -34,6 +34,13 @@ def decoded(value):
     return result
 
 
+def file_identity(stat):
+    # Reading and executing these held public originals legitimately changes access time.
+    # Replacement, permissions and content timestamps must remain identical.
+    return (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_uid, stat.st_gid,
+            stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
 class NativeCodecCrossoverTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -49,9 +56,9 @@ class NativeCodecCrossoverTests(unittest.TestCase):
         for path in cls.paths:
             if not path.is_absolute() or path.is_symlink() or not path.is_file():
                 raise ValueError("native crossover original must be an absolute regular file")
-            before = path.stat()
+            before = file_identity(path.stat())
             data = path.read_bytes()
-            if before != path.stat():
+            if before != file_identity(path.stat()):
                 raise ValueError("native crossover original changed during intake")
             cls.originals.append((before, hashlib.sha256(data).digest()))
         if len(cls.paths[0].read_bytes()) > 1024 * 1024:
@@ -73,7 +80,7 @@ class NativeCodecCrossoverTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         for path, (before, digest) in zip(cls.paths, cls.originals):
-            if before != path.stat() or hashlib.sha256(path.read_bytes()).digest() != digest:
+            if before != file_identity(path.stat()) or hashlib.sha256(path.read_bytes()).digest() != digest:
                 raise AssertionError("held native crossover original drifted")
 
     def setUp(self):

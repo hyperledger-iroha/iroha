@@ -2194,12 +2194,14 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                 format!("duplicate field `{key}` in variant `{variant_name}`");
                             let duplicate_msg =
                                 syn::LitStr::new(&duplicate_text, proc_macro2::Span::call_site());
+                            let deserialize_call =
+                                attrs.deserializer_call(ty, quote!(&mut __parser));
                             match_tokens.push(quote! {
                                 #key_lit => {
                                     if #var_ident.is_some() {
                                         return Err(norito::Error::Message(#duplicate_msg.into()));
                                     }
-                                    let value = <#ty as norito::json::JsonDeserialize>::json_deserialize(&mut __parser)?;
+                                    let value = #deserialize_call;
                                     #var_ident = ::core::option::Option::Some(value);
                                 }
                             });
@@ -3305,11 +3307,7 @@ fn derive_enum_json_deserialize(
                     let field_ident = field.ident.as_ref().unwrap();
                     let key = container_attrs.rename_field(field_ident, &attrs);
                     let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
-                    add_bound(
-                        &mut gen_local,
-                        &field.ty,
-                        quote!(norito::json::JsonDeserialize),
-                    );
+                    attrs.require_json_deserialize_bound(&mut gen_local, &field.ty);
                     let var_ident = format_ident!("__norito_variant_field_{}", field_ident);
                     let ty = &field.ty;
                     inits.push(quote! { let mut #var_ident: ::core::option::Option<#ty> = ::core::option::Option::None; });
@@ -3317,12 +3315,13 @@ fn derive_enum_json_deserialize(
                         format!("duplicate field `{key}` in variant `{variant_name}`");
                     let duplicate_msg =
                         syn::LitStr::new(&duplicate_text, proc_macro2::Span::call_site());
+                    let deserialize_call = attrs.deserializer_call(ty, quote!(&mut __parser));
                     match_tokens.push(quote! {
                         #key_lit => {
                             if #var_ident.is_some() {
                                 return Err(norito::json::Error::Message(#duplicate_msg.into()));
                             }
-                            let value = <#ty as norito::json::JsonDeserialize>::json_deserialize(&mut __parser)?;
+                            let value = #deserialize_call;
                             #var_ident = ::core::option::Option::Some(value);
                         }
                     });

@@ -443,6 +443,8 @@ impl LayerableAuthentication for UnauthenticatedRoute {}
 /// invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandlerAuthentication {
+    /// An actual owner listener token and immutable private-root scope are verified before export.
+    PrivateRootOwnerToken,
     /// Canonical account request authentication performed by the handler.
     ///
     /// These handlers bind the request body and route to an on-ledger account,
@@ -478,6 +480,7 @@ pub(crate) enum HandlerAuthentication {
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
+            Self::PrivateRootOwnerToken => AuthenticationPolicy::PrivateRootOwnerToken,
             Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
             Self::OptionalCanonicalAccountSignature => {
                 AuthenticationPolicy::OptionalCanonicalAccountSignature
@@ -569,6 +572,7 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
     /// in-flight admission, and only then permits the typed handler extractor
     /// to run.
     #[must_use]
+    #[cfg(feature = "app_api")]
     pub(crate) fn authenticated_soracloud_command(
         self,
         app_state: SharedAppState,
@@ -1190,14 +1194,13 @@ mod tests {
     )
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
-    #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn kagemusha_routes_are_part_of_every_app_api_router() {
+    async fn kagemusha_routes_are_complete_without_optional_features() {
         use iroha_torii_shared::route_catalog::kagemusha;
         let mut builder = RouterBuilder::new(
             (),
             RouteCatalog::new(kagemusha::ROUTES),
-            compiled_route_features(),
+            EnabledFeatures::none(),
         )
         .expect("KAGEMUSHA catalog is valid");
         builder.route(
@@ -1222,9 +1225,25 @@ mod tests {
             &kagemusha::AUTHORITY_STATE,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
+        builder.route(
+            &kagemusha::RESOURCE_NAMES_STATE,
+            catalog_get(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &kagemusha::AUTHORITY_ORIGINALS,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &kagemusha::ORDINARY_WALLET_CURRENT,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         let (router, manifest) = builder
             .finish()
-            .expect("app-api routes require and accept the complete KAGEMUSHA family");
+            .expect("every build requires and accepts the complete KAGEMUSHA family");
+        assert_eq!(kagemusha::ROUTES.len(), 8);
         assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
             .clone()
@@ -1250,12 +1269,23 @@ mod tests {
             .await
             .expect("KAGEMUSHA authority-state route response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert_eq!(
-            RouteCatalog::new(kagemusha::ROUTES)
-                .project(CatalogProjection::Mounted, compiled_route_features())
-                .len(),
-            kagemusha::ROUTES.len()
-        );
+        for projection in [
+            CatalogProjection::Mounted,
+            CatalogProjection::OpenApi,
+            CatalogProjection::Sdk,
+        ] {
+            let projected =
+                RouteCatalog::new(kagemusha::ROUTES).project(projection, EnabledFeatures::none());
+            assert_eq!(projected.len(), kagemusha::ROUTES.len());
+            assert!(projected.contains(&&kagemusha::AUTHORITY_STATE));
+        }
+        let mcp = RouteCatalog::new(kagemusha::ROUTES)
+            .project(CatalogProjection::Mcp, EnabledFeatures::none());
+        assert_eq!(mcp.len(), 5);
+        assert!(mcp.contains(&&kagemusha::AUTHORITY_STATE));
+        assert!(!mcp.contains(&&kagemusha::RESOURCE_NAMES_STATE));
+        assert!(!mcp.contains(&&kagemusha::AUTHORITY_ORIGINALS));
+        assert!(!mcp.contains(&&kagemusha::ORDINARY_WALLET_CURRENT));
     }
     #[cfg(feature = "app_api")]
     async fn short_circuit_success(

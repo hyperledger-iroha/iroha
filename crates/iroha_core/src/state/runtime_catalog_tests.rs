@@ -196,22 +196,37 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
     nexus.dataspace_catalog = dataspaces;
     nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
-    let genesis_world = World::with([], accounts, []);
-    let mut parameters = genesis_world.parameters.block();
-    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-    ));
-    parameters.commit();
-    let state = State::new_with_nexus_for_testing(
-        genesis_world,
-        nexus.clone(),
-        LiveQueryStore::start_test(),
-    );
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_config(
+    // These component transitions need the actual retained global schedule.
+    // Structural handshake metadata alone never supplies proposal-height authority.
+    let mut config =
+        crate::sumeragi::test_chain::TestChainConfig::new(World::with([], accounts, []), 0);
+    config.nexus = Some(nexus.clone());
+    config.lane_manifests = Some(Arc::new(LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
         &nexus.governance,
         &nexus.registry,
     )));
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("prepare catalog fixture's original signed global genesis");
+    let genesis = prepared.genesis.block().clone();
+    // Acquire the unshared owner before any worker can retain it.
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("catalog fixture owns its unique unapplied State"));
+    crate::sumeragi::startup::apply_genesis(
+        &state,
+        genesis.clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply the original signed genesis and retain its exact schedule");
+    assert_eq!(state.latest_block_hash_fast(), Some(genesis.hash()));
+    assert_eq!(
+        state.network_id,
+        iroha_data_model::NetworkId::from_genesis_hash(genesis.hash())
+    );
     let mut world = state.world.block();
     {
         let mut peers = world.peers_mut_for_testing().transaction();
@@ -383,6 +398,55 @@ fn catalog_manifest_for_peers(
 }
 
 #[test]
+fn runtime_catalog_fixture_retains_original_schedule_and_cannot_authorize_by_header() {
+    run_catalog_test(|| {
+        let (state, _) = catalog_fixture(InvalidMember::None);
+        let original = state
+            .kura_handle()
+            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .expect("actual retained signed genesis");
+        let header = catalog_test_header(&state);
+        assert_eq!(header.prev_block_hash(), Some(original.hash()));
+        assert!(header.creation_time() > original.header().creation_time());
+        assert_eq!(
+            crate::sumeragi::schedule::scheduled_committee(&state.world.view(), 2)
+                .expect("original genesis owns H2 authority")
+                .len(),
+            4
+        );
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog.lanes().len(),
+            5,
+            "the complete configured physical baseline is retained"
+        );
+        let (missing, missing_keys) = catalog_fixture(InvalidMember::None);
+        let payload = catalog_payload(&missing, &missing_keys);
+        // Retain the actual signed parent and all four live participant keys,
+        // but corrupt only the schedule being tested. A header cannot replace it.
+        let mut world = missing.world.block();
+        *world.consensus_schedule.get_mut() = Default::default();
+        world.commit();
+        let before = norito::json::to_json(&missing.world).unwrap();
+        let mut block = missing.block(catalog_test_header(&missing));
+        let mut tx = block.transaction();
+        let error = tx
+            .stage_consensus_catalog_transition(&payload)
+            .expect_err("an H2 header cannot supply an original consensus schedule");
+        assert!(matches!(
+            error,
+            LaneLifecycleError::RuntimeCatalog(message)
+                if message == "the stored consensus schedule is malformed"
+        ));
+        assert!(runtime_catalog_from_world(&tx.world).unwrap().is_none());
+        assert!(tx.pending_lane_lifecycle.is_none());
+        drop(tx);
+        drop(block);
+        assert_eq!(norito::json::to_json(&missing.world).unwrap(), before);
+        assert_eq!(state.latest_block_hash_fast(), Some(original.hash()));
+    });
+}
+
+#[test]
 fn runtime_catalog_preflight_preserves_prior_additions_and_rejects_replacement() {
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
@@ -496,14 +560,10 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let before = state.nexus_snapshot();
+        let original_native_policy = crate::sumeragi::lanes::lane_policy(&state.world.view())
+            .expect("completed original routing metadata read");
         let payload = catalog_payload(&state, &keys);
-        let mut block = state.block(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let mut block = state.block(catalog_test_header(&state));
         let mut transaction = block.transaction();
         transaction
             .stage_consensus_catalog_transition(&payload)
@@ -530,7 +590,8 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             DataSpaceId::new(12)
         );
         assert!(transaction.lane_manifests.has_manifest(LaneId::new(5)));
-        let native = crate::sumeragi::lanes::lane_policy(&transaction.world).expect("completed original routing metadata read")
+        let native = crate::sumeragi::lanes::lane_policy(&transaction.world)
+            .expect("completed original routing metadata read")
             .expect("physical registration also stages its native lane policy");
         let fixed = native.fixed_lane(LaneId::new(5)).unwrap();
         assert_eq!(
@@ -569,9 +630,11 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             "aborted transaction cannot publish topology"
         );
         assert!(runtime_catalog_from_world(&block.world).unwrap().is_none());
-        assert!(
-            crate::sumeragi::lanes::lane_policy(&block.world).expect("completed original routing metadata read").is_none(),
-            "aborting the catalog transaction must also discard native lane activation"
+        assert_eq!(
+            crate::sumeragi::lanes::lane_policy(&block.world)
+                .expect("completed original routing metadata read"),
+            original_native_policy,
+            "aborting the catalog transaction preserves the exact original native policy"
         );
     });
 }
@@ -592,13 +655,7 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
         payload.lane_additions[0].visibility = LaneVisibility::Restricted;
         let lane = payload.lane_additions[0].id;
         let dataspace = payload.lane_additions[0].dataspace_id;
-        let mut block = state.block(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let mut block = state.block(catalog_test_header(&state));
         let params = block.world.parameters().sumeragi.clone();
         let mut transaction = block.transaction();
         transaction
@@ -606,7 +663,9 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
             .unwrap();
         transaction.apply();
         step::advance(&mut block, &LaneStepInput::default()).unwrap();
-        let mut policy = lane_policy(&block.world).expect("completed original routing metadata read").unwrap();
+        let mut policy = lane_policy(&block.world)
+            .expect("completed original routing metadata read")
+            .unwrap();
         assert_eq!(policy.lane_params, params);
         let record = block
             .world
@@ -667,20 +726,28 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
         };
         let private = make_tx(dataspace);
         assert_eq!(
-            inputs.execution_route(&private, 4).expect("completed original routing read"),
+            inputs
+                .execution_route(&private, 4)
+                .expect("completed original routing read"),
             None,
             "private work cannot escape to universal before activation is applied"
         );
         assert_eq!(
-            inputs.execution_route(&private, 5).expect("completed original routing read"),
+            inputs
+                .execution_route(&private, 5)
+                .expect("completed original routing read"),
             Some(crate::queue::RoutingDecision::new(lane, dataspace))
         );
         assert_eq!(
-            inputs.execution_route(&make_tx(DataSpaceId::new(777)), 5).expect("completed original routing read"),
+            inputs
+                .execution_route(&make_tx(DataSpaceId::new(777)), 5)
+                .expect("completed original routing read"),
             None
         );
         assert_eq!(
-            inputs.execution_route(&make_tx(DataSpaceId::UNIVERSAL), 5).expect("completed original routing read"),
+            inputs
+                .execution_route(&make_tx(DataSpaceId::UNIVERSAL), 5)
+                .expect("completed original routing read"),
             Some(crate::queue::RoutingDecision::new(
                 LaneId::SINGLE,
                 DataSpaceId::UNIVERSAL
@@ -739,7 +806,9 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
             ));
             for height in 2..=5 {
                 assert_eq!(
-                    inputs.execution_route(&control, height).expect("completed original routing read"),
+                    inputs
+                        .execution_route(&control, height)
+                        .expect("completed original routing read"),
                     Some(crate::queue::RoutingDecision::new(
                         LaneId::SINGLE,
                         DataSpaceId::UNIVERSAL,
@@ -763,13 +832,7 @@ fn runtime_catalog_rejects_native_lane_conflict_without_partial_state() {
         };
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
-        let mut block = state.block(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let mut block = state.block(catalog_test_header(&state));
         let mut policy = SumeragiLanePolicy::for_chain(
             block.world.parameters().sumeragi.clone(),
             iroha_sumeragi::availability::recommended_data_availability_layout(),

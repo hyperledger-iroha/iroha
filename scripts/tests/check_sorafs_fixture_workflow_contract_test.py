@@ -771,10 +771,11 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         'IROHA_JS_CARGO_LOCKFILE_PATH="${REPO_ROOT}/Cargo.lock"',
         'IROHA_JS_CARGO_PATH="${native_cargo}"',
         'RUSTC="${native_rustc}"',
-        "RUSTC_BOOTSTRAP=1",
+        "unset RUSTC_BOOTSTRAP",
         'RUSTDOC="${native_rustdoc}"',
     ):
         assert build_binding in parity_runner
+    assert "RUSTC_BOOTSTRAP=1" not in parity_runner
     assert "node scripts/run-test-profile.mjs sorafs-native" in parity_runner
     javascript_profile_runner = read("javascript/iroha_js/scripts/run-test-profile.mjs")
     assert '"cancelAssetLockV1.test.js"' in javascript_profile_runner

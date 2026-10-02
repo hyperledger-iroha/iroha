@@ -23,6 +23,10 @@ fn hash() -> HashOf<SignedTransaction> {
 }
 
 fn status(kind: &str, resolved_from: &str) -> Response<Vec<u8>> {
+    scoped_status(kind, resolved_from, "global")
+}
+
+fn scoped_status(kind: &str, resolved_from: &str, scope: &str) -> Response<Vec<u8>> {
     let status = if kind == "Applied" {
         norito::json!({"kind": kind, "block_height": 7})
     } else {
@@ -32,7 +36,7 @@ fn status(kind: &str, resolved_from: &str) -> Response<Vec<u8>> {
     let payload = norito::json!({
         "hash": transaction_hash,
         "status": status,
-        "scope": "global",
+        "scope": scope,
         "resolved_from": resolved_from
     });
     json_response(
@@ -108,6 +112,10 @@ fn wait_with_options(
 }
 
 fn assert_only_exact_status_reads(snapshots: &[RequestSnapshot]) {
+    assert_exact_scoped_reads(snapshots, "global");
+}
+
+fn assert_exact_scoped_reads(snapshots: &[RequestSnapshot], scope: &str) {
     for request in snapshots {
         assert_eq!(request.method, Method::GET);
         assert_eq!(request.url.path(), "/v1/pipeline/transactions/status");
@@ -121,7 +129,7 @@ fn assert_only_exact_status_reads(snapshots: &[RequestSnapshot]) {
         assert!(
             query
                 .iter()
-                .any(|(key, value)| key == "scope" && value == "global")
+                .any(|(key, value)| key == "scope" && value == scope)
         );
     }
 }
@@ -486,6 +494,7 @@ fn transaction_wait_outcome_admission_rechecks_deadline_after_decoding() {
             poll_interval: Duration::from_millis(1),
         },
         None,
+        super::transaction_wait::Scope::Global,
     )
     .expect("wait");
     state.begin_poll().expect("in-budget dispatch");
@@ -569,4 +578,204 @@ async fn transaction_wait_async_deadline_retires_the_pending_status_future() {
     assert_eq!(snapshots.len(), 1);
     assert_only_exact_status_reads(&snapshots);
     assert!(snapshots[0].timeout.expect("deadline") <= Duration::from_millis(30));
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LocalWaitTransport {
+    Blocking,
+    Async,
+    Facade,
+}
+const LOCAL_WAIT_TRANSPORTS: [LocalWaitTransport; 3] = [
+    LocalWaitTransport::Blocking,
+    LocalWaitTransport::Async,
+    LocalWaitTransport::Facade,
+];
+
+fn wait_local(
+    client: &Client,
+    transport: LocalWaitTransport,
+    timeout: Duration,
+) -> eyre::Result<super::TransactionWaitOutcome> {
+    let options = TransactionWaitOptions {
+        timeout,
+        poll_interval: Duration::from_millis(1),
+    };
+    match transport {
+        LocalWaitTransport::Blocking => client.wait_for_transaction_applied_local(hash(), options),
+        LocalWaitTransport::Async => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(client.wait_until_transaction_applied_local(hash(), options)),
+        LocalWaitTransport::Facade => crate::blocking::Client::from_client(client.clone())?
+            .wait_for_transaction_applied_local(hash(), options),
+    }
+}
+
+fn assert_not_global_finality(error: &eyre::Report) {
+    assert!(
+        error
+            .chain()
+            .all(|cause| cause.downcast_ref::<TransactionFinalityFailure>().is_none())
+    );
+    assert!(
+        error
+            .downcast_ref::<super::TxConfirmationFinalError>()
+            .is_none()
+    );
+}
+
+#[test]
+fn transaction_wait_local_requires_exact_state_applied_and_requests_local_in_every_transport() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        let (client, snapshots) = scripted_client(vec![
+            backpressure(Some("0")),
+            scoped_status("Applied", "cache", "local"),
+            scoped_status("Applied", "state", "local"),
+        ]);
+        let client = client.with_request_deadline(Instant::now() + Duration::from_secs(1));
+        let outcome = wait_local(&client, transport, Duration::from_secs(2)).expect("peer Applied");
+        assert_eq!(outcome.scope, "local");
+        assert_eq!(outcome.resolved_from, "state");
+        assert_eq!(outcome.attempts, 3);
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 3);
+        assert_exact_scoped_reads(&snapshots, "local");
+        let budgets = snapshots
+            .iter()
+            .map(|request| request.timeout.expect("remaining budget"))
+            .collect::<Vec<_>>();
+        assert!(
+            budgets
+                .iter()
+                .all(|budget| *budget <= Duration::from_secs(1))
+        );
+        assert!(budgets.windows(2).all(|pair| pair[1] < pair[0]));
+    }
+}
+
+#[test]
+fn transaction_wait_local_rejects_wrong_hash_or_global_authority() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        let mut wrong_hash = scoped_status("Applied", "state", "local");
+        let body = String::from_utf8(wrong_hash.body().clone()).expect("JSON");
+        *wrong_hash.body_mut() = body
+            .replace(
+                &hash().to_string(),
+                &Hash::prehashed([0x73; Hash::LENGTH]).to_string(),
+            )
+            .into_bytes();
+        for (response, expected) in [(wrong_hash, "hash"), (status("Applied", "state"), "scope")] {
+            let (client, snapshots) = scripted_client(vec![response]);
+            let error = wait_local(&client, transport, Duration::from_secs(1))
+                .expect_err("wrong authority");
+            if expected == "hash" {
+                assert!(matches!(
+                    error.downcast_ref::<crate::Error>(),
+                    Some(crate::Error::ResponseBinding {
+                        operation: "pipeline.transaction_status",
+                        field: "hash",
+                    })
+                ));
+            } else {
+                assert!(format!("{error:#}").contains("scope must be exactly `local`"));
+            }
+            assert_not_global_finality(&error);
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 1);
+            assert_exact_scoped_reads(&snapshots, "local");
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_local_terminal_failure_is_not_global_finality_evidence() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        for kind in ["Rejected", "Expired"] {
+            let (client, snapshots) = scripted_client(vec![scoped_status(kind, "state", "local")]);
+            let error =
+                wait_local(&client, transport, Duration::from_secs(1)).expect_err("local failure");
+            assert!(format!("{error:#}").contains("not a global finality failure"));
+            assert_not_global_finality(&error);
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 1);
+            assert_exact_scoped_reads(&snapshots, "local");
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_local_cache_and_backpressure_cannot_outlive_original_deadline() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        for response in [
+            scoped_status("Applied", "cache", "local"),
+            backpressure(Some("3600")),
+        ] {
+            let backpressured = response.status() == StatusCode::TOO_MANY_REQUESTS;
+            let (client, snapshots) = scripted_client(vec![response]);
+            let error = wait_local(&client, transport, Duration::from_millis(20))
+                .expect_err("local deadline");
+            assert!(
+                format!("{error:#}").contains("peer-local Applied observation remains unresolved")
+            );
+            assert_not_global_finality(&error);
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert!(!snapshots.is_empty());
+            if backpressured {
+                assert_eq!(snapshots.len(), 1, "Retry-After cannot extend budget");
+            }
+            assert_exact_scoped_reads(&snapshots, "local");
+            assert!(
+                snapshots
+                    .iter()
+                    .all(|request| request.timeout.expect("remaining budget")
+                        <= Duration::from_millis(20))
+            );
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_local_zero_or_inherited_expired_deadline_dispatches_nothing() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        for inherited in [false, true] {
+            let (client, snapshots) =
+                scripted_client(vec![scoped_status("Applied", "state", "local")]);
+            let (client, timeout) = if inherited {
+                (
+                    client
+                        .with_request_deadline(Instant::now())
+                        .with_request_deadline(Instant::now() + Duration::from_secs(1)),
+                    Duration::from_secs(1),
+                )
+            } else {
+                (client, Duration::ZERO)
+            };
+            let error = wait_local(&client, transport, timeout).expect_err("expired budget");
+            assert_not_global_finality(&error);
+            assert!(snapshots.lock().expect("snapshots").is_empty());
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_local_late_applied_never_confirms_the_peer() {
+    for transport in LOCAL_WAIT_TRANSPORTS {
+        let snapshots = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&snapshots);
+        let budget = Duration::from_millis(30);
+        let http = DefaultHttpTransport::mock(Arc::new(move |snapshot| {
+            observed.lock().expect("snapshots").push(snapshot);
+            std::thread::sleep(budget + Duration::from_millis(1));
+            Ok(scoped_status("Applied", "state", "local"))
+        }));
+        let client = client_with_base_url(base_url()).with_test_http_transport(http);
+        let error = wait_local(&client, transport, budget).expect_err("late local observation");
+        assert_not_global_finality(&error);
+        assert!(format!("{error:#}").contains("peer-local Applied observation remains unresolved"));
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert_eq!(snapshots.len(), 1);
+        assert_exact_scoped_reads(&snapshots, "local");
+    }
 }

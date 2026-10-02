@@ -2615,6 +2615,7 @@ mod tests {
     #[test]
     fn exact_inventory_rejects_omission_reorder_and_duplicate_hash() {
         let inventory = artifact_inventory();
+        assert_eq!(inventory.len(), 54);
         validate_exact_release_inventory_v1(&inventory).expect("accept ordered inventory");
         assert_eq!(inventory.len(), 54);
         assert!(validate_exact_release_inventory_v1(&inventory[..50]).is_err());

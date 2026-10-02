@@ -75,6 +75,8 @@ pub mod sorafs_reserve;
 pub mod sorafs_stream_token_authority;
 /// Native stream-token custody policy and hardware enrollment transitions.
 pub mod sorafs_stream_token_custody;
+/// Governed native gateway quotas, leases and ordered callback history.
+pub(crate) mod sorafs_stream_token_gateway;
 /// Closed role-16 topology authority instruction; no native mutation or signer capability yet.
 pub mod sorafs_topology_authority;
 pub mod space_directory;
@@ -349,6 +351,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenGateway> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,

@@ -46,9 +46,10 @@ pub(crate) fn build_failure(error: BuildError, status_committed_height: u64) -> 
             | ProofError::Chain(ChainReadError::Committee { .. }) => Reason::FinalityUnavailable,
             _ => Reason::ConflictingState,
         },
-        BuildError::HeightOverflow | BuildError::InvalidSigner | BuildError::Signing(_) => {
-            Reason::InternalFailure
-        }
+        BuildError::HeightOverflow
+        | BuildError::InvalidSigner
+        | BuildError::ClockUnavailable
+        | BuildError::Signing(_) => Reason::InternalFailure,
     }
 }
 
@@ -534,6 +535,7 @@ mod tests {
         for error in [
             BuildError::InvalidSigner,
             BuildError::HeightOverflow,
+            BuildError::ClockUnavailable,
             BuildError::Signing("failed".into()),
         ] {
             assert_eq!(build_failure(error, 1), Reason::InternalFailure);

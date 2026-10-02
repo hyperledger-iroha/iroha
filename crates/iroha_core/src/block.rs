@@ -6277,7 +6277,14 @@ pub(crate) mod valid {
                 // block's World delta.
                 state
                     .advance_requested_sumeragi_schedule()
-                    .map_err(BlockValidationError::from)?;
+                    .map_err(|error| match error {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            BlockValidationError::ExecutionDeferred(reason)
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            BlockValidationError::from(error)
+                        }
+                    })?;
                 state.advance_requested_sumeragi_lanes();
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
@@ -8063,6 +8070,7 @@ pub(crate) mod valid {
             for reason in [
                 ivm::error::ExecutionDeferral::AllocationUnavailable,
                 ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+                ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable,
             ] {
                 assert_eq!(
                     map_block_err_to_reason(&BlockValidationError::ExecutionDeferred(

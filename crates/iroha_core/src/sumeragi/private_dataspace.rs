@@ -58,7 +58,10 @@ fn active_owner(
         now,
     )
     .map_err(|error| error.into_attempt_error(invalid))?;
-    if resolved != dataspace || dataspace == DataSpaceId::UNIVERSAL {
+    if resolved != dataspace
+        || dataspace == DataSpaceId::UNIVERSAL
+        || DataSpaceId::from_hash(&selector.name_hash()) != dataspace
+    {
         return Err(invalid("active alias differs from registered private dataspace").into());
     }
     Ok(

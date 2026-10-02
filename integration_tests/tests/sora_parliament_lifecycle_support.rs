@@ -908,7 +908,10 @@ pub(super) async fn stage_contract_artifact(
     for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
         let chunk_index = u32::try_from(index)?;
         let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-            code_hash: verified.code_hash,
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                verified.code_hash,
+            ),
             total_size,
             chunk_index,
             chunk_count,
@@ -916,14 +919,32 @@ pub(super) async fn stage_contract_artifact(
         })];
         if chunk_index + 1 == chunk_count {
             instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-                code_hash: verified.code_hash,
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    verified.code_hash,
+                ),
                 total_size,
                 chunk_count,
             }));
         }
         submit_parliament_instructions(&client, instructions).await?;
     }
-    submit_parliament_instructions(&client, [RegisterSmartContractCode { manifest }]).await?;
+    submit_parliament_instructions(
+        &client,
+        [{
+            let scoped_manifest = manifest;
+            RegisterSmartContractCode {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    scoped_manifest
+                        .code_hash
+                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+                ),
+                manifest: scoped_manifest,
+            }
+        }],
+    )
+    .await?;
     let code_hash = *verified.code_hash.as_ref();
     let abi_hash = *verified.abi_hash.as_ref();
     Ok((

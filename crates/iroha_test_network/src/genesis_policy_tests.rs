@@ -328,7 +328,8 @@ fn assert_startup_retains_rejection_and_rolls_back(
         &mut world,
         &proposal.0,
         &nexus.dataspace_catalog,
-    );
+    )
+    .expect("authenticated genesis SNS bootstrap");
     let state =
         State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
     config::install_preexec_lane_manifests(&state, None).unwrap();

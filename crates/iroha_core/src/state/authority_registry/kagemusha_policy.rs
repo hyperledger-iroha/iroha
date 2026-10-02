@@ -1,14 +1,14 @@
 //! Typed semantic preimage for the configured Kagemusha verifier runtime.
 //!
-//! This is a checked operational projection. Daemon startup currently loads
-//! release artifacts from configured local files; snapshot recovery starts with
-//! a RejectAll verifier. The typed World registry now persists expected release
-//! identities and lifecycle. Installation, startup, and ordinary State commit
-//! check an authenticated runtime against that registry. The built-in reject-all
-//! runtime remains safe across certified signer-policy installation, standby
-//! installation, and first activation. Rotation, retirement, multi-release
-//! reload, and a complete root publisher still must exist before this
-//! projection can enter a root.
+//! This is a diagnostic projection, never a complete-State commitment. Local
+//! RejectAll versus loaded/stale artifacts is availability, not canonical authority.
+//! The complete governed release registry is already an original World value.
+//! Reload authenticates the exact governed set and original State head; monetary
+//! execution checks that same registry and locally defers missing/stale artifacts
+//! before effects. Publication checks local cache integrity independently of the
+//! certified registry transition, so a successor does not depend on local preload.
+//! TODO: permissioned rotation/retirement and original complete-State capture,
+//! derived checks, history publication and recovery remain before Required closes.
 
 use std::{any::Any, sync::Arc};
 

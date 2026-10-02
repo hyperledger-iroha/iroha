@@ -1251,30 +1251,20 @@ fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
         _ => false,
     }
 }
-fn parameters_with_staging(parameters: &Parameters) -> Vec<Parameter> {
-    parameters.parameters().collect()
-}
-fn parameter_generation_priority(parameter: &Parameter) -> u8 {
-    let _ = parameter;
-    25
-}
 fn collect_parameter_instructions(parameters: &Parameters) -> Vec<InstructionBox> {
     let mut generated = Vec::new();
-    for parameter in parameters_with_staging(parameters) {
-        match parameter {
-            Parameter::Executor(_) | Parameter::Transaction(_) | Parameter::SmartContract(_) => {}
-            other => {
-                if generated
-                    .iter()
-                    .any(|existing| parameter_targets_same_slot(existing, &other))
-                {
-                    continue;
-                }
-                generated.push(other);
-            }
+    for parameter in parameters.parameters() {
+        // The structured genesis block is authoritative for every policy slot,
+        // including admission and execution limits. Its signed instructions
+        // must retain the same values rather than reconstructing defaults.
+        if generated
+            .iter()
+            .any(|existing| parameter_targets_same_slot(existing, &parameter))
+        {
+            continue;
         }
+        generated.push(parameter);
     }
-    generated.sort_by_key(parameter_generation_priority);
     generated
         .into_iter()
         .map(|parameter| InstructionBox::from(SetParameter::new(parameter)))
@@ -1680,18 +1670,12 @@ impl RawGenesisTransaction {
     pub fn effective_parameters(&self) -> Result<Parameters> {
         self.validate_no_explicit_set_parameter_instructions()?;
         self.validate_structured_parameter_blocks()?;
-        let mut aggregated = Parameters::default();
-        for tx in &self.transactions {
-            if let Some(params) = &tx.parameters {
-                aggregated.sumeragi.block_cadence_ms = params.sumeragi.block_cadence_ms;
-                for instruction in collect_parameter_instructions(params) {
-                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                        aggregated.set_parameter(set_param.inner().clone());
-                    }
-                }
-            }
-        }
-        Ok(aggregated)
+        Ok(self
+            .transactions
+            .iter()
+            .find_map(|transaction| transaction.parameters.as_ref())
+            .cloned()
+            .unwrap_or_default())
     }
     /// Populate consensus metadata fields with defaults and a computed consensus fingerprint.
     ///
@@ -2157,7 +2141,7 @@ impl RawGenesisTransaction {
             .map(|tx| GenesisTxBuilder {
                 parameters: tx
                     .parameters
-                    .map_or(Vec::new(), |p| parameters_with_staging(&p)),
+                    .map_or(Vec::new(), |p| p.parameters().collect()),
                 instructions: tx.instructions,
                 ivm_triggers: tx.ivm_triggers,
                 topology: tx.topology,
@@ -2361,8 +2345,8 @@ impl RawGenesisTransaction {
             tx.instructions
                 .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
             if let Some(parameters) = &mut tx.parameters {
-                let filtered_parameters = parameters_with_staging(parameters)
-                    .into_iter()
+                let filtered_parameters = parameters
+                    .parameters()
                     .filter(|parameter| {
                         !matches!(
                             parameter,
@@ -3176,6 +3160,112 @@ mod tests {
         manifest
     }
 
+    fn configured_execution_policy_for_test() -> Parameters {
+        use std::num::{NonZeroU16, NonZeroU64};
+        let mut parameters = Parameters::default();
+        parameters.transaction.max_signatures = NonZeroU64::new(3).unwrap();
+        parameters.transaction.max_instructions = NonZeroU64::new(5).unwrap();
+        parameters.transaction.ivm_bytecode_size = NonZeroU64::new(65_536).unwrap();
+        parameters.transaction.max_tx_bytes = NonZeroU64::new(524_288).unwrap();
+        parameters.transaction.max_decompressed_bytes = NonZeroU64::new(1_048_576).unwrap();
+        parameters.transaction.max_metadata_depth = NonZeroU16::new(3).unwrap();
+        parameters.transaction.max_time_to_live_ms = NonZeroU64::new(1_000).unwrap();
+        parameters.transaction.require_height_ttl = true;
+        parameters.transaction.require_sequence = true;
+        parameters.executor.fuel = NonZeroU64::new(1_000).unwrap();
+        parameters.executor.memory = NonZeroU64::new(2_097_152).unwrap();
+        parameters.executor.execution_depth = 4;
+        parameters.executor.max_output_items = NonZeroU64::new(2).unwrap();
+        parameters.executor.max_output_bytes = NonZeroU64::new(16_384).unwrap();
+        parameters.smart_contract.fuel = NonZeroU64::new(2_000).unwrap();
+        parameters.smart_contract.memory = NonZeroU64::new(4_194_304).unwrap();
+        parameters.smart_contract.execution_depth = 3;
+        parameters.smart_contract.max_output_items = NonZeroU64::new(4).unwrap();
+        parameters.smart_contract.max_output_bytes = NonZeroU64::new(32_768).unwrap();
+        parameters
+    }
+
+    #[test]
+    fn complete_parameter_instructions_retain_every_admission_and_execution_slot() {
+        let expected = configured_execution_policy_for_test();
+        let original_slots = expected.parameters().collect::<Vec<_>>();
+        let instructions = collect_parameter_instructions(&expected);
+        let actual_slots = instructions
+            .iter()
+            .map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .expect("every policy slot is its typed SetParameter")
+                    .inner()
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_slots, original_slots);
+        for (index, slot) in actual_slots.iter().enumerate() {
+            assert!(
+                actual_slots[..index]
+                    .iter()
+                    .all(|previous| !parameter_targets_same_slot(previous, slot)),
+                "every authoritative slot is emitted exactly once"
+            );
+        }
+        assert_eq!(Parameters::from_iter(actual_slots), expected);
+    }
+
+    #[test]
+    fn signed_genesis_retains_complete_configured_execution_policy() -> Result<()> {
+        init_instruction_registry();
+        let expected = configured_execution_policy_for_test();
+        let manifest = with_test_signing_topology(
+            expected
+                .parameters()
+                .fold(
+                    GenesisBuilder::new_without_executor(
+                        ChainId::from("genesis-complete-execution-policy"),
+                        ".",
+                    ),
+                    GenesisBuilder::append_parameter,
+                )
+                .build_raw_for_test(),
+        )
+        .with_consensus_meta();
+        assert_eq!(manifest.effective_parameters()?, expected);
+        let key = KeyPair::from_seed(vec![0x52; 32], Algorithm::Ed25519);
+        let block = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &key, None, None, 1_000,
+            )?
+            .0;
+        let signed_slots = block
+            .external_transactions()
+            .flat_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => instructions.iter(),
+                _ => panic!("genesis policy must use its signed instruction batches"),
+            })
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+            .map(|instruction| instruction.inner().clone())
+            .collect::<Vec<_>>();
+        for original in expected.parameters() {
+            assert_eq!(
+                signed_slots
+                    .iter()
+                    .filter(|slot| **slot == original)
+                    .count(),
+                1,
+                "the signed body must retain the exact authoritative parameter {original:?}"
+            );
+        }
+        validate_prepared_genesis_bundle(
+            &block.encode_wire()?,
+            &manifest,
+            key.public_key(),
+            block.hash(),
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn signed_genesis_batches_have_canonical_expiry_and_increasing_sequences() -> Result<()> {
         init_instruction_registry();
@@ -3195,6 +3285,9 @@ mod tests {
                 .build_raw_for_test(),
         )
         .with_consensus_meta();
+        let effective = manifest.effective_parameters()?;
+        assert!(effective.transaction.require_height_ttl);
+        assert!(effective.transaction.require_sequence);
         let block = manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(

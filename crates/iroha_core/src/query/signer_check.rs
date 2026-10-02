@@ -15,14 +15,16 @@ use iroha_data_model::{
         sorafs::{
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
-            MutateSorafsTopologyAuthority,
+            MutateSorafsStreamTokenGateway, MutateSorafsTopologyAuthority,
         },
     },
     sorafs::{
         final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
         final_promotion_authority::FinalPromotionAuthorityActionV1,
         release_manifest_authority::ReleaseManifestActionV1,
-        stream_token_authority::StreamTokenAuthorityActionV1, topology_authority::TopologyActionV1,
+        stream_token_authority::StreamTokenAuthorityActionV1,
+        stream_token_gateway::native::StreamTokenGatewayActionV1,
+        topology_authority::TopologyActionV1,
     },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -105,6 +107,25 @@ impl NativeCheckRoundV1 {
             bound: false,
         })
     }
+    /// Bind a caller's already-established absolute deadline without a phase-local renewal.
+    pub(crate) fn start_until(deadline: Instant) -> Result<Self, Error> {
+        let started = Instant::now();
+        let max_elapsed = deadline
+            .checked_duration_since(started)
+            .ok_or(Error::Expired)?;
+        if max_elapsed.is_zero() {
+            return Err(Error::Expired);
+        }
+        if max_elapsed > MAX_ROUND {
+            return Err(Error::Invalid);
+        }
+        Ok(Self {
+            started,
+            max_elapsed,
+            challenge: None,
+            bound: false,
+        })
+    }
     /// Called only after the purpose wrapper's pure preflight, once per prepared attempt.
     pub(crate) fn issue_challenge(&mut self) -> Result<[u8; 32], Error> {
         self.ensure_live()?;
@@ -122,6 +143,10 @@ impl NativeCheckRoundV1 {
         self.ensure_live()?;
         self.challenge = Some(challenge);
         Ok(challenge)
+    }
+    /// The unchanged absolute end of this original monotonic lifetime.
+    pub(crate) fn deadline(&self) -> Instant {
+        self.started + self.max_elapsed
     }
     pub(crate) fn ensure_live(&self) -> Result<(), Error> {
         if self.started.elapsed() >= self.max_elapsed {
@@ -143,6 +168,8 @@ pub(crate) enum NativeCustodyCheckPurposeV1 {
     FinalPromotionAccount,
     ReleaseManifest,
     StreamToken,
+    /// Native gateway readback; cannot stand in for signer or private-key authority.
+    StreamTokenGateway,
     /// Proof binding only; role-16 Core execution and current authority remain closed.
     Topology,
 }
@@ -162,6 +189,7 @@ pub(crate) enum NativeCustodyCheckRefV1<'a> {
     )]
     ReleaseManifest(&'a MutateSorafsReleaseManifestAuthority),
     StreamToken(&'a MutateSorafsStreamTokenAuthority),
+    StreamTokenGateway(&'a MutateSorafsStreamTokenGateway),
     #[cfg_attr(
         not(test),
         expect(
@@ -240,6 +268,19 @@ impl NativeCustodyCheckRefV1<'_> {
                     Some(check.floor.context_id),
                 ))
             }
+            Self::StreamTokenGateway(instruction) => {
+                let StreamTokenGatewayActionV1::Check(check) = &instruction.request.action else {
+                    return Err(Error::Transaction);
+                };
+                Ok((
+                    NativeCustodyCheckPurposeV1::StreamTokenGateway,
+                    check.challenge,
+                    *instruction.request.network_id.as_bytes(),
+                    check.floor.height,
+                    check.floor.block_hash,
+                    Some(check.floor.context_id),
+                ))
+            }
             Self::Topology(instruction) => {
                 let TopologyActionV1::Check(check) = &instruction.transition.action else {
                     return Err(Error::Transaction);
@@ -263,6 +304,7 @@ impl NativeCustodyCheckRefV1<'_> {
             Self::FinalPromotionAccount(instruction) => (*instruction).clone().into(),
             Self::ReleaseManifest(instruction) => (*instruction).clone().into(),
             Self::StreamToken(instruction) => (*instruction).clone().into(),
+            Self::StreamTokenGateway(instruction) => (*instruction).clone().into(),
             Self::Topology(instruction) => (*instruction).clone().into(),
         }
     }

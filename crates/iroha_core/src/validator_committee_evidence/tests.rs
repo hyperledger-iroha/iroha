@@ -592,12 +592,23 @@ fn offline_committee_proposal_retains_signed_root_and_refuses_foreign_network_in
     };
     let original = input(network);
     let hash = original.hash_as_entrypoint();
+    let input_time = original.entrypoint().creation_time_ms().unwrap();
+    let genesis_input_floor = genesis
+        .external_transactions()
+        .map(|transaction| transaction.creation_time() + Duration::from_millis(1))
+        .max()
+        .expect("the original signed genesis has real inputs");
+    assert_eq!(genesis.header().creation_time(), genesis_input_floor);
+    assert_eq!(
+        Duration::from_millis(input_time),
+        genesis.header().creation_time()
+    );
     let proposal = offline_proposal(&genesis, &genesis, original).unwrap();
     assert_eq!(proposal.header().height().get(), 2);
     assert_eq!(proposal.header().prev_block_hash(), Some(genesis.hash()));
     assert_eq!(
         proposal.header().creation_time(),
-        Duration::from_millis(1001)
+        genesis.header().creation_time() + Duration::from_millis(1)
     );
     assert_eq!(
         proposal.execution_context().unwrap().external,

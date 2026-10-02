@@ -26,12 +26,334 @@ fn current_finality_client() -> Client {
         NetworkId::from_genesis_hash(current_finality_fixture().0.block_header.hash());
     client
 }
+
+#[test]
+fn provider_discovery_reader_uses_exact_bounded_norito_request_and_never_trusts_a_response_root() {
+    use iroha_data_model::{
+        sorafs::{
+            capacity::ProviderId, provider_admission::discovery::MAX_PROVIDER_DISCOVERY_BYTES_V1,
+        },
+        testing::native_finality::NativeFinalityFixture,
+    };
+    let mut native = NativeFinalityFixture::start("sdk-provider-discovery");
+    let block = native.block_with_submitted_work(native.next_header());
+    let proof = native.certify(block);
+    let verified = native.verifier().verify_retained_decision(&proof).unwrap();
+    let mut client = client_with_base_url(base_url());
+    client.network_id = native.network_id();
+    client.headers.insert(
+        "x-api-token".into(),
+        "provider-discovery-token-fixture".into(),
+    );
+    let provider = ProviderId::new([0xab; 32]);
+    let (result, request) = capture_request(
+        mk_response(StatusCode::OK, vec![1, 2, 3], Some(APPLICATION_NORITO)),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_provider_discovery(
+                provider,
+                Hash::new(b"independently qualified schema"),
+                &verified,
+                1,
+            )
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        request.url.path(),
+        format!(
+            "/v1/sorafs/providers/{}/discovery/2",
+            hex::encode(provider.as_bytes())
+        )
+    );
+    assert_eq!(request.max_response_bytes, MAX_PROVIDER_DISCOVERY_BYTES_V1);
+    assert_eq!(
+        request
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .map(|(_, value)| value.as_str()),
+        Some(APPLICATION_NORITO)
+    );
+    assert_eq!(
+        request
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("x-api-token"))
+            .map(|(_, value)| value.as_str()),
+        Some("provider-discovery-token-fixture")
+    );
+    assert!(
+        client
+            .get_provider_discovery(ProviderId::new([0; 32]), Hash::new(b"schema"), &verified, 1)
+            .is_err()
+    );
+    client.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        Hash::new(b"foreign provider network genesis"),
+    ));
+    assert!(
+        client
+            .get_provider_discovery(provider, Hash::new(b"schema"), &verified, 1)
+            .is_err()
+    );
+}
+#[test]
+fn account_read_discovery_uses_bounded_parent_transport_and_rejects_unverified_data() {
+    use iroha_data_model::{
+        sorafs::{
+            capacity::ProviderId, provider_admission::discovery::MAX_PROVIDER_DISCOVERY_BYTES_V1,
+        },
+        testing::native_finality::NativeFinalityFixture,
+    };
+    let mut native = NativeFinalityFixture::start("sdk-account-read-discovery");
+    let block = native.block_with_submitted_work(native.next_header());
+    let proof = native.certify(block);
+    let verified = native.verifier().verify_retained_decision(&proof).unwrap();
+    let mut client = client_with_base_url(base_url());
+    client.network_id = native.network_id();
+    let provider = ProviderId::new([0xbc; 32]);
+    for status in [StatusCode::OK, StatusCode::SERVICE_UNAVAILABLE] {
+        let (result, request) = capture_request(
+            mk_response(status, vec![1, 2, 3], Some(APPLICATION_NORITO)),
+            |transport| {
+                let client = client.clone().with_test_http_transport(transport);
+                mark_data_model_compatible(&client);
+                client.get_account_read_provider_discovery(
+                    provider,
+                    Hash::new(b"qualified schema"),
+                    &verified,
+                    1,
+                )
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            request.url.path(),
+            format!(
+                "/v1/sorafs/providers/{}/discovery/2",
+                hex::encode(provider.as_bytes())
+            )
+        );
+        assert_eq!(request.max_response_bytes, MAX_PROVIDER_DISCOVERY_BYTES_V1);
+    }
+    assert!(
+        client
+            .get_account_read_provider_discovery(
+                ProviderId::new([0; 32]),
+                Hash::new(b"schema"),
+                &verified,
+                1
+            )
+            .is_err()
+    );
+    client.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        Hash::new(b"foreign registry"),
+    ));
+    assert!(
+        client
+            .get_account_read_provider_discovery(provider, Hash::new(b"schema"), &verified, 1)
+            .is_err()
+    );
+}
+
+fn stream_token_custody_control_fixture() -> (
+    Client,
+    iroha_data_model::sorafs::capacity::ProviderId,
+    sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+    iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+) {
+    use iroha_data_model::{
+        sorafs::capacity::ProviderId, testing::native_finality::NativeFinalityFixture,
+    };
+    use sorafs_manifest::signer::{
+        custody::SignerCustodyBindingV1,
+        protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
+    };
+    let mut native = NativeFinalityFixture::start("sdk-stream-token-control");
+    let block = native.block_with_submitted_work(native.next_header());
+    let proof = native.certify(block);
+    let verified = native.verifier().verify_retained_decision(&proof).unwrap();
+    let mut client = client_with_base_url(base_url());
+    client.chain = native.chain_id().parse().unwrap();
+    client.network_id = native.network_id();
+    let provider = ProviderId::new([0xbd; 32]);
+    let key = KeyPair::from_seed(vec![0x65; 32], Algorithm::Ed25519);
+    let binding = SignerCustodyBindingV1 {
+        chain_id: client.chain.to_string(),
+        network_id: *client.network_id.as_bytes(),
+        runtime_handle: "software://storage/token".into(),
+        key_handle: "software://storage/token/key".into(),
+        service_id: "storage-token-signer".into(),
+        administrator_id: "storage-token-admin".into(),
+        role: SignerRoleV1::StreamToken,
+        purpose: SignerPurposeBindingV1::StreamToken {
+            provider_id: *provider.as_bytes(),
+        },
+        algorithm: SignerKeyAlgorithmV1::Ed25519,
+        public_key: key.public_key().clone(),
+        key_revision: 1,
+        policy_revision: 1,
+        policy_digest: [9; 32],
+    };
+    binding.validate().unwrap();
+    (client, provider, binding, verified)
+}
+
+#[test]
+fn stream_token_custody_control_uses_bounded_discovery_and_rejects_unverified_responses() {
+    use iroha_data_model::sorafs::provider_admission::discovery::MAX_PROVIDER_DISCOVERY_BYTES_V1;
+    let (client, provider, binding, verified) = stream_token_custody_control_fixture();
+    for response in [
+        mk_response(StatusCode::OK, vec![1, 2, 3], Some(APPLICATION_NORITO)),
+        mk_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            vec![1, 2, 3],
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(StatusCode::OK, b"{}".to_vec(), Some(APPLICATION_JSON)),
+        mk_response(
+            StatusCode::OK,
+            vec![0; MAX_PROVIDER_DISCOVERY_BYTES_V1 + 1],
+            Some(APPLICATION_NORITO),
+        ),
+    ] {
+        let (result, request) = capture_request(response, |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_stream_token_custody_control(
+                provider,
+                &binding,
+                Hash::new(b"independently qualified schema"),
+                &verified,
+                1,
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            request.url.path(),
+            format!(
+                "/v1/sorafs/providers/{}/discovery/2",
+                hex::encode(provider.as_bytes())
+            )
+        );
+        assert_eq!(request.max_response_bytes, MAX_PROVIDER_DISCOVERY_BYTES_V1);
+        assert_eq!(
+            request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+    }
+}
+
+#[test]
+fn stream_token_custody_control_rejects_independent_scope_mismatch_before_dispatch() {
+    use iroha_data_model::sorafs::capacity::ProviderId;
+    use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
+    let (client, provider, binding, verified) = stream_token_custody_control_fixture();
+    let mut mutants = Vec::new();
+    let mut changed = binding.clone();
+    changed.chain_id = "another-chain".into();
+    mutants.push(changed);
+    let mut changed = binding.clone();
+    changed.network_id = [0x42; 32];
+    mutants.push(changed);
+    let mut changed = binding.clone();
+    changed.purpose = SignerPurposeBindingV1::StreamToken {
+        provider_id: [0x43; 32],
+    };
+    mutants.push(changed);
+    let mut changed = binding.clone();
+    changed.role = SignerRoleV1::ProofOutcome;
+    mutants.push(changed);
+    let mut changed = binding.clone();
+    changed.key_revision = 0;
+    mutants.push(changed);
+    with_mock_http(
+        |_| panic!("invalid independent custody binding must not dispatch"),
+        |transport| {
+            let client = client.with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            for changed in &mutants {
+                assert!(
+                    client
+                        .get_stream_token_custody_control(
+                            provider,
+                            changed,
+                            Hash::new(b"schema"),
+                            &verified,
+                            1,
+                        )
+                        .is_err()
+                );
+            }
+            assert!(
+                client
+                    .get_stream_token_custody_control(
+                        ProviderId::new([0; 32]),
+                        &binding,
+                        Hash::new(b"schema"),
+                        &verified,
+                        1,
+                    )
+                    .is_err()
+            );
+            let mut foreign = client.clone();
+            foreign.network_id = NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other genesis")),
+            );
+            let mut foreign_binding = binding.clone();
+            foreign_binding.network_id = *foreign.network_id.as_bytes();
+            assert!(
+                foreign
+                    .get_stream_token_custody_control(
+                        provider,
+                        &foreign_binding,
+                        Hash::new(b"schema"),
+                        &verified,
+                        1,
+                    )
+                    .is_err()
+            );
+        },
+    );
+}
+
+#[test]
+fn stream_token_custody_control_expired_deadline_does_not_dispatch() {
+    let (client, provider, binding, verified) = stream_token_custody_control_fixture();
+    with_mock_http(
+        |_| panic!("expired custody-control read must not dispatch"),
+        |transport| {
+            let client = client
+                .with_test_http_transport(transport)
+                .with_request_deadline(std::time::Instant::now());
+            mark_data_model_compatible(&client);
+            assert!(
+                client
+                    .get_stream_token_custody_control(
+                        provider,
+                        &binding,
+                        Hash::new(b"schema"),
+                        &verified,
+                        1,
+                    )
+                    .is_err()
+            );
+        },
+    );
+}
+
 fn client_attestation_fixture() -> iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation
 {
     use iroha_data_model::sumeragi_finality::*;
     let (proof, verifier, signer) = current_finality_fixture();
     let node_id = iroha_model_base::peer::PeerId::new(signer.public_key().clone());
     let body = SumeragiFinalityAttestationBody {
+        observed_at_unix_ms: 1_000_000,
         challenge: [17; 32],
         network_id: NetworkId::from_genesis_hash(proof.block_header.hash()),
         node_fingerprint: Hash::new(norito::codec::Encode::encode(&node_id)),
@@ -875,4 +1197,422 @@ fn native_client_continues_real_h2_quorum_and_keeps_checkpoint_on_rejection() {
     .unwrap();
     assert_eq!(returned, second);
     assert_eq!(verifier.export_checkpoint(&second).unwrap().height(), 2);
+}
+
+#[test]
+fn private_dataspace_record_read_is_bounded_exact_and_does_not_select_parent_trust() {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope,
+        private_dataspace::{
+            MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES, PrivateDataspaceAnchorState,
+            PrivateDataspaceRecord, PrivateDataspaceRecordProof, PrivateDataspaceRegistration,
+        },
+        sumeragi_finality::genesis_epoch,
+        testing::native_finality::NativeFinalityFixture,
+    };
+    let client = current_finality_client();
+    let dataspace_id = DataSpaceId::new(u64::MAX);
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: client.network_id,
+        dataspace_id,
+    };
+    let child = NativeFinalityFixture::start_with_scope("sdk-private-record", scope);
+    let result = child
+        .verifier()
+        .verify_retained_decision(child.genesis_proof())
+        .unwrap()
+        .result()
+        .0;
+    let registration = PrivateDataspaceRegistration::new(
+        scope,
+        child.chain_id().parse().unwrap(),
+        child.network_id(),
+        result,
+        genesis_epoch(child.genesis()).unwrap(),
+    )
+    .unwrap();
+    let record = PrivateDataspaceRecord {
+        dataspace_id,
+        alias: "acme".into(),
+        owner: client.account.clone(),
+        ownership_generation: 1,
+        anchor: PrivateDataspaceAnchorState::from_authorized_registration(registration).unwrap(),
+    };
+    let key = record.witness_key();
+    let value = norito::encode_canonical(&record).unwrap();
+    // This structurally valid response deliberately carries no authenticated parent decision.
+    let proof = PrivateDataspaceRecordProof::from_writes(
+        client.network_id,
+        2,
+        *Hash::new(b"untrusted claimed parent result").as_ref(),
+        [(key.as_slice(), value.as_slice())],
+        record,
+    )
+    .unwrap();
+    let wire = norito::encode_canonical(&proof).unwrap();
+    let response = mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO));
+    let (received, request) = capture_request(response, |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_private_dataspace_record_proof(dataspace_id, NonZeroU64::new(2).unwrap())
+    });
+    let received = received.unwrap();
+    assert_eq!(received, proof);
+    assert_eq!(
+        request.url.path(),
+        format!("/v1/private-dataspaces/{}/records/2/proof", u64::MAX)
+    );
+    assert_eq!(
+        request.max_response_bytes,
+        MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES
+    );
+    let (parent_genesis, mut parent_verifier, _) = current_finality_fixture();
+    parent_verifier.verify(&parent_genesis).unwrap();
+    let parent = parent_verifier
+        .verify_retained_decision(&parent_genesis)
+        .unwrap();
+    assert!(
+        received.verify(dataspace_id, &parent).is_err(),
+        "transport cannot authenticate the claimed parent decision"
+    );
+    for (requested_dataspace, requested_height, wrong_network) in [
+        (DataSpaceId::new(1), 2, false),
+        (dataspace_id, 3, false),
+        (dataspace_id, 2, true),
+    ] {
+        let response = mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO));
+        let (result, _) = capture_request(response, |transport| {
+            let mut client = client.clone().with_test_http_transport(transport);
+            if wrong_network {
+                client.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                    Hash::new(b"another parent"),
+                ));
+            }
+            mark_data_model_compatible(&client);
+            client.get_private_dataspace_record_proof(
+                requested_dataspace,
+                NonZeroU64::new(requested_height).unwrap(),
+            )
+        });
+        assert!(result.is_err());
+    }
+    for response in [
+        mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_JSON)),
+        mk_response(
+            StatusCode::OK,
+            vec![0; MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES + 1],
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(StatusCode::OK, Vec::new(), Some(APPLICATION_NORITO)),
+        mk_response(
+            StatusCode::OK,
+            [wire.as_slice(), &[0]].concat(),
+            Some(APPLICATION_NORITO),
+        ),
+    ] {
+        let (result, _) = capture_request(response, |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_private_dataspace_record_proof(dataspace_id, NonZeroU64::new(2).unwrap())
+        });
+        assert!(result.is_err());
+    }
+    assert!(
+        client
+            .get_private_dataspace_record_proof(DataSpaceId::UNIVERSAL, NonZeroU64::new(2).unwrap())
+            .is_err()
+    );
+    assert!(
+        client
+            .get_private_dataspace_record_proof(dataspace_id, NonZeroU64::new(1).unwrap())
+            .is_err()
+    );
+}
+
+fn private_root_export_fixture() -> (
+    Client,
+    iroha_data_model::testing::native_finality::NativeFinalityFixture,
+    iroha_data_model::private_dataspace::PrivateDataspaceRegistration,
+) {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope, private_dataspace::PrivateDataspaceRegistration,
+        sumeragi_finality::genesis_epoch, testing::native_finality::NativeFinalityFixture,
+    };
+    let parent = current_finality_client();
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: parent.network_id,
+        dataspace_id: DataSpaceId::new(u64::MAX),
+    };
+    let child = NativeFinalityFixture::start_with_scope("sdk-private-export", scope);
+    let result = child
+        .verifier()
+        .verify_retained_decision(child.genesis_proof())
+        .unwrap()
+        .result()
+        .0;
+    let registration = PrivateDataspaceRegistration::new(
+        scope,
+        child.chain_id().parse().unwrap(),
+        child.network_id(),
+        result,
+        genesis_epoch(child.genesis()).unwrap(),
+    )
+    .unwrap();
+    let mut client = client_with_base_url(base_url());
+    client.chain = registration.child_chain_id.clone();
+    client.network_id = child.network_id();
+    client
+        .headers
+        .insert("x-api-token".into(), "private-export-owner-fixture".into());
+    (client, child, registration)
+}
+
+#[test]
+fn private_root_registration_read_retains_owner_token_and_exact_independent_scope() {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope,
+        private_dataspace::MAX_PRIVATE_DATASPACE_REGISTRATION_BYTES,
+    };
+    let (client, _, registration) = private_root_export_fixture();
+    let scope = registration.scope;
+    let wire = norito::encode_canonical(&registration).unwrap();
+    let (received, request) = capture_request(
+        norito_response(StatusCode::OK, &registration),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_private_root_registration(scope)
+        },
+    );
+    assert_eq!(received.unwrap(), registration);
+    assert_eq!(request.url.path(), "/v1/private-root/registration");
+    assert_eq!(
+        request.max_response_bytes,
+        MAX_PRIVATE_DATASPACE_REGISTRATION_BYTES
+    );
+    assert_eq!(
+        request
+            .headers
+            .iter()
+            .filter(|(name, value)| name.eq_ignore_ascii_case("x-api-token")
+                && value == "private-export-owner-fixture")
+            .count(),
+        1
+    );
+    assert!(
+        !request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-iroha-signature"))
+    );
+    let SumeragiRootScope::Dataspace {
+        parent_network_id, ..
+    } = scope
+    else {
+        unreachable!()
+    };
+    for changed in 0..4 {
+        let (result, _) = capture_request(
+            mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+            |transport| {
+                let mut client = client.clone().with_test_http_transport(transport);
+                let selected_scope = match changed {
+                    0 => SumeragiRootScope::Dataspace {
+                        parent_network_id,
+                        dataspace_id: DataSpaceId::new(1),
+                    },
+                    1 => SumeragiRootScope::Dataspace {
+                        parent_network_id: client.network_id,
+                        dataspace_id: DataSpaceId::new(u64::MAX),
+                    },
+                    2 => {
+                        client.network_id = parent_network_id;
+                        scope
+                    }
+                    _ => {
+                        client.chain = "another-child-chain".parse().unwrap();
+                        scope
+                    }
+                };
+                mark_data_model_compatible(&client);
+                client.get_private_root_registration(selected_scope)
+            },
+        );
+        assert!(result.is_err(), "substitution {changed}");
+    }
+    for response in [
+        mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_JSON)),
+        mk_response(
+            StatusCode::OK,
+            [wire.as_slice(), &[0]].concat(),
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(
+            StatusCode::OK,
+            vec![0; MAX_PRIVATE_DATASPACE_REGISTRATION_BYTES + 1],
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(StatusCode::FORBIDDEN, wire, Some(APPLICATION_NORITO)),
+    ] {
+        let (result, _) = capture_request(response, |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_private_root_registration(scope)
+        });
+        assert!(result.is_err());
+    }
+    assert!(
+        client
+            .get_private_root_registration(SumeragiRootScope::Global)
+            .is_err()
+    );
+    assert!(
+        client
+            .get_private_root_registration(SumeragiRootScope::Dataspace {
+                parent_network_id,
+                dataspace_id: DataSpaceId::UNIVERSAL
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn private_root_anchor_read_is_bounded_exact_and_does_not_authenticate_the_quorum() {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope,
+        private_dataspace::{
+            MAX_PRIVATE_DATASPACE_ANCHOR_BYTES, PrivateDataspaceAnchor, PrivateDataspaceAnchorState,
+        },
+    };
+    let (client, mut child, registration) = private_root_export_fixture();
+    let scope = registration.scope;
+    let block = child.block_with_submitted_work(child.next_header());
+    let proof = child.certify(block);
+    let verified = child.verifier().verify_retained_decision(&proof).unwrap();
+    let anchor = PrivateDataspaceAnchor::from_certificate(
+        &registration,
+        verified.block().commit_certificate().unwrap(),
+    )
+    .unwrap();
+    let height = NonZeroU64::new(2).unwrap();
+    let wire = norito::encode_canonical(&anchor).unwrap();
+    let (received, request) =
+        capture_request(norito_response(StatusCode::OK, &anchor), |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_private_root_anchor(scope, height)
+        });
+    assert_eq!(received.unwrap(), anchor);
+    assert_eq!(request.url.path(), "/v1/private-root/anchors/2");
+    assert_eq!(
+        request.max_response_bytes,
+        MAX_PRIVATE_DATASPACE_ANCHOR_BYTES
+    );
+    assert_eq!(
+        request
+            .headers
+            .iter()
+            .filter(|(name, value)| name.eq_ignore_ascii_case("x-api-token")
+                && value == "private-export-owner-fixture")
+            .count(),
+        1
+    );
+    let SumeragiRootScope::Dataspace {
+        parent_network_id, ..
+    } = scope
+    else {
+        unreachable!()
+    };
+    for changed in 0..4 {
+        let (result, _) = capture_request(
+            mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+            |transport| {
+                let mut client = client.clone().with_test_http_transport(transport);
+                let selected_scope = match changed {
+                    0 => SumeragiRootScope::Dataspace {
+                        parent_network_id,
+                        dataspace_id: DataSpaceId::new(1),
+                    },
+                    1 => SumeragiRootScope::Dataspace {
+                        parent_network_id: client.network_id,
+                        dataspace_id: DataSpaceId::new(u64::MAX),
+                    },
+                    2 => {
+                        client.network_id = parent_network_id;
+                        scope
+                    }
+                    _ => scope,
+                };
+                mark_data_model_compatible(&client);
+                client.get_private_root_anchor(
+                    selected_scope,
+                    if changed == 3 {
+                        NonZeroU64::new(3).unwrap()
+                    } else {
+                        height
+                    },
+                )
+            },
+        );
+        assert!(result.is_err(), "substitution {changed}");
+    }
+    let mut forged = anchor.clone();
+    let mut qc: iroha_sumeragi::message::Qc =
+        norito::decode_canonical(&forged.certificate.commit_qc).unwrap();
+    qc.agg_sig.0[0] ^= 1;
+    forged.certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
+    let (received, _) = capture_request(norito_response(StatusCode::OK, &forged), |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_private_root_anchor(scope, height)
+    });
+    let mut tracker =
+        PrivateDataspaceAnchorState::from_authorized_registration(registration).unwrap();
+    assert!(
+        tracker.apply(&received.unwrap()).is_err(),
+        "transport never confers quorum trust"
+    );
+    tracker.apply(&anchor).unwrap();
+    for response in [
+        mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_JSON)),
+        mk_response(
+            StatusCode::OK,
+            [wire.as_slice(), &[0]].concat(),
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(
+            StatusCode::OK,
+            vec![0; MAX_PRIVATE_DATASPACE_ANCHOR_BYTES + 1],
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(StatusCode::FORBIDDEN, wire, Some(APPLICATION_NORITO)),
+    ] {
+        let (result, _) = capture_request(response, |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_private_root_anchor(scope, height)
+        });
+        assert!(result.is_err());
+    }
+    assert!(
+        client
+            .get_private_root_anchor(SumeragiRootScope::Global, height)
+            .is_err()
+    );
+    assert!(
+        client
+            .get_private_root_anchor(scope, NonZeroU64::new(1).unwrap())
+            .is_err()
+    );
+    assert!(
+        client
+            .get_private_root_anchor(
+                SumeragiRootScope::Dataspace {
+                    parent_network_id,
+                    dataspace_id: DataSpaceId::UNIVERSAL
+                },
+                height
+            )
+            .is_err()
+    );
 }

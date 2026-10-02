@@ -161,6 +161,8 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sorafs_final_promotion_authority_v1",
     "sorafs_final_promotion_account_custody_v1",
     "sorafs_stream_token_custody_v1",
+    "sorafs_stream_token_operation_v1",
+    crate::query::stream_token_gateway::storage::STATE_ROOT,
     "sorafs/provider_admission",
     "sc/",
     "da_ingest_quota_v1/",
@@ -15279,7 +15281,7 @@ seiyaku StaleRuntimeBinding {
         account_id: AccountId,
         permission_name: &str,
     ) {
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
@@ -15323,7 +15325,7 @@ seiyaku StaleRuntimeBinding {
     }
     fn grant_test_asset_transfer(state: &State, account_id: AccountId, asset: AssetId) {
         let owner = asset.account().clone();
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next permission grant height");
@@ -18151,7 +18153,7 @@ seiyaku OpaqueInstructionSubmission {
             // This fixture exercises semantic rejection before child proof decoding.
             vec![0]
         } else {
-            fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("canonical AXT proof")
+            crate::unit_test_support::prove_axt_bound_batch_when_available(&batch, &binding)
         };
         let envelope = axt::AxtProofEnvelope {
             dsid,
@@ -18319,7 +18321,7 @@ seiyaku OpaqueInstructionSubmission {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
         assert_eq!(resolved, merchant_account_id);
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -18575,7 +18577,7 @@ seiyaku OpaqueInstructionSubmission {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
         assert_eq!(resolved, merchant_account_id);
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -19262,31 +19264,11 @@ seiyaku Callee {
     }
     #[test]
     fn repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime() {
-        // Successful cache retention uses a process-global 64 MiB owner. Isolate this
-        // exact residency test so unrelated parallel owners cannot refuse its return;
-        // preserve the production cap and every warm-path gas and counter assertion.
-        const CHILD: &str = "IROHA_CORE_NESTED_CACHE_TEST_CHILD";
-        const NAME: &str = "smartcontracts::ivm::host::tests::repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime";
-        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new(NAME)) {
-            let output = std::process::Command::new(
-                std::env::current_exe().expect("resolve Core nested-cache test executable"),
-            )
-            .arg(NAME)
-            .args(["--exact", "--nocapture", "--test-threads=1"])
-            .env(CHILD, NAME)
-            .output()
-            .expect("execute exact nested-cache test child");
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                output.status.success(),
-                "{NAME} failed in its isolated harness\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            );
-            assert!(
-                stdout.contains(&format!("test {NAME} ... ok"))
-                    && stdout.contains("test result: ok. 1 passed; 0 failed;"),
-                "{NAME} did not complete exactly once\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            );
+        // Other tests deliberately change the process-wide retention limits.
+        // The exact child runs every original warmth, reset and gas assertion.
+        if crate::unit_test_support::run_in_isolated_harness(
+            "smartcontracts::ivm::host::tests::repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime",
+        ) {
             return;
         }
         let authority: AccountId = fixture_account("alice");
@@ -19811,16 +19793,28 @@ seiyaku HeldCallee {
 "#,
             1,
         );
-        assert_eq!(
-            state.committed_height(),
-            1,
-            "original signed genesis is already applied"
-        );
-        let parent = state
+        // `contract_test_state` has already applied its original signed genesis.
+        // A fabricated height-one carrier cannot replace that authenticated tip.
+        assert_eq!(state.committed_height(), 1);
+        let original_parent = state
             .view()
             .latest_block_hash()
-            .expect("original signed genesis hash");
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), Some(parent), None, 0, 0));
+            .expect("original signed host genesis");
+        assert!(
+            crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some()
+        );
+        let creation_time_ms = state
+            .latest_block_creation_time_ms_fast()
+            .expect("original signed genesis timestamp")
+            .checked_add(1)
+            .expect("next component timestamp");
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(original_parent),
+            None,
+            creation_time_ms,
+            0,
+        ));
         {
             let mut tx = block.transaction();
             let binding = tx
@@ -20079,7 +20073,7 @@ seiyaku EffectfulView {
         descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
         malicious_manifest.provenance = None;
         malicious_manifest = malicious_manifest.signed(&fixture_signing_keypair(&authority));
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
@@ -21006,7 +21000,10 @@ seiyaku Callee {
         );
         // Apply these component artifacts in ordinary execution, with no
         // claim to an authenticated genesis source capability.
-        let next_height = core::num::NonZeroU64::new(2).unwrap();
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let source = artifact_test_signed_root(*block.network_id(), &authority);
         let source_call = Hash::from(source.hash_as_entrypoint());
@@ -21901,7 +21898,7 @@ seiyaku Callee {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
         };
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -21962,15 +21959,12 @@ seiyaku Callee {
                 .into_execution_artifacts(None)
                 .expect("export actual artifact");
             assert_eq!(artifacts.queued_instructions().len(), 1);
-            // This is an ordinary component artifact test, not authenticated
-            // genesis execution. Keep both signed-budget cases at height two.
-            let mut block = state.block(BlockHeader::new(
-                core::num::NonZeroU64::new(2).unwrap(),
-                None,
-                None,
-                0,
-                0,
-            ));
+            // This is ordinary component artifact execution against the fixture's
+            // original genesis, not a fabricated genesis execution capability.
+            let next_height =
+                core::num::NonZeroU64::new(u64::try_from(state.view().height() + 1).unwrap())
+                    .unwrap();
+            let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut tx = block.transaction();
             if bind_root {
@@ -22066,7 +22060,7 @@ seiyaku DurableOwner {
                 Some(authorization),
             )]),
         };
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");

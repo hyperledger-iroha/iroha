@@ -73,9 +73,17 @@ fn first_error_v1(
 }
 
 /// Reduce one complete aligned tile and append precisely its subtree root.
-fn append_tile_v1(
+pub(super) fn append_tile_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     nodes: &mut [PrivacyOuterDigestV1],
+) -> Result<(), AggregateStarkErrorV1> {
+    append_tile_with_cut_v1(accumulator, nodes, None)
+}
+
+fn append_tile_with_cut_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    nodes: &mut [PrivacyOuterDigestV1],
+    mut cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
 ) -> Result<(), AggregateStarkErrorV1> {
     let first = accumulator.next_leaf;
     if accumulator.node_prefixes.capacity() > usize::BITS as usize
@@ -93,6 +101,11 @@ fn append_tile_v1(
     let mut level = 0;
     while width > 1 {
         let global_start = first >> level;
+        if level == retained_commitment::CUT_LEVEL_V1 {
+            if let Some(cut) = cut.as_deref_mut() {
+                cut.capture_v1(global_start, &nodes[..width])?;
+            }
+        }
         for (offset, &node) in nodes[..width].iter().enumerate() {
             accumulator.capture(level, global_start + offset, node)?;
         }
@@ -131,6 +144,11 @@ fn append_tile_v1(
         }
         width /= 2;
         level += 1;
+    }
+    if level == retained_commitment::CUT_LEVEL_V1 {
+        if let Some(cut) = cut {
+            cut.capture_v1(first >> level, &nodes[..1])?;
+        }
     }
     accumulator.append_subtree_v1(level, nodes[0])
 }
@@ -179,6 +197,32 @@ fn finish_rows_with_v1(
     ) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>
     + Sync,
 ) -> Result<(), AggregateStarkErrorV1> {
+    finish_rows_with_cut_v1(accumulator, streams, None, finalize)
+}
+
+pub(super) fn finish_rows_retaining_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    streams: &mut [PrivacyOuterLastFieldStreamV1],
+    cut: &mut retained_commitment::RetainedMerkleCutV1,
+) -> Result<(), AggregateStarkErrorV1> {
+    finish_rows_with_cut_v1(accumulator, streams, Some(cut), |_, stream| {
+        stream
+            .finalize_in_place_v1()
+            .map_err(map_digest_stream_error_v1)
+            .map_err(map_transparent_error_v1)
+    })
+}
+
+fn finish_rows_with_cut_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    streams: &mut [PrivacyOuterLastFieldStreamV1],
+    mut cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
+    finalize: impl Fn(
+        usize,
+        &mut PrivacyOuterLastFieldStreamV1,
+    ) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>
+    + Sync,
+) -> Result<(), AggregateStarkErrorV1> {
     if streams.len() != accumulator.leaf_count || accumulator.next_leaf != 0 {
         return Err(AggregateStarkErrorV1::InvalidProofShape);
     }
@@ -206,7 +250,7 @@ fn finish_rows_with_v1(
         if let Some((_, error)) = failure {
             return Err(error);
         }
-        append_tile_v1(accumulator, &mut tile.0)?;
+        append_tile_with_cut_v1(accumulator, &mut tile.0, cut.as_deref_mut())?;
         tile.clear_v1();
     }
     Ok(())

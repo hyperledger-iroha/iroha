@@ -78,28 +78,50 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
     let (canonical_validator, _) = gen_account_in("wonderland");
     let (stale_validator, _) = gen_account_in("wonderland");
     let registry = |validator: AccountId| {
-        use iroha_data_model::nexus::{NativeLaneManifestV1, NativeLaneValidatorBindingV1};
-        let directory = tempdir().expect("original manifest source directory");
-        let descriptor = NativeLaneManifestV1 {
-            lane: Some("default".to_owned()),
-            version: Some(1),
-            validators: Some(vec![NativeLaneValidatorBindingV1 {
-                validator: Some(validator.to_string()),
-                peer_id: Some(PeerId::from(validator.expect_single_signatory().clone()).to_string()),
-                ..NativeLaneValidatorBindingV1::default()
-            }]),
-            ..NativeLaneManifestV1::default()
+        let lane = LaneConfig::default();
+        let directory = tempdir().expect("original authority manifest source");
+        let source = iroha_data_model::nexus::NativeLaneManifestV1 {
+            lane: Some(lane.alias.clone()),
+            version: Some(iroha_data_model::nexus::NativeLaneManifestV1::VERSION),
+            validators: Some(vec![
+                iroha_data_model::nexus::NativeLaneValidatorBindingV1 {
+                    peer_id: Some(
+                        PeerId::new(
+                            validator
+                                .try_signatory()
+                                .expect("single-key fixture validator")
+                                .clone(),
+                        )
+                        .to_string(),
+                    ),
+                    validator: Some(validator.to_string()),
+                    torii_url: None,
+                },
+            ]),
+            ..iroha_data_model::nexus::NativeLaneManifestV1::default()
         };
-        fs::write(directory.path().join("default.manifest.json"), norito::json::to_vec(&descriptor).unwrap()).unwrap();
-        let frozen = Arc::new(LaneManifestRegistry::from_config(
-            &LaneCatalog::default(), &GovernanceCatalog::default(),
-            &LaneRegistry { manifest_directory: Some(directory.path().to_path_buf()), ..LaneRegistry::default() },
+        fs::write(
+            directory
+                .path()
+                .join(format!("{}.manifest.json", lane.alias)),
+            norito::json::to_vec(&source).expect("encode original authority manifest"),
+        )
+        .expect("write original authority manifest");
+        let registry = Arc::new(LaneManifestRegistry::from_config(
+            &LaneCatalog::default(),
+            &GovernanceCatalog::default(),
+            &LaneRegistry {
+                manifest_directory: Some(directory.path().to_path_buf()),
+                ..LaneRegistry::default()
+            },
         ));
-        assert_eq!(frozen.lane_rules(LaneId::SINGLE).unwrap().validators, vec![validator]);
-        // Publication consumes the materialized source; deleted files cannot
-        // become a second authority during either State/Queue reconfiguration.
+        assert_eq!(
+            registry.lane_rules(lane.id).unwrap().validators,
+            vec![validator]
+        );
+        // The source bytes remain frozen after the original path is retired.
         drop(directory);
-        frozen
+        registry
     };
     // Exercise both State entry points: a fresh empty Queue and a stale Queue
     // must adopt installed authority; stale Queue policy must never resurrect

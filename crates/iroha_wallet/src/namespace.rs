@@ -1,12 +1,12 @@
-//! Exact paid domain-namespace requests built from public native policy and authoritative names.
+//! Exact paid namespace requests built from public native policy and authoritative names.
 
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{blocking, config::Config, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
     alias_setup::{
-        AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
-        AliasSetupPlanRequestV1, ResolvedDomainV1,
+        AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+        AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDataSpaceV1, ResolvedDomainV1,
     },
     asset::AssetDefinitionId,
     isi::alias_setup::EnsureAlias,
@@ -35,6 +35,158 @@ pub struct DomainNamespaceQuote {
     pub payment_asset: AssetDefinitionId,
     /// Node-time deadline carried by the signed rent guard.
     pub valid_until_ms: u64,
+}
+
+/// One ordinary paid SNS lease for an independently executed private dataspace.
+#[derive(Debug, Clone)]
+pub struct PrivateDataspaceNamespaceQuote {
+    /// Exact one-year lease request, bound to the wallet owner and current policy.
+    pub request: AliasSetupPlanRequestV1,
+    /// Canonical SNS name and its hash-derived dataspace id.
+    pub dataspace: ResolvedDataSpaceV1,
+    /// Maximum quoted namespace rent, separate from transaction fees.
+    pub rent: Quantity,
+    /// Exact rent currency selected by the native pricing policy.
+    pub payment_asset: AssetDefinitionId,
+    /// Node-time expiry of the signed acquisition guard.
+    pub valid_until_ms: u64,
+}
+
+/// Prepare a canonical private dataspace lease without adding a physical parent lane/catalog.
+/// The caller has already selected and authenticated the parent network. These read-only policy
+/// observations prepare an ordinary paid request; the native planner and committed execution
+/// recheck exact owner, namespace, price and generation. They do not establish parent finality.
+/// All discovery, status, pricing and optional existing-name reads share one absolute deadline.
+///
+/// # Errors
+/// Rejects a noncanonical or reserved alias, changed network/profile, physical parent collision,
+/// another owner or inactive lease, malformed policy, exhausted deadline or invalid rent guard.
+pub fn prepare_private_dataspace_request(
+    config: &Config,
+    alias: &str,
+    deadline: Instant,
+) -> Result<PrivateDataspaceNamespaceQuote> {
+    let selector = private_dataspace_selector(alias)?;
+    let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(eyre!("private dataspace namespace deadline expired"));
+    }
+    let discovery = blocking::account_bootstrap::Client::new(
+        config.torii_api_url.clone(),
+        remaining.min(config.torii_request_timeout),
+    )?;
+    let capabilities = discovery.capabilities()?;
+    if capabilities.network_id != config.network_id
+        || capabilities.network_prefix != config.account_chain_discriminant
+    {
+        return Err(eyre!(
+            "private dataspace endpoint changed the selected network/profile"
+        ));
+    }
+    let client = blocking::Client::from_client(
+        iroha::client::Client::builder(config.clone())
+            .build()?
+            .with_request_deadline(deadline),
+    )?;
+    let status = client.status().get()?;
+    let policy = client
+        .client()
+        .sns()
+        .get_policy(DATASPACE_ALIAS_SUFFIX_ID)?;
+    let record = client
+        .client()
+        .sns()
+        .get_name_optional(SnsNamespacePath::Dataspace, alias)?;
+    let quote = quote_private_dataspace(
+        &policy,
+        selector,
+        config.account.clone(),
+        status.observed_at_ms,
+        config.transaction_ttl,
+        &status.dataspace_catalog,
+        record.as_ref(),
+    )?;
+    if Instant::now() >= deadline {
+        return Err(eyre!("private dataspace namespace deadline expired"));
+    }
+    Ok(quote)
+}
+
+fn private_dataspace_selector(alias: &str) -> Result<NameSelectorV1> {
+    let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)?;
+    if alias == "universal" || selector.normalized_label() != alias {
+        return Err(eyre!(
+            "private dataspace requires a canonical non-reserved SNS alias"
+        ));
+    }
+    // The model's alias segment grammar also rejects hierarchy and ambiguous spelling.
+    DomainId::parse_fully_qualified(&format!("app.{alias}"))?;
+    Ok(selector)
+}
+
+fn quote_private_dataspace(
+    policy: &SuffixPolicyV1,
+    selector: NameSelectorV1,
+    owner: AccountId,
+    observed_at_ms: u64,
+    ttl: Duration,
+    catalog: &[NexusDataspaceCatalogStatus],
+    record: Option<&NameRecordV1>,
+) -> Result<PrivateDataspaceNamespaceQuote> {
+    let alias = selector.normalized_label();
+    let dataspace_id = DataSpaceId::from_hash(&selector.name_hash());
+    if observed_at_ms == 0
+        || dataspace_id == DataSpaceId::UNIVERSAL
+        || catalog
+            .iter()
+            .any(|entry| entry.alias == alias || entry.dataspace_id == dataspace_id.as_u64())
+    {
+        return Err(eyre!(
+            "private dataspace requires fresh time and an independent namespace"
+        ));
+    }
+    if let Some(record) = record
+        && (active_dataspace(record, alias, observed_at_ms)? != dataspace_id
+            || record.owner != owner)
+    {
+        return Err(eyre!(
+            "existing dataspace lease differs from the selected owner or derived id"
+        ));
+    }
+    let lifetime_ms = u64::try_from(ttl.as_millis())
+        .unwrap_or(u64::MAX)
+        .min(MAX_QUOTE_LIFETIME_MS);
+    if lifetime_ms < 1_000 {
+        return Err(eyre!(
+            "namespace transaction lifetime must be at least one second"
+        ));
+    }
+    let valid_until_ms = observed_at_ms
+        .checked_add(lifetime_ms)
+        .ok_or_else(|| eyre!("namespace quote deadline overflow"))?;
+    let price = quote_lease_price(policy, &selector, 1, None)?;
+    let dataspace = ResolvedDataSpaceV1::new(alias.parse()?, dataspace_id);
+    let request = AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
+        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: dataspace.clone(),
+            owner,
+        }),
+        AliasLeaseAcquisitionV1::new(1, Some(price.pricing_class)),
+        AliasQuoteGuardV1 {
+            expected_policy_version: policy.policy_version,
+            expected_payment_asset: price.payment_asset.clone(),
+            max_amount: price.amount.clone(),
+            valid_until_ms,
+        },
+    )]);
+    Ok(PrivateDataspaceNamespaceQuote {
+        request,
+        dataspace,
+        rent: price.amount,
+        payment_asset: price.payment_asset,
+        valid_until_ms,
+    })
 }
 
 /// Read current policy and resolve a full domain into one bounded, owner-bound native request.

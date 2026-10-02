@@ -11241,8 +11241,20 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
     let signer = original_config.genesis_key.clone();
     let mut original = CertifiedTestChain::start(original_config).expect("original signed configured genesis");
     while original.height() < 4 {
-        // The maintained owner inserts real signed Log work, never an empty block.
-        assert_eq!(original.commit(Vec::new()), vec![true]);
+        let transaction = original.sign(
+            &signer,
+            [Log::new(iroha_logger::Level::INFO, "original lane-history work".to_owned()).into()],
+            original.height(),
+        );
+        let input_hash = transaction.hash_as_entrypoint();
+        let parent_height = original.height();
+        assert_eq!(original.commit(vec![transaction]), vec![true]);
+        assert_eq!(original.height(), parent_height + 1);
+        assert_eq!(
+            original.state().view().latest_block().unwrap().external_entrypoints_cloned()
+                .next().unwrap().hash(),
+            input_hash,
+        );
     }
     let current = original.state().nexus_snapshot();
     let incarnations = LaneLifecycleParameterV1::canonical_incarnations(
@@ -18532,7 +18544,7 @@ state_test! { sync axt_policy_refresh_does_not_cache_future_created_autoscale_la
             manifest_root: [0xA7; 32],
             target_lane: future_lane,
             active_handle_era: 1,
-            next_handle_counter: 0,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -19588,7 +19600,23 @@ fn space_directory_manifest_rotation_updates_policy_cache() {
     let mut expected_root_current = [0u8; 32];
     expected_root_current.copy_from_slice(record_current.manifest_hash.as_ref());
     assert_eq!(first_entry.manifest_root, expected_root_current);
-    assert_eq!(first_entry.active_handle_era, 1);
+    let authenticated_counter = state
+        .world
+        .axt_handle_counters
+        .view()
+        .get(&dataspace)
+        .expect("the signed genesis retains this manifest's permanent ratchet")
+        .clone();
+    assert!(authenticated_counter.authorization_generation() > 0);
+    assert!(authenticated_counter.next() > 0);
+    assert_eq!(
+        first_entry.active_handle_era,
+        authenticated_counter.authorization_generation()
+    );
+    assert_eq!(
+        first_entry.next_handle_counter,
+        authenticated_counter.next()
+    );
     assert_eq!(first_entry.target_lane, lane_id);
     let_row! { manifest_v2 = AssetPermissionManifest { version: ManifestVersion::default(), uaid, dataspace, issued_ms: 5, activation_epoch: 4, expiry_epoch: Some(10), entries: Vec::new(), } };
     let mut record_v2 = SpaceDirectoryManifestRecord::new(manifest_v2);
@@ -20203,8 +20231,14 @@ state_test! { sync capture_exec_witness_refuses_a_pristine_scope_without_its_ori
     let state = blank_state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     assert_eq!(
-        block.capture_exec_witness(),
+        block.require_original_execution_recorder(),
         Err("State execution has no original recorder".to_owned())
+    );
+    // A pristine scope lacks both owners. Capture checks its complete inventory
+    // before touching any recorder; the independent recorder refusal remains exact.
+    assert_eq!(
+        block.capture_exec_witness(),
+        Err("FASTPQ witness capture has no finalized owned inventory".to_owned())
     );
     assert!(block.take_exec_witness().is_none());
 }
@@ -23074,7 +23108,10 @@ execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::paramete
     // A genuinely empty Fast store may construct an empty unauthenticated State;
     // it neither invents committed native history nor drops any executed World.
     let mut empty_config = kura_config.clone();
-    empty_config.store_dir = iroha_config::base::WithOrigin::inline(temp_dir.path().join("empty-fast"));
+    let empty_store = temp_dir.path().join("empty-fast");
+    std::fs::create_dir(&empty_store).expect("create the actual empty Fast store directory");
+    assert!(std::fs::read_dir(&empty_store).unwrap().next().is_none());
+    empty_config.store_dir = iroha_config::base::WithOrigin::inline(empty_store);
     let (empty_kura, _) = Kura::new_with_configured_lane_catalog(
         &empty_config, &lane_config, &lane_catalog,
     ).expect("open genuinely empty Fast Kura with the same configured catalog");
@@ -26251,11 +26288,16 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
     let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
     let missing_domain = DomainId::try_new("dummy", "universal").unwrap();
     let_row! { asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap(), ) };
-    // Commit initial domain, account, and the by-call trigger.
+    // Retain the account, leased asset-owning domain and by-call trigger.
     let_row! { block = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
+        seed_trigger_domain_name_lease(
+            &mut stx,
+            &ALICE_ID,
+            &DomainId::try_new("wonderland", "universal").expect("asset-owning domain"),
+        );
         Register::domain(Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
         ))
@@ -26337,11 +26379,6 @@ state_test! { sync self_calling_trigger_stops_at_synchronous_execution_depth
     let header = state.view().latest_block().expect("original trigger parent").header();
     let mut block = state.block(header);
     let mut transaction = block.transaction_for_callback_testing();
-    Register::domain(Domain::new(
-        DomainId::try_new("wonderland", "universal").expect("valid domain"),
-    ))
-    .execute(&ALICE_ID, &mut transaction)
-    .expect("register domain");
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut transaction)
         .expect("register account");
@@ -26409,11 +26446,6 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
     let mut block = state.block(header);
     {
         let mut transaction = block.transaction_for_callback_testing();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").expect("valid domain"),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .expect("register domain");
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut transaction)
             .expect("register account");
@@ -26996,11 +27028,6 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut transaction = state_block.transaction_for_callback_testing();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .expect("register domain");
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut transaction)
             .expect("register account");
@@ -27136,11 +27163,6 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -27614,11 +27636,6 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -27905,6 +27922,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
+        seed_trigger_domain_name_lease(&mut stx, &ALICE_ID, &domain_id);
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

@@ -234,9 +234,8 @@ use crate::{
     routing::MaybeTelemetry,
     sorafs::{
         AdmissionRegistry, AliasCachePolicyExt, BLINDED_CID_LEN, MAX_CLIENT_ID_BYTES,
-        MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, MAX_TOKEN_FUTURE_SKEW_SECS,
-        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaSubject, TokenOverrides,
-        decode_token_base64,
+        MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, StreamTokenHeaderError,
+        StreamTokenIssuerError, StreamTokenQuotaSubject, TokenOverrides, decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -40326,7 +40325,23 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn car_range_accepts_valid_stream_token() {
-        let context = token_test_context();
+        // Serving also requires the provider's governance-admitted capability advert.
+        let advert = make_signed_advert();
+        let mut context =
+            capability_token_context(&advert, b"stream token payload fixture".to_vec());
+        let mut app =
+            Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive route app"));
+        let admission = ServingAdmissionFixture::new();
+        app.stream_token_admission_capture = Some(admission.capture.clone());
+        let cleanup = RangeCleanupTestOwner::install(&mut app, 64);
+        context.app = Arc::new(app);
+        assert!(context.app.sorafs_gateway_config.enforce_capabilities);
+        assert_eq!(
+            context
+                .app
+                .provider_supports_chunk_range(&advert.provider_id()),
+            Some(true)
+        );
         let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
@@ -40339,6 +40354,8 @@ mod advert_tests {
         );
         let response = context.car_range(headers, 8081).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(admission.active_leases(), 1);
+        assert_eq!(admission.outcomes()[0].status, CustodyStatus::Accepted);
         let (parts, body) = response.into_parts();
         let headers = parts.headers;
         let body_bytes = body::to_bytes(body, usize::MAX)
@@ -40395,6 +40412,8 @@ mod advert_tests {
             chunk_range_header.contains(&format!("chunks={}", report.chunk_indices.len())),
             "chunk range header must report the verified chunk count"
         );
+        wait_for_range_cleanup(|| admission.active_leases() == 0).await;
+        cleanup.finish().await;
     }
     #[tokio::test]
     async fn car_range_streams_verified_middle_chunk_window() {
@@ -41047,7 +41066,23 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn chunk_range_accepts_valid_stream_token() {
-        let context = token_test_context();
+        // Serving also requires the provider's governance-admitted capability advert.
+        let advert = make_signed_advert();
+        let payload = b"stream token payload fixture";
+        let mut context = capability_token_context(&advert, payload.to_vec());
+        let mut app =
+            Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive route app"));
+        let admission = ServingAdmissionFixture::new();
+        app.stream_token_admission_capture = Some(admission.capture.clone());
+        let cleanup = RangeCleanupTestOwner::install(&mut app, 64);
+        context.app = Arc::new(app);
+        assert!(context.app.sorafs_gateway_config.enforce_capabilities);
+        assert_eq!(
+            context
+                .app
+                .provider_supports_chunk_range(&advert.provider_id()),
+            Some(true)
+        );
         let manifest = context.manifest();
         let chunk_record = manifest.chunk(0).expect("chunk record");
         let chunk_digest_hex = hex::encode(chunk_record.digest);
@@ -41066,8 +41101,10 @@ mod advert_tests {
             alias_proof_header("alias/test"),
         );
         let response = api_test_route!(get_storage_chunk; State(context.app.clone()); Path((context.manifest_id_hex.clone(), chunk_digest_hex)); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8082))));
-        let (parts, _) = response.into_parts();
+        let (parts, response_body) = response.into_parts();
         assert_eq!(parts.status, StatusCode::OK);
+        assert_eq!(admission.active_leases(), 1);
+        assert_eq!(admission.outcomes()[0].status, CustodyStatus::Accepted);
         let tls_state = parts
             .headers
             .get(HeaderName::from_static(SORA_TLS_STATE_HEADER))
@@ -41077,6 +41114,12 @@ mod advert_tests {
             tls_state.starts_with("ech-"),
             "unexpected TLS state header: {tls_state}"
         );
+        let bytes = body::to_bytes(response_body, 1024 * 1024)
+            .await
+            .expect("collect chunk body");
+        assert_eq!(bytes.as_ref(), payload);
+        wait_for_range_cleanup(|| admission.active_leases() == 0).await;
+        cleanup.finish().await;
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]

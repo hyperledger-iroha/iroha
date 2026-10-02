@@ -509,7 +509,10 @@ fn stream_snapshot_head_race_fails_cas_before_any_provider_operation() {
         let state = harness.source.base.state.lock().unwrap();
         assert!(state.used_ids.is_empty());
         assert_eq!(state.commits, 0);
-        assert_eq!(fs::read_dir(&harness.source.directory).unwrap().count(), 0);
+        assert_eq!(
+            crate::signer_operation::journal::test_record_count(&harness.source.directory),
+            0
+        );
     }
     // A structurally valid but concurrently superseded head instead reaches authoritative CAS.
     let harness = Harness::new();
@@ -525,7 +528,10 @@ fn stream_snapshot_head_race_fails_cas_before_any_provider_operation() {
     assert_eq!(harness.source.counts().reserves, 1);
     assert_eq!(harness.calls(), 0);
     assert_eq!(harness.source.base.state.lock().unwrap().commits, 0);
-    assert_eq!(fs::read_dir(&harness.source.directory).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&harness.source.directory),
+        0
+    );
 }
 
 #[test]
@@ -631,7 +637,10 @@ fn stream_payload_admission_rejects_domain_body_provider_and_key_before_source_r
         alternates > 0,
         "a genuinely different ordinary-decodable frame was rejected"
     );
-    assert_eq!(fs::read_dir(&harness.source.directory).unwrap().count(), 0);
+    assert_eq!(
+        crate::signer_operation::journal::test_record_count(&harness.source.directory),
+        0
+    );
     harness
         .sign(&body)
         .expect("positive control reaches source and four provider calls");
@@ -827,7 +836,7 @@ fn stream_constructor_rejects_wrong_journal_role_and_unavailable_fresh_custody()
         assert_eq!(error, expected);
         assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 0);
         assert!(fixture.source.state.lock().unwrap().used_ids.is_empty());
-        assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+        assert_eq!(crate::signer_operation::journal::test_record_count(path), 0);
     }
 }
 

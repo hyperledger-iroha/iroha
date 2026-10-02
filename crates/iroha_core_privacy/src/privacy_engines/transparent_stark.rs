@@ -365,6 +365,21 @@ impl GoldilocksFp4V1 {
             GoldilocksFieldV1::ZERO,
         ],
     };
+    /// Construct a deliberately noncanonical coefficient fixture for rejection tests.
+    ///
+    /// Ordinary constructors retain their canonicality requirements. This fixed
+    /// invalid value is available only to the internal test harness.
+    #[cfg(test)]
+    pub(crate) const fn noncanonical_fixture_v1() -> Self {
+        Self {
+            coefficients: [
+                GoldilocksFieldV1(u64::MAX),
+                GoldilocksFieldV1::ZERO,
+                GoldilocksFieldV1::ZERO,
+                GoldilocksFieldV1::ZERO,
+            ],
+        }
+    }
     /// Decode four canonical residues in ascending power order.
     pub(crate) fn canonical(values: [u64; 4]) -> Option<Self> {
         Self::from_coefficients([
@@ -2099,6 +2114,28 @@ mod tests {
             PrivacyProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         );
+    #[test]
+    fn noncanonical_fp4_fixture_preserves_strict_ordinary_constructors() {
+        let malformed = GoldilocksFp4V1::noncanonical_fixture_v1();
+        let coefficients = [
+            GoldilocksFieldV1(u64::MAX),
+            GoldilocksFieldV1::ZERO,
+            GoldilocksFieldV1::ZERO,
+            GoldilocksFieldV1::ZERO,
+        ];
+        assert_eq!(malformed.coefficients(), coefficients);
+        assert!(!malformed.is_canonical());
+        assert!(GoldilocksFp4V1::canonical(coefficients.map(|value| value.0)).is_none());
+        assert!(GoldilocksFp4V1::from_coefficients(coefficients).is_none());
+        assert_eq!(
+            GoldilocksFp4V1::from_base(GoldilocksFieldV1::ONE),
+            GoldilocksFp4V1::ONE
+        );
+        assert_eq!(
+            GoldilocksFp4V1::canonical([1, 0, 0, 0]),
+            Some(GoldilocksFp4V1::ONE)
+        );
+    }
     fn fp4(coefficients: [u64; 4]) -> GoldilocksFp4V1 {
         GoldilocksFp4V1::canonical(coefficients).expect("small canonical coefficients")
     }

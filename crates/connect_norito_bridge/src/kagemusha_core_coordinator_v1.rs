@@ -21,6 +21,8 @@ mod native_core_work;
 mod native_installation;
 #[cfg(unix)]
 mod ordinary_app_identity;
+#[cfg(unix)]
+mod ordinary_native_startup;
 pub use native_core_work::{
     KagemushaNativeCompletedOutboxReleaseLocatorV1, KagemushaNativeCorePublicationDestinationV1,
     KagemushaNativeCoreWorkSourceV1, KagemushaNativeIncomingEvidenceSourceV1,
@@ -34,8 +36,20 @@ pub use native_core_work::{
 #[cfg(unix)]
 pub use ordinary_app_identity::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
-    KagemushaOrdinaryEnrollmentDispositionV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    KagemushaOrdinaryEnrollmentDispositionV1, KagemushaOrdinaryNativeCurrentControlRequestV1,
+    KagemushaOrdinaryNativeCurrentControlResponseV1,
+    bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    install_kagemusha_native_ordinary_source_v1,
+    invoke_kagemusha_native_ordinary_current_control_v1,
+    publish_kagemusha_native_ordinary_initial_state_v1,
+    recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
+};
+#[cfg(unix)]
+pub use ordinary_native_startup::{
+    KagemushaNativeOrdinaryRuntimeStartupV1, KagemushaOrdinaryNativeStartupRequestV1,
+    KagemushaOrdinaryNativeStartupResponseV1, invoke_kagemusha_native_ordinary_runtime_startup_v1,
+    register_kagemusha_native_ordinary_runtime_startup_v1,
 };
 mod recovered_backend;
 #[cfg(test)]
@@ -1767,6 +1781,158 @@ mod tests {
         norito::json::Value::Object(value)
     }
 
+    fn generated_mobile_frame_fixture(
+        original: &str,
+        terminal_original: &norito::json::Value,
+    ) -> String {
+        let mut canonical = Vec::new();
+        for (method, name, mut fields) in mobile_request_cases() {
+            if method == KagemushaCoreCoordinatorMethodV1::BuildTerminalEnvelope {
+                fields[1] =
+                    hex::decode(terminal_original["signedResponseHex"].as_str().unwrap()).unwrap();
+            }
+            let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+            let response = kagemusha_core_coordinator_encode_response_v1(&mobile_response_fields(
+                method, &fields,
+            ))
+            .unwrap();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response),
+                Ok(()),
+                "generated request/response correlation for {name}",
+            );
+            canonical.push((
+                name,
+                method,
+                format!(
+                    "{name}\t{}\t{}\t{}",
+                    method.code(),
+                    hex::encode(request),
+                    hex::encode(response),
+                ),
+            ));
+        }
+        let mut emitted = std::collections::BTreeSet::new();
+        let mut result = String::new();
+        for line in original.lines() {
+            if line.starts_with('#') || line.is_empty() {
+                result.push_str(line);
+                result.push('\n');
+                continue;
+            }
+            let columns: Vec<_> = line.split('\t').collect();
+            assert_eq!(columns.len(), 4, "invalid original fixture row");
+            assert!(emitted.insert(columns[0]), "duplicate original fixture row");
+            if let Some((_, method, generated)) =
+                canonical.iter().find(|(name, _, _)| *name == columns[0])
+            {
+                assert_eq!(columns[1].parse::<u8>().unwrap(), method.code());
+                result.push_str(generated);
+            } else {
+                assert!(matches!(columns[0], "recover-missing" | "recover-terminal"));
+                let method =
+                    KagemushaCoreCoordinatorMethodV1::from_code(columns[1].parse().unwrap())
+                        .unwrap();
+                let request = hex::decode(columns[2]).unwrap();
+                let response = hex::decode(columns[3]).unwrap();
+                assert_eq!(
+                    kagemusha_core_coordinator_validate_method_response_v1(
+                        method, &request, &response,
+                    ),
+                    Ok(()),
+                    "retained recovery request/response correlation for {}",
+                    columns[0],
+                );
+                result.push_str(line);
+            }
+            result.push('\n');
+        }
+        for (name, _, generated) in canonical {
+            if emitted.insert(name) {
+                result.push_str(&generated);
+                result.push('\n');
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn shared_fixture_emitter_repairs_obsolete_ack_and_retains_valid_pairs() {
+        let original =
+            include_str!("../../../fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv");
+        let generated =
+            generated_mobile_frame_fixture(original, &generated_terminal_original_fixture());
+        let rows = |text: &str| {
+            text.lines()
+                .filter(|line| !line.starts_with('#') && !line.is_empty())
+                .map(|line| {
+                    let columns: Vec<_> = line.split('\t').collect();
+                    assert_eq!(columns.len(), 4);
+                    (columns[0].to_owned(), line.to_owned())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let old = rows(original);
+        let current = rows(&generated);
+        assert_eq!(old.len(), 28);
+        assert_eq!(current.len(), 28);
+        assert_eq!(
+            old.keys().collect::<Vec<_>>(),
+            current.keys().collect::<Vec<_>>()
+        );
+        for (name, line) in old {
+            let columns: Vec<_> = line.split('\t').collect();
+            let method =
+                KagemushaCoreCoordinatorMethodV1::from_code(columns[1].parse().unwrap()).unwrap();
+            let request = hex::decode(columns[2]).unwrap();
+            let response = hex::decode(columns[3]).unwrap();
+            if kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                .is_ok()
+            {
+                assert_eq!(current[&name], line, "valid original pair changed: {name}");
+            }
+        }
+        let ack: Vec<_> = current["app-attest-ack"].split('\t').collect();
+        let request =
+            kagemusha_core_coordinator_decode_request_v1(&hex::decode(ack[2]).unwrap()).unwrap();
+        let response =
+            kagemusha_core_coordinator_decode_response_v1(&hex::decode(ack[3]).unwrap()).unwrap();
+        assert_eq!(
+            iroha_data_model::kagemusha::kagemusha_app_attest_original_counter_v1(&request[3])
+                .unwrap(),
+            11,
+        );
+        assert_eq!(response[4], 11_u32.to_le_bytes());
+        let mut obsolete = request.clone();
+        obsolete[3] = vec![0xa2, 0x01, 0x02];
+        let obsolete = kagemusha_core_coordinator_encode_request_v1(&obsolete).unwrap();
+        let response_frame = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(
+                KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest,
+                &obsolete,
+                &response_frame,
+            ),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+        );
+        for substituted_counter in [5_u32, 71] {
+            let mut wrong_counter = response.clone();
+            wrong_counter[4] = substituted_counter.to_le_bytes().to_vec();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_response_v1(
+                    KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest,
+                    &hex::decode(ack[2]).unwrap(),
+                    &kagemusha_core_coordinator_encode_response_v1(&wrong_counter).unwrap(),
+                ),
+                Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+            );
+        }
+        assert_eq!(
+            generated_mobile_frame_fixture(&generated, &generated_terminal_original_fixture()),
+            generated
+        );
+    }
+
     #[test]
     fn diagnostic_terminal_original_fixture_matches_native_canonical_codec() {
         let generated = generated_terminal_original_fixture();
@@ -1802,59 +1968,7 @@ mod tests {
             .unwrap();
             let fixture_path = root.join("kagemusha_core_coordinator_frame_v1.tsv");
             let old = std::fs::read_to_string(&fixture_path).unwrap();
-            let archives: norito::json::Value = norito::json::from_str(include_str!(
-                "../../../fixtures/offline/kagemusha_core_coordinator_archives_v1.json"
-            ))
-            .unwrap();
-            let request = kagemusha_core_coordinator_encode_request_v1(&[
-                hex::decode(archives["candidate"]["norito_hex"].as_str().unwrap()).unwrap(),
-                hex::decode(generated["signedResponseHex"].as_str().unwrap()).unwrap(),
-            ])
-            .unwrap();
-            let response =
-                kagemusha_core_coordinator_encode_response_v1(&[b"canonical-envelope".to_vec()])
-                    .unwrap();
-            let mut new = String::new();
-            for line in old.lines() {
-                if line.starts_with("terminal-envelope\t") {
-                    new.push_str(&format!(
-                        "terminal-envelope\t6\t{}\t{}\n",
-                        hex::encode(&request),
-                        hex::encode(&response)
-                    ));
-                } else if ![
-                    "app-attest-ack\t",
-                    "incoming-prepare\t",
-                    "incoming-complete\t",
-                    "incoming-stage\t",
-                    "authenticated-hardware-policy\t",
-                    "app-approval-recheck\t",
-                    "app-possession-recheck\t",
-                    "ordinary-identity-recheck\t",
-                ]
-                .iter()
-                .any(|name| line.starts_with(name))
-                {
-                    new.push_str(line);
-                    new.push('\n');
-                }
-            }
-            for (method, name, fields) in mobile_request_cases()
-                .into_iter()
-                .filter(|(m, _, _)| m.code() == 13 || m.code() >= 15)
-            {
-                let response = mobile_response_fields(method, &fields);
-                let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
-                let response = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
-                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
-                    .unwrap();
-                new.push_str(&format!(
-                    "{name}\t{}\t{}\t{}\n",
-                    method.code(),
-                    hex::encode(request),
-                    hex::encode(response)
-                ));
-            }
+            let new = generated_mobile_frame_fixture(&old, &generated);
             std::fs::write(output.join("kagemusha_core_coordinator_frame_v1.tsv"), new).unwrap();
         } else {
             let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -2053,8 +2167,12 @@ mod tests {
             .expect("closed method");
             let request = hex::decode(columns[2]).expect("request hex");
             let response = hex::decode(columns[3]).expect("response hex");
-            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
-                .expect("native request/response correlation");
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response),
+                Ok(()),
+                "native request/response correlation for {}",
+                columns[0],
+            );
             assert!(
                 fixtures
                     .insert(columns[0], (method, request, response))
@@ -2067,7 +2185,7 @@ mod tests {
                 .values()
                 .map(|(method, _, _)| method.code())
                 .collect::<std::collections::BTreeSet<_>>(),
-            (1..=21).collect(),
+            (1_u8..=21).collect::<std::collections::BTreeSet<_>>()
         );
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
@@ -2729,9 +2847,29 @@ mod tests {
     #[test]
     fn signed_android_and_ios_requests_have_one_exact_method_matrix() {
         let expected_counts = [
-            3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1, 2, 4, 2, 0,
+            2, 2, 2, 3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1, 2, 4, 2, 0,
         ];
         let cases = mobile_request_cases();
+        assert_eq!(
+            cases[..3]
+                .iter()
+                .map(|(method, label, _)| (*method, *label))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval,
+                    "app-approval-recheck",
+                ),
+                (
+                    KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession,
+                    "app-possession-recheck",
+                ),
+                (
+                    KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity,
+                    "ordinary-identity-recheck",
+                ),
+            ]
+        );
         assert_eq!(
             cases
                 .iter()

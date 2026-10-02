@@ -130,15 +130,6 @@ fn fixture_config() -> (
         ]),
     );
     sns::seed_default_namespace_policies(&mut world);
-    // Paid alias operations execute on the global registry under explicit
-    // immutable genesis metadata, even before a new dataspace is catalogued.
-    {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-    }
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.fee_asset_id = payment_asset.to_string();
     // Match the standard State test fixture's zero ordinary transaction fees. The independent
@@ -214,6 +205,32 @@ fn fixture_config() -> (
         })
         .collect();
     (config, signer, owner, collector, payment_asset)
+}
+
+#[test]
+fn alias_registry_fixture_consensus_registration_requires_original_signer_permission() {
+    let (mut config, _, _, _, _) = fixture_config();
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    assert!(
+        config
+            .world
+            .account_permissions
+            .view()
+            .get(&genesis_account)
+            .unwrap()
+            .contains(&Permission::from(CanManageConsensusKeys))
+    );
+    config
+        .world
+        .account_permissions_mut_for_testing()
+        .insert(genesis_account, BTreeSet::new());
+    let failure = CertifiedTestChain::prepare(config)
+        .expect_err("the actual genesis signer cannot register consensus keys without permission");
+    assert_eq!(failure.state.view().height(), 0);
+    assert!(matches!(
+        failure.error,
+        crate::sumeragi::test_chain::TestChainError::Genesis(_)
+    ));
 }
 
 fn commit_bpng_catalog(fixture: &Fixture) {

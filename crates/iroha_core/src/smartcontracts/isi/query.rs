@@ -7619,9 +7619,14 @@ mod tests {
         let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
             .expect("exact transaction baseline");
         assert_eq!(
+            fixture.store.blocks[0].network_entrypoint_count(),
+            3,
+            "signed genesis inputs remain part of exact Network history"
+        );
+        assert_eq!(
             expected.len(),
-            3 + 16 * 2,
-            "signed genesis and successor inputs"
+            35,
+            "three original genesis inputs and sixteen two-input successors"
         );
         let params = QueryParams {
             pagination: Pagination::default(),
@@ -7650,6 +7655,7 @@ mod tests {
         };
         assert_eq!(first.remaining_items, Some(30));
         let mut collected = transactions_from_batch(first.batch);
+        assert_eq!(collected.len(), 5);
         let mut cursor = first.continue_cursor;
         let mut expected_remaining = 30_u64;
         // Each five-row continuation authenticates from H17 to the carrier of its
@@ -7670,6 +7676,7 @@ mod tests {
                 "continuation retains the complete original-tip ancestry cost"
             );
             let page = transactions_from_batch(next.batch);
+            assert_eq!(page.len(), 5);
             expected_remaining = expected_remaining
                 .saturating_sub(u64::try_from(page.len()).expect("page length fits u64"));
             assert_eq!(next.remaining_items, Some(expected_remaining));
@@ -7786,6 +7793,19 @@ mod tests {
             panic!("expected iterable transaction output");
         };
         let mut cursor = first.continue_cursor.expect("exact query continuation");
+        let mut corrupted_wire = fixture.store.blocks[target_height.get() - 1]
+            .encode_wire()
+            .expect("original canonical historical wire");
+        *corrupted_wire
+            .last_mut()
+            .expect("original wire is nonempty") ^= 1;
+        let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
+            .expect_err("altered source must fail its canonical frame checksum");
+        assert!(
+            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
+            if message == "checksum mismatch")
+        );
+        let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(target_height);
         loop {
             match query_handle.handle_iter_continue(cursor, &ALICE_ID) {
@@ -7795,9 +7815,9 @@ mod tests {
                     );
                 }
                 Err(err) => {
-                    assert!(
-                        matches!(&err, Error::Conversion(message) if message == "Norito (de)serialization issue: checksum mismatch"),
-                        "the modified canonical frame must fail its checksum: {err:?}"
+                    assert_eq!(
+                        err, expected_error,
+                        "continuation must propagate the complete canonical source refusal"
                     );
                     break;
                 }
@@ -7852,6 +7872,19 @@ mod tests {
     fn find_transactions_bounded_defers_old_corruption_but_exact_fails() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        let mut corrupted_wire = fixture.store.blocks[fixture.unrelated_height.get() - 1]
+            .encode_wire()
+            .expect("original canonical historical wire");
+        *corrupted_wire
+            .last_mut()
+            .expect("original wire is nonempty") ^= 1;
+        let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
+            .expect_err("altered old source must fail its canonical frame checksum");
+        assert!(matches!(
+            &codec_error,
+            iroha_version::error::Error::NoritoCodec(message) if message == "checksum mismatch"
+        ));
+        let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7884,9 +7917,9 @@ mod tests {
         let err = exact
             .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
             .expect_err("exact query must validate corrupt selected history");
-        assert!(
-            matches!(&err, Error::Conversion(message) if message == "Norito (de)serialization issue: checksum mismatch"),
-            "the modified canonical frame must fail its checksum: {err:?}"
+        assert_eq!(
+            err, expected_error,
+            "exact history must propagate the complete canonical source refusal"
         );
     }
     #[test]

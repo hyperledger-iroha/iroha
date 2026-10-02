@@ -1473,7 +1473,7 @@ mod tests {
         );
     }
     #[test]
-    fn sns_configuration_keeps_consumed_governance_capacity_until_the_original_time_sweep() {
+    fn sns_configuration_and_time_preserve_consumed_governance_capacity() {
         use crate::state::{
             GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
@@ -1575,22 +1575,16 @@ mod tests {
         let original = block.world.smart_contract_state.get(&key).unwrap().clone();
         {
             let mut tx = block.transaction();
-            let error = ConfigureAliasAutoRenew::new(
+            ConfigureAliasAutoRenew::new(
                 fixture.target.clone(),
                 retained.revision,
                 Some(config.clone()),
             )
             .execute(&fixture.owner, &mut tx)
-            .unwrap_err();
-            assert!(
-                error.to_string().contains("consumed mandatory sources"),
-                "{error}"
-            );
-            assert_eq!(tx.world.smart_contract_state.get(&key), Some(&original));
-            assert!(
-                tx.execution_deferral().is_none(),
-                "intrinsic capacity is a completed refusal"
-            );
+            .expect("SNS configurations use the disjoint native maintenance pool");
+            assert_ne!(tx.world.smart_contract_state.get(&key), Some(&original));
+            assert!(tx.execution_deferral().is_none());
+            // Dropping this disposable configuration preserves its exact original record.
         }
         assert_eq!(block.fastpq_source_usage_for_testing().1, consumed);
         assert_eq!(
@@ -1599,8 +1593,8 @@ mod tests {
         );
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         block.execute_ordinary_output_plan(&source, None).unwrap();
-        // The genuine producer completed Time. A later configuration does not
-        // retroactively join that sweep; its next-carrier retained obligation fits.
+        // The genuine producer completed Time. A later configuration joins the
+        // next bounded native sweep and cannot consume governance reservations.
         {
             let mut tx = block.transaction();
             ConfigureAliasAutoRenew::new(fixture.target.clone(), retained.revision, Some(config))
@@ -1837,8 +1831,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn native_auto_renew_debits_exact_owner_quote_once() {
+    #[tokio::test]
+    async fn native_auto_renew_debits_exact_owner_quote_once() {
+        // Preserve the native retry reason if the exact debit oracle fails.
+        let _logger = iroha_logger::test_logger();
         let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
         let owner_before = asset_balance(&fixture.state, &fixture.payment_asset, &fixture.owner);
         let collector_before =
@@ -3878,10 +3874,7 @@ mod tests {
             permission::query::CanReadAllLedgerData,
         };
         use iroha_primitives::json::Json;
-        use std::{
-            collections::{BTreeMap, BTreeSet},
-            num::NonZeroU16,
-        };
+        use std::{collections::BTreeMap, num::NonZeroU16};
         let registrar_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
         let registrar = AccountId::new(registrar_key.public_key().clone());
         let collector = AccountId::new(
@@ -3958,15 +3951,9 @@ mod tests {
             crate::sns::record_storage_key(&domain_selector),
             norito::codec::Encode::encode(&domain_lease),
         );
-        world.account_permissions.insert(
-            registrar.clone(),
-            BTreeSet::from([
-                Permission::from(CanManageAccountAlias {
-                    scope: AccountAliasPermissionScope::Domain(domain.clone()),
-                }),
-                Permission::from(CanReadAllLedgerData),
-            ]),
-        );
+        let alias_management = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        });
         let target = AliasTargetV1::AccountAlias(alias.clone());
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target).unwrap();
         assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
@@ -4041,6 +4028,17 @@ mod tests {
         );
         let mut config = TestChainConfig::new(world, 1_000);
         config.genesis_key = registrar_key.clone();
+        // Carry the fixture's management and snapshot-read permissions as
+        // actual grants in the authenticated signed genesis source.
+        config.genesis_instructions.extend([
+            iroha_data_model::isi::Grant::account_permission(alias_management, registrar.clone())
+                .into(),
+            iroha_data_model::isi::Grant::account_permission(
+                Permission::from(CanReadAllLedgerData),
+                registrar.clone(),
+            )
+            .into(),
+        ]);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.dataspace_catalog = catalog.clone();
         // Both supplied configuration cuts describe this same pre-genesis catalog.
@@ -4077,13 +4075,13 @@ mod tests {
             ensure.clone().into(),
         ];
         let signed = chain.sign(&registrar_key, instructions, 1_999);
-        let accepted = chain.commit_at(2_000, vec![signed]);
+        let committed = chain.commit_at(2_000, vec![signed]);
         let tip = chain.committed(2);
         assert_eq!(
-            accepted,
+            committed,
             vec![true],
-            "original native output: {:?}",
-            tip.block().network_output_at(0)
+            "native atomic registration outputs: {:?}",
+            tip.block().execution_outputs(),
         );
         let (wallet_original, signer_original, lease_original, payer_after, collector_after) = {
             let view = chain.state().view();

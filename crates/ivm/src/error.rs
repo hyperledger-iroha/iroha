@@ -31,6 +31,7 @@ mod tests {
         for reason in [
             ExecutionDeferral::AllocationUnavailable,
             ExecutionDeferral::ActiveMemoryCapacity,
+            ExecutionDeferral::VerifierArtifactsUnavailable,
         ] {
             let error = VMError::ExecutionDeferred(reason);
             assert_eq!(

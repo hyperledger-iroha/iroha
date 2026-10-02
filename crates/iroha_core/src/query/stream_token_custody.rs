@@ -8,7 +8,7 @@ use crate::{
     query::signer_finality::{VerifiedSignerFinalityV1, verify_signer_finality_v1},
     state::{StateReadOnly, StateView, WorldReadOnly},
 };
-use iroha_crypto::{Hash, PublicKey};
+use iroha_crypto::PublicKey;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     stream_token_custody::{
@@ -88,23 +88,9 @@ impl StreamTokenCustodyBlockFinalityV1 {
     }
 }
 
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::codec::Encode,
-    norito::codec::Decode,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::query::stream_token_custody::ControlIndexV1")]
-pub(crate) struct ControlIndexV1 {
-    pub(crate) revision: u64,
-    pub(crate) digest: [u8; 32],
-    pub(crate) height: u64,
-    pub(crate) ordinal: u32,
-}
+pub(crate) use iroha_data_model::sorafs::stream_token_custody::history::{
+    StreamTokenCustodyControlIndexV1 as ControlIndexV1, head_key, height_key, record_key, scope,
+};
 pub(crate) struct NativeControl {
     pub(crate) record: StreamTokenCustodyControlRecordV1,
     pub(crate) state: SignerCustodyControlStateV1,
@@ -131,7 +117,7 @@ where
         norito::DecodeLimits::new(
             4096,
             STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
-            8192,
+            STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
             256 * 1024,
             16,
         ),
@@ -142,40 +128,13 @@ pub(crate) fn record_digest(record: &StreamTokenCustodyControlRecordV1) -> Resul
     record.canonical_digest().map_err(|_| Error::Invalid)
 }
 
-fn scope(provider: ProviderId) -> String {
-    format!(
-        "sorafs_stream_token_custody_v1_{}",
-        hex::encode(provider.as_bytes())
-    )
-}
-pub(crate) fn head_key(provider: ProviderId) -> StatePath {
-    StatePath::from_str(&format!("{}_head", scope(provider)))
-        .expect("bounded native custody head path")
-}
-pub(crate) fn record_key(provider: ProviderId, revision: u64) -> StatePath {
-    StatePath::from_str(&format!("{}_revision_{revision:020}", scope(provider)))
-        .expect("bounded native custody revision path")
-}
-pub(crate) fn height_key(provider: ProviderId, height: u64, ordinal: u32) -> StatePath {
-    StatePath::from_str(&format!(
-        "{}_height_{height:020}_{ordinal:010}",
-        scope(provider)
-    ))
-    .expect("bounded native custody height path")
-}
 pub(crate) fn key_path(
     provider: ProviderId,
     signer: bool,
     key: &PublicKey,
 ) -> Result<StatePath, Error> {
-    let digest = Hash::new(encode(key)?);
-    StatePath::from_str(&format!(
-        "sorafs_stream_token_custody_v1_{}_{}_key_{}",
-        hex::encode(provider.as_bytes()),
-        if signer { "signer" } else { "attester" },
-        hex::encode(digest.as_ref())
-    ))
-    .map_err(|_| Error::Invalid)
+    iroha_data_model::sorafs::stream_token_custody::history::key_path(provider, signer, key)
+        .map_err(|_| Error::Invalid)
 }
 fn validate_key_indexes(
     world: &impl WorldReadOnly,
@@ -257,6 +216,9 @@ pub(crate) fn read_record(
     let state: SignerCustodyControlStateV1 =
         decode(&record.control_state).map_err(|_| Error::CorruptHistory)?;
     state.validate().map_err(|_| Error::CorruptHistory)?;
+    record
+        .validate_active_enrollment(&state)
+        .map_err(|_| Error::CorruptHistory)?;
     if record.provider_id != provider
         || record.revision != revision
         || revision == 0

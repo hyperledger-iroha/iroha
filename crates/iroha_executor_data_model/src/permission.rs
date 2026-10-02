@@ -1069,6 +1069,35 @@ pub mod sorafs {
         pub struct CanUpsertSorafsProviderCredit;
     }
     permission! {
+        /// Govern native stream-token gateway policies and bootstrap exact gateway operators.
+        ///
+        /// Genesis seeds this global administrator: gateway IDs depend on the genesis-derived
+        /// network identity and therefore cannot be embedded as scoped bootstrap permissions.
+        #[derive(Copy)]
+        pub struct CanManageSorafsStreamTokenGateway;
+    }
+    permission! {
+        /// Attest admissions and discharge retained obligations for one native gateway.
+        #[derive(Copy)]
+        #[norito(deny_unknown_fields)]
+        pub struct CanOperateSorafsStreamTokenGateway {
+            /// Exact nonzero network-derived gateway identifier; never a wildcard.
+            pub gateway_id: [u8; 32],
+        }
+    }
+    permission! {
+        /// Independently challenge exact native readback for one stream-token gateway.
+        ///
+        /// This capability never grants operation authority or independently proves serving
+        /// eligibility. The native Check also requires current governed observer membership.
+        #[derive(Copy)]
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsStreamTokenGateway {
+            /// Exact nonzero network-derived gateway identifier; never a wildcard.
+            pub gateway_id: [u8; 32],
+        }
+    }
+    permission! {
         /// Permission to configure, enroll, or revoke stream-token custody for one provider.
         #[derive(Copy)]
         pub struct CanManageSorafsStreamTokenCustody {
@@ -1632,6 +1661,9 @@ mod final_promotion_permission_tests;
 #[cfg(test)]
 #[path = "release_manifest_permission_tests.rs"]
 mod release_manifest_permission_tests;
+#[cfg(test)]
+#[path = "stream_token_gateway_permission_tests.rs"]
+mod stream_token_gateway_permission_tests;
 #[cfg(test)]
 #[path = "stream_token_permission_tests.rs"]
 mod stream_token_permission_tests;

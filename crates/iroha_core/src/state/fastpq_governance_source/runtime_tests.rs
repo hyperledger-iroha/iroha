@@ -343,7 +343,7 @@ fn restore_rejects_over_capacity_current_and_undo_without_publishing_partial_ind
 }
 
 #[test]
-fn sns_restore_admits_original_current_and_undo_obligations_without_erasing_refusal() {
+fn sns_current_and_undo_records_do_not_consume_governance_reservations() {
     use iroha_data_model::alias_setup::{
         AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1, ResolvedDomainV1,
     };
@@ -387,13 +387,13 @@ fn sns_restore_admits_original_current_and_undo_obligations_without_erasing_refu
     world.validate_retained_mandatory_sources().unwrap();
     let refused = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
-        || world.validate_retained_mandatory_sources().unwrap_err(),
+        || {
+            let value = record(0);
+            crate::sns::alias_auto_renew_state(&world.view(), &value.target).unwrap_err()
+        },
     );
     assert!(
-        matches!(
-            refused,
-            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
-        ),
+        matches!(refused, crate::sns::SnsError::Deferred(_)),
         "{refused}"
     );
     world.validate_retained_mandatory_sources().unwrap();
@@ -402,9 +402,10 @@ fn sns_restore_admits_original_current_and_undo_obligations_without_erasing_refu
     world
         .smart_contract_state
         .insert(key.clone(), overflow.encode());
-    let failed = world.validate_retained_mandatory_sources().unwrap_err();
-    assert!(
-        crate::execution_attempt::expect_completed_rejection(failed).contains("global retained")
+    world.validate_retained_mandatory_sources().unwrap();
+    assert_eq!(
+        world.smart_contract_state.view().get(&key),
+        Some(&overflow.encode())
     );
     {
         let mut data = world.smart_contract_state.block();
@@ -419,6 +420,5 @@ fn sns_restore_admits_original_current_and_undo_obligations_without_erasing_refu
             .get(&key)
             .is_some()
     );
-    let undo = world.validate_retained_mandatory_sources().unwrap_err();
-    assert!(crate::execution_attempt::expect_completed_rejection(undo).contains("global retained"));
+    world.validate_retained_mandatory_sources().unwrap();
 }

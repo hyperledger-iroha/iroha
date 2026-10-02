@@ -266,7 +266,7 @@ fn scalar_dispatch_residues(
                 log19.post_base.sha_word(),
                 log19.post_base.sha(),
                 log19.post_base.rfc5280(),
-                log19.claims.sha.segments[segment],
+                segment as u8,
                 &log19.claims.sha.ca_calls,
             )
             .unwrap()
@@ -307,6 +307,13 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
     let claims = main_log19_terminal_claims_fixture_v1();
     let statement =
         crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(0);
+    let key_plan = main_key_joins::MainKeyJoinPlanV1::new_v1(
+        &layout,
+        &statement,
+        ZkX509Rfc5280StarkShapeV1::from_statement(&main_log19_statement_fixture_v1()).unwrap(),
+    )
+    .unwrap();
+    assert!(key_plan.admissible_v1(point, &shared).unwrap());
     let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
     let p256 =
         MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, post_base)
@@ -453,6 +460,25 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
             .unwrap(),
     );
     assert_eq!(evaluate(&alphas, &p256).unwrap(), expected);
+    // Include every key and digest relation with nonzero coefficients. The
+    // scalar comparison above independently checks all 49 local registrations;
+    // dedicated join controls check the key/digest algebra and owner mapping.
+    let key_alphas: [E; main_key_joins::BLOCKS_V1] =
+        core::array::from_fn(|i| E::canonical([i as u64 + 2, 3, 5, 7]).unwrap());
+    let key_openings: [E; main_key_joins::OPENINGS_V1] =
+        core::array::from_fn(|i| E::canonical([i as u64 + 11, 13, 17, 19]).unwrap());
+    let key_contribution = key_plan
+        .evaluate_v1(&groups, point, &key_openings, &key_alphas)
+        .unwrap();
+    assert_ne!(key_contribution, E::ZERO);
+    let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout).unwrap();
+    let sha_union_alphas: [E; main_sha_union::UNION_QUOTIENTS_V1] =
+        core::array::from_fn(|i| E::canonical([i as u64 + 37, 41, 43, 47]).unwrap());
+    let sha_union_contribution = sha_union_plan
+        .evaluate_v1(&groups, point, &sha_union_alphas)
+        .unwrap();
+    assert_ne!(sha_union_contribution, E::ZERO);
+    let complete_expected = expected.add(key_contribution).add(sha_union_contribution);
     // Nonzero higher chunks exercise reconstruction, rather than accepting a
     // sole constant composition opening.
     let power = point.pow(
@@ -463,7 +489,7 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         .unwrap()
         .stride_v1() as u128,
     );
-    let mut constant = expected;
+    let mut constant = complete_expected;
     for chunk in 1..COMPOSITION_DEGREE_CHUNKS {
         let value = E::canonical([chunk as u64 + 17, 19, 23, 29]).unwrap();
         deep.composition_values[0][chunk] = value.coefficients().map(|coefficient| coefficient.0);
@@ -476,6 +502,11 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         point,
         &alphas,
         &[E::ONE; 192],
+        &key_plan,
+        &key_alphas,
+        &key_openings,
+        &sha_union_plan,
+        &sha_union_alphas,
         &p256,
         &projection,
         &io,
@@ -505,8 +536,89 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         );
         let changed = evaluate(&alphas, &p256).unwrap();
         assert_eq!(changed, expected.add(delta), "registration {index}");
-        assert!(verify_composition_v1(&shared, &deep, point, changed).is_err());
+        assert!(
+            verify_composition_v1(
+                &shared,
+                &deep,
+                point,
+                changed.add(key_contribution).add(sha_union_contribution)
+            )
+            .is_err()
+        );
         alphas[index][0][column] = alphas[index][0][column].sub(E::ONE);
+    }
+    // Every join alpha and all 31 supplemental values affect the same complete
+    // composition. Keep the independently checked local part fixed here.
+    for block in 0..main_key_joins::BLOCKS_V1 {
+        let mut changed = key_alphas;
+        changed[block] = changed[block].add(E::ONE);
+        let value = key_plan
+            .evaluate_v1(&groups, point, &key_openings, &changed)
+            .unwrap();
+        assert_ne!(value, key_contribution, "join block {block}");
+        assert!(
+            verify_composition_v1(
+                &shared,
+                &deep,
+                point,
+                expected.add(value).add(sha_union_contribution)
+            )
+            .is_err()
+        );
+    }
+    for opening in 0..main_key_joins::OPENINGS_V1 {
+        let mut changed = key_openings;
+        changed[opening] = changed[opening].add(E::ONE);
+        let value = key_plan
+            .evaluate_v1(&groups, point, &changed, &key_alphas)
+            .unwrap();
+        assert_ne!(value, key_contribution, "join opening {opening}");
+        assert!(
+            verify_composition_v1(
+                &shared,
+                &deep,
+                point,
+                expected.add(value).add(sha_union_contribution)
+            )
+            .is_err()
+        );
+    }
+    for equation in 0..main_sha_union::UNION_QUOTIENTS_V1 {
+        let mut changed = sha_union_alphas;
+        changed[equation] = changed[equation].add(E::ONE);
+        let value = sha_union_plan
+            .evaluate_v1(&groups, point, &changed)
+            .unwrap();
+        assert_ne!(value, sha_union_contribution, "SHA union alpha {equation}");
+        assert!(
+            verify_composition_v1(
+                &shared,
+                &deep,
+                point,
+                expected.add(key_contribution).add(value)
+            )
+            .is_err()
+        );
+    }
+    for (group, column) in sha_union_plan.source_coordinates_for_test_v1() {
+        let mut changed = groups.clone();
+        changed[group].aux_current[column] = changed[group].aux_current[column].add(E::ONE);
+        let value = sha_union_plan
+            .evaluate_v1(&changed, point, &sha_union_alphas)
+            .unwrap();
+        assert_ne!(
+            value, sha_union_contribution,
+            "SHA union source {group}/{column}"
+        );
+        assert!(
+            verify_composition_v1(
+                &shared,
+                &deep,
+                point,
+                expected.add(key_contribution).add(value)
+            )
+            .is_err()
+        );
     }
     // Private terminal mutations are exercised by the closed link-plan tests;
     // the verifier context no longer has private scalar claims to mutate.
@@ -533,6 +645,11 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
             point,
             &alphas,
             &[E::ONE; 192],
+            &key_plan,
+            &key_alphas,
+            &key_openings,
+            &sha_union_plan,
+            &sha_union_alphas,
             &p256,
             &projection,
             &io,

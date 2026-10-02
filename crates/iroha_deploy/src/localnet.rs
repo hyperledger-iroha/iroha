@@ -1,6 +1,7 @@
 //! Canonical native localnet generation shared by desktop and CLI frontends.
 
 mod custody;
+pub mod service_authorities;
 use crate::genesis::{
     ConsensusPolicy, generate_default,
     profile::{
@@ -96,6 +97,7 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(test)]
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use rand::{TryRngCore as _, rngs::OsRng};
+pub use service_authorities::LocalnetServiceProfile;
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -107,10 +109,14 @@ use std::{
 use zeroize::{Zeroize as _, Zeroizing};
 
 mod private_root;
+pub(crate) use custody::sync_private_tree;
 pub use private_root::{PrivateRootSpec, prepare_private_root};
+pub(crate) use private_root::{prepare_private_root_at, verify_retained as verify_private_root};
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
+    /// Closed service-authority preparation; token services remain disabled.
+    pub service_profile: LocalnetServiceProfile,
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
     /// Optional localnet performance profile (throughput presets).
@@ -384,8 +390,6 @@ const MINT_FINALITY_SEED_DIRECTORY: &str = "mint-finality-signers";
 const LOCALNET_MAX_TOTAL_CONNECTIONS: usize = MAX_VALIDATORS_PER_HEIGHT - 1 + 2;
 /// Capacity for the inbound P2P subscriber queue in localnet configs.
 const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
-/// Delay outbound P2P dials at startup to avoid connection refused spam in localnet.
-const LOCALNET_CONNECT_STARTUP_DELAY_MS: u64 = 2_000;
 /// Default consensus ingress rate cap (msgs/sec) for localnet.
 const LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC: u32 = 600;
 /// Default consensus ingress burst cap (msgs) for localnet.
@@ -1124,12 +1128,26 @@ pub fn generate_localnet_with_chain<T: Write>(
     chain_id: Option<&str>,
     configured_discriminant: Option<u16>,
 ) -> Result<()> {
-    generate_localnet_runtime(opts, writer, chain_id, configured_discriminant, false)
+    generate_localnet_runtime(opts, writer, chain_id, configured_discriminant, false, None)
 }
 
 /// Materialize a native managed localnet without shell launchers or inherited seed descriptors.
 pub fn generate_managed_localnet(opts: &LocalnetOptions) -> Result<()> {
-    generate_localnet_runtime(opts, &mut BufWriter::new(std::io::sink()), None, None, true)
+    generate_managed_localnet_at(opts, None)
+}
+
+fn generate_managed_localnet_at(
+    opts: &LocalnetOptions,
+    publication_root: Option<&Path>,
+) -> Result<()> {
+    generate_localnet_runtime(
+        opts,
+        &mut BufWriter::new(std::io::sink()),
+        None,
+        None,
+        true,
+        publication_root,
+    )
 }
 
 fn generate_localnet_runtime<T: Write>(
@@ -1138,12 +1156,14 @@ fn generate_localnet_runtime<T: Write>(
     chain_id: Option<&str>,
     configured_discriminant: Option<u16>,
     managed: bool,
+    publication_root: Option<&Path>,
 ) -> Result<()> {
     init_instruction_registry();
     let chain_id = resolve_localnet_chain_id(chain_id)?;
     let chain_discriminant =
         resolve_localnet_chain_discriminant(&chain_id, configured_discriminant)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
+    service_authorities::validate_selection(opts, managed, taira)?;
     let hosts = validate_localnet_options(opts, taira)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     if taira
@@ -1193,6 +1213,14 @@ fn generate_localnet_runtime<T: Write>(
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
     let runtime_bundle = write_localnet_runtime_bundle(
         &out_dir,
+        &client_identity,
+        &http_operator_identity,
+        &onboarding_identity,
+    )?;
+    let service_authorities = service_authorities::generate(
+        opts.service_profile,
+        &out_dir,
+        seed_bytes,
         &client_identity,
         &http_operator_identity,
         &onboarding_identity,
@@ -1248,13 +1276,24 @@ fn generate_localnet_runtime<T: Write>(
     }
     genesis = append_localnet_service_accounts(
         genesis,
-        &[&client_identity.account_id, &onboarding_identity.account_id],
+        &[
+            Account::new(client_identity.account_id.clone()),
+            Account::new(onboarding_identity.account_id.clone()),
+        ],
     )?;
-    genesis = append_localnet_alias_fee_bootstrap(
+    genesis = append_localnet_service_fee_bootstrap(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
         &onboarding_identity.account_id,
+    )?;
+    if let Some(authorities) = service_authorities.as_ref() {
+        genesis = authorities.append_genesis(genesis, &client_identity.account_id)?;
+    }
+    genesis = service_authorities::append_profile(
+        genesis,
+        opts.service_profile,
+        &client_identity.account_id,
     )?;
     genesis = apply_parameter_overrides(
         genesis,
@@ -1373,6 +1412,12 @@ fn generate_localnet_runtime<T: Write>(
         signature_batch_max_ed25519,
         queue_capacity,
     );
+    let bootstrap_config = match service_authorities.as_ref() {
+        Some(authorities) => {
+            authorities.seed_provider_owner(&bootstrap_config, chain_discriminant)?
+        }
+        None => bootstrap_config,
+    };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
@@ -1406,6 +1451,9 @@ fn generate_localnet_runtime<T: Write>(
         &genesis_signed_path,
         genesis_expected_hash,
     )?;
+    if let Some(authorities) = service_authorities.as_ref() {
+        authorities.publish(&out_dir, genesis_expected_hash, &client_identity.account_id)?;
+    }
     for (idx, peer) in peers.iter().enumerate() {
         let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
         custody::ensure_directory(&paths.kura)
@@ -1425,42 +1473,61 @@ fn generate_localnet_runtime<T: Write>(
                 paths.da_store.display()
             )
         })?;
-        let rendered = render_peer_config(
-            peer,
-            &trusted,
-            &peer_telemetry_urls,
-            &genesis_public_key,
-            &genesis_signed_path,
-            LocalnetGenesisIdentitySource::PublishedFile,
-            &bls_entries,
-            &paths,
-            Some(rans_tables_path.as_path()),
-            &chain_id,
-            chain_discriminant,
-            (&hosts.bind, &hosts.public),
-            RenderPeerFeatures {
-                mcp_enabled,
-                npos_bootstrap,
-                taira,
-                operator_account: &operator_account_literal,
-                operator_public_key: &http_operator_identity.public_key,
-                onboarding_account: &onboarding_account_literal,
-                runtime: Some(&runtime_bundle),
-            },
-            opts.sora_profile,
-            lane_manifest_directory.as_deref(),
-            dataspace_fault_tolerance,
-            &gas_account_id,
-            tx_gossip_overrides,
-            logger_filter,
-            signature_batch_max_ed25519,
-            queue_capacity,
-        );
-        let rendered = if managed {
-            managed_peer_config(&rendered, &managed_node_dir(&out_dir, idx))?
-        } else {
-            rendered
+        let render = |render_root: &Path| -> Result<Zeroizing<String>> {
+            let render_paths = LocalnetPeerStoragePaths::new(render_root, idx);
+            let render_runtime = runtime_bundle.at_root(render_root);
+            let render_manifests = lane_manifest_directory
+                .as_ref()
+                .map(|directory| {
+                    directory
+                        .strip_prefix(&out_dir)
+                        .map(|relative| render_root.join(relative))
+                })
+                .transpose()?;
+            let rendered = render_peer_config(
+                peer,
+                &trusted,
+                &peer_telemetry_urls,
+                &genesis_public_key,
+                &render_root.join("genesis.signed.nrt"),
+                LocalnetGenesisIdentitySource::PublishedFile,
+                &bls_entries,
+                &render_paths,
+                Some(&render_root.join(LOCALNET_RANS_TABLE_RELATIVE_PATH)),
+                &chain_id,
+                chain_discriminant,
+                (&hosts.bind, &hosts.public),
+                RenderPeerFeatures {
+                    mcp_enabled,
+                    npos_bootstrap,
+                    taira,
+                    operator_account: &operator_account_literal,
+                    operator_public_key: &http_operator_identity.public_key,
+                    onboarding_account: &onboarding_account_literal,
+                    runtime: Some(&render_runtime),
+                },
+                opts.sora_profile,
+                render_manifests.as_deref(),
+                dataspace_fault_tolerance,
+                &gas_account_id,
+                tx_gossip_overrides,
+                logger_filter,
+                signature_batch_max_ed25519,
+                queue_capacity,
+            );
+            let rendered = match service_authorities.as_ref() {
+                Some(authorities) => {
+                    authorities.seed_provider_owner(&rendered, chain_discriminant)?
+                }
+                None => rendered,
+            };
+            if managed {
+                managed_peer_config(&rendered, &managed_node_dir(render_root, idx))
+            } else {
+                Ok(rendered)
+            }
         };
+        let rendered = render(&out_dir)?;
         let path = out_dir.join(format!("peer{idx}.toml"));
         let parsed_config =
             parse_localnet_peer_config(&rendered, Some(&path)).wrap_err_with(|| {
@@ -1475,6 +1542,10 @@ fn generate_localnet_runtime<T: Write>(
                 genesis_expected_hash
             ));
         }
+        let rendered = match publication_root {
+            Some(root) => render(root)?,
+            None => rendered,
+        };
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
     }
@@ -2858,13 +2929,6 @@ fn render_peer_config(
         ),
     );
     network.insert(
-        "connect_startup_delay_ms".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_CONNECT_STARTUP_DELAY_MS)
-                .expect("LOCALNET_CONNECT_STARTUP_DELAY_MS fits i64"),
-        ),
-    );
-    network.insert(
         "consensus_ingress_rate_per_sec".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_RATE_PER_SEC)),
     );
@@ -3611,7 +3675,7 @@ fn append_localnet_contract_permissions(
 }
 fn append_localnet_service_accounts(
     genesis: RawGenesisTransaction,
-    service_accounts: &[&AccountId],
+    service_accounts: &[iroha_data_model::account::NewAccount],
 ) -> Result<RawGenesisTransaction> {
     let mut registered = genesis
         .instructions()
@@ -3626,15 +3690,14 @@ fn append_localnet_service_accounts(
     // Generated account/asset custody leaves its global phase open. Service
     // registration and its following fee/contract grants share that authority.
     let mut builder = genesis.into_builder();
-    for account_id in service_accounts {
-        if registered.insert((*account_id).clone()) {
-            builder =
-                builder.append_instruction(Register::account(Account::new((*account_id).clone())));
+    for account in service_accounts {
+        if registered.insert(account.id.clone()) {
+            builder = builder.append_instruction(Register::account(account.clone()));
         }
     }
     builder.build_raw()
 }
-fn append_localnet_alias_fee_bootstrap(
+fn append_localnet_service_fee_bootstrap(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
     operator_account_id: &AccountId,
@@ -3682,6 +3745,20 @@ fn append_localnet_alias_fee_bootstrap(
     if onboarding_account_id != genesis_account_id && onboarding_account_id != operator_account_id {
         builder = builder.append_instruction(Mint::asset_quantity(
             LOCALNET_ALIAS_SETUP_PAYER_BALANCE,
+            AssetId::new(fee_asset_id.clone(), onboarding_account_id.clone()),
+        ));
+    }
+    // Both Permissioned and NPoS public localnets expose this exact operator as
+    // their funded faucet authority. Allocate the service balances before the
+    // consensus-specific bootstrap so a default Permissioned network can serve
+    // its advertised claim without granting runtime minting permission.
+    builder = builder.append_instruction(Mint::asset_quantity(
+        LOCALNET_FAUCET_AUTHORITY_BALANCE,
+        AssetId::new(fee_asset_id.clone(), operator_account_id.clone()),
+    ));
+    if onboarding_account_id != operator_account_id {
+        builder = builder.append_instruction(Mint::asset_quantity(
+            LOCALNET_FAUCET_AUTHORITY_BALANCE,
             AssetId::new(fee_asset_id, onboarding_account_id.clone()),
         ));
     }
@@ -4051,16 +4128,6 @@ fn append_localnet_npos_bootstrap(
             onboarding_account_id.clone(),
         )));
         registrations.accounts.insert(onboarding_account_id.clone());
-    }
-    builder = builder.append_instruction(Mint::asset_quantity(
-        LOCALNET_FAUCET_AUTHORITY_BALANCE,
-        AssetId::new(fee_asset_id.clone(), client_account_id.clone()),
-    ));
-    if onboarding_account_id != client_account_id {
-        builder = builder.append_instruction(Mint::asset_quantity(
-            LOCALNET_FAUCET_AUTHORITY_BALANCE,
-            AssetId::new(fee_asset_id.clone(), onboarding_account_id.clone()),
-        ));
     }
     let fee_sponsor_program_id = localnet_fee_sponsor_program_id(genesis_account_id);
     let fee_sponsor_revision =
@@ -6070,6 +6137,18 @@ struct LocalnetRuntimeBundle {
     onboarding_token_file: PathBuf,
     onboarding_token_hash: [u8; 32],
 }
+impl LocalnetRuntimeBundle {
+    fn at_root(&self, root: &Path) -> Self {
+        let runtime = root.join(LOCALNET_RUNTIME_DIRECTORY);
+        Self {
+            ledger_signer_key: runtime.join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
+            operator_signer_key: runtime.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
+            onboarding_signer_key: runtime.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
+            onboarding_token_file: runtime.join(LOCALNET_ONBOARDING_TOKEN_FILE),
+            onboarding_token_hash: self.onboarding_token_hash,
+        }
+    }
+}
 fn localnet_ephemeral_identity(
     base_seed: Option<&[u8]>,
     identity_label: &[u8],
@@ -6240,6 +6319,38 @@ mod managed_tests {
         for (index, peer) in prepared.peers.iter().enumerate() {
             let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
             let table: toml::Table = std::str::from_utf8(&bytes).unwrap().parse().unwrap();
+            let config = parse_localnet_peer_config(
+                std::str::from_utf8(&bytes).unwrap(),
+                Some(&peer.config_path),
+            )
+            .unwrap();
+            assert_eq!(
+                config.network.connect_startup_delay,
+                std::time::Duration::ZERO
+            );
+            assert_eq!(
+                (config.network.dial_timeout, config.network.preauth_timeout),
+                (
+                    iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                    iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
+                )
+            );
+            let pow = &config.network.soranet_handshake.pow;
+            let expected_pow = actual::SoranetPow::default_const();
+            assert_eq!(
+                (
+                    pow.difficulty,
+                    pow.puzzle.memory_kib,
+                    pow.puzzle.time_cost,
+                    pow.puzzle.lanes,
+                ),
+                (
+                    expected_pow.difficulty,
+                    expected_pow.puzzle.memory_kib,
+                    expected_pow.puzzle.time_cost,
+                    expected_pow.puzzle.lanes,
+                )
+            );
             let node = managed_node_dir(&root, index);
             assert_eq!(table["data_dir"].as_str(), node.to_str());
             assert!(table["sumeragi"].get("mint_finality_seed_fd").is_none());
@@ -6544,22 +6655,42 @@ pub fn prepare_localnet(
     directory: &Path,
     ports: &crate::managed::LocalnetPorts,
 ) -> crate::managed::Result<crate::managed::PreparedLocalnet> {
+    prepare_localnet_at(
+        name,
+        directory,
+        ports,
+        LocalnetServiceProfile::Standard,
+        None,
+    )
+}
+
+pub(crate) fn prepare_localnet_at(
+    name: &str,
+    directory: &Path,
+    ports: &crate::managed::LocalnetPorts,
+    service_profile: LocalnetServiceProfile,
+    publication_root: Option<&Path>,
+) -> crate::managed::Result<crate::managed::PreparedLocalnet> {
     use crate::managed::{Error, ManagedContext, ManagedPeer, PreparedLocalnet};
-    generate_managed_localnet(&LocalnetOptions {
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).expect("four is nonzero"),
-        seed: None,
-        bind_host: "127.0.0.1".into(),
-        public_host: "127.0.0.1".into(),
-        base_api_port: ports.base_api,
-        base_p2p_port: ports.base_p2p,
-        out_dir: directory.to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    })
+    generate_managed_localnet_at(
+        &LocalnetOptions {
+            service_profile,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("four is nonzero"),
+            seed: None,
+            bind_host: "127.0.0.1".into(),
+            public_host: "127.0.0.1".into(),
+            base_api_port: ports.base_api,
+            base_p2p_port: ports.base_p2p,
+            out_dir: directory.to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+        },
+        publication_root,
+    )
     .map_err(|error| Error::Invalid(format!("localnet preparation failed: {error}")))?;
     let directory = directory.canonicalize()?;
     let client_config = directory.join("client.toml");
@@ -6568,24 +6699,29 @@ pub fn prepare_localnet(
         iroha::config::Config::load_bytes_with_musubi_publication(&client_config, &bytes)
             .map_err(|_| Error::Invalid("generated client configuration is invalid".into()))?;
     let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+    let published = publication_root.unwrap_or(&directory);
     let context = ManagedContext {
         name: name.into(),
         chain_id: config.chain.to_string(),
         network_id: config.network_id.to_string(),
         account_id: config.account.to_string(),
         torii_url: config.torii_api_url.to_string(),
-        client_config,
+        client_config: published.join("client.toml"),
         dataspace_alias: "universal".into(),
         dataspace_id: 0,
     };
     let peers = (0..4)
         .map(|index| ManagedPeer {
-            config_path: directory.join(format!("peer{index}.toml")),
+            config_path: published.join(format!("peer{index}.toml")),
             torii_url: format!("http://127.0.0.1:{}/", ports.base_api + index),
             log_name: format!("peer{index}.log"),
         })
         .collect();
-    Ok(PreparedLocalnet { context, peers })
+    Ok(PreparedLocalnet {
+        context,
+        peers,
+        service_profile,
+    })
 }
 
 impl crate::managed::PreparedLocalnet {

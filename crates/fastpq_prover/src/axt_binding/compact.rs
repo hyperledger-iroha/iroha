@@ -128,9 +128,7 @@ pub(super) fn prove(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Resu
     .map_err(|error| match error {
         ProvingError::Prove(error) => error,
         ProvingError::Verify(error) => verification_error(error),
-        ProvingError::Busy => Error::InvalidAxtBinding {
-            details: "AXT producer is busy".into(),
-        },
+        ProvingError::Busy => Error::ProducerBusy,
     })
 }
 

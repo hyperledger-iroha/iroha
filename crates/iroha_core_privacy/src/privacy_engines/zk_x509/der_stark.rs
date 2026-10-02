@@ -543,6 +543,7 @@ pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
 /// These values are absorbed after auxiliary roots and before composition challenges. The final-row
 /// identities bind them to the committed DER accumulators; byte-memory and RFC 5280 adapters
 /// consume them in the same verifier-fixed role order.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(test)]
 pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
@@ -4208,6 +4209,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAir
 }
 /// Complete standalone DER relation, retaining its own explicit public statement.
 /// MAIN uses the local relation and private joined endpoint quotients instead.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
@@ -4250,7 +4252,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV
 }
 /// Allocate and evaluate the complete strict-DER constraint vector.
 ///
-/// Streaming composition builders should use [`evaluate_zk_x509_der_stark_residues_into_v1`] to
+/// Streaming composition builders should use [`evaluate_zk_x509_der_stark_local_residues_into_v1`] to
 /// reuse one bounded scratch vector across every common-domain row.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirFieldV1>(
@@ -4278,6 +4280,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirField
     Ok(residues)
 }
 /// Complete standalone DER constraints including its explicit public endpoints.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(

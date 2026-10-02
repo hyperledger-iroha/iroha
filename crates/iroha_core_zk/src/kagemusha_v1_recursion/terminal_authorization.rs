@@ -1566,7 +1566,6 @@ pub(crate) fn kagemusha_candidate_envelope_digest_v1(
 /// returned digest bytes remain tied to that queued SHA relation; the consuming circuit must
 /// authenticate its complete SHA queue before treating the digest as a monetary authority.
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
 pub(crate) fn constrain_candidate_envelope_digest_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

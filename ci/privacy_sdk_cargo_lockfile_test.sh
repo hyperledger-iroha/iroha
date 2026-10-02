@@ -1715,6 +1715,14 @@ assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+# Stock JavaScript Cargo consumes the sealed root; the other privacy corridors
+# retain the independent external snapshot of that exact graph.
+grep -Fxq \
+  "IROHA_JS_CARGO_LOCKFILE_PATH=${PROVISION_REPOSITORY}/Cargo.lock" \
+  "${PROVISION_GITHUB_ENV}"
+grep -Fxq \
+  "IROHA_PRIVACY_CARGO_LOCKFILE_PATH=${PROVISION_CORRIDOR}/lock/Cargo.lock" \
+  "${PROVISION_GITHUB_ENV}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH=' "${PROVISION_GITHUB_ENV}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL=' "${PROVISION_GITHUB_ENV}"
 grep -Fxq \
@@ -2079,7 +2087,7 @@ run_python_guard_for_root() {
   fi
   env \
     IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${selected_lock}" \
-    IROHA_JS_CARGO_LOCKFILE_PATH="${selected_lock}" \
+    IROHA_JS_CARGO_LOCKFILE_PATH="${root}/Cargo.lock" \
     IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH="${selected_lock}" \
     IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL="${selected_lock_seal}" \
     IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="${workspace_state}" \
@@ -4585,7 +4593,7 @@ run_artifact_set_negative_control symlink
 grep -Fq 'source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq '${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Eq '^(FROZEN|TRACKED_ROOT)_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
@@ -4927,7 +4935,7 @@ private = {
     "privacy-sdk-guard": ("privacy SDK", "Python SDK Cargo", "ci/check_privacy_sdk_guard.sh", "privacy-python", 5, False),
 }
 artifact = {
-    "privacy_javascript_sdk_tests": ("Prime privacy N-API dependencies from the frozen lock", "ci/check_privacy_js_sdk.sh"),
+    "privacy_javascript_sdk_tests": ("Prime privacy N-API dependencies from the authenticated root lock", "ci/check_privacy_js_sdk.sh"),
     "privacy_swift_sdk_parse": ("Install Apple Rust targets and prime frozen dependencies", "ci/check_privacy_swift_sdk.sh"),
 }
 def job_match(source: str, name: str) -> re.Match[str]:

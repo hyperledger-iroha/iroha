@@ -127,7 +127,7 @@ mod account_capabilities_tests {
     }
 }
 
-#[cfg(all(test, feature = "app_api"))]
+#[cfg(test)]
 mod universal_kagemusha_readiness_tests {
     use super::*;
     use axum::{
@@ -220,14 +220,11 @@ mod universal_kagemusha_readiness_tests {
         assert_eq!(kagemusha_redeem_body_limit(1024), 1024);
     }
     #[test]
-    fn enabled_kagemusha_commands_require_maximum_top_up_ingress_capacity() {
+    fn kagemusha_commands_require_maximum_top_up_ingress_capacity() {
         let floor = iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1;
-        assert!(kagemusha_command_ingress_capacity_is_valid(false, 1));
-        assert!(!kagemusha_command_ingress_capacity_is_valid(
-            true,
-            floor - 1
-        ));
-        assert!(kagemusha_command_ingress_capacity_is_valid(true, floor));
+        assert!(!kagemusha_command_ingress_capacity_is_valid(1));
+        assert!(!kagemusha_command_ingress_capacity_is_valid(floor - 1));
+        assert!(kagemusha_command_ingress_capacity_is_valid(floor));
     }
     #[test]
     fn kagemusha_command_memory_pool_admits_each_maximum_working_set() {
@@ -254,75 +251,9 @@ mod universal_kagemusha_readiness_tests {
         }
     }
     #[tokio::test]
-    async fn disabled_kagemusha_commands_reject_before_body_or_resource_admission() {
+    async fn default_kagemusha_commands_admit_with_resource_leases_before_body_polling() {
         let mut app = super::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique KAGEMUSHA admission app state");
-        assert!(state.kagemusha_commands.is_none());
-        state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
-        let memory_capacity = state.kagemusha_command_memory_inflight.capacity_bytes();
-
-        let body_guard = Arc::clone(&app.proof_body_inflight)
-            .try_acquire_owned()
-            .expect("occupy the KAGEMUSHA body admission permit");
-        let memory_guard = app
-            .kagemusha_command_memory_inflight
-            .try_acquire_parts([memory_capacity, 0])
-            .expect("occupy the KAGEMUSHA command memory pool");
-        let router = Router::new()
-            .route(
-                route_catalog::kagemusha::TOP_UP.path(),
-                axum::routing::post(|| async { StatusCode::NO_CONTENT }),
-            )
-            .layer(axum::middleware::from_fn_with_state(
-                Arc::clone(&app),
-                enforce_kagemusha_command_prebody_admission,
-            ));
-        let body = Body::from_stream(futures::stream::poll_fn(
-            |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
-                panic!("disabled KAGEMUSHA command admission polled the request body")
-            },
-        ));
-        let mut request = Request::builder()
-            .method(axum::http::Method::POST)
-            .uri(route_catalog::kagemusha::TOP_UP.path())
-            .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
-            .header(header::CONTENT_LENGTH, "1")
-            .header("idempotency-key", "00".repeat(32))
-            .body(body)
-            .expect("disabled KAGEMUSHA command request");
-        request
-            .extensions_mut()
-            .insert(MatchedRouteMetadata::from_descriptor(
-                route_catalog::kagemusha::TOP_UP,
-            ));
-
-        let response = router
-            .oneshot(request)
-            .await
-            .expect("disabled KAGEMUSHA command response");
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            response.headers().get("x-iroha-reject-code"),
-            Some(&axum::http::HeaderValue::from_static(
-                "kagemusha_service_unavailable"
-            ))
-        );
-        assert_eq!(app.proof_body_inflight.available_permits(), 0);
-        assert_eq!(app.kagemusha_command_memory_inflight.available_bytes(), 0);
-
-        drop(memory_guard);
-        drop(body_guard);
-        assert_eq!(app.proof_body_inflight.available_permits(), 1);
-        assert_eq!(
-            app.kagemusha_command_memory_inflight.available_bytes(),
-            memory_capacity
-        );
-    }
-    #[tokio::test]
-    async fn kagemusha_command_resource_leases_precede_body_polling_and_cover_handler_work() {
-        let mut app = super::mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique KAGEMUSHA admission app state");
-        state.kagemusha_commands = Some(configured_kagemusha_command_runtime());
         state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         state.proof_limits.body_read_timeout = Duration::from_secs(1);
         let memory_capacity = state.kagemusha_command_memory_inflight.capacity_bytes();

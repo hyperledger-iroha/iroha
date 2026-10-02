@@ -130,7 +130,7 @@ fn key_output_local_relation_covers_both_depths_all_slots_and_fp4_lift() {
                     &all[begin..begin + KEY_OUTPUT_RESIDUES_V1],
                     &[F::ZERO; KEY_OUTPUT_RESIDUES_V1]
                 );
-                assert_eq!(all.len(), 1_702);
+                assert_eq!(all.len(), 1_618);
             }
         }
         assert_eq!(live, if cert2 == 0 { 260 } else { 325 });
@@ -324,7 +324,7 @@ fn key_output_arbitrary_selectors_and_complete_degree_inventory_are_polynomial()
             ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1,
             ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1
         ),
-        (285, 280, 102, 1702, 4)
+        (285, 280, 102, 1618, 4)
     );
 }
 

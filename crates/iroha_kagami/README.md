@@ -48,6 +48,21 @@ store. `down` retains the ledger; `localnet reset local` deliberately retires it
 default localnet when no context has been selected. Use `context list`,
 `context show`, or `context use NAME` to inspect or select retained environments.
 
+Private dataspaces use an independently pinned network profile installed with the
+native bundle. `kagami dataspace networks` lists the available names. With a
+qualified parent profile installed, the command surface is:
+
+```bash
+kagami dataspace up privateapp --network taira
+kagami dataspace status
+kagami contract deploy hello.ko
+```
+
+This retains four owner-private local validators, their original owner identity,
+and exact parent-operation journals. A timeout leaves that work available for
+status and retry. Official Taira profile publication and combined runtime
+qualification remain tracked acceptance gates; the CLI invents no release key.
+
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.
 

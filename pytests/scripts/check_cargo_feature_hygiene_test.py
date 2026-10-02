@@ -105,6 +105,93 @@ def test_production_prover_keeps_exact_shipping_context_and_rejects_test_forward
     )
 
 
+def test_ordinary_native_keeps_exact_shipping_prover_features() -> None:
+    """Native custody is contextual shipping, with no inherited fixture defaults."""
+
+    package = "iroha"
+    feature = "kagemusha-ordinary-native"
+    expected = (
+        "dep:iroha_core_zk",
+        "iroha_core_zk/proofs-halo2",
+        "iroha_core_zk/kagemusha-production-prover",
+    )
+    document = _guarded_document(package)
+    assert _guarded_errors(package, document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package][feature] == expected
+    assert feature in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
+    assert feature not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
+    assert document["dependencies"]["iroha_core_zk"]["default-features"] is False
+    for forwarders in (
+        [],
+        list(expected[:-1]),
+        [*expected, "iroha_core_zk/test-utils"],
+        [*expected, "iroha_core_zk/kagemusha-real-proof-harness"],
+    ):
+        changed = copy.deepcopy(document)
+        changed["features"][feature] = forwarders
+        assert any(feature in error for error in _guarded_errors(package, changed))
+    changed = copy.deepcopy(document)
+    changed["features"]["default"].append(feature)
+    assert any(
+        f"contextual shipping feature `{feature}` is reachable from local" in error
+        for error in _guarded_errors(package, changed)
+    )
+
+
+def test_ordinary_native_inventory_tool_is_explicit_and_keeps_required_custody() -> None:
+    """Shipping custody consumers do not enable the release assembly executable."""
+
+    document = _guarded_document("iroha")
+    assert _guarded_errors("iroha", document) == []
+    assert document["features"]["dev-tools"] == ["kagemusha-ordinary-native"]
+    assert "dev-tools" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["iroha"]
+    assert "dev-tools" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["iroha"]
+    assert "dev-tools" not in FEATURE_HYGIENE.local_default_feature_closure(
+        FEATURE_HYGIENE.cargo_visible_features(document)
+    )
+    target = next(
+        row for row in document["bin"]
+        if row["name"] == "iroha_ordinary_native_inventory_assemble"
+    )
+    assert target["required-features"] == ["dev-tools"]
+    for forwarders in ([], ["kagemusha-ordinary-native", "iroha_core_zk/test-utils"]):
+        changed = copy.deepcopy(document)
+        changed["features"]["dev-tools"] = forwarders
+        assert any("feature `dev-tools` must be" in error for error in _guarded_errors("iroha", changed))
+    changed = copy.deepcopy(document)
+    changed["features"]["default"].append("dev-tools")
+    assert any("explicit opt-in feature `dev-tools` is reachable" in error for error in _guarded_errors("iroha", changed))
+
+
+def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:
+    """Halo2-only callers avoid FASTPQ while STARK retains its exact shared field codec."""
+
+    package = "iroha_core_zk"
+    document = _guarded_document(package)
+    assert _guarded_errors(package, document) == []
+    assert document["dependencies"]["fastpq_prover"]["optional"] is True
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package]["zk-stark"] == ("dep:fastpq_prover",)
+    assert "fastpq_prover" not in FEATURE_HYGIENE.cargo_visible_features(document)
+    for mutation in ("remove", "unconditional"):
+        changed = copy.deepcopy(document)
+        if mutation == "remove":
+            del changed["dependencies"]["fastpq_prover"]
+        else:
+            changed["dependencies"]["fastpq_prover"]["optional"] = False
+        assert any(
+            "STARK field dependency `fastpq_prover` must be an optional normal dependency"
+            in error
+            for error in _guarded_errors(package, changed)
+        ), mutation
+    for members in ([], ["fastpq_prover"], ["fastpq_prover?/default"]):
+        changed = copy.deepcopy(document)
+        changed["features"]["zk-stark"] = members
+        assert any(
+            "feature `zk-stark` must be ['dep:fastpq_prover']" in error
+            for error in _guarded_errors(package, changed)
+        ), members
+
+
 def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
     document = copy.deepcopy(_guarded_document("iroha_core"))
     document["features"]["new-portable-production-capability"] = []

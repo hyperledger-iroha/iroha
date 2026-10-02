@@ -144,17 +144,49 @@ fn mandatory_reservation_counts_all_retained_obligations() {
 }
 
 #[test]
+fn native_reservation_is_committed_disjoint_and_checked_before_packing() {
+    let policy = profile(4);
+    assert_eq!(
+        policy.native_maintenance_reservation().unwrap(),
+        intrinsic().checked_repeat_entries(64).unwrap()
+    );
+    let mut missing = policy;
+    missing.max_native_maintenance_invocations = 0;
+    assert!(missing.native_maintenance_reservation().is_err());
+    assert!(missing.validate(output()).is_err());
+    let mut overflow = policy;
+    overflow.max_native_maintenance_invocations = u32::MAX;
+    assert!(overflow.native_maintenance_reservation().is_err());
+    assert!(overflow.maximum_network_inputs(output()).is_err());
+    let mut no_reservation = policy;
+    no_reservation.block = intrinsic()
+        .checked_repeat_entries(invocation_count(output(), 4).unwrap())
+        .unwrap()
+        .checked_add_entries(mandatory().reservation().unwrap())
+        .unwrap();
+    assert!(no_reservation.maximum_network_inputs(output()).is_err());
+    let mut json = norito::json::to_value(&policy).unwrap();
+    json.as_object_mut()
+        .unwrap()
+        .remove("max_native_maintenance_invocations");
+    assert!(norito::json::from_value::<FastpqSourcePolicyV1>(json).is_err());
+}
+
+#[test]
 fn complete_source_envelope_preserves_output_fanout_and_mandatory_pool() {
     let policy = profile(4);
-    // Four Network, ten possible Pipeline, three Time, five obligations.
-    assert_eq!(policy.block.max_executed_entries, 4 + 10 + 3 + 5);
-    assert_eq!(policy.block.max_transcripts, 17 * 3 + 5);
-    assert_eq!(policy.block.max_deltas, 17 * 7 + 5);
+    // Four Network, ten possible Pipeline, three Time, 64 native, five obligations.
+    assert_eq!(policy.block.max_executed_entries, 4 + 10 + 3 + 64 + 5);
+    assert_eq!(policy.block.max_transcripts, (17 + 64) * 3 + 5);
+    assert_eq!(policy.block.max_deltas, (17 + 64) * 7 + 5);
     assert_eq!(
         policy.block.max_input_transcript_bytes,
-        17 * 1_013 + 5 * 211
+        (17 + 64) * 1_013 + 5 * 211
     );
-    assert_eq!(policy.block.max_total_statement_bytes, 17 * 2_027 + 5 * 307);
+    assert_eq!(
+        policy.block.max_total_statement_bytes,
+        (17 + 64) * 2_027 + 5 * 307
+    );
     assert_eq!(policy.block.max_statement_bytes, 2_027);
     assert_eq!(policy.maximum_network_inputs(output()).unwrap(), 4);
     policy.validate(output()).unwrap();
@@ -184,6 +216,8 @@ fn pure_capacity_formula_matches_exhaustive_small_envelopes() {
                         .checked_repeat_entries(invocation_count(output, candidate).unwrap())
                         .unwrap()
                         .checked_add_entries(reserve)
+                        .unwrap()
+                        .checked_add_entries(policy.native_maintenance_reservation().unwrap())
                         .unwrap();
                     assert_eq!(required.fits_within(policy.block), candidate <= network);
                 }
@@ -264,7 +298,7 @@ fn canonical_profile_identity_changes_with_each_policy_dimension() {
         original
     );
     assert!(norito::decode_canonical::<FastpqSourceLimitsV1>(&frame).is_err());
-    for mutation in 0..7 {
+    for mutation in 0..8 {
         let mut changed = original;
         match mutation {
             0 => changed.block.max_executed_entries += 1,
@@ -274,6 +308,7 @@ fn canonical_profile_identity_changes_with_each_policy_dimension() {
             4 => changed.block.max_statement_bytes += 1,
             5 => changed.block.max_total_statement_bytes += 1,
             6 => changed.mandatory.max_retained_obligations -= 1,
+            7 => changed.max_native_maintenance_invocations -= 1,
             _ => unreachable!(),
         }
         assert_ne!(
@@ -324,17 +359,17 @@ fn measured_bounded_corpus_derives_a_finite_candidate_without_selecting_a_defaul
     };
     let output = ExecutionOutputPolicyV1::bootstrap();
     let candidate = FastpqSourcePolicyV1::from_sizing(output, entry, mandatory, 1).unwrap();
-    assert_eq!(candidate.block.max_executed_entries, 1_025 + 64);
-    assert_eq!(candidate.block.max_transcripts, 1_025 * 16 + 64);
-    assert_eq!(candidate.block.max_deltas, 1_025 * 16 + 64);
+    assert_eq!(candidate.block.max_executed_entries, 1_025 + 64 + 64);
+    assert_eq!(candidate.block.max_transcripts, (1_025 + 64) * 16 + 64);
+    assert_eq!(candidate.block.max_deltas, (1_025 + 64) * 16 + 64);
     assert_eq!(
         candidate.block.max_input_transcript_bytes,
-        1_025 * 670_864 + 64 * 159_609
+        (1_025 + 64) * 670_864 + 64 * 159_609
     );
     assert_eq!(candidate.block.max_statement_bytes, 272_175);
     assert_eq!(
         candidate.block.max_total_statement_bytes,
-        1_025 * 272_175 + 64 * 252_617
+        (1_025 + 64) * 272_175 + 64 * 252_617
     );
     assert_eq!(candidate.maximum_network_inputs(output).unwrap(), 1);
     // Reserving every potential invocation exposes the real scale. Source policy
@@ -358,8 +393,8 @@ fn bootstrap_matches_measured_runtime_corpus_and_checked_sizing() {
         .unwrap()
     );
     assert_eq!(policy.maximum_network_inputs(output).unwrap(), 11);
-    assert_eq!(policy.block.max_input_transcript_bytes, 501_314_448);
-    assert_eq!(policy.block.max_total_statement_bytes, 994_636_613);
+    assert_eq!(policy.block.max_input_transcript_bytes, 510_095_248);
+    assert_eq!(policy.block.max_total_statement_bytes, 1_012_055_813);
     // Original runtime paths are empty. A richer sixteen-occurrence input is
     // still charged in full and must not fit merely because archive paths exist.
     let with_full_paths = FastpqSourceLimitsV1 {
@@ -387,8 +422,11 @@ fn policy_display_retains_all_three_profile_components() {
     assert_eq!(
         policy.to_string(),
         format!(
-            "{:?},{:?},{:?}_FASTPQ_SOURCE",
-            policy.intrinsic, policy.block, policy.mandatory
+            "{:?},{:?},{},{:?}_FASTPQ_SOURCE",
+            policy.intrinsic,
+            policy.block,
+            policy.max_native_maintenance_invocations,
+            policy.mandatory
         )
     );
 }

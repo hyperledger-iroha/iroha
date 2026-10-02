@@ -416,7 +416,6 @@ run_mode() {
     --timeout "$LOCALNET_TIMEOUT"
     "${logger_args[@]}"
     --force
-    --skip-asset-register
     "${DEPLOY_ARGS[@]}"
   )
   if [[ ${#PROFILE_ARGS[@]} -gt 0 ]]; then

@@ -34,7 +34,7 @@ Singular requests identify the query by name and optionally include a payload:
     "type": "FindContractManifestByArtifactId",
     "payload": {
       "artifact_id": {
-        "dataspace_id": 0,
+        "dataspace_id": 18446744073709551615,
         "code_hash": "hash:BAF171AF0123F8A6C0BFAD9A4CA03A80C678DA21355E484320E2E5C667408D2F#0BB7"
       }
     }

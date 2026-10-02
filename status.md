@@ -14,14 +14,14 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Native private-file custody and release-signed checkpoint authentication have component coverage. | Desktop cutover, matching installed-binary startup/deployment/restart, independent private dataspace execution and parent admission, official checkpoint publication, native OS matrices and latency targets remain under qualification. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Unsigned macOS ARM64 installed-release diagnostics pass config-free local startup, all three deployment inputs and restart recovery, plus four-parent/four-private attachment, paid namespace provisioning, verified anchoring and bounded payload-isolation checks. | Cold registry dependencies, official Taira checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency targets remain under qualification. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Bounded bootstrap/startup, request-bound native finality and signed top-up boundaries have component implementations. | Durable hardware authority, recursive monetary proofs, reserve settlement, provisioning and physical-device evidence. |
+| KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Current-owner financial control, complete recursive monetary proofs, funded State transitions, settlement, recovery and physical-device evidence. |
 
 ## Immediate blockers
 
@@ -51,6 +51,17 @@ and production qualification remain open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
 
+Native stream-token gateway admission combines protected consensus quotas, leases and
+callback history with challenged readbacks, daemon software custody and a final serving
+publication fence. Broker-supplied gateway authority and the generic local token-reputation
+producer are retired. Native admissions own exact reputation append intents; certified current
+readbacks and committed terminal dispositions govern callback completion. The token issuer uses
+one bounded private receipt journal over shared Unix/Windows filesystem custody;
+native Windows execution and release qualification remain open. Combined candidate
+validation, native service closure and multi-replica recovery remain open. Component
+coverage does not qualify cold registry fetches, the complete 64 MiB fetch-process RSS
+bound, signed native releases or reference-host p95 latency.
+
 The private-settlement five-second proof-through-settlement target is unmet.
 Current-source repeated settlement, fault and leakage campaigns are unqualified;
 prior component timings and network observations do not qualify changed source.
@@ -58,23 +69,35 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
-All four validators return readiness HTTP 200, have three peers, and converged
-at height 3 after an ordinary signed transaction resolved to StateApplied.
-The public endpoint at `https://taira.sora.org` has verified TLS, and the
-same-revision basic doctor reports healthy public routes and curated MCP tools.
+Taira's four validators run the a2a98f02 daemon build with fresh keys and signed
+genesis. The genesis beacon ceremony resolved to StateApplied at height 5.
+All four completed sequential C2 restarts with their keys and ledger retained.
+Latest direct checks verified each active process, current selector and C2
+binary, with height 8, three peers and readiness HTTP 200. Public TLS,
+readiness and status are healthy at a2a98f02, height 8, three peers, twenty-one
+approved transactions, zero rejected transactions and an empty queue. The
+same-revision native basic doctor passed all fifteen checks with no failures.
 The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes deployment recovery and initializes fresh safety records
-before first startup. Deployment preparation, transfer and the routine updater
-accept an authenticated build-only candidate without a full regression gate.
-On-chain governance owns deployment policy; no fixed 24-hour fault test is a
-deployment prerequisite for testnet or production.
+Current source initializes fresh safety records before first startup and retires
+completed execution after successful replay before strict native archive
+attachment. Deployment preparation, transfer and the routine updater accept an
+authenticated build-only candidate without a full regression gate. On-chain
+governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
+for testnet or production. Release qualification remains open.
 
-Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
-completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
-use the approved deployment tooling. Retained incident records describe the
+Fresh-account funding applied at height 6; ordinary paid public pings applied
+at heights 7 and 8, with exactly one C2 ping submission. Native read-only
+funding resume now returns Applied with exact committed-transaction readback
+at height 6. The live endpoint objective is achieved; broader native release
+qualification and original public-reset coordinator completion remain separate.
+Mac outbound-port exhaustion was recovered, with the ephemeral-port setting
+and scoped SYN guard persisted. The temporary artifact server was stopped.
+Physical DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+Validators run in a Linux guest on MacStadium in Dublin; use the approved
+deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
+
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -86,11 +109,35 @@ require the explicitly approved OVH target.
 Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
 checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. The combined candidate still needs
-fresh compiler and focused-test validation, a merge-free workspace check, genuine
-private-terminal/quotient-mask profile regeneration, current native/SDK consumers
-and executable-metadata freshness. Full workspace tests, physical-device
-qualification and same-candidate release validation remain incomplete.
+These results qualify their recorded source. Privacy component coverage includes
+normal builds, authentic profile pins, ordinary controls, required-Metal
+coefficient parity and RFC key replay. Maximum X509 proofs pass verification and
+byte/RSS limits, but exceed the unchanged 300-second proving limit; observed
+virtual size also exceeds the literal 32 GiB limit on the recorded candidate.
+The retained-query optimization requires fresh native parity, proof verification
+and time/memory measurements. Detailed boundaries remain in the
+[ZK goals](specs/zk_first_release_goals.md).
+
+KAGEMUSHA component coverage includes journal recovery, issuer-key and
+enrollment-floor controls, expired-preparation custody, Guard-generation and
+reciprocal claim-carrier binding. The non-test real-proof frontend, strict privacy
+lint and complete ordinary suite remain under qualification. SDK native-custody
+and assembly tools have explicit feature/target owners; FASTPQ uses the existing
+STARK feature. Current dependency costs and the native proving context remain
+under review.
+
+Ordinary recursive credential generation is blocked by the Eq circuit requiring
+8,584 advice columns against the 1,024-column limit. The complete-circuit
+preflight and compact authenticated carrier layout still need fresh compiler,
+layout, parity and proof qualification.
+
+The combined candidate needs fresh compiler and focused-test validation, genuine
+fixture production, private-terminal/quotient-mask profile regeneration, current
+native/SDK consumers and executable-metadata freshness. Historical Core fixture
+failures and unfinished selections require fresh execution after their repairs.
+Full workspace tests, Kotlin/Swift consumers, four-validator and physical-device
+qualification, and same-candidate signed release validation remain incomplete.
+
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).

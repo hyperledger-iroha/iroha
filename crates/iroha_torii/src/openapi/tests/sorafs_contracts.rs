@@ -1111,3 +1111,37 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
         sequence_contracts! { value_strings(reasons) => contract_strings(inventory); }
     }
 }
+
+#[test]
+fn sorafs_account_storage_token_declares_exact_account_auth_and_explicit_policy() {
+    use iroha_torii_shared::route_catalog::{AuthenticationPolicy, RouteEffect};
+    let route = iroha_torii_shared::route_catalog::sorafs::STORAGE_ACCOUNT_TOKEN;
+    assert_eq!(
+        route.authentication(),
+        AuthenticationPolicy::CanonicalAccountSignature
+    );
+    assert_eq!(route.effect(), RouteEffect::Mutation);
+    assert!(route.requires_private_no_store());
+    let document = generate_spec();
+    let operation = openapi_operation(&document, "/v1/sorafs/storage/token/account", "post");
+    let mut expected = canonical_account_headers(false);
+    expected.insert(("X-SoraFS-Nonce".to_owned(), true));
+    expected.insert(("X-SoraFS-Client".to_owned(), true));
+    assert_eq!(
+        operation_header_requirements(operation)
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert!(
+        operation_header_requirements(operation).contains(&("X-SoraFS-Nonce".to_owned(), true))
+    );
+    assert!(
+        operation_header_requirements(operation).contains(&("X-SoraFS-Client".to_owned(), true))
+    );
+    let description = contract_text(
+        operation.get("description"),
+        "account storage-token description",
+    );
+    description_contracts! { Some(description) => &["registered_account_read", "current policy is rechecked", "canonical account"]; }
+}

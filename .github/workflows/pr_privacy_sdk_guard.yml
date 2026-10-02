@@ -561,8 +561,8 @@ jobs:
           [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
           cmp -s "$release_lock" Cargo.lock
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-      - name: Prime privacy N-API dependencies from the frozen lock
-        run: RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+      - name: Prime privacy N-API dependencies from the authenticated root lock
+        run: env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.93.1 cargo)" fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
       - name: Privacy JavaScript SDK tests through authenticated N-API ABI25

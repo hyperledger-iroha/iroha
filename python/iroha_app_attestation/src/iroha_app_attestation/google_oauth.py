@@ -26,7 +26,7 @@ from typing import Callable
 from .attestation import (AttestationRejected, children, der_one,
                           oid, positive_integer, primitive, require)
 from .play_integrity import PlayIntegrityPolicy, _NoRedirect, _unique
-from .openssl_private_rsa import private_rsa_operation
+from .openssl_private_rsa import acquire_crypto_originals, private_rsa_operation
 
 POLICY_SCHEMA = "iroha.kagemusha.play-integrity-verification-policy.v1"
 OAUTH_SCOPE = "https://www.googleapis.com/auth/playintegrity"
@@ -132,8 +132,10 @@ class GoogleServiceAccountTokenProvider:
     """Production OAuth source with FD custody and only the playintegrity scope.
 
     The caller owns the admitted public policy, credential descriptor, trusted
-    clock and reviewed OpenSSL executable. The provider duplicates the FD and
-    checks the held original before every use, including cached-token reuse.
+    clock and reviewed OpenSSL executable. Actual Root-owned loaded TLS/crypto
+    originals are held before duplicating the credential FD and rechecked before
+    every private use and cached-token reuse. This does not admit a Native runtime
+    policy or construct issuer authority.
     Use ``close`` at deployment shutdown. No credential path is accepted.
     """
     def __init__(self, *, public_policy_original: bytes, native_policy: PlayIntegrityPolicy,
@@ -145,7 +147,12 @@ class GoogleServiceAccountTokenProvider:
                 and type(credential_fd) is int and credential_fd >= 3
                 and callable(trusted_time_ms) and openssl_path.is_absolute()
                 and openssl_path.is_file(), "Google OAuth custody absent")
-        self._fd = os.dup(credential_fd)
+        # Code custody precedes even duplication/parsing of private credential
+        # bytes. It is a local original check, not Native release admission.
+        self._crypto_code=acquire_crypto_originals()
+        try:self._fd = os.dup(credential_fd)
+        except Exception:
+            self._crypto_code.close();raise
         self._clock = trusted_time_ms
         self._openssl = openssl_path
         self._lock = threading.Lock()
@@ -161,6 +168,7 @@ class GoogleServiceAccountTokenProvider:
         except Exception:
             os.close(self._fd)
             self._fd = -1
+            self._crypto_code.close()
             raise
 
     def _stat(self) -> tuple:
@@ -172,6 +180,7 @@ class GoogleServiceAccountTokenProvider:
                 value.st_uid, value.st_mtime_ns, value.st_ctime_ns)
 
     def _read(self) -> bytes:
+        self._crypto_code.recheck()
         require(self._stat() == self._metadata, "Google OAuth credential original changed")
         original = os.pread(self._fd, MAX_CREDENTIAL_BYTES + 1, 0)
         require(len(original) == self._metadata[2] and self._stat() == self._metadata,
@@ -204,6 +213,7 @@ class GoogleServiceAccountTokenProvider:
 
     def __call__(self) -> str:
         with self._lock:
+            self._crypto_code.recheck()
             require(self._fd >= 3, "Google OAuth custody closed")
             original = self._read()
             require(hashlib.sha256(original).digest() == self._credential_digest,
@@ -230,6 +240,7 @@ class GoogleServiceAccountTokenProvider:
                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
                 method="POST")
             try:
+                self._crypto_code.recheck()
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                     urllib.request.HTTPSHandler(context=ssl.create_default_context()), _NoRedirect())
                 with opener.open(request, timeout=5) as response:
@@ -256,6 +267,7 @@ class GoogleServiceAccountTokenProvider:
                 require(self._stat() == self._metadata
                         and hashlib.sha256(self._read()).digest() == self._credential_digest,
                         "Google OAuth credential original changed")
+                self._crypto_code.recheck()
                 self._access, self._issued = value["access_token"], now
                 self._refresh = now + value["expires_in"] - 60
                 return self._access
@@ -270,3 +282,4 @@ class GoogleServiceAccountTokenProvider:
                 os.close(self._fd)
                 self._fd = -1
             self._access = None
+            self._crypto_code.close()

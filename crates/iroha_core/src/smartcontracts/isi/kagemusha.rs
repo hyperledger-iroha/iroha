@@ -1,10 +1,14 @@
 //! Kagemusha V1 pooled-reserve instruction execution.
 
 mod authority;
+mod execution_availability;
 pub(crate) mod kagemusha_v1_reserve;
+#[cfg(test)]
+pub(crate) mod runtime_publication_tests;
 
 pub(crate) use authority::{
     KagemushaVerifierAuthorityV1, runtime_matches_governed_registry, runtime_verifier_authority,
+    validate_runtime_cache_for_publication,
 };
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -2283,6 +2287,40 @@ pub mod isi {
         labeled_invariant(label, error.to_string()).into()
     }
 
+    /// Governed rejection is deterministic; unavailable local artifacts retain
+    /// the original transaction's sticky retry owner before any monetary effect.
+    pub(super) fn require_execution_runtime(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        release_id: [u8; 32],
+        operation: execution_availability::Operation,
+    ) -> Result<(), Error> {
+        let decision = execution_availability::require(
+            state_transaction.kagemusha_v1_runtime_verifier.as_ref(),
+            *state_transaction.network_id(),
+            state_transaction.world.kagemusha_verifier_registry.get(),
+            release_id,
+            operation,
+        );
+        match decision {
+            Ok(()) => Ok(()),
+            Err(execution_availability::Failure::Rejected(reason)) => Err(kagemusha_v1_error(
+                match operation {
+                    execution_availability::Operation::TopUp => "recursive_release_invalid",
+                    execution_availability::Operation::Redemption => "invalid_recursive_proof",
+                },
+                reason,
+            )),
+            Err(execution_availability::Failure::Unavailable) => {
+                state_transaction
+                    .defer_execution(ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable);
+                Err(kagemusha_v1_error(
+                    "local_verifier_unavailable",
+                    "governed verifier artifacts require authenticated local reload",
+                ))
+            }
+        }
+    }
+
     fn retain_operation_index_refusal<T>(
         state_transaction: &mut StateTransaction<'_, '_>,
         result: Result<T, (([u8; 32], [u8; 32]), mv::storage::AdmittedStorageError)>,
@@ -2401,6 +2439,11 @@ pub mod isi {
             )
             .into());
         }
+        require_execution_runtime(
+            state_transaction,
+            request.release_id,
+            execution_availability::Operation::TopUp,
+        )?;
         let verified_authorization = state_transaction
             .kagemusha_v1_runtime_verifier
             .verify_top_up_authorization(&request)
@@ -2544,6 +2587,11 @@ pub mod isi {
         request
             .validate_shape()
             .map_err(|error| kagemusha_v1_error("redemption_invalid", error))?;
+        require_execution_runtime(
+            state_transaction,
+            request.voucher.statement.lifecycle.release_id,
+            execution_availability::Operation::Redemption,
+        )?;
         let verified_proof = state_transaction
             .kagemusha_v1_runtime_verifier
             .verify_redemption_request(request)

@@ -217,6 +217,7 @@ mod tests {
         halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
         plonk::{Circuit, VerifyingKey, keygen_vk_custom},
         poly::{
+            VerificationStrategy as _,
             commitment::{Params as _, ParamsProver as _},
             ipa::commitment::ParamsIPA,
         },
@@ -356,23 +357,81 @@ mod tests {
     }
     #[test]
     fn native_reconstructed_issuer_table_changes_exact_vk_identity_in_both_parities() {
+        use halo2_proofs::{
+            plonk::{create_proof, keygen_pk, verify_proof},
+            poly::ipa::{
+                commitment::IPACommitmentScheme,
+                multiopen::{ProverIPA, VerifierIPA},
+                strategy::SingleStrategy,
+            },
+            transcript::{
+                Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer as _,
+                TranscriptWriterBuffer as _,
+            },
+        };
+        use rand_core_06::OsRng;
+
         macro_rules! check {
             ($curve:ty, $field:ty) => {{
                 let p = ParamsIPA::<$curve>::new(7);
                 let c = Tiny::<$field>::good();
                 let key = keygen_vk_custom(&p, &c, true).unwrap();
                 let bytes = key.to_bytes(SerdeFormat::Processed);
+                let restored = VerifyingKey::<$curve>::read_checked::<_, Tiny<$field>>(
+                    &mut std::io::Cursor::new(&bytes),
+                    SerdeFormat::Processed,
+                    p.k(),
+                    c.params(),
+                )
+                .unwrap();
+                assert_eq!(restored.transcript_repr(), key.transcript_repr());
+
                 let mut changed = c.params();
                 changed.table.slots[0].issuer_sec1 = changed.table.slots[1].issuer_sec1;
-                assert!(
-                    VerifyingKey::<$curve>::read_checked::<_, Tiny<$field>>(
-                        &mut std::io::Cursor::new(bytes),
-                        SerdeFormat::Processed,
-                        p.k(),
-                        changed,
+                // Processed bytes carry commitments and selectors. Trusted reconstruction
+                // binds the issuer constants through the verifying-key transcript identity.
+                let substituted = VerifyingKey::<$curve>::read_checked::<_, Tiny<$field>>(
+                    &mut std::io::Cursor::new(&bytes),
+                    SerdeFormat::Processed,
+                    p.k(),
+                    changed,
+                )
+                .unwrap();
+                assert_ne!(substituted.transcript_repr(), key.transcript_repr());
+
+                let pk = keygen_pk(&p, key, &c).unwrap();
+                let instances: &[&[$field]] = &[];
+                let mut transcript =
+                    Blake2bWrite::<_, $curve, Challenge255<$curve>>::init(Vec::new());
+                create_proof::<
+                    IPACommitmentScheme<$curve>,
+                    ProverIPA<'_, $curve>,
+                    Challenge255<$curve>,
+                    _,
+                    _,
+                    _,
+                >(&p, &pk, &[c], &[instances], OsRng, &mut transcript)
+                .unwrap();
+                let proof = transcript.finalize();
+                let verify = |vk: &VerifyingKey<$curve>| {
+                    let mut transcript =
+                        Blake2bRead::<_, $curve, Challenge255<$curve>>::init(proof.as_slice());
+                    verify_proof::<
+                        IPACommitmentScheme<$curve>,
+                        VerifierIPA<'_, $curve>,
+                        Challenge255<$curve>,
+                        _,
+                        _,
+                    >(
+                        &p,
+                        vk,
+                        SingleStrategy::new(&p),
+                        &[instances],
+                        &mut transcript,
                     )
-                    .is_err()
-                );
+                };
+                assert!(verify(&restored).is_ok());
+                assert!(verify(&substituted).is_err());
             }};
         }
         check!(EqAffine, Fp);

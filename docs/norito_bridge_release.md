@@ -57,7 +57,7 @@ that workflow for local release verification.
      "$NORITO_BRIDGE_BUILD_DIR" \
      "$(dirname "$NORITO_BRIDGE_ARCHIVE_OUTPUT")"
    ./scripts/build_norito_xcframework.sh \
-     --privacy-production-enabled \
+     --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock \
      --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
@@ -67,7 +67,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 25, the privacy-production feature state,
+   manifest binds exact native bridge ABI 25, the mandatory privacy build recipe,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,
@@ -301,7 +301,23 @@ An explicit external root must already exist, be absolute/canonical, and lie
 outside the reviewed source tree. Missing external outputs never fall back to
 old `kotlin/*/build` artifacts. Ordinary local checks retain source-tree outputs
 only when the external variable is absent. The checker rejects ambiguous core
-runtime JARs and symlinked or hard-linked selected artifacts.
+runtime JARs and symlinked or hard-linked selected artifacts. All three runtime
+outputs are mandatory: the core JAR, client AAR, and wallet AAR. Generated release
+POMs must select one exact version, including client-to-core and wallet-to-client
+dependencies. Release packaging additionally requires the three matching Maven
+artifacts, POMs and Gradle module metadata under `org.hyperledger.iroha.sdk`;
+missing wallet outputs, different build/Maven bytes, and unrelated versions or
+modules are rejected. Each library metadata variant retains its exact owned
+dependency graph and artifact name, URL, size and checksums; source/javadoc
+variants retain their own original files. A leading `v` in the package label is removed once to obtain
+the Maven version, matching the mobile workflow. Native source authentication,
+ABI inspection and provenance checks remain mandatory. Packaging captures the
+complete original input identities/digests before native validation, rechecks
+that snapshot afterward, copies through stable regular-file descriptors, and
+compares both staged files and actual ZIP payloads against the captured bytes.
+The source inventory, copied payloads and archive are rechecked immediately
+before the existing atomic no-replace package publication. Source/copy mutation
+or later restoration cannot replace the original validated payload.
 
 The mobile workflow explicitly runs `:core-jvm:test` before publication and
 creates per-module runtime CycloneDX reports for `core-jvm`, `client-android`,

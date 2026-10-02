@@ -2,9 +2,29 @@
 
 state_test! { sync service_snapshot_roundtrip_preserves_state_hash_and_actual_replacement
     let service = super::snapshot_service_state::tests::service_world();
+    // The structural fixture's H-1 predates native genesis. Retain its exact
+    // rollback controls separately from the later native carrier's predecessor.
+    {
+        let replacement = service.block_and_revert();
+        assert_eq!(*replacement.soradns_directory_latest.get(), Some([1; 32]));
+        assert_eq!(replacement.capacity_disputes.len(), 1);
+        assert_eq!(replacement.soradns_release_signers.len(), 1);
+        assert!(replacement.soradns_directory_pending.is_empty());
+    }
     let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
         crate::sumeragi::test_chain::TestChainConfig::new(service, 1_000),
     ).expect("native genesis retains original service state");
+    let predecessor = {
+        let world = chain.state().world_view();
+        (
+            *world.soradns_directory_latest.get(),
+            world.capacity_disputes.len(),
+            world.soradns_release_signers.len(),
+            world.soradns_directory_pending.iter()
+                .map(|(key, value)| (*key, value.clone())).collect::<Vec<_>>(),
+        )
+    };
+    let predecessor_hash = chain.state().latest_block_hash_fast();
     chain.commit(Vec::new());
     let state = chain.state();
     let snapshot = norito::json::to_value(state.as_ref()).unwrap();
@@ -38,10 +58,12 @@ state_test! { sync service_snapshot_roundtrip_preserves_state_hash_and_actual_re
     let carrier = restored.kura.get_block(NonZeroUsize::new(restored.committed_height()).unwrap()).unwrap();
     {
         let replacement = restored.block_and_revert(carrier.header());
-        assert_eq!(*replacement.world.soradns_directory_latest.get(), Some([1; 32]));
-        assert_eq!(replacement.world.capacity_disputes.len(), 1);
-        assert_eq!(replacement.world.soradns_release_signers.len(), 1);
-        assert!(replacement.world.soradns_directory_pending.is_empty());
+        assert_eq!(carrier.header().prev_block_hash(), predecessor_hash);
+        assert_eq!(*replacement.world.soradns_directory_latest.get(), predecessor.0);
+        assert_eq!(replacement.world.capacity_disputes.len(), predecessor.1);
+        assert_eq!(replacement.world.soradns_release_signers.len(), predecessor.2);
+        assert_eq!(replacement.world.soradns_directory_pending.iter()
+            .map(|(key, value)| (*key, value.clone())).collect::<Vec<_>>(), predecessor.3);
     }
     let mut after = String::new();
     super::snapshot_service_state::serialize(&restored.world, &mut after);

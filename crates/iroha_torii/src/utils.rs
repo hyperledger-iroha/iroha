@@ -2163,7 +2163,6 @@ pub mod extractors {
         }
     }
     /// Schema-specific body and decode limits for public KAGEMUSHA API requests.
-    #[cfg(feature = "app_api")]
     trait KagemushaCanonicalNoritoSchemaV1:
         NoritoSerialize + for<'de> NoritoDeserialize<'de> + Sized
     {
@@ -2172,7 +2171,6 @@ pub mod extractors {
         /// Decode the canonical body and enforce every schema invariant.
         fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError>;
     }
-    #[cfg(feature = "app_api")]
     impl KagemushaCanonicalNoritoSchemaV1
         for iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1
     {
@@ -2184,7 +2182,6 @@ pub mod extractors {
                 .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
         }
     }
-    #[cfg(feature = "app_api")]
     impl KagemushaCanonicalNoritoSchemaV1
         for iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1
     {
@@ -2196,7 +2193,6 @@ pub mod extractors {
                 .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
         }
     }
-    #[cfg(feature = "app_api")]
     #[derive(Debug)]
     enum KagemushaCanonicalNoritoDecodeError {
         Empty,
@@ -2204,7 +2200,6 @@ pub mod extractors {
         Norito(norito::Error),
         Invalid(iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1),
     }
-    #[cfg(feature = "app_api")]
     impl KagemushaCanonicalNoritoDecodeError {
         fn from_kagemusha_api(
             error: iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1,
@@ -2224,7 +2219,6 @@ pub mod extractors {
             }
         }
     }
-    #[cfg(feature = "app_api")]
     fn validate_kagemusha_canonical_norito_body_len(
         actual: usize,
         maximum: usize,
@@ -2237,14 +2231,12 @@ pub mod extractors {
         }
         Ok(())
     }
-    #[cfg(feature = "app_api")]
     fn decode_kagemusha_canonical_norito<T: KagemushaCanonicalNoritoSchemaV1>(
         body: &[u8],
     ) -> Result<T, KagemushaCanonicalNoritoDecodeError> {
         validate_kagemusha_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
         T::decode_validated(body)
     }
-    #[cfg(feature = "app_api")]
     #[allow(clippy::result_large_err)]
     fn kagemusha_canonical_norito_rejection<T: 'static>(
         error: KagemushaCanonicalNoritoDecodeError,
@@ -2280,13 +2272,11 @@ pub mod extractors {
         }
     }
     /// Extractor for one canonical, schema-bounded KAGEMUSHA API Norito request.
-    #[cfg(feature = "app_api")]
     #[derive(Clone, Copy, Debug)]
     pub(crate) struct KagemushaNorito<T>(
         /// Decoded canonical request.
         pub(crate) T,
     );
-    #[cfg(feature = "app_api")]
     impl<S, T> FromRequest<S> for KagemushaNorito<T>
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,

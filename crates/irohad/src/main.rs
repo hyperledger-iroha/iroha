@@ -664,6 +664,7 @@ fn init_global_metrics_handle(
 fn nexus_topology_is_custom(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
     nexus.uses_multilane_catalogs()
 }
+mod startup_root_topology;
 fn ensure_manifest_crypto_matches(
     manifest: &RawGenesisTransaction,
     config: &Config,
@@ -2713,7 +2714,8 @@ impl Iroha {
                         &mut world,
                         &genesis_block.0,
                         &config.nexus.dataspace_catalog,
-                    );
+                    )
+                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 }
                 Box::new(
                     State::try_new_with_chain_and_network_id(
@@ -2819,20 +2821,22 @@ impl Iroha {
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
             state.install_lane_compliance_engine(None);
         }
-        let signed_consensus_mode = match signed_genesis_context {
-            Some((mode, _)) => mode,
+        let (signed_consensus_mode, signed_context) = match signed_genesis_context {
+            Some(context) => context,
             None => {
                 return Err(Report::new(StartError::InitKura)
                     .attach("startup has no signed genesis metadata"));
             }
         };
-        if config.nexus.uses_multilane_catalogs()
-            && signed_consensus_mode != iroha_data_model::block::consensus::ConsensusMode::Npos
-        {
-            return Err(Report::new(StartError::InitKura).attach(
-                "custom Nexus lane topology requires the authenticated consensus mode to be NPoS",
-            ));
-        }
+        // The original genesis signature and exact configured trust anchor were verified above.
+        // A private root owns one independent lane zero; its non-universal dataspace is not a
+        // public multi-lane topology and does not change the signed consensus mode.
+        startup_root_topology::validate(
+            &config.nexus,
+            signed_consensus_mode,
+            signed_context.root_scope,
+        )
+        .map_err(|reason| Report::new(StartError::InitKura).attach(reason))?;
         // Thread the remaining runtime preferences from config into state before Sumeragi
         // rebuilds it, so replayed and live blocks execute under the same configuration. ZK
         // configuration was installed once above.
@@ -3796,7 +3800,6 @@ impl Iroha {
             runtime_deps.sorafs_stream_token_state_observer.clone();
         let mut sorafs_stream_token_approved_anchor =
             runtime_deps.sorafs_stream_token_approved_anchor;
-        #[cfg(unix)]
         if !emergency_fast
             && config
                 .torii
@@ -3822,22 +3825,23 @@ impl Iroha {
             sorafs_stream_token_state_observer = Some(native.observer);
             sorafs_stream_token_approved_anchor = Some(native.anchor);
         }
-        #[cfg(not(unix))]
-        if !emergency_fast
-            && config
-                .torii
-                .sorafs_storage
-                .stream_tokens
-                .signer
-                .as_ref()
-                .is_some_and(|signer| signer.native.is_some())
-        {
-            return Err(Report::new(StartError::StartTorii).attach(
-                "native stream-token software custody requires owner-only Unix runtime credentials",
-            ));
-        }
-        let sorafs_stream_token_gateway_admission =
-            runtime_deps.sorafs_stream_token_gateway_admission.clone();
+        // Native consensus is the sole normal-launch gateway admission owner. Assembly rejects
+        // injected bare DTO providers before both normal and emergency/disabled selection.
+        let sorafs_stream_token_gateway_runtime =
+            sorafs_stream_token_gateway_runtime::native::build_native_runtime(
+                &config.torii.sorafs_storage.stream_tokens,
+                config
+                    .torii
+                    .sorafs_gateway
+                    .compliance
+                    .as_ref()
+                    .map(|compliance| compliance.gateway_id.as_str()),
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                runtime_deps.sorafs_stream_token_gateway_admission.as_ref(),
+                emergency_fast,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let sorafs_appeal_finance_runtime_signers =
             runtime_deps.sorafs_appeal_finance_runtime_signers.clone();
         let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
@@ -4367,7 +4371,7 @@ impl Iroha {
                 .as_ref()
                 .expect("reputation runtime is disabled during emergency Fast startup");
             let admission: Arc<
-                dyn sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
+                dyn sorafs_node::reputation::runtime::PorTerminalReputationAdmissionV1,
             > = Arc::new(reputation_runtime.clone());
             let child = if sorafs_node.config().por_replay_archive_policy().is_some() {
                 sorafs_por_replay_archive_runtime::start(
@@ -4401,12 +4405,10 @@ impl Iroha {
                 "enabled finalized PoR replay archival requires the committed reputation runtime",
             ));
         }
-        let stream_token_reputation_admission = sorafs_reputation_runtime.as_ref().map(|runtime| {
-            let admission: Arc<
-                dyn sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
-            > = Arc::new(runtime.clone());
-            admission
-        });
+        let (sorafs_stream_token_gateway_admission, stream_token_reputation_delivery) =
+            sorafs_stream_token_gateway_runtime.map_or((None, None), |runtime| {
+                (Some(runtime.provider), Some(runtime.reputation))
+            });
         let sorafs_stream_token_admission_capture = if emergency_fast {
             None
         } else {
@@ -4420,7 +4422,7 @@ impl Iroha {
                     .as_ref()
                     .map(|compliance| compliance.gateway_id.as_str()),
                 sorafs_stream_token_gateway_admission,
-                stream_token_reputation_admission,
+                stream_token_reputation_delivery,
             )
             .map_err(|error| {
                 Report::new(StartError::StartTorii).attach(format!(
@@ -4429,14 +4431,13 @@ impl Iroha {
             })?
         };
         if let Some(capture) = sorafs_stream_token_admission_capture.as_ref() {
-            let poll_interval = sorafs_reputation_config
-                .as_ref()
-                .ok_or_else(|| {
-                    Report::new(StartError::StartTorii).attach(
-                        "enabled stream-token gateway admission requires reputation reconciliation policy",
-                    )
-                })?
-                .poll_interval;
+            let poll_interval = Duration::from_millis(
+                config
+                    .torii
+                    .sorafs_storage
+                    .stream_tokens
+                    .admission_reconcile_interval_ms,
+            );
             let child = sorafs_stream_token_gateway_runtime::start_reconciler(
                 Arc::clone(capture),
                 poll_interval,
@@ -8944,7 +8945,8 @@ fn validate_genesis_execution_offline(
         &mut world,
         &genesis.0,
         &config.nexus.dataspace_catalog,
-    );
+    )
+    .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let mut state = State::try_new_with_chain_and_network_id(
         execution_budget,
         world,
@@ -10793,9 +10795,10 @@ mod tests {
                 && reputation < reputation_only_worker,
             "the exact archive must enter the node before routes are built, and bounded compaction must start only after durable reputation admission"
         );
-        assert!(compact_source.contains(
-            "dynsorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1"
-        ));
+        assert!(
+            compact_source
+                .contains("dynsorafs_node::reputation::runtime::PorTerminalReputationAdmissionV1")
+        );
         assert!(
             compact_source.contains("reputation_config.poll_interval,reputation_config.page_items"),
             "the reputation-only callback worker must use validated bounded runtime policy"
@@ -11431,7 +11434,8 @@ mod tests {
                 &mut world,
                 &provisional.0,
                 &config.nexus.dataspace_catalog,
-            );
+            )
+            .expect("authenticated genesis SNS bootstrap");
             let mut state = State::try_new_with_chain_and_network_id(
                 budget,
                 world,

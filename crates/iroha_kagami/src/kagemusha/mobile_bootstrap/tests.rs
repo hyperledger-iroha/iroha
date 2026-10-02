@@ -367,14 +367,19 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_artifact
 
     // A valid release signature does not excuse different bytes in any content-addressed file.
     let resolver = KagemushaDirectoryArtifactResolverV1::new(&artifact_root).unwrap();
-    fs::write(resolver.path_for_digest(bindings[49].sha256), [0xff]).unwrap();
     args.checkpoint_output = directory.path().join("refused-checkpoint.norito");
-    assert!(prepare(&args, &mut std::io::BufWriter::new(Vec::new())).is_err());
-    assert!(!args.checkpoint_output.exists());
-    assert_eq!(
-        fs::read(directory.path().join("prepared-checkpoint.norito")).unwrap(),
-        bytes
-    );
+    for binding in &bindings[49..] {
+        let artifact_path = resolver.path_for_digest(binding.sha256);
+        let original = fs::read(&artifact_path).unwrap();
+        fs::write(&artifact_path, [0xff]).unwrap();
+        assert!(prepare(&args, &mut std::io::BufWriter::new(Vec::new())).is_err());
+        assert!(!args.checkpoint_output.exists());
+        assert_eq!(
+            fs::read(directory.path().join("prepared-checkpoint.norito")).unwrap(),
+            bytes
+        );
+        fs::write(artifact_path, original).unwrap();
+    }
 }
 
 #[test]

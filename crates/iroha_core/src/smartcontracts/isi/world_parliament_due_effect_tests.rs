@@ -643,6 +643,20 @@ fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
     state
         .validate_kagemusha_v1_runtime_for_startup()
         .expect("an active finalized release can await exact local artifact reload");
+    let mut next = state.block(iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = next.transaction();
+    crate::smartcontracts::isi::kagemusha::runtime_publication_tests::check_transaction(
+        &mut tx,
+        successor_active.unwrap(),
+        true,
+        false,
+    );
 }
 
 #[test]
@@ -1200,3 +1214,5 @@ fn parliament_terminal_effect_failure_retains_atomic_rollback_and_exact_outcome(
         crate::state::GovernanceProposalStatus::ExecutionFailed
     );
 }
+
+include!("world_kagemusha_runtime_authority_tests.rs");

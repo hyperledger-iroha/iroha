@@ -287,13 +287,15 @@ impl MainTerminalLinkPlanV1 {
             return Err(ZkX509StarkErrorV1::ConstraintOpening);
         }
         self.evaluate_with_v1(E::from_base(point), alphas, |column| {
-            groups
+            let value = groups
                 .get(column.group)
                 .and_then(|group| group.aux_current.get(column.column))
                 .copied()
-                .filter(|value| value.is_canonical())
-                .map(E::from_base)
-                .ok_or(ZkX509StarkErrorV1::ConstraintOpening)
+                .ok_or(ZkX509StarkErrorV1::ConstraintOpening)?;
+            if !value.is_canonical() {
+                return Err(ZkX509StarkErrorV1::ConstraintOpening);
+            }
+            Ok(E::from_base(value))
         })
     }
     fn evaluate_with_v1(
@@ -666,31 +668,42 @@ mod tests {
         );
         assert_eq!(calls.get(), 0);
         let mut malformed = alphas;
-        malformed[191] =
-            E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
+        malformed[191] = E::noncanonical_fixture_v1();
         assert!(
             plan.evaluate_with_v1(E::from_base(F(7)), &malformed, |_| Ok(E::ONE))
                 .is_err()
         );
         assert!(
-            plan.evaluate_with_v1(
-                E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]),
-                &alphas,
-                |_| Ok(E::ONE)
-            )
-            .is_err()
+            plan.evaluate_with_v1(E::noncanonical_fixture_v1(), &alphas, |_| Ok(E::ONE))
+                .is_err()
         );
         assert!(
             plan.evaluate_with_v1(E::from_base(F(7)), &alphas, |_| Ok(
-                E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO])
+                E::noncanonical_fixture_v1()
             ))
             .is_err()
         );
         assert!(plan.evaluate_v1(&[], E::from_base(F(7)), &alphas).is_err());
         assert!(plan.evaluate_base_v1(&[], F(7), &alphas).is_err());
+        let base_plan = small_plan_v1();
+        let mut base_groups = [aggregate::AggregateOpenedTraceGroupV1 {
+            base_current: Vec::new(),
+            base_next: Vec::new(),
+            aux_current: vec![F::ONE; 2],
+            aux_next: Vec::new(),
+        }];
         assert_eq!(
-            plan.evaluate_base_v1(&[], F(u64::MAX), &alphas),
-            Err(ZkX509StarkErrorV1::ConstraintOpening),
+            base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
+            Ok(E::ZERO)
+        );
+        assert_eq!(
+            base_plan.evaluate_base_v1(&base_groups, F(u64::MAX), &alphas),
+            Err(ZkX509StarkErrorV1::ConstraintOpening)
+        );
+        base_groups[0].aux_current[0] = F(u64::MAX);
+        assert_eq!(
+            base_plan.evaluate_base_v1(&base_groups, F(7), &alphas),
+            Err(ZkX509StarkErrorV1::ConstraintOpening)
         );
         for point in plan
             .links

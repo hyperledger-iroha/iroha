@@ -184,6 +184,24 @@ def test_snapshot_bounds_and_asset_field_set_match_current_sources(document):
     assert schemas["AxtAssetIncarnationV1"]["minItems"] == schemas["AxtAssetIncarnationV1"]["maxItems"] == 1
 
 
+def test_signed_clock_body_fields_match_current_model_and_uint64_bounds(document):
+    source = (ROOT / "crates/iroha_data_model/src/sumeragi_finality.rs").read_text()
+    body = source.split("pub struct SumeragiFinalityAttestationBody {", 1)[1].split("\n}", 1)[0]
+    fields = set(re.findall(r"(?m)^    pub ([a-z_]+):", body))
+    schema = document["components"]["schemas"]["SumeragiFinalityAttestationBody"]
+    assert set(schema["properties"]) == set(schema["required"]) == fields
+    assert schema["additionalProperties"] is False
+    assert "self.observed_at_unix_ms != 0" in source
+    clock = schema["properties"]["observed_at_unix_ms"]
+    assert clock["type"] == "integer" and clock["format"] == "uint64"
+    assert clock["minimum"] == 1 and clock["maximum"] == (1 << 64) - 1
+    check = Draft202012Validator(clock)
+    for value in (1, 1_000_000, (1 << 64) - 1):
+        check.validate(value)
+    for value in (0, -1, 1 << 64, "1000000", True, None):
+        assert not check.is_valid(value), value
+
+
 @pytest.fixture(scope="module")
 def native_fixture(document):
     # This file is copied byte-for-byte only after the shared DTO native test runs.
@@ -199,6 +217,7 @@ def test_actual_native_fixture_is_data_only_and_uses_exact_tuple_codec(native_fi
     assert len(native_fixture["asset_incarnation"]) == 1
     assert native_fixture["attestation"]["body"]["status"]["protocol_version"] == 1
     assert native_fixture["attestation"]["body"]["status"]["applied_height"] == 2
+    assert native_fixture["attestation"]["body"]["observed_at_unix_ms"] == 1_000_000
 
 
 def test_native_fixture_rejects_unknown_nested_authority_and_missing_fields(document, native_fixture):
@@ -224,4 +243,3 @@ def test_native_fixture_rejects_unknown_nested_authority_and_missing_fields(docu
                 target = target[key]
             del target[field]
             assert not check.is_valid(missing), (path, field)
-

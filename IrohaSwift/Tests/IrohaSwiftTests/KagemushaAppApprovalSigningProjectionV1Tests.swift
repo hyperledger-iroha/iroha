@@ -192,6 +192,25 @@ final class KagemushaAppApprovalSigningProjectionV1Tests: XCTestCase {
       publicKey: other.publicKey.x963Representation))
   }
 
+  func testAppleWAuthenticatesCompleteMeasuredReleaseOriginal() throws {
+    let signer = try key(), value = try keyedProjection(signer)
+    let expected = try release()
+    let extensions = Data([0xa2]) + cborText("validationCategory")
+      + cborBytes(Data([UInt8(expected.validationCategory), 0, 0, 0]))
+      + cborText("bundleVersion") + cborText(expected.bundleVersion)
+    for flags in [UInt8(0x40), 0xc0] {
+      let raw = try assertion(key: signer, clientHash: value.clientDataHash,
+        flags: flags, extensions: extensions)
+      let checked = try original(raw, projection: value, publicKey: signer.publicKey.x963Representation)
+      XCTAssertEqual(checked.rawAssertion, raw)
+      XCTAssertEqual(checked.observedCounter, 3)
+    }
+    let wrong = Data([0xa2]) + cborText("validationCategory") + cborBytes(Data([10, 0, 0, 0]))
+      + cborText("bundleVersion") + cborText("foreign")
+    XCTAssertThrowsError(try original(assertion(key: signer, clientHash: value.clientDataHash,
+      flags: 0xc0, extensions: wrong), projection: value, publicKey: signer.publicKey.x963Representation))
+  }
+
   func testAppleWRejectsReplayedCounterDirectDERAndUnsupportedAuthenticator() throws {
     let signer = try key(), value = try keyedProjection(signer)
     let publicKey = signer.publicKey.x963Representation
@@ -223,8 +242,8 @@ final class KagemushaAppApprovalSigningProjectionV1Tests: XCTestCase {
     return cborLength(bytes.count, major: 3) + bytes
   }
   private func assertion(key: P256.Signing.PrivateKey, clientHash: Data,
-    flags: UInt8 = 0x40, relyingPartyHash: Data? = nil) throws -> Data {
-    let auth = (relyingPartyHash ?? appID) + Data([flags, 0, 0, 0, 3])
+    flags: UInt8 = 0x40, relyingPartyHash: Data? = nil, extensions: Data = Data()) throws -> Data {
+    let auth = (relyingPartyHash ?? appID) + Data([flags, 0, 0, 0, 3]) + extensions
     let nonce = Data(SHA256.hash(data: auth + clientHash))
     let signature = try key.signature(for: nonce).derRepresentation
     return Data([0xa2]) + cborText("authenticatorData") + cborBytes(auth)

@@ -10,10 +10,7 @@ use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_ru
 use iroha_data_model::{
     NetworkId,
     query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
-    sorafs::{
-        capacity::ProviderId,
-        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
-    },
+    sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::{
@@ -27,7 +24,7 @@ use sorafs_node::reputation::{
     ReputationIngestMetricsSnapshot, ReputationIngestPolicyV1, ReputationIngestService,
     ReputationIngestStatusV1,
     runtime::{
-        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+        PorTerminalReputationAdmissionV1, REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
         ReputationCommittedProjectorRuntimeV1, ReputationCommittedReadApiV1,
         ReputationCommittedReadProjectionV1, ReputationFinalizedQueryPolicyV1,
         ReputationFinalizedQueryV1, ReputationGovernanceDagClientV1,
@@ -35,11 +32,11 @@ use sorafs_node::reputation::{
         ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
         ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
         ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
-        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
-        ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
+        ReputationJournalTransactionSubmitterV1, ReputationPublicationPolicyV1,
+        ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
-        StreamTokenReputationAdmissionOutcomeV1, reputation_journal_submitter_policy_digest_v1,
+        reputation_journal_submitter_policy_digest_v1,
     },
 };
 use std::{
@@ -287,7 +284,7 @@ impl ReputationRuntimeHandleV1 {
     pub fn activation_state(
         &self,
     ) -> Result<
-        sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+        sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1,
         ReputationRuntimeError,
     > {
         let slot = self
@@ -296,12 +293,12 @@ impl ReputationRuntimeHandleV1 {
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
         let Some(active) = slot.clone() else {
             return Ok(
-                sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Deferred,
+                sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1::Deferred,
             );
         };
         drop(slot);
         active.check_external_bindings()?;
-        Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+        Ok(sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1::Active)
     }
     fn install_active(
         &self,
@@ -431,33 +428,6 @@ impl ReputationRuntimeHandleV1 {
         active.check_external_bindings()?;
         result
     }
-    /// Durably admit one authenticated, externally sequenced stream-token outcome.
-    ///
-    /// The regional gateway owner remains responsible for authenticating the
-    /// outcome and allocating its sequence from sealed monotonic state. This
-    /// boundary uses that exact binding, consults immutable finalized history
-    /// for compacted replay, and revalidates every active runtime dependency
-    /// before and after durable admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns a runtime-binding, validation, finalized-query, source-conflict,
-    /// or durable producer error.
-    pub fn record_authenticated_stream_token_validation(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
-        let active = self.active()?;
-        active.check_external_bindings()?;
-        let result = active
-            .runtime
-            .stream_token_journal_producer()
-            .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
-            .enqueue_authenticated_validation(provider_id, outcome);
-        active.check_external_bindings()?;
-        result
-    }
 }
 impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
     fn committed_read_projection(
@@ -478,11 +448,11 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
         ReputationRuntimeHandleV1::committed_events_after(self, sequence)
     }
 }
-impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
+impl PorTerminalReputationAdmissionV1 for ReputationRuntimeHandleV1 {
     fn activation_state(
         &self,
     ) -> Result<
-        sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1,
+        sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1,
         ReputationRuntimeError,
     > {
         ReputationRuntimeHandleV1::activation_state(self)
@@ -496,17 +466,6 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
         ReputationRuntimeError,
     > {
         ReputationRuntimeHandleV1::record_por_terminal(self, provider_id, outcome)
-    }
-    fn record_authenticated_stream_token_validation(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
-        ReputationRuntimeHandleV1::record_authenticated_stream_token_validation(
-            self,
-            provider_id,
-            outcome,
-        )
     }
 }
 /// Assemble and start the committed reputation runtime.
@@ -1066,28 +1025,21 @@ fn read_bootstrap_delivery_view(
     bootstrap_delivery_view
         .validate_for_request(network_id, None, 1, u64::MAX)
         .wrap_err("validate exact finalized reputation journal bootstrap view")?;
-    for authority in [
-        &bootstrap_delivery_view
-            .authority_policy
-            .policy
-            .por_recorder_authority,
-        &bootstrap_delivery_view
-            .authority_policy
-            .policy
-            .token_recorder_authority,
-    ] {
-        journal_delivery_policy
-            .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
-            .wrap_err("revalidate reputation journal submitter before authority check")?;
-        let supports_authority = dependencies
-            .journal_transaction_submitter
-            .supports_authority(authority);
-        journal_delivery_policy
-            .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
-            .wrap_err("revalidate reputation journal submitter after authority check")?;
-        if !supports_authority {
-            bail!("reputation journal submitter does not own a governed recorder identity");
-        }
+    let authority = &bootstrap_delivery_view
+        .authority_policy
+        .policy
+        .por_recorder_authority;
+    journal_delivery_policy
+        .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+        .wrap_err("revalidate reputation journal submitter before authority check")?;
+    let supports_authority = dependencies
+        .journal_transaction_submitter
+        .supports_authority(authority);
+    journal_delivery_policy
+        .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+        .wrap_err("revalidate reputation journal submitter after authority check")?;
+    if !supports_authority {
+        bail!("reputation journal submitter does not own the governed PoR recorder identity");
     }
     Ok(bootstrap_delivery_view)
 }
@@ -1286,6 +1238,10 @@ mod tests {
     use super::*;
     use iroha_config::base::util::Bytes;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::sorafs::{
+        reputation::ReputationJournalPolicyOriginV1,
+        stream_token_gateway::native::StreamTokenGatewayExecutionV1,
+    };
     use iroha_data_model::{
         account::AccountId,
         query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
@@ -1299,8 +1255,7 @@ mod tests {
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-                ReputationJournalFinalizedEventPageV1, StreamTokenValidationBindingV1,
-                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+                ReputationJournalFinalizedEventPageV1,
             },
             reserve::{
                 ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
@@ -1552,7 +1507,7 @@ mod tests {
             let anchor = ReputationFinalizedAnchorV1 {
                 network_id: *network_id,
                 identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
-                    height: 1,
+                    height: 2,
                     block_hash: [0x81; 32],
                 },
                 finalized_at_unix_ms: 1_800_000_000_000,
@@ -1564,12 +1519,21 @@ mod tests {
                 por_recorder_authority: account(1),
                 dispute_recorder_authority: account(2),
                 token_recorder_authority: account(3),
+                stream_token_delivery: Default::default(),
                 max_source_age_ms: 86_400_000,
             };
             let authority_policy = ReputationJournalAuthorityPolicyRecordV1::try_new(
                 policy,
                 account(4),
                 anchor.finalized_at_unix_ms,
+                ReputationJournalPolicyOriginV1::Network(StreamTokenGatewayExecutionV1 {
+                    height: 2,
+                    transaction_hash: [0x61; 32],
+                    entry_index: 0,
+                    instruction_index: 0,
+                    recorded_at_unix_ms: anchor.finalized_at_unix_ms,
+                    authority: account(4),
+                }),
             )
             .expect("authority policy record");
             let mut view = ReputationJournalDeliveryFinalizedViewV1 {
@@ -1603,7 +1567,7 @@ mod tests {
                 anchor: ReputationFinalizedAnchorV1 {
                     network_id: *network_id,
                     identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
-                        height: 1,
+                        height: 2,
                         block_hash: [0x81; 32],
                     },
                     finalized_at_unix_ms: 1_800_000_000_000,
@@ -1755,6 +1719,7 @@ mod tests {
     #[derive(Debug)]
     struct PendingJournalSubmitter {
         handle: String,
+        authority: AccountId,
         qualification: ReputationRuntimeProviderQualificationV1,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
@@ -1774,9 +1739,9 @@ mod tests {
         }
     }
     impl ReputationJournalTransactionSubmitterV1 for PendingJournalSubmitter {
-        fn supports_authority(&self, _authority: &AccountId) -> bool {
+        fn supports_authority(&self, authority: &AccountId) -> bool {
             ExternalProviderCallCounters::record_readiness(&self.external_calls);
-            true
+            authority == &self.authority
         }
         fn submit(
             &self,
@@ -2057,6 +2022,7 @@ mod tests {
             }),
             journal_transaction_submitter: Arc::new(PendingJournalSubmitter {
                 handle: config.journal_transaction_submitter_handle.clone(),
+                authority: account(1),
                 qualification: submitter_qualification,
                 external_calls: external_calls.clone(),
             }),
@@ -2150,7 +2116,7 @@ mod tests {
         tokio::task::yield_now().await;
         assert_eq!(
             handle.activation_state(),
-            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Deferred)
+            Ok(sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1::Deferred)
         );
         assert!(matches!(
             handle.status(),
@@ -2187,7 +2153,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
-    fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
+    fn por_terminal_trait_is_object_safe_and_exactly_idempotent() {
         let temp = TempDir::new().expect("tempdir");
         let network_id = network_id("reputation-runtime-native-admission");
         let trust_policy = trust_policy();
@@ -2210,48 +2176,10 @@ mod tests {
         .expect("assemble native admission runtime");
         assert_eq!(
             handle.activation_state(),
-            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+            Ok(sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1::Active)
         );
-        let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
+        let admission: &dyn PorTerminalReputationAdmissionV1 = &handle;
         let activation_unix_ms: u64 = 1_800_000_000_000;
-        let token_outcome = StreamTokenValidationOutcomeV1 {
-            binding: StreamTokenValidationBindingV1 {
-                gateway_id: [0x18; 32],
-                gateway_sequence: 1,
-                request_context_digest: [0x19; 32],
-            },
-            token_body_digest: Some([0x1A; 32]),
-            token_key_version: Some(7),
-            validated_at_unix_ms: activation_unix_ms,
-            status: StreamTokenValidationStatusV1::Accepted,
-        };
-        let inserted_token = admission
-            .record_authenticated_stream_token_validation(
-                ProviderId::new([0x1B; 32]),
-                token_outcome,
-            )
-            .expect("durably insert authenticated stream-token outcome");
-        let replayed_token = admission
-            .record_authenticated_stream_token_validation(
-                ProviderId::new([0x1B; 32]),
-                token_outcome,
-            )
-            .expect("replay authenticated stream-token outcome");
-        assert!(matches!(
-            (inserted_token, replayed_token),
-            (
-                StreamTokenReputationAdmissionOutcomeV1::Enqueued(
-                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
-                        event_id: inserted,
-                    },
-                ),
-                StreamTokenReputationAdmissionOutcomeV1::Enqueued(
-                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
-                        event_id: replay,
-                    },
-                ),
-            ) if inserted == replay
-        ));
         let terminal_at = |challenge_id: u8, decided_at_unix_ms: u64| PorTerminalOutcomeV1 {
             challenge_id: [challenge_id; 32],
             manifest_digest: [0x21; 32],
@@ -2353,7 +2281,7 @@ mod tests {
             runtime_dependencies,
         )
         .expect("assemble native admission runtime");
-        let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
+        let admission: &dyn PorTerminalReputationAdmissionV1 = &handle;
         let terminal = PorTerminalOutcomeV1 {
             challenge_id: [0x61; 32],
             manifest_digest: [0x62; 32],
@@ -2509,7 +2437,7 @@ mod tests {
         ));
         assert_eq!(
             handle.activation_state(),
-            Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
+            Ok(sorafs_node::reputation::runtime::PorTerminalReputationAdmissionStateV1::Active)
         );
     }
     #[test]
@@ -2791,6 +2719,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn assembly_requires_the_por_recorder_and_does_not_require_the_token_recorder() {
+        let temp = TempDir::new().expect("tempdir");
+        let network_id = network_id("reputation-runtime-test");
+        let trust_policy = trust_policy();
+        for (authority, admitted) in [(account(1), true), (account(3), false)] {
+            let state_dir = temp.path().join(if admitted { "por" } else { "token" });
+            let config = config(state_dir.clone(), &network_id, trust_policy.as_ref());
+            let mut dependencies = dependencies(
+                &config,
+                &network_id,
+                trust_policy.as_ref(),
+                "ledger.finalized.primary",
+            );
+            dependencies.journal_transaction_submitter = Arc::new(PendingJournalSubmitter {
+                handle: config.journal_transaction_submitter_handle.clone(),
+                authority,
+                qualification: ReputationRuntimeProviderQualificationV1::new(
+                    config.journal_transaction_submitter_revision,
+                    config.journal_transaction_submitter_policy_digest,
+                ),
+                external_calls: None,
+            });
+            let result = assemble(&config, &network_id, trust_policy.as_ref(), dependencies);
+            if admitted {
+                result.expect("the governed PoR recorder is sufficient for the PoR outbox");
+            } else {
+                let error = result.expect_err("the token recorder cannot replace the PoR recorder");
+                assert!(error.to_string().contains("governed PoR recorder identity"));
+                assert!(!state_dir.exists(), "reject before opening durable state");
+            }
+        }
     }
     #[test]
     fn assembly_rejects_unready_adapter_before_state_open() {

@@ -37,6 +37,44 @@ public final class KagemushaNativePreparedAppEnrollmentPossessionV1: @unchecked 
     return Data(originalID)
   }
 
+  /// Read the exact native-consumed Apple E assertion for final issuer transport.
+  /// This never invokes the device or infers completion from a local assertion journal.
+  /// The current original owner and two matching native readbacks must retain the same
+  /// purpose-bound receipt; unavailable or substituted evidence revokes this bridge.
+  public func recoverOriginalConsumedAssertion() throws
+    -> KagemushaNativeConsumedAppEnrollmentPossessionOriginalV1 {
+    do {
+      let p = try recheck()
+      guard p.platform == 4, let floor = p.appleCounterFloor,
+        p.approval == nil, p.credentialDigest.isEmpty else {
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("consumed Apple enrollment original unavailable")
+      }
+      let retained = try recover()
+      guard retained.state == 2, (1...4096).contains(retained.raw.count) else {
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("enrollment possession is not consumed")
+      }
+      let receipt = try KagemushaAppPlatformReceiptProjectionV1(retained.receipt)
+      guard receipt.purpose == 2, receipt.ticket == p.ticket,
+        receipt.originalID == originalID, receipt.nativeScope == p.nativeScope,
+        receipt.challengeDigest == Data(SHA256.hash(data: p.signingBytes)),
+        receipt.rawEvidenceDigest == Data(SHA256.hash(data: retained.raw)),
+        receipt.originalScopeDigest == p.nativeScope,
+        let counter = receipt.appleCounter, counter > floor else {
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("consumed enrollment original differs")
+      }
+      let checked = try recover()
+      guard checked.state == 2, checked.raw == retained.raw, checked.receipt == retained.receipt else {
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("consumed enrollment readback changed")
+      }
+      _ = try recheck()
+      return KagemushaNativeConsumedAppEnrollmentPossessionOriginalV1(rawAssertion: retained.raw,
+        receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1(original: p, receipt: receipt))
+    } catch {
+      try? bridge.close()
+      throw error
+    }
+  }
+
   /// Return an original issuer-signed canonical credential archive to the same native
   /// pending owner. Native Core authenticates, correlates and durably retains it.
   /// A completed E may recover the identical previously issued credential after C's
@@ -153,6 +191,18 @@ public struct KagemushaNativeAppEnrollmentPossessionReceiptV1: Sendable {
     enrollmentChallengeHash = receipt.originalID; keyID = original.keyID; keyAlias = original.keyAlias
     signingDigest = receipt.challengeDigest; rawAssertionDigest = receipt.rawEvidenceDigest
     observedCounter = receipt.appleCounter!; canonicalReceipt = receipt.canonicalBytes
+  }
+}
+
+/// Original assertion and receipt read from the same consumed native E owner.
+/// These public transport bytes do not create a credential or financial authority.
+public struct KagemushaNativeConsumedAppEnrollmentPossessionOriginalV1: Sendable {
+  public let rawAssertion: Data
+  public let receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1
+
+  fileprivate init(rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) {
+    self.rawAssertion = Data(rawAssertion)
+    self.receipt = receipt
   }
 }
 

@@ -59,7 +59,6 @@ const REQUIRED_BUILD_ENVIRONMENT = Object.freeze({
   CARGO_BUILD_JOBS: "1",
   CARGO_INCREMENTAL: "0",
   CARGO_NET_OFFLINE: "true",
-  RUSTC_BOOTSTRAP: "1",
 });
 const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set([
   "EACCES",
@@ -343,6 +342,9 @@ function macosCargoEnvironment(env, identity) {
 }
 
 function validateRequiredEnvironment(env) {
+  if (env.RUSTC_BOOTSTRAP !== undefined) {
+    throw new Error("Native build forbids RUSTC_BOOTSTRAP; use the stock pinned toolchain.");
+  }
   for (const [key, expected] of Object.entries(REQUIRED_BUILD_ENVIRONMENT)) {
     if (env[key] !== expected) {
       throw new Error(
@@ -381,9 +383,9 @@ function canonicalBuildInputs(repoRoot, env) {
     throw new Error("Native build Cargo lock path must end in Cargo.lock.");
   }
   const rootLock = join(repoRoot, "Cargo.lock");
-  if (cargoLock !== rootLock && isPathInside(repoRoot, cargoLock)) {
+  if (cargoLock !== rootLock) {
     throw new Error(
-      "Native build external Cargo.lock must remain outside the source tree.",
+      "Native build Cargo.lock must be the authenticated repository root Cargo.lock.",
     );
   }
   return Object.freeze({ cargoLock, cargoManifest });
@@ -1302,16 +1304,14 @@ export function runNativeBuild({
   assertDirectories();
   const outputBefore = cargoArtifactIdentityOrNull(nativePath);
   invalidateProvenance(nativePath);
+  // Stock Cargo resolves this authenticated root manifest to its exact root lock.
+  // --locked rejects dependency drift; no alternate lock or unstable flag is admitted.
   const buildArgs = [
     platform === "darwin" ? "rustc" : "build",
     "--locked",
     "--offline",
     "--jobs",
     "1",
-    "-Z",
-    "unstable-options",
-    "--lockfile-path",
-    inputs.cargoLock,
     "--manifest-path",
     inputs.cargoManifest,
     "--package",

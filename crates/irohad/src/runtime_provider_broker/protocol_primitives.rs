@@ -93,10 +93,6 @@ pub(super) const OPERATION_MODERATION_CHECKPOINT_LOAD_V1: u16 = 103;
 pub(super) const OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 104;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1: u16 = 105;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1: u16 = 106;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1: u16 = 107;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1: u16 = 108;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1: u16 = 109;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1: u16 = 110;
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1: u16 = 111;
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1: u16 = 112;
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1: u16 = 113;
@@ -407,7 +403,7 @@ mod operation_ordinal_tests {
     use super::*;
 
     #[test]
-    fn post_soracloud_operation_ids_are_exact_and_contiguous() {
+    fn post_soracloud_operation_ids_are_exact_and_ordered() {
         let exact = [
             (OPERATION_SORACLOUD_PROVENANCE_SIGN_V1, 100),
             (OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1, 101),
@@ -422,10 +418,6 @@ mod operation_ordinal_tests {
                 OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
                 106,
             ),
-            (OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1, 107),
-            (OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1, 108),
-            (OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1, 109),
-            (OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1, 110),
             (
                 OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
                 111,
@@ -465,15 +457,16 @@ mod operation_ordinal_tests {
             (OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1, 129),
             (OPERATION_STREAM_TOKEN_CHECK_V1, 130),
         ];
-        for (index, (operation, expected)) in exact.into_iter().enumerate() {
+        for (operation, expected) in exact {
             assert_eq!(operation, expected);
-            assert_eq!(usize::from(operation), index + 100);
             assert!(super::super::operation_is_known(operation));
         }
         assert!(super::super::operation_is_known(
             OPERATION_POP_RUNTIME_OPEN_V1
         ));
-        assert!(!super::super::operation_is_known(131));
+        for unsupported in [107, 108, 109, 110, 131] {
+            assert!(!super::super::operation_is_known(unsupported));
+        }
     }
 }
 
@@ -751,7 +744,7 @@ impl_broker_debug_fields!(BrokerFrameV1 as value {
     "body_len" => value.body.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(BrokerFrameV1 { body });
-define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ProviderBindingWireV1"; pub(super) ProviderBindingWireV1 { pub(super) slot: u16, pub(super) handle: String, pub(super) revision: Option<u64>, pub(super) policy_digest: Option<[u8; 32]>, pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>, pub(super) stream_token_signer_binding: Option<crate::runtime_provider_registry::StreamTokenSignerRuntimeBindingV1>, pub(super) stream_token_gateway_admission_qualification: Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>, pub(super) stream_token_gateway_admission_max_pending: Option<u32>, pub(super) stream_token_gateway_admission_max_tracked_tokens: Option<u32>, pub(super) stream_token_gateway_admission_reconcile_max_items: Option<u32>, pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>, pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>, pub(super) appeal_finance_checkpoint_max_bytes: Option<u64>, pub(super) pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingWireV1>, pub(super) por_replay_archive_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>, pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>, pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>, pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>, pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>, pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>, pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>, pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>, pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>, pub(super) provider_ingest_max_signed_transaction_bytes: Option<u64>, pub(super) evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingWireV1>, pub(super) evidence_viewer_grant_ttl_ms: Option<u64>, pub(super) evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_id: Option<[u8; 32]>, pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_max_bytes: Option<u64>, pub(super) moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::ProviderBindingWireV1"; pub(super) ProviderBindingWireV1 { pub(super) slot: u16, pub(super) handle: String, pub(super) revision: Option<u64>, pub(super) policy_digest: Option<[u8; 32]>, pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>, pub(super) stream_token_signer_binding: Option<crate::runtime_provider_registry::StreamTokenSignerRuntimeBindingV1>, pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>, pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>, pub(super) appeal_finance_checkpoint_max_bytes: Option<u64>, pub(super) pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingWireV1>, pub(super) por_replay_archive_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>, pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>, pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>, pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>, pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>, pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>, pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>, pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>, pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>, pub(super) provider_ingest_max_signed_transaction_bytes: Option<u64>, pub(super) evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingWireV1>, pub(super) evidence_viewer_grant_ttl_ms: Option<u64>, pub(super) evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_id: Option<[u8; 32]>, pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_max_bytes: Option<u64>, pub(super) moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, });
 // Exact public identity and resource bound for moderation receipt archives.
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::primitives::ModerationPanelNotificationArchiveBindingWireV1"; pub(super) ModerationPanelNotificationArchiveBindingWireV1 { pub(super) archive_id: [u8; 32], pub(super) bootstrap_public_key: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_bytes: u64, pub(super) max_records: u64, });
 define_broker_wire_struct!(copy pub(super) GovernanceRequestIngressBindingWireV1 { pub(super) scope: u8, pub(super) endpoint_binding: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_body_bytes: u64, pub(super) max_envelope_lifetime_secs: u64, pub(super) max_future_skew_secs: u64, });

@@ -198,7 +198,10 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let lane = LaneId::new(17);
+    // This fixture authenticates the original global genesis before Initial dispatch.
+    // Keep its retained custody on that primary, rather than preloading a secondary
+    // validator before the secondary's native activation exists.
+    let lane = LaneId::SINGLE;
     let (validator, asset, before, share_before, nexus) = {
         let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, definition) = prepare_accounts(&mut stx);

@@ -7,3 +7,6 @@
 
 /// Bounded light finality verification and challenge-bound committee observations.
 pub mod finality;
+
+/// Deadline-bound native SDK transport for independently anchored finality observations.
+pub mod http;

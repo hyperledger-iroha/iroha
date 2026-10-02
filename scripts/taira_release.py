@@ -2,8 +2,8 @@
 """Check and prepare local Taira binaries without deployment authority.
 
 Requires Python 3.11+, Git, the repository Rust toolchain, a warm Cargo target,
-and explicitly hash-pinned Zig/cargo-zigbuild executables. `check` runs the
-maintained native CLI gate in the existing sibling .taira-testnet-build-targets/routine
+and explicitly hash-pinned Zig/cargo-zigbuild executables. Optional `check` runs
+development diagnostics in the existing sibling .taira-testnet-build-targets/routine
 lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must agree).
 `prepare` keeps repo target/ by default, ignoring the development-only environment
 selector, and builds the four Linux release binaries
@@ -1735,7 +1735,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         capacity_preflight([(target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
                             (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
         # Resolve the complete signed package graph before allocating an attempt
-        # or running any native checks or release build.
+        # or running the release build.
         print("[taira-release] verify offline Cargo package closure", flush=True)
         packages = local_package_names(source, env)
         attempt_number = 1 if not names else int(names[-1]) + 1
@@ -1959,7 +1959,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
         if name == "check":
             command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
-                                 help="basic native regression checks (default), or full regression qualification")
+                                 help="optional development diagnostics: basic regressions (default) or full census; neither is a preparation or deployment prerequisite")
             command.add_argument("--session-dir", type=Path,
                                  help="fresh private directory for a detached diagnostic; use check-status for its durable result")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
@@ -1969,7 +1969,7 @@ def parser() -> argparse.ArgumentParser:
         if name == "prepare":
             command.set_defaults(native_check_scope="build-only")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
-                                 help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
+                                 help="pinned native build linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
             command.add_argument("--output-dir", type=Path, required=True)

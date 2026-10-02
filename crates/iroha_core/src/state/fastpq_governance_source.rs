@@ -44,25 +44,11 @@ fn future_release(
     custody: &GovernanceLockCustody,
     ceiling: FastpqSourceLimitsV1,
 ) -> Result<FastpqSourceLimitsV1, String> {
-    future_transfer(
-        &custody.bond_escrow_account,
-        owner,
-        &custody.asset_definition_id,
-        ceiling,
-    )
-}
-
-fn future_transfer(
-    from: &AccountId,
-    to: &AccountId,
-    asset: &iroha_data_model::asset::AssetDefinitionId,
-    ceiling: FastpqSourceLimitsV1,
-) -> Result<FastpqSourceLimitsV1, String> {
     // Reject oversized variable identities before cloning them into a frame.
     let identity_bytes = [
-        norito::canonical_frame_len(to),
-        norito::canonical_frame_len(from),
-        norito::canonical_frame_len(asset),
+        norito::canonical_frame_len(owner),
+        norito::canonical_frame_len(&custody.bond_escrow_account),
+        norito::canonical_frame_len(&custody.asset_definition_id),
     ]
     .into_iter()
     .try_fold(0_u64, |sum, length| {
@@ -90,9 +76,9 @@ fn future_transfer(
         authority_digest: hash,
         poseidon_preimage_digest: Some(hash),
         deltas: vec![TransferDeltaTranscript {
-            from_account: from.clone(),
-            to_account: to.clone(),
-            asset_definition: asset.clone(),
+            from_account: custody.bond_escrow_account.clone(),
+            to_account: owner.clone(),
+            asset_definition: custody.asset_definition_id.clone(),
             amount: quantity.clone(),
             from_balance_before: quantity.clone(),
             from_balance_after: quantity.clone(),
@@ -127,68 +113,6 @@ fn future_transfer(
     })
 }
 
-/// Combined corpus accounting remains one owner across governance and SNS.
-#[derive(Debug)]
-pub(super) struct RetainedCorpus {
-    profile: FastpqSourcePolicyV1,
-    count: u32,
-    total: FastpqSourceLimitsV1,
-}
-
-impl RetainedCorpus {
-    pub(super) fn with_sns(
-        mut self,
-        storage: &impl StorageReadOnly<iroha_model_base::state_path::StatePath, Vec<u8>>,
-        replacement: Option<&iroha_data_model::alias_setup::AliasAutoRenewStateV1>,
-    ) -> Result<FastpqSourceLimitsV1, crate::sns::SnsError> {
-        if cfg!(all(test, sumeragi_core_mutation = "HC34")) {
-            return Ok(FastpqSourceLimitsV1::ZERO);
-        }
-        let mut sns_total = FastpqSourceLimitsV1::ZERO;
-        let ceiling = self
-            .profile
-            .mandatory
-            .reservation()
-            .map_err(crate::sns::SnsError::Internal)?;
-        crate::sns::visit_retained_auto_renew_obligations(
-            storage,
-            replacement,
-            |owner, collector, asset| {
-                self.count = self.count.checked_add(1).ok_or_else(|| {
-                    crate::sns::SnsError::Conflict(
-                        "retained mandatory obligation count exceeds u32".into(),
-                    )
-                })?;
-                if self.count > self.profile.mandatory.max_retained_obligations {
-                    return Err(crate::sns::SnsError::Conflict(
-                        "global retained governance/SNS count exceeds mandatory source allowance"
-                            .into(),
-                    ));
-                }
-                let shape = future_transfer(
-                    owner,
-                    collector,
-                    asset,
-                    self.profile.mandatory.per_obligation,
-                )
-                .map_err(crate::sns::SnsError::Conflict)?;
-                sns_total = sns_total
-                    .checked_add_entries(shape)
-                    .map_err(crate::sns::SnsError::Conflict)?;
-                self.total = self
-                    .total
-                    .checked_add_entries(shape)
-                    .map_err(crate::sns::SnsError::Conflict)?;
-                if !self.total.fits_within(ceiling) {
-                    return Err(crate::sns::SnsError::Conflict("retained governance/SNS transfers exceed their global mandatory source pool".into()));
-                }
-                Ok(())
-            },
-        )?;
-        Ok(sns_total)
-    }
-}
-
 /// Validate a complete authoritative retained corpus and an optional replacement.
 /// The cap applies globally across all referenda and expiry heights.
 pub(super) fn validate_retained<'a>(
@@ -196,7 +120,7 @@ pub(super) fn validate_retained<'a>(
     groups: impl IntoIterator<Item = (&'a String, &'a GovernanceLocksForReferendum)>,
     replacement: Option<(&str, &AccountId, &GovernanceLockCustody)>,
     rekey: Option<(&AccountId, &AccountId)>,
-) -> Result<RetainedCorpus, String> {
+) -> Result<(), String> {
     let ceiling = profile.mandatory.reservation()?;
     let mut total = FastpqSourceLimitsV1::ZERO;
     let mut count = 0_u32;
@@ -249,66 +173,10 @@ pub(super) fn validate_retained<'a>(
     if let Some((_, owner, custody)) = replacement {
         append(owner, custody)?;
     }
-    Ok(RetainedCorpus {
-        profile,
-        count,
-        total,
-    })
+    Ok(())
 }
 
 impl StateTransaction<'_, '_> {
-    /// Admit every retained future charge before changing an SNS configuration.
-    pub(crate) fn validate_fastpq_sns_state(
-        &self,
-        replacement: &iroha_data_model::alias_setup::AliasAutoRenewStateV1,
-    ) -> Result<(), crate::sns::SnsError> {
-        let current = self.world.parameters.get().block();
-        for profile in [self.fastpq_source_policy.0, current.fastpq_source()] {
-            let sns = validate_retained(profile, self.world.governance_locks.iter(), None, None)
-                .map_err(crate::sns::SnsError::Conflict)?
-                .with_sns(&self.world.smart_contract_state, Some(replacement))?;
-            if let Some(consumed) = self
-                .fastpq_source_quota
-                .pending_time_consumed_usage()
-                .map_err(crate::sns::SnsError::Conflict)?
-            {
-                let used = FastpqSourceLimitsV1 {
-                    max_executed_entries: consumed.executed_entries.try_into().map_err(|_| {
-                        crate::sns::SnsError::Conflict(
-                            "consumed mandatory entries exceed u32".into(),
-                        )
-                    })?,
-                    max_transcripts: consumed.transcripts.try_into().map_err(|_| {
-                        crate::sns::SnsError::Conflict(
-                            "consumed mandatory transcripts exceed u32".into(),
-                        )
-                    })?,
-                    max_deltas: consumed.deltas.try_into().map_err(|_| {
-                        crate::sns::SnsError::Conflict(
-                            "consumed mandatory deltas exceed u32".into(),
-                        )
-                    })?,
-                    max_input_transcript_bytes: consumed.input_transcript_bytes,
-                    max_statement_bytes: consumed.max_statement_bytes,
-                    max_total_statement_bytes: consumed.total_statement_bytes,
-                };
-                if !used
-                    .checked_add_entries(sns)
-                    .map_err(crate::sns::SnsError::Conflict)?
-                    .fits_within(
-                        profile
-                            .mandatory
-                            .reservation()
-                            .map_err(crate::sns::SnsError::Conflict)?,
-                    )
-                {
-                    return Err(crate::sns::SnsError::Conflict("consumed mandatory sources and pending SNS Time charges exceed the original carrier allowance".into()));
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Preflight the complete prospective retained corpus before escrow movement.
     pub(crate) fn validate_fastpq_governance_lock(
         &self,
@@ -325,9 +193,7 @@ impl StateTransaction<'_, '_> {
                 self.world.governance_locks.iter(),
                 Some((referendum, owner, custody)),
                 None,
-            )?
-            .with_sns(&self.world.smart_contract_state, None)
-            .map_err(sns_attempt_error)?;
+            )?;
         }
         Ok(())
     }
@@ -345,22 +211,9 @@ impl StateTransaction<'_, '_> {
                 self.world.governance_locks.iter(),
                 None,
                 Some((old, new)),
-            )?
-            .with_sns(&self.world.smart_contract_state, None)
-            .map_err(sns_attempt_error)?;
+            )?;
         }
         Ok(())
-    }
-}
-
-pub(super) fn sns_attempt_error(
-    error: crate::sns::SnsError,
-) -> crate::execution_attempt::ExecutionAttemptError<String> {
-    match error {
-        crate::sns::SnsError::Deferred(reason) => {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
-        }
-        error => crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string()),
     }
 }
 
@@ -372,28 +225,22 @@ impl super::World {
         {
             let parameters = self.parameters.view();
             let locks = self.governance_locks.view();
-            let records = self.smart_contract_state.view();
             validate_retained(
                 parameters.get().block().fastpq_source(),
                 locks.iter(),
                 None,
                 None,
-            )?
-            .with_sns(&records, None)
-            .map_err(sns_attempt_error)?;
+            )?;
         }
         {
             let parameters = self.parameters.block_and_revert();
             let locks = self.governance_locks.block_and_revert();
-            let records = self.smart_contract_state.block_and_revert();
             validate_retained(
                 parameters.get().block().fastpq_source(),
                 locks.iter(),
                 None,
                 None,
-            )?
-            .with_sns(&records, None)
-            .map_err(sns_attempt_error)?;
+            )?;
         }
         Ok(())
     }

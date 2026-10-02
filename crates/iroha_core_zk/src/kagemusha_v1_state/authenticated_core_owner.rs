@@ -31,7 +31,14 @@ pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
-    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaNativeOrdinaryCashOwnerV1,
+    KagemushaOrdinaryLogicalApprovalJournalV1,
+};
+pub(crate) use ordinary_enrollment::{
+    KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
 };
 
 #[path = "authenticated_core_dispatch.rs"]

@@ -1997,6 +1997,41 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
             .is_empty()
     );
 }
+
+#[test]
+fn cold_online_dependency_reports_missing_environment_capability_before_registry_or_storage_io() {
+    let temp = TempDir::new().expect("temporary directory");
+    let (root, _) = create_test_package(&temp);
+    write_test_lock_with_registry_node(&root);
+    let cache = MusubiCache::open(temp.path().join("cache")).expect("private cache");
+    let graph = ResolvedWorkspaceGraphV1 {
+        lock: LockfileV1::read(&root.join(LOCK_FILE_NAME)).expect("exact locked dependency"),
+        registry: None,
+        cached_source: None,
+        prepared_archive_fetch: None,
+        platform_config_provenance: None,
+        account_chain_discriminant: 753,
+    };
+    let error = ensure_graph_archives(&cache, &graph, GraphModeArgs::default())
+        .expect_err("cold online dependency requires an admitted download capability");
+    assert_eq!(error.code(), ErrorCode::Registry);
+    let rendered = CommandOutput::failure("deploy", error)
+        .render(OutputFormat::Human)
+        .expect("cold capability diagnostic");
+    assert!(rendered.stderr().contains("selected environment"));
+    assert!(rendered.stderr().contains("uncached dependency"));
+    assert!(!rendered.stderr().contains("offline"));
+    let offline = ensure_graph_archives(
+        &cache,
+        &graph,
+        GraphModeArgs {
+            offline: true,
+            ..GraphModeArgs::default()
+        },
+    )
+    .expect_err("offline misses remain distinct");
+    assert_eq!(offline.code(), ErrorCode::OfflineMiss);
+}
 #[test]
 fn package_output_writer_creates_confined_target_directory() {
     let temp = TempDir::new().expect("temporary directory");

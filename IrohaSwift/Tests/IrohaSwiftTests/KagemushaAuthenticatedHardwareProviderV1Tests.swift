@@ -63,14 +63,14 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     )
   }
 
-  func testOnlineOnlyLifecycleBridgeCannotQualifyAsAuthenticatedTransport() throws {
+  func testMissingLifecycleEndpointCannotQualifyAsAuthenticatedTransport() throws {
     let transport: any KagemushaNativeAuthenticatedDeviceTransportV1 =
-      KagemushaDeviceLifecycleBridgeV1.onlineOnly()
+      KagemushaDeviceLifecycleBridgeV1.unavailableForTests()
     XCTAssertThrowsError(try transport.hardwarePolicyID()) { error in
-      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .onlineOnly)
+      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .unavailable)
     }
     XCTAssertThrowsError(try transport.qualificationReportDigest()) { error in
-      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .onlineOnly)
+      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .unavailable)
     }
     XCTAssertThrowsError(
       try transport.executeAndVerify(
@@ -80,7 +80,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
         acceptedDevicePublicKey: nil
       )
     ) { error in
-      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .onlineOnly)
+      XCTAssertEqual(error as? KagemushaDeviceLifecycleBridgeErrorV1, .unavailable)
     }
   }
 
@@ -90,7 +90,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let provider = KagemushaAuthenticatedHardwareProviderV1(
       transport: transport,
       core: core, intentOwner: testOperationIntentOwner()
-    )
+    , incomingFoldEvidenceProvider: testRequiredIncomingOwner())
 
     XCTAssertThrowsError(try provider.qualification()) { error in
       XCTAssertEqual(
@@ -111,7 +111,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let fixture = try reservationFixture()
     let core = RecordingNativeCore()
     let transport = try QualificationOnlyTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     let operationID = Data(repeating: 7, count: 32)
     XCTAssertEqual(
       try provider.reservePaymentOperationID(
@@ -136,7 +136,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       fixtureBytes(fixture, "send_request_hex"))
     let core = RecordingNativeCore()
     let provider = KagemushaAuthenticatedHardwareProviderV1(
-      transport: try QualificationOnlyTransport(), core: core, intentOwner: testOperationIntentOwner())
+      transport: try QualificationOnlyTransport(), core: core, intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     let operationID = Data(repeating: 8, count: 32)
     for _ in 0..<2 {
       XCTAssertEqual(
@@ -166,7 +166,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let core = RecordingNativeCore()
     core.substituteReservedID = true
     let transport = try QualificationOnlyTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     let operationID = Data(repeating: 9, count: 32)
     XCTAssertNoThrow(try provider.qualification())
     XCTAssertThrowsError(
@@ -194,7 +194,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let core = RecordingNativeCore()
     core.substituteReservedID = true
     let transport = try QualificationOnlyTransport()
-    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner())
+    let provider = KagemushaAuthenticatedHardwareProviderV1(transport: transport, core: core, intentOwner: testOperationIntentOwner(), incomingFoldEvidenceProvider: testRequiredIncomingOwner())
     let operationID = Data(repeating: 12, count: 32)
     XCTAssertThrowsError(
       try provider.createPaymentRequest(

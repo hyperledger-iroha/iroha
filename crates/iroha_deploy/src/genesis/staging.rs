@@ -406,7 +406,8 @@ pub fn staged_signed_native_genesis_with_projection<T: Send>(
                         let authority = StagedNativeGenesis {
                             genesis: authenticated.0.clone(),
                             epoch,
-                            lane_policy: iroha_core::sumeragi::lanes::lane_policy(staged.world()),
+                            lane_policy: iroha_core::sumeragi::lanes::lane_policy(staged.world())
+                                .wrap_err("read committed staged genesis lane policy")?,
                             lanes: staged.world().sumeragi_lanes().clone(),
                         };
                         let projection = project(&authenticated, staged)?;
@@ -612,7 +613,8 @@ pub fn configured_initial_genesis_state(
         &mut world,
         &provisional.0,
         &nexus.dataspace_catalog,
-    );
+    )
+    .map_err(|error| eyre!("initialize authenticated genesis SNS policies: {error}"))?;
     // Even the generic default profile needs an authenticated configured catalog.
     // A blank test Kura has no production network/geometry binding to restore.
     let kura_config = config.map_or_else(staged_default_kura, |config| config.kura.clone());

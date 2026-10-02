@@ -252,7 +252,13 @@ fn ensure_private_instruction(
             "AMX coordinator requires the authenticated global root",
         ));
     }
-    let target = crate::queue::native_instruction_execution_target(
+    let bootstrap = state.genesis_execution_scope.is_some();
+    let resolve = if bootstrap {
+        crate::queue::private_genesis_instruction_target
+    } else {
+        crate::queue::native_instruction_execution_target
+    };
+    let target = resolve(
         &**instruction,
         &state.nexus.dataspace_catalog,
         &state.world,
@@ -262,7 +268,6 @@ fn ensure_private_instruction(
         crate::queue::RoutingResolveError::Deferred(reason) => state.defer_execution(reason),
         _ => denied("private instruction has no exact native dataspace target"),
     })?;
-    let bootstrap = state.genesis_execution_scope.is_some();
     let parameter = instruction.as_any().is::<SetParameter>();
     if target.dataspace.is_some_and(|target| target != dataspace)
         || target.global && !(bootstrap && parameter)
@@ -274,7 +279,7 @@ fn ensure_private_instruction(
     }
     if bootstrap {
         // The opaque capability authenticates this original genesis input. Private
-        // bootstrap still cannot address a foreign dataspace or global registry.
+        // bootstrap initializes its own alias registry, never a foreign dataspace or parent registry.
         return Ok(());
     }
     if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {

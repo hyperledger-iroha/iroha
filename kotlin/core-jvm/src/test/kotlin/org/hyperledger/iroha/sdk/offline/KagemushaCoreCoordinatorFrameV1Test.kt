@@ -276,7 +276,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
     }
 
     @Test
-    fun `App Attest commit acknowledgment binds every original byte and the actual monotonic counter`() {
+    fun `App Attest commit acknowledgment binds every original byte and independent counter`() {
         val method = KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
         val selection = domain + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(403).array() +
@@ -292,7 +292,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
         selection[428] = 70
         selection[444] = 71
         val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
-            selection, originalAppAttestAssertion(11u), KagemushaCoreCoordinatorFrameV1.u32(4),
+            selection, appAttestOriginal(11), KagemushaCoreCoordinatorFrameV1.u32(4),
             ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
         // The wallet's u128 index may be far beyond the unrelated signed u32 hardware counter.
         val wideIndex = request.map { it.copyOf() }.toMutableList()
@@ -332,7 +332,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, derivedCounter)
         }
-        val assertion = originalAppAttestAssertion(11u)
+        val assertion = appAttestOriginal(11)
         val unknownKey = assertion.copyOf().also { it[2] = 'x'.code.toByte() }
         val noncanonicalMap = byteArrayOf(0xb8.toByte(), 2) + assertion.copyOfRange(1, assertion.size)
         val indefiniteMap = assertion.copyOf().also { it[0] = 0xbf.toByte() }
@@ -344,7 +344,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
         for (malformed in listOf(byteArrayOf(0xa2.toByte(), 1, 2), assertion + byteArrayOf(0),
                 assertion.copyOf(assertion.size - 1), unknownKey, noncanonicalMap, indefiniteMap, duplicateKey,
                 malformedUtf8, wrongAuthenticatorType, noncanonicalAuthenticatorLength,
-                originalAppAttestAssertion(4u), originalAppAttestAssertion(3u))) {
+                appAttestOriginal(4), appAttestOriginal(3))) {
             val invalid = request.map { it.copyOf() }.toMutableList()
             invalid[3] = malformed
             assertFailsWith<IllegalArgumentException> {
@@ -364,6 +364,30 @@ class KagemushaCoreCoordinatorFrameV1Test {
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
         }
+        val lowerFloor = request.map { it.copyOf() }.toMutableList()
+        lowerFloor[4] = KagemushaCoreCoordinatorFrameV1.u32(3)
+        KagemushaCoreCoordinatorFrameV1.decodeRequest(method,
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, lowerFloor))
+        for (counter in listOf(5, 71)) {
+            val wrongCounter = response.map { it.copyOf() }.toMutableList()
+            wrongCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(counter)
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, wrongCounter)
+            }
+        }
+        val obsolete = request.map { it.copyOf() }.toMutableList()
+        obsolete[3] = byteArrayOf(0xa2.toByte(), 1, 2)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, obsolete)
+        }
+        val bootstrap = request.map { it.copyOf() }.toMutableList()
+        bootstrap[2][331] = 0
+        bootstrap[2].fill(0, 364, 460)
+        val bootstrapFrame = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, bootstrap)
+        val bootstrapResponse = response.map { it.copyOf() }.toMutableList()
+        bootstrapResponse[2] = MessageDigest.getInstance("SHA-256").digest(bootstrap[2])
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, bootstrapFrame,
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, bootstrapFrame, bootstrapResponse))
         response.indices.forEach { index ->
             val changed = response.map { it.copyOf() }
             changed[index][0] = (changed[index][0].toInt() xor 1).toByte()
@@ -385,13 +409,59 @@ class KagemushaCoreCoordinatorFrameV1Test {
         }
     }
 
-    /** Canonical original-byte shape only; no real App Attest signature or hardware authority. */
-    private fun originalAppAttestAssertion(counter: UInt): ByteArray =
-        byteArrayOf(0xa2.toByte(), 0x71) + "authenticatorData".toByteArray(Charsets.US_ASCII) +
-            byteArrayOf(0x58, 37) + ByteArray(32) { 0x42 } + byteArrayOf(0x40) +
-            ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(counter.toInt()).array() +
+    @Test
+    fun `App Attest original parser rejects malformed and noncanonical evidence`() {
+        val original = appAttestOriginal(11)
+        val parse = org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAppAttestOriginalV1::counter
+        assertEquals(11u, parse(original))
+        assertEquals(UInt.MAX_VALUE, parse(appAttestOriginal(-1)))
+        val duplicate = byteArrayOf(0xa2.toByte()) + original.copyOfRange(1, 58) +
+            original.copyOfRange(1, 58)
+        val badFlags = original.copyOf().also { it[53] = 0 }
+        val zeroAppID = original.copyOf().also { it.fill(0, 21, 53) }
+        val overlongMap = byteArrayOf(0xb8.toByte(), 2) + original.copyOfRange(1, original.size)
+        for (invalid in listOf(ByteArray(0), byteArrayOf(0xa2.toByte(), 1, 2),
+            original + byteArrayOf(0), original.copyOf(original.size - 1), duplicate,
+            badFlags, zeroAppID, overlongMap, ByteArray(312))) {
+            assertFailsWith<IllegalArgumentException> { parse(invalid) }
+        }
+    }
+
+    @Test
+    fun `App Attest original extensions retain exact bounded category and version grammar`() {
+        val parse = org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaAppAttestOriginalV1::counter
+        fun text(value: String): ByteArray {
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            val header = if (bytes.size < 24) byteArrayOf((0x60 or bytes.size).toByte())
+                else byteArrayOf(0x78, bytes.size.toByte())
+            return header + bytes
+        }
+        fun extensions(category: Int, version: String = "1.2"): ByteArray =
+            byteArrayOf(0xa2.toByte()) + text("validationCategory") + byteArrayOf(0x44) +
+                KagemushaCoreCoordinatorFrameV1.u32(category) + text("bundleVersion") + text(version)
+        for (category in listOf(1, 2, 3, 4, 5, 6, 10)) {
+            assertEquals(11u, parse(appAttestOriginal(11, extensions(category))))
+        }
+        assertEquals(11u, parse(appAttestOriginal(11, extensions(1, "x".repeat(128)))))
+        val valid = extensions(1)
+        val invalidUtf8 = valid.copyOfRange(0, valid.size - 4) + byteArrayOf(0x61, 0xff.toByte())
+        val categoryOnly = text("validationCategory") + byteArrayOf(0x44) + KagemushaCoreCoordinatorFrameV1.u32(1)
+        for (invalid in listOf(extensions(0), extensions(7), extensions(11), extensions(1, ""),
+            extensions(1, "a\u0000b"), extensions(1, "x".repeat(129)),
+            valid + byteArrayOf(0), byteArrayOf(0xb8.toByte(), 2) + valid.copyOfRange(1, valid.size),
+            byteArrayOf(0xa2.toByte()) + categoryOnly + categoryOnly, invalidUtf8)) {
+            assertFailsWith<IllegalArgumentException> { parse(appAttestOriginal(11, invalid)) }
+        }
+    }
+
+    private fun appAttestOriginal(counter: Int, extensions: ByteArray = ByteArray(0)): ByteArray {
+        val auth = ByteArray(32) { 0x42 } + byteArrayOf(if (extensions.isEmpty()) 0x40.toByte() else 0xc0.toByte()) +
+            ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(counter).array() + extensions
+        return byteArrayOf(0xa2.toByte(), 0x71) + "authenticatorData".toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x58, auth.size.toByte()) + auth +
             byteArrayOf(0x69) + "signature".toByteArray(Charsets.US_ASCII) +
             byteArrayOf(0x48, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01)
+    }
 
     private class Fixture(val name: String, val method: KagemushaCoreCoordinatorMethodV1, val request: ByteArray, val response: ByteArray)
 

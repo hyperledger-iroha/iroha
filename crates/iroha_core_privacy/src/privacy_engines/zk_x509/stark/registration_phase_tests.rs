@@ -65,7 +65,7 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
         .unwrap()
     });
     let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
-    let source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+    let mut source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
         &layout, &assembly, sha, p256, binding,
     )
     .expect("actual maximum BoundSources phase without mask/commitment work");
@@ -89,17 +89,99 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
         );
         assert_eq!(der_last[der_column], rfc_values[(1 << 19) - 1]);
     }
-    assert!(zk_x509_main_rfc_sha_terminal_products_match_v1(
-        source.claims.rfc5280,
-        source.claims.sha
-    ));
-    let mut changed = source.claims.sha;
-    changed.segments[0].rfc_stream_products[0][0] =
-        changed.segments[0].rfc_stream_products[0][0].add(F::ONE);
-    assert!(!zk_x509_main_rfc_sha_terminal_products_match_v1(
-        source.claims.rfc5280,
-        changed
-    ));
+    let (bridges, consumers) = super::super::rfc5280_stark::zk_x509_rfc_sha_union_columns_v1();
+    let mut bridge_values = zeroize::Zeroizing::new([[F::ZERO; 4]; 4]);
+    let mut role_values = zeroize::Zeroizing::new([[F::ZERO; 4]; 4]);
+    for index in 0..4 {
+        for lane in 0..4 {
+            let bridge = ZeroizingMainTraceColumnV1(
+                source
+                    .rfc
+                    .build_aux_column_v1(bridges[index][lane])
+                    .unwrap(),
+            );
+            assert_eq!(bridge.len(), 1 << 19);
+            bridge_values[index][lane] = bridge[ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[index] - 1];
+            assert!(
+                bridge
+                    .iter()
+                    .all(|value| *value == bridge_values[index][lane])
+            );
+            let role = ZeroizingMainTraceColumnV1(
+                source
+                    .rfc
+                    .build_aux_column_v1(consumers[index][lane])
+                    .unwrap(),
+            );
+            assert_eq!(role.len(), 1 << 19);
+            role_values[index][lane] = role[(1 << 19) - 1];
+        }
+        let mut endpoint = zeroize::Zeroizing::new([[F::ZERO; 4]; 4]);
+        let mut seen = false;
+        let returned = source.sha_aux[index]
+            .for_each_aux_row_with_air_terminals_v1(|row, aux| {
+                if row == ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[index] - 1 {
+                    seen = true;
+                    for stream in 0..4 {
+                        endpoint[stream].copy_from_slice(&aux[62 + 4 * stream..66 + 4 * stream]);
+                    }
+                }
+            })
+            .unwrap();
+        assert!(seen);
+        assert_eq!(*endpoint, returned.segment.rfc_stream_products);
+        for lane in 0..4 {
+            let product = endpoint
+                .iter()
+                .fold(F::ONE, |value, stream| value.mul(stream[lane]));
+            assert_eq!(
+                bridge_values[index][lane], product,
+                "private SHA endpoint {index}/{lane}"
+            );
+            assert_ne!(bridge_values[index][lane].add(F::ONE), product);
+            // Every independently committed byte stream affects its equation.
+            assert!(endpoint.iter().all(|stream| stream[lane] != F::ZERO));
+            for selected in 0..4 {
+                let changed = endpoint
+                    .iter()
+                    .enumerate()
+                    .fold(F::ONE, |value, (stream, words)| {
+                        value.mul(if stream == selected {
+                            words[lane].add(F::ONE)
+                        } else {
+                            words[lane]
+                        })
+                    });
+                assert_ne!(bridge_values[index][lane], changed);
+            }
+        }
+    }
+    for lane in 0..4 {
+        let role = role_values
+            .iter()
+            .fold(F::ONE, |value, role| value.mul(role[lane]));
+        let bridge = bridge_values
+            .iter()
+            .fold(F::ONE, |value, segment| value.mul(segment[lane]));
+        assert_eq!(
+            role, bridge,
+            "private four-role/four-segment union lane {lane}"
+        );
+        assert!(role_values.iter().all(|role| role[lane] != F::ZERO));
+        for selected in 0..4 {
+            let changed = role_values
+                .iter()
+                .enumerate()
+                .fold(F::ONE, |value, (index, words)| {
+                    value.mul(if index == selected {
+                        words[lane].add(F::ONE)
+                    } else {
+                        words[lane]
+                    })
+                });
+            assert_ne!(changed, bridge);
+        }
+    }
 }
 
 #[test]
@@ -133,7 +215,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "6de4f9403e4659834a309ceff14b2bd4ba8f2e0b182a1d4b85bf98e71d000ff5",
+        "e3acff9ebb2e4166768308152400b1d01fa5ed3796103c148356cff9a064afa0",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -191,7 +273,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "da169e0edd7885a13b8d5d5a8faab55442fa1c5213fab7eacb30fe3e9c7221fd",
+        "7efdef5f968f33a391d8a374d6f656ca4432cbf05bb2230cc0aa0c2f034f53b1",
         "update only when the canonical proof protocol intentionally changes"
     );
 }

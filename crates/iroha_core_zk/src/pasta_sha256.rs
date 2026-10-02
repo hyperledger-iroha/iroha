@@ -4,7 +4,11 @@
 //! synthesis has established the virtual-to-physical cell map, five Table8
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::pasta_sha256_table8::IV;
 use super::pasta_sha256_table8::{
     AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
@@ -22,7 +26,11 @@ use halo2_base::{
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
 };
 use sha2::{Digest as _, Sha256};
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use sha2::{compress256, digest::generic_array::GenericArray};
 /// Independent Table8 lanes fixed by the V1 circuit identity.
 pub(crate) const PASTA_SHA256_LANES_V1: usize = 5;
@@ -343,7 +351,11 @@ where
         });
         Ok(output_words)
     }
-    #[cfg(any(test, feature = "kagemusha-production-prover"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     /// Hash an active prefix of a fixed-capacity message without changing the key shape.
     ///
     /// `message.len()` and each source byte's constant/assigned provenance must be fixed by the

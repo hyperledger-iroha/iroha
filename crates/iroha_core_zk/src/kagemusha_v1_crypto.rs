@@ -1,13 +1,10 @@
 //! Typed Kagemusha V1 credit-envelope encryption.
 //!
-//! These helpers canonicalize the data-model plaintext and associated data,
-//! then invoke the reviewed X25519/HKDF-SHA256/XChaCha20-Poly1305 primitive in
-//! `iroha_crypto`. They are an implementation component for a completely
-//! qualified non-forking hardware provider, not a software fallback: AEAD
-//! success grants no monetary authority and never substitutes for a released
-//! recursive proof, hardware transition certificate, journal, counter, inbox,
-//! or outbox decision. No AEAD or X25519 arithmetic is placed in the recursive
-//! circuits.
+//! These helpers canonicalize the sole data-model plaintext and associated data and invoke
+//! the maintained X25519/HKDF-SHA256/XChaCha20-Poly1305 primitive in `iroha_crypto`.
+//! They serve both Native ordinary cash and qualified hardware adapters. AEAD success grants
+//! no financial authority: actual State/Guard proofs and independently governed one-use
+//! financial admission remain mandatory. AEAD/X25519 arithmetic stays outside the circuits.
 
 use iroha_crypto::kagemusha::{
     KagemushaCreditCryptoErrorV1, kagemusha_x25519_public_key_v1, open_kagemusha_credit_bytes_v1,
@@ -51,9 +48,9 @@ pub enum KagemushaCreditEncryptionErrorV1 {
 ///
 /// The RNG supplies exactly one fresh 32-byte X25519 ephemeral secret followed
 /// by one fresh 24-byte XChaCha20-Poly1305 nonce. This explicit injection is for
-/// hardware adapters, deterministic qualification vectors, and crash-recovery
-/// reproduction of an already reserved transition; production callers must not
-/// replace the qualified provider with a host software RNG.
+/// hardware adapters, Native ordinary cash custody, qualification vectors and exact
+/// crash recovery. Native production selects secure entropy before fsync; a retry must
+/// reproduce its already retained original rather than selecting new randomness.
 ///
 /// # Errors
 ///
