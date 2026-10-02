@@ -15,12 +15,16 @@ use zeroize::Zeroizing;
 #[path = "hardware_evidence_bootstrap/lifecycle.rs"]
 mod lifecycle;
 use lifecycle::{Lifecycle, Step};
+/// Refusal classes of the first-device hardware evidence owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaHardwareEvidenceErrorV1 {
+    /// An original, selection or interval failed validation.
     #[error("hardware bootstrap original rejected")]
     Rejected,
+    /// Journal, clock or randomness custody is unavailable.
     #[error("hardware bootstrap custody unavailable")]
     Custody,
+    /// A fenced invocation may have executed; its outcome is not known.
     #[error("hardware bootstrap original invocation outcome unknown")]
     UnknownOutcome,
 }
@@ -102,8 +106,8 @@ impl KagemushaCompiledHardwareBootstrapBindingV1 {
     }
     fn interval(&self) -> Result<KagemushaOrdinaryNativeTimeIntervalV1> {
         self.manifest.validate().map_err(|_| Rejected)?;
-        let c = self.clock.lock().map_err(|_| Custody)?;
-        if c.network_id().map_err(|_| Custody)?.0 != self.manifest.network_id
+        let mut c = self.clock.lock().map_err(|_| Custody)?;
+        if *c.network_id().map_err(|_| Custody)?.as_bytes() != self.manifest.network_id
             || c.installed_selection_digest().map_err(|_| Custody)?
                 != self.manifest.native_clock_selection_digest
         {
@@ -118,6 +122,7 @@ impl KagemushaCompiledHardwareBootstrapBindingV1 {
             .map_err(|_| Rejected)?;
         Ok(i)
     }
+    /// Return the signed release original after rechecking the network, clock selection and interval.
     pub fn public_signed_release_original(&self) -> Result<&[u8]> {
         self.interval()?;
         Ok(&self.signed_original)
@@ -194,6 +199,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             .map_err(|_| Custody)?;
         Ok(Self::blank(binding, journal, reservation))
     }
+    /// Reopen the existing journal for this binding and replay its bounded records.
     pub fn recover(
         root: &Path,
         binding: Arc<KagemushaCompiledHardwareBootstrapBindingV1>,
@@ -251,6 +257,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             receipt: None,
         }
     }
+    /// Require journal ownership and a valid bound native clock interval.
     pub fn recheck_custody(&self) -> Result<()> {
         self.journal.check_owned().map_err(|_| Custody)?;
         self.binding.interval()?;
@@ -304,6 +311,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
         self.start(Step::Prepare, sha(google_id_token_original).to_vec())?;
         encode(&self.reservation)
     }
+    /// Capture the challenge original for the pending Prepare step.
     pub fn accept_challenge(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Prepare, original)?;
@@ -344,6 +352,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
                 .clone(),
         ))
     }
+    /// Capture the Android key and attestation archive for the pending Key step.
     pub fn capture_android_original(
         &mut self,
         key: KagemushaDevicePublicKeyV1,
@@ -360,6 +369,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: b,
         })
     }
+    /// Fence the RawIssuer step and return the challenge and attestation archive originals.
     pub fn fence_raw_issuer(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
         self.start(Step::RawIssuer, vec![])?;
         Ok((
@@ -367,6 +377,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             self.raw.as_ref().ok_or(Rejected)?.archive.clone(),
         ))
     }
+    /// Capture the raw issuer admission original for the pending RawIssuer step.
     pub fn accept_raw_admission(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::RawIssuer, original)?;
@@ -391,10 +402,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             expires_at_ms: c.expires_at_ms,
         })
     }
+    /// Fence the Possession step and return the exact possession signing bytes.
     pub fn fence_possession(&mut self) -> Result<Vec<u8>> {
         self.start(Step::Possession, vec![])?;
         self.possession()?.signing_bytes().map_err(|_| Rejected)
     }
+    /// Capture the DER possession signature for the pending Possession step.
     pub fn capture_possession(&mut self, der: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Possession, der)?;
@@ -403,6 +416,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: der.to_vec(),
         })
     }
+    /// Return the cloud project number and integrity request hash over all captured originals.
     pub fn integrity_selection(&self) -> Result<(u64, [u8; 32])> {
         self.recheck_custody()?;
         let e = self.possession()?.signing_bytes().map_err(|_| Rejected)?;
@@ -418,10 +432,12 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             ),
         ))
     }
+    /// Fence the Integrity step and return its exact integrity selection.
     pub fn fence_integrity(&mut self) -> Result<(u64, [u8; 32])> {
         self.start(Step::Integrity, vec![])?;
         self.integrity_selection()
     }
+    /// Capture the opaque integrity token for the pending Integrity step.
     pub fn capture_integrity_original(&mut self, opaque_token: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Integrity, opaque_token)?;
@@ -430,6 +446,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             original: opaque_token.to_vec(),
         })
     }
+    /// Fence the Receipt step and return every captured original for the issuer request.
     pub fn fence_receipt(
         &mut self,
     ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
@@ -443,6 +460,7 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
             self.token.as_ref().ok_or(Rejected)?.to_vec(),
         ))
     }
+    /// Capture the hardware receipt original for the pending Receipt step.
     pub fn accept_hardware_receipt(&mut self, original: &[u8]) -> Result<()> {
         self.recheck_custody()?;
         self.check_capture(Step::Receipt, original)?;
@@ -489,26 +507,32 @@ impl KagemushaFirstDeviceHardwareEvidenceOwnerV1 {
         }
         Ok(())
     }
+    /// Return the pending step tag, if any.
     pub fn pending_step(&self) -> Result<Option<u8>> {
         self.recheck_custody()?;
         Ok(self.state.pending().map(|s| s as u8))
     }
+    /// Return the last completed step tag.
     pub fn completed_step(&self) -> Result<u8> {
         self.recheck_custody()?;
         Ok(self.state.completed())
     }
+    /// Return the captured hardware receipt original, if any.
     pub fn original_receipt(&self) -> Result<Option<&[u8]>> {
         self.recheck_custody()?;
         Ok(self.receipt.as_deref())
     }
+    /// Return the encoded reservation original.
     pub fn reservation_original(&self) -> Result<Vec<u8>> {
         self.recheck_custody()?;
         encode(&self.reservation)
     }
+    /// Return the reservation deadline in milliseconds.
     pub fn authoritative_deadline_ms(&self) -> Result<u64> {
         self.recheck_custody()?;
         Ok(self.reservation.deadline_ms)
     }
+    /// Persist a cancellation request when the lifecycle permits it.
     pub fn request_cancel(&mut self) -> Result<()> {
         let mut next = self.state;
         next.cancel().map_err(|_| Rejected)?;

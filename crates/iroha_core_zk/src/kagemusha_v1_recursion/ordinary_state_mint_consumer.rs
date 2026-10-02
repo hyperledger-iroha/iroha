@@ -9,7 +9,7 @@ use super::{
 use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128};
 use halo2_base::{
     AssignedValue, Context,
-    gates::{GateInstructions as _, RangeChip},
+    gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 
 pub(super) fn inactive_column<F: KagemushaPoseidonFieldV1>(

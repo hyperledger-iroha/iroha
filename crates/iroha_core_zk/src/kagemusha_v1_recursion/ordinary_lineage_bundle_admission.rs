@@ -20,7 +20,8 @@ pub use commit_admission::{
 };
 
 pub(crate) use commit_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
 };
 
 const BUNDLE_MAX: usize = 256 * 1024;

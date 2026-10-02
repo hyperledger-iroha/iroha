@@ -2312,7 +2312,7 @@ where
         .first()
         .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
     if ordinary_data.is_some() {
-        let range = loader.ecc_chip().range();
+        let chip = loader.ecc_chip();
         let mut context = loader.ctx_mut();
         let cells = authorization_column
             .iter()
@@ -2320,7 +2320,7 @@ where
             .collect::<Vec<_>>();
         super::ordinary_state_mint_consumer::constrain_inactive_column(
             context.main(),
-            range,
+            chip.range(),
             &cells,
             mint,
         )?;
