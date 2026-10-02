@@ -234,6 +234,9 @@ fn both_satisfied(f: &Originals, public_mutations: bool) -> Result<bool, String>
     assert_eq!(eq_public.len(), 113);
     assert_eq!(ep_public.len(), 113);
     let eq = build_ordinary_mint_eq_v1(&eq_parameters, &witness(f), root, &f.table)?;
+    let geometry = eq.jobs.capacity_profile().unwrap();
+    println!("Mint113 Fp fixedK16 SHA jobs/blocks/rows: {geometry:?}");
+    assert!(geometry.2 <= (1usize << KAGEMUSHA_HALO2_K_V1) - 9);
     let eq_pass = MockProver::run(KAGEMUSHA_HALO2_K_V1, &eq, vec![eq_public.clone()])
         .map_err(|e| format!("Eq Mint synthesis: {e:?}"))?
         .verify()
@@ -255,6 +258,12 @@ fn both_satisfied(f: &Originals, public_mutations: bool) -> Result<bool, String>
     drop(eq);
     halo2_proofs::release_allocator_slack();
     let ep = build_ordinary_mint_ep_v1(&ep_parameters, &witness(f), root, &f.table)?;
+    let ep_geometry = ep.jobs.capacity_profile().unwrap();
+    assert_eq!(
+        geometry, ep_geometry,
+        "exact both-field compression topology"
+    );
+    println!("Mint113 Fq fixedK16 SHA jobs/blocks/rows: {ep_geometry:?}");
     let ep_pass = MockProver::run(KAGEMUSHA_HALO2_K_V1, &ep, vec![ep_public.clone()])
         .map_err(|e| format!("Ep Mint synthesis: {e:?}"))?
         .verify()
@@ -366,5 +375,50 @@ fn genuine_ordinary_mint113_keys_and_actual_both_parity_proofs() {
             }
 
         },
+    );
+}
+
+#[test]
+fn public_account_preprocessing_binds_both_domains_to_original_account_and_credential() {
+    let f = originals(false);
+    let c = &f.enrollment.selection.issuance.credential;
+    let data = ordinary_mint_public_data_v1(
+        &f.statement,
+        &f.approval,
+        c,
+        None,
+        f.enrollment.release.provider_policy_root(),
+    )
+    .unwrap();
+    let account = &f.statement.context.lineage.owner.account_id;
+    let raw = norito::encode_canonical(account).unwrap();
+    assert_eq!(
+        data.digests[16],
+        kagemusha_ordinary_app_account_binding_v1(account)
+    );
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:account-identity\0");
+    hash.update((raw.len() as u64).to_le_bytes());
+    hash.update(raw);
+    assert_eq!(data.digests[17], <[u8; 32]>::from(hash.finalize()));
+    let mut statement = f.statement.clone();
+    statement.context.lineage.owner.account_id = iroha_data_model::account::AccountId::new(
+        iroha_crypto::KeyPair::from_seed(vec![99; 32], iroha_crypto::Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let mut approval = f.approval.clone();
+    statement.issuance_commitment = statement.context.issuance_commitment().unwrap();
+    statement.credit_id = statement.context.credit_id().unwrap();
+    approval.challenge.statement_digest = statement.binding_digest().unwrap();
+    assert!(
+        ordinary_mint_public_data_v1(
+            &statement,
+            &approval,
+            c,
+            None,
+            f.enrollment.release.provider_policy_root()
+        )
+        .is_err()
     );
 }

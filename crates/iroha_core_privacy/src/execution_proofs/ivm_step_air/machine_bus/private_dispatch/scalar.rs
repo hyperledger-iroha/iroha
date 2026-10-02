@@ -1,6 +1,8 @@
 //! Original private scalar/branch reads, tags, writes, comparisons and shifts.
 //! Total NOT/NEG reuse the ALU; signed MIN/MAX select full original words.
 //! Four multiply variants reuse the exact full-width product/correction bank.
+//! Successful DIV/DIVU/REM/REMU reuse that product, the remainder comparison and
+//! the original shift workspace; their native trap-sensitive operands are public.
 //!
 //! This bank consumes the enclosing dispatcher's private canonical fetch cells
 //! and its sole original packet array. It has no independent instruction list,
@@ -8,7 +10,7 @@
 
 use super::super::super::{
     alu, branch, immediate_operand, semantic_opcode, shift,
-    trace::{bit_count, multiply},
+    trace::{bit_count, division, multiply},
     word,
 };
 use super::*;
@@ -39,6 +41,22 @@ pub(super) fn is_bit_count(instruction: u32) -> bool {
         wide::opcode(instruction),
         wide::arithmetic::POPCNT | wide::arithmetic::CLZ | wide::arithmetic::CTZ
     )
+}
+
+fn division_kind(instruction: u32) -> Option<usize> {
+    match wide::opcode(instruction) {
+        wide::arithmetic::DIV => Some(0),
+        wide::arithmetic::DIVU => Some(1),
+        wide::arithmetic::REM => Some(2),
+        wide::arithmetic::REMU => Some(3),
+        _ => None,
+    }
+}
+
+/// Successful division still requires both native trap-sensitive operands public.
+/// TODO: Compose original failed-attempt ports before admitting private traps.
+pub(super) fn is_division(instruction: u32) -> bool {
+    division_kind(instruction).is_some()
 }
 
 fn multiply_kind(instruction: u32) -> Option<usize> {
@@ -175,6 +193,7 @@ pub(super) fn is_supported(instruction: u32) -> bool {
         || is_multiply(instruction)
         || is_bit_count(instruction)
         || is_conditional_move(instruction)
+        || is_division(instruction)
 }
 
 pub(super) fn append_residues(
@@ -200,6 +219,8 @@ pub(super) fn append_residues(
     };
     let select = |predicate: &dyn Fn(u32) -> bool| weighted(&|w| F(u64::from(predicate(w))));
     let active = select(&|_| true);
+    let division_selected = select(&|w| is_division(w));
+    let division_signed = select(&|w| division_kind(w).is_some_and(division::signed_kind));
     let move_selected = select(&|w| is_conditional_move(w));
     let register_move = select(&|w| wide::opcode(w) == wide::arithmetic::CMOV);
     let move_taken = F::ONE.sub(row[SCALAR + MOVE_ZERO]);
@@ -296,6 +317,10 @@ pub(super) fn append_residues(
     let branching = select(&|w| is_branch(w));
     out.push(branching.mul(p[SCALAR_LEFT][BEFORE_TAG]));
     out.push(branching.mul(p[SCALAR_RIGHT][BEFORE_TAG]));
+    // Native division may trap on its values; public tags are mandatory even
+    // for rd0 and even when the two private tags would otherwise match.
+    out.push(division_selected.mul(p[SCALAR_LEFT][BEFORE_TAG]));
+    out.push(division_selected.mul(p[SCALAR_RIGHT][BEFORE_TAG]));
     for (slot, zero) in [
         (SCALAR_LEFT, select(&|w| left_register(w) == 0)),
         (
@@ -356,29 +381,42 @@ pub(super) fn append_residues(
     // No bank allocates an intermediate private residual vector.
     alu::append_residues(out, bank, source, selectors);
     let comparison = &row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS];
+    let product = &row[SCALAR + MULTIPLY..SCALAR + COUNT];
+    let shifts = &row[SCALAR + SHIFT..super::WIDTH];
     branch::append_bank_residues(
         out,
         comparison,
-        core::array::from_fn(|operand| core::array::from_fn(|limb| source.limb(operand, limb))),
+        core::array::from_fn(|operand| {
+            core::array::from_fn(|limb| {
+                let divided = if operand == 0 {
+                    shifts[division::REMAINDER + limb]
+                } else {
+                    product[multiply::SIGNED_SIGNED + limb]
+                };
+                F::ONE
+                    .sub(division_selected)
+                    .mul(source.limb(operand, limb))
+                    .add(division_selected.mul(divided))
+            })
+        }),
         [source.sign(0), source.sign(1)],
         core::array::from_fn(|predicate| select(&|w| comparison_predicate(w) == Some(predicate))),
     );
     // Like the ALU and shift banks, the exact product stays constrained on
     // every row. Keeping range equations unconditional preserves degree four;
     // only destination selection depends on the private canonical fetch.
-    let product = &row[SCALAR + MULTIPLY..SCALAR + COUNT];
     multiply::append_residues(
         out,
         product,
         &row[SCALAR + PRODUCT_DIGITS..SCALAR + MULTIPLY],
         source,
         multiply::Selection {
-            multiply: F::ONE,
-            division: F::ZERO,
+            multiply: F::ONE.sub(division_selected),
+            division: division_selected,
             square: F::ZERO,
-            signed: F::ZERO,
-            success: F::ZERO,
-            quotient: [F::ZERO; 4],
+            signed: division_signed,
+            success: division_selected,
+            quotient: core::array::from_fn(|limb| shifts[division::QUOTIENT + limb]),
         },
     );
     let product_destinations = core::array::from_fn::<_, 4, _>(|kind| {
@@ -412,11 +450,35 @@ pub(super) fn append_residues(
             wide::arithmetic::CLZ | wide::arithmetic::CTZ
         ) && has_destination(w)
     });
-    let shifts = &row[SCALAR + SHIFT..super::WIDTH];
     let mut kinds = core::array::from_fn(|kind| select(&|w| shift_kind(w) == Some(kind)));
     // Canonical SLL on every non-shift row, including zero-source padding.
     kinds[0] = kinds[0].add(F::ONE.sub(select(&|w| shift_kind(w).is_some())));
+    let shift_start = out.len();
     shift::append_bank_residues(out, shifts, source, kinds);
+    // Reuse the original 208 cells; the old barrel equations are at most cubic.
+    // Division's radix-four checks remain unconditional and degree four.
+    for residual in &mut out[shift_start..] {
+        *residual = F::ONE.sub(division_selected).mul(*residual);
+    }
+    let gas_digits = core::array::from_fn::<_, 32, _>(|digit| {
+        let offset = WORDS + 64 + 2 * digit;
+        row[offset].add(F(2).mul(row[offset + 1]))
+    });
+    division::append_residues(
+        out,
+        shifts,
+        product,
+        source,
+        &gas_digits,
+        comparison[branch::BORROW + 3],
+        division::Selection {
+            active: division_selected,
+            signed: division_signed,
+            ceiling: F::ZERO,
+            out_of_gas: F::ZERO,
+            assertion_failed: F::ZERO,
+        },
+    );
     let shift_destination = select(&|w| shift_kind(w).is_some() && has_destination(w));
     let alu_destination = select(&|w| is_alu(w) && wide::rd(w) != 0);
     let minimum_destination =
@@ -430,6 +492,9 @@ pub(super) fn append_residues(
                 wide::arithmetic::MIN | wide::arithmetic::MAX
             )
             && has_destination(w)
+    });
+    let division_destinations = core::array::from_fn::<_, 4, _>(|kind| {
+        select(&|w| division_kind(w) == Some(kind) && has_destination(w))
     });
     let taken = comparison[branch::TAKEN_BANK_OFFSET];
     for limb in 0..4 {
@@ -458,6 +523,17 @@ pub(super) fn append_residues(
         out.push(
             p[SCALAR_DESTINATION][AFTER + limb]
                 .sub(multiplied)
+                .sub(division_destinations.iter().enumerate().fold(
+                    F::ZERO,
+                    |sum, (kind, selected)| {
+                        let result = if kind < 2 {
+                            division::QUOTIENT_RESULT
+                        } else {
+                            division::REMAINDER_RESULT
+                        };
+                        sum.add(selected.mul(shifts[result + limb]))
+                    },
+                ))
                 .sub(move_destination.mul(source.limb(1, limb)))
                 .sub(if limb == 0 {
                     population_destination

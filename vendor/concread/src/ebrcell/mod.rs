@@ -184,6 +184,38 @@ impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
         self.caller.is_poisoned()
     }
 
+    /// Borrow the current value while retaining its sole original physical writer.
+    ///
+    /// The reference cannot outlive this acquisition. No clone, collector pin,
+    /// payload allocation or publication occurs; no mutable reference is exposed.
+    ///
+    /// # Errors
+    /// Refuses original writer poison before exposing its payload.
+    ///
+    /// ```compile_fail
+    /// use concread::ebrcell::EbrCell;
+    /// let cell=EbrCell::new(String::from("original"));
+    /// let original=cell.try_acquire_writer().unwrap();
+    /// let borrowed=original.borrow_current().unwrap();
+    /// drop(original);
+    /// assert_eq!(borrowed,"original");
+    /// ```
+    pub fn borrow_current(
+        &self,
+    ) -> Result<&T, EbrCellWriterAdmissionError<std::convert::Infallible>> {
+        if self.is_poisoned() {
+            return Err(EbrCellWriterAdmissionError::Poisoned);
+        }
+        // SAFETY: this acquisition holds the sole original physical writer and
+        // borrows its Cell. Replacement and Cell destruction cannot occur; the
+        // returned shared reference is bounded by this acquisition's borrow.
+        let current = self
+            .caller
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() });
+        Ok(&unsafe { current.deref() }.value)
+    }
+
     /// Copy the current value while this original physical writer prevents replacement.
     ///
     /// No clone, payload allocation, collector registration or publication occurs.
@@ -195,17 +227,7 @@ impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
     where
         T: Copy,
     {
-        if self.is_poisoned() {
-            return Err(EbrCellWriterAdmissionError::Poisoned);
-        }
-        // SAFETY: this acquisition holds the original writer and borrows the
-        // cell, preventing active replacement and destruction. No reference
-        // escapes; Copy cannot invoke user cloning or run a destructor.
-        let current = self
-            .caller
-            .active
-            .load(Acquire, unsafe { epoch::unprotected() });
-        Ok(unsafe { current.deref() }.value)
+        Ok(*self.borrow_current()?)
     }
 
     /// Admit and clone under this original physical owner, without releasing it.

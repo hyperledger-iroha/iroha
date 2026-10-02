@@ -10979,3 +10979,7 @@ mod ordinary_zero_bootstrap_qualification_tests;
 #[cfg(test)]
 #[path = "ordinary_mint_genuine_qualification_tests.rs"]
 mod ordinary_mint_genuine_qualification_tests;
+
+#[cfg(all(test, unix))]
+#[path = "ordinary_mint_public_artifact_tests.rs"]
+mod ordinary_mint_public_artifact_tests;

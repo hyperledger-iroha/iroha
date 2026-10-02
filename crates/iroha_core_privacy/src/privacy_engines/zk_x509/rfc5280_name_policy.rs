@@ -1,7 +1,7 @@
 //! Original Name structure and forced OID-census uniqueness constraints.
 //!
-//! TODO: the full original Name value census and UTF8/PrintableString state
-//! machine remain required before complete parser equivalence or activation.
+//! The separate NameValue family authenticates the complete value census and
+//! directory-string transition policy; release qualification remains separate.
 use super::*;
 
 const NODE_CLASS: usize = CALENDAR_COLUMNS + 10;
@@ -19,8 +19,10 @@ const NAME_INVERSE: usize = BASE_D;
 const NAME_FIRST: usize = BASE_E;
 const NAME_ID: usize = BASE_F;
 const INSTANCE_REMAINDER: usize = BASE_SMALL_BITS;
+// Six bits bound a positive gap between disjoint keys 1..=48. The existing
+// 24-cell small-bit area holds both six-bit groups without changing width.
 const KEY_GAP: usize = INSTANCE_REMAINDER + 6;
-pub(super) const RESIDUES: usize = 54;
+pub(super) const RESIDUES: usize = 56;
 
 pub(super) fn residues<A: PolynomialAirFieldV1>(
     row: &ZkX509Rfc5280StarkBaseRowV1<A>,
@@ -76,7 +78,14 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
         ),
     );
     push(fixed_byte.mul(first.sub(name.mul(row[BASE_IS_WRITE]))));
-    push(fixed_byte.mul(row[NAME_ID]).mul(row[NAME_ID].sub(A::ONE)));
+    // Preserve the authenticated original issuer/subject/CRL classes 0, 1, 2.
+    // The fixed selector makes this cubic class test degree four.
+    push(
+        fixed_byte
+            .mul(row[NAME_ID])
+            .mul(row[NAME_ID].sub(A::ONE))
+            .mul(row[NAME_ID].sub(A::from_base(F(2)))),
+    );
     let remainder = (0..6).fold(A::ZERO, |sum, bit| {
         sum.add(row[INSTANCE_REMAINDER + bit].mul_base(F(1 << bit)))
     });
@@ -91,15 +100,15 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
         let bit = row[INSTANCE_REMAINDER + bit];
         push(fixed_byte.mul(name).mul(bit).mul(bit.sub(A::ONE)));
     }
-    for bit in 0..5 {
+    for bit in 0..6 {
         let bit = row[KEY_GAP + bit];
         push(fixed_byte.mul(first).mul(bit).mul(bit.sub(A::ONE)));
     }
-    let gap = (0..5).fold(A::ZERO, |sum, bit| {
+    let gap = (0..6).fold(A::ZERO, |sum, bit| {
         sum.add(row[KEY_GAP + bit].mul_base(F(1 << bit)))
     });
     let key = row[BASE_DOCUMENT]
-        .mul_base(F(8))
+        .mul_base(F(12))
         .add(row[NAME_ID].mul_base(F(4)))
         .add(row[BASE_ENDPOINT_ROLE])
         .add(A::ONE);
@@ -133,6 +142,12 @@ pub(super) fn residues<A: PolynomialAirFieldV1>(
             .mul(row[BASE_ACTIVE])
             .mul(A::ONE.sub(row[BASE_STRICT]))
             .mul(next[BASE_H].sub(row[BASE_H])),
+    );
+    push(
+        fixed_byte
+            .mul(row[BASE_ACTIVE])
+            .mul(A::ONE.sub(row[BASE_STRICT]))
+            .mul(next[BASE_TAG_CLASS].sub(row[BASE_TAG_CLASS])),
     );
     assert_eq!(index, RESIDUES);
     output
@@ -175,7 +190,7 @@ pub(super) fn populate_fixed_byte(
     if name {
         let partition = row[BASE_H].0 / 1024;
         let remainder = row[BASE_H].0 % 1024;
-        if partition > 1 || remainder >= 64 {
+        if partition > 2 || remainder >= 64 {
             return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
         }
         row[NAME_ID] = F(partition);
@@ -183,13 +198,13 @@ pub(super) fn populate_fixed_byte(
             row[INSTANCE_REMAINDER + bit] = F((remainder >> bit) & 1);
         }
         if row[NAME_FIRST] == F::ONE {
-            let key = row[BASE_DOCUMENT].0 * 8 + partition * 4 + row[BASE_ENDPOINT_ROLE].0 + 1;
+            let key = row[BASE_DOCUMENT].0 * 12 + partition * 4 + row[BASE_ENDPOINT_ROLE].0 + 1;
             let gap = key
                 .checked_sub(*previous)
                 .and_then(|difference| difference.checked_sub(1))
-                .filter(|gap| *gap < 32)
+                .filter(|gap| *gap < 64)
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-            for bit in 0..5 {
+            for bit in 0..6 {
                 row[KEY_GAP + bit] = F((gap >> bit) & 1);
             }
             *previous = key;

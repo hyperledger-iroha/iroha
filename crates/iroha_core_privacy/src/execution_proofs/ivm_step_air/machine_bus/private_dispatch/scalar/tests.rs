@@ -196,11 +196,27 @@ impl ScalarFixture {
             left,
             right,
         ));
+        if let Some(kind) = division_kind(instruction) {
+            fill_division(&mut fixture, left, right, record.before.gas_remaining, kind);
+        }
         Self(fixture)
     }
     fn accepts(&self, program: &Program) -> bool {
         self.0.accepts(program)
     }
+}
+
+// The successful native division uses the same original source words and gas.
+fn fill_division(fixture: &mut Fixture, left: u64, right: u64, gas: u64, kind: usize) {
+    let witness = division::witness(left, right, gas, kind);
+    fixture.row[SCALAR + SHIFT..super::super::WIDTH].copy_from_slice(&witness.bank);
+    fixture.row[SCALAR + PRODUCT_DIGITS..SCALAR + MULTIPLY].copy_from_slice(&witness.digits);
+    fixture.row[SCALAR + MULTIPLY..SCALAR + COUNT].copy_from_slice(&witness.product);
+    fixture.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS].copy_from_slice(&branch::bank_witness(
+        0,
+        witness.remainder,
+        witness.denominator,
+    ));
 }
 
 // Fill the shared exact-product workspace, including unused-operation rows.
@@ -492,6 +508,10 @@ fn composed_private_scalar_polynomials_have_degree_four() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let artifact = contract(
         &[
+            enc::encode_rr(wide::arithmetic::DIV, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::DIVU, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::REM, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::REMU, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::CMOV, 4, 2, 3),
             enc::encode_ri(wide::arithmetic::CMOVI, 4, 2, -1),
             enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
@@ -713,11 +733,14 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         wide::arithmetic::MULHU,
         wide::arithmetic::MULHSU,
         wide::arithmetic::MULH,
+        wide::arithmetic::DIV,
+        wide::arithmetic::DIVU,
+        wide::arithmetic::REM,
+        wide::arithmetic::REMU,
     ] {
-        let (_, fixture) = native(
-            enc::encode_rr(opcode, 4, 2, 3),
-            &[(2, 17, true), (3, 23, true), (4, 19, false)],
-        );
+        let instruction = enc::encode_rr(opcode, 4, 2, 3);
+        let tag = !is_division(instruction);
+        let (_, fixture) = native(instruction, &[(2, 17, tag), (3, 23, tag), (4, 19, false)]);
         assert!(accepts(&fixture, None));
         for slot in [SCALAR_LEFT, SCALAR_RIGHT, SCALAR_DESTINATION] {
             assert!(!accepts(&fixture, Some((slot, false))));
@@ -960,3 +983,5 @@ mod unary_select;
 mod bit_counts;
 
 mod conditional_moves;
+
+mod div_rem;

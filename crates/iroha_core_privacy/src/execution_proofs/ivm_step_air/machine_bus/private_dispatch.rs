@@ -355,6 +355,7 @@ fn append_control_residues<'a>(
     let multiply_extra_gas = select(&|_, w| scalar::is_multiply(w)).mul(F(2));
     let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
     let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
+    let division_extra_gas = select(&|_, w| scalar::is_division(w)).mul(F(9));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
@@ -475,6 +476,7 @@ fn append_control_residues<'a>(
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)
                 .add(move_extra_gas)
+                .add(division_extra_gas)
                 .add(branching)
         } else {
             F::ZERO

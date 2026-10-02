@@ -33,7 +33,7 @@
 mod absolute;
 pub(super) mod bit_count;
 mod ceiling;
-mod division;
+pub(super) mod division;
 mod gcd;
 mod mean;
 pub(super) mod multiply;

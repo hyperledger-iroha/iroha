@@ -47,8 +47,8 @@ fn variable_output_public_pair_geometry_covers_every_disclosure_shape() {
         }
         assert_eq!(variable_output::slot(shape, u32::MAX), None);
     }
-    assert_eq!(variable_output::FIX_END, 118);
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 146);
+    assert_eq!(variable_output::FIX_END, 119);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
 }
 
 #[test]

@@ -394,6 +394,14 @@ fn qualify() {
             &generated.ep.proof,
             &ep_column[..84]
         ));
+        #[cfg(unix)]
+        super::ordinary_mint_public_artifact_tests::export_from_environment(
+            &generated,
+            provider,
+            &f.enrollment.issuer_table,
+            apple,
+        )
+        .expect("export and replay exact public mathematical Mint artifacts");
         drop(generated);
         halo2_proofs::release_allocator_slack();
     }

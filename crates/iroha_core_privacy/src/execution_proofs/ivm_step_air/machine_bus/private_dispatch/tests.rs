@@ -537,7 +537,7 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
-        enc::encode_rr(wide::arithmetic::DIV, 2, 3, 1),
+        enc::encode_rr(wide::arithmetic::DIV_CEIL, 2, 3, 1),
     ] {
         assert!(role(w).is_none());
     }

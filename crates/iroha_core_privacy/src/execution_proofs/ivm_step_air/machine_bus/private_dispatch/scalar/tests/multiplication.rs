@@ -198,7 +198,7 @@ fn private_multiply_bounded_carries_and_false_original_sources_fail() {
 }
 
 #[test]
-fn private_multiply_exact_three_gas_and_unavailable_division_are_bound() {
+fn private_multiply_exact_three_gas_and_unavailable_extended_arithmetic_are_bound() {
     for opcode in OPS {
         let (program, fixture) = checked(
             enc::encode_rr(opcode, 4, 2, 3),
@@ -217,10 +217,9 @@ fn private_multiply_exact_three_gas_and_unavailable_division_are_bound() {
         }
     }
     for opcode in [
-        wide::arithmetic::DIV,
-        wide::arithmetic::DIVU,
-        wide::arithmetic::REM,
-        wide::arithmetic::REMU,
+        wide::arithmetic::DIV_CEIL,
+        wide::arithmetic::GCD,
+        wide::arithmetic::ABS,
     ] {
         assert!(!is_supported(enc::encode_rr(opcode, 4, 2, 3)));
     }

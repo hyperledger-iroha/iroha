@@ -138,7 +138,12 @@ fn scalar_reference_v1(
                 );
             let multiplicity = row[BASE_PROFILE_TABLE_MULTIPLICITY];
             let query_gate =
-                row_family_gate_v1(material, row_index, ZkX509Rfc5280StarkFamilyV1::FixedByte)?;
+                row_family_gate_v1(material, row_index, ZkX509Rfc5280StarkFamilyV1::FixedByte)?
+                    .add(row_family_gate_v1(
+                        material,
+                        row_index,
+                        ZkX509Rfc5280StarkFamilyV1::NameValue,
+                    )?);
             let query_factor = profile_byte_factor_v1(&row, lane, challenges);
             let topology_query_gate = row[BASE_PROFILE_TOPOLOGY_QUERY_ACTIVE];
             let topology_query_factor = profile_topology_query_factor_v1(&row, lane, challenges);

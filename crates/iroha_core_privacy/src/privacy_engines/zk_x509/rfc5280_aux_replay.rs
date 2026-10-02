@@ -147,7 +147,9 @@ impl ColumnStateV1 {
                         .mul(profile_topology_source_factor_v1(&row, lane, challenges)),
                 );
             let multiplicity = row[BASE_PROFILE_TABLE_MULTIPLICITY];
-            let query_gate = context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::FixedByte);
+            let query_gate = context
+                .family_gate_v1(ZkX509Rfc5280StarkFamilyV1::FixedByte)
+                .add(context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::NameValue));
             let query_factor = profile_byte_factor_v1(&row, lane, challenges);
             let topology_query_gate = row[BASE_PROFILE_TOPOLOGY_QUERY_ACTIVE];
             let topology_query_factor = profile_topology_query_factor_v1(&row, lane, challenges);

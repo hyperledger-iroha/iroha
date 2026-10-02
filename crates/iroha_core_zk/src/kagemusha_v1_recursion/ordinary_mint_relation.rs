@@ -11,7 +11,7 @@ use super::super::ordinary_mint_public::{
 };
 use super::super::{
     DigestV1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-    canonical_preimage::{assemble_canonical_preimage_v1, stream::KagemushaBoundedByteStreamV1},
+    canonical_preimage::assemble_canonical_preimage_v1,
     composite::assigned_uint_bytes_v1,
     guard_bundle::{assign_bytes, constant_bytes, digest_limbs_assigned, hash},
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
@@ -43,7 +43,6 @@ use halo2_proofs::{
 use iroha_data_model::kagemusha::*;
 use sha2::{Digest as _, Sha256};
 type Bytes<F> = [PastaSha256ByteV1<F>; 32];
-const ACCOUNT_MAX: usize = 4096;
 const DIGEST_COUNT: usize = 34;
 /// Proof witness only; construction lends no Native funding/debit or global lineage capability.
 pub(crate) struct OrdinaryMintWitnessV1<'a> {
@@ -123,22 +122,6 @@ fn framed_hash<F: KagemushaPoseidonFieldV1>(
     m.extend(constant_bytes(&(raw.len() as u64).to_le_bytes()));
     m.extend(raw);
     hash(ctx, jobs, m)
-}
-fn account_hash<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut Context<F>,
-    r: &RangeChip<F>,
-    jobs: &mut PastaSha256JobsV1<F>,
-    domain: &[u8],
-    raw: &KagemushaBoundedByteStreamV1<F>,
-) -> Result<Bytes<F>, String> {
-    let mut prefix = constant_bytes(domain);
-    prefix.extend(assigned_uint_bytes_v1(ctx, r.gate(), raw.actual_len(), 64));
-    let plen = prefix.len();
-    let len = ctx.load_constant(F::from(plen as u64));
-    let prefix = KagemushaBoundedByteStreamV1::constrain(ctx, r, prefix, len)?;
-    let message = prefix.concat(ctx, r, raw, plen + ACCOUNT_MAX)?;
-    let words = jobs.digest_bounded_constrained(ctx, r, message.bytes(), message.actual_len())?;
-    words_to_bytes(ctx, r, words)
 }
 fn build_half<F: KagemushaPoseidonFieldV1>(
     w: &OrdinaryMintWitnessV1<'_>,
@@ -365,33 +348,10 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     )?;
     let evidence = words_to_bytes(builder.main(0), &range, words)?;
     equal(builder.main(0), &range, evidence, digest_cells[4]);
-    // Two independent account hashes use the exact same constrained complete original stream.
-    let account = norito::encode_canonical(&w.statement.context.lineage.owner.account_id)
-        .map_err(|e| e.to_string())?;
-    if account.len() > ACCOUNT_MAX {
-        return Err("ordinary Mint account original capacity differs".into());
-    }
-    let mut raw = vec![0; ACCOUNT_MAX];
-    raw[..account.len()].copy_from_slice(&account);
-    let bytes = assign_bytes(builder.main(0), &range, &raw);
-    let len = builder.main(0).load_witness(F::from(account.len() as u64));
-    let account = KagemushaBoundedByteStreamV1::constrain(builder.main(0), &range, bytes, len)?;
-    let app_account = account_hash(
-        builder.main(0),
-        &range,
-        &mut jobs,
-        b"iroha:kagemusha:v1:app-approval-account\0",
-        &account,
-    )?;
-    equal(builder.main(0), &range, app_account, digest_cells[16]);
-    let neutral_account = account_hash(
-        builder.main(0),
-        &range,
-        &mut jobs,
-        b"iroha:kagemusha:v1:account-identity\0",
-        &account,
-    )?;
-    equal(builder.main(0), &range, neutral_account, digest_cells[17]);
+    // The sole closed verifier derives digests 16/17 from the same complete canonical
+    // public AccountId, within the unchanged 4096-byte limit. Digest 16 stays joined to
+    // the issuer-authenticated credential above; digest 17 stays in the constrained
+    // credit-opening commitment below. Caller-offered digest vectors are never authority.
     let ctx = builder.main(0);
     let opening = w.credit_opening;
     let recipient = assign_bytes(ctx, &range, &opening.recipient_binding_opening);
