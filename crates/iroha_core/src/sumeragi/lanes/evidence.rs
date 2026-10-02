@@ -20,7 +20,7 @@ use iroha_sumeragi::{
 };
 
 use super::{
-    Admission, AdmissionError, AnchorView, LaneChainView, LaneResult, admit,
+    Admission, AdmissionAttemptError, AdmissionError, AnchorView, LaneChainView, LaneResult, admit,
     global::StatelessChecks, lane_genesis_hash, lane_genesis_result, lane_height_config,
     lane_instance,
 };
@@ -44,6 +44,18 @@ pub enum LaneEntryError {
     /// The certified payload does not reproduce valid lane admission.
     #[error(transparent)]
     Admission(#[from] AdmissionError),
+    /// Admission could not finish under the reader's inherited local resources.
+    #[error("lane evidence decode deferred: {0:?}")]
+    Deferred(norito::core::DecodeResourceError),
+}
+
+impl From<AdmissionAttemptError> for LaneEntryError {
+    fn from(error: AdmissionAttemptError) -> Self {
+        match error {
+            AdmissionAttemptError::Rejected(error) => Self::Admission(error),
+            AdmissionAttemptError::Deferred(refusal) => Self::Deferred(refusal),
+        }
+    }
 }
 
 /// Authenticate a frame's complete commit certificate under an independent lane record.

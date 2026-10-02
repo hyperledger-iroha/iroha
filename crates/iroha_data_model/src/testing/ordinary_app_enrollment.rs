@@ -218,7 +218,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             .unwrap();
         let release_attestation = KagemushaReleaseAttestationV1 {
             version: 1,
-            subject: release_subject.clone(),
+            subject: release_subject,
             approvals: release_keys[..2]
                 .iter()
                 .map(|key| KagemushaReleaseApprovalV1 {
@@ -320,7 +320,10 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             raw.extend_from_slice(&auth);
             raw.push(0x69);
             raw.extend_from_slice(b"signature");
-            raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+            raw.extend_from_slice(&[
+                0x58,
+                u8::try_from(der.as_bytes().len()).expect("P-256 DER signature fits one CBOR byte"),
+            ]);
             raw.extend_from_slice(der.as_bytes());
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw }
         } else {
@@ -767,6 +770,5 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
         "app_authority_seed_hex":(hex::encode([61;32])),"platform_p256_secret_hex":(hex::encode([7;32])),
         "vectors":vectors
     });
-    let bytes = norito::json::to_vec(&document).unwrap();
-    bytes
+    norito::json::to_vec(&document).unwrap()
 }

@@ -23,11 +23,7 @@ use halo2_base::gates::circuit::BaseCircuitParams;
 #[cfg(feature = "zk-halo2-ipa")]
 #[cfg(any(test, feature = "kagemusha-production-prover"))]
 use halo2_base::utils::CurveAffineExt;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_proofs::plonk::create_proof_consuming;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_proofs::plonk::{keygen_pk, keygen_vk};
@@ -710,11 +706,7 @@ pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
 ))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     fn reborrow(&self) -> KagemushaRecursiveStateGenerationWitnessV1<'_> {
         self.clone()
     }

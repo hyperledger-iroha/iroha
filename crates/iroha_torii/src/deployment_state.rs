@@ -53,16 +53,7 @@ fn deployment_dataspace_id(
         segment,
         ledger_time_ms,
     )
-    .or_else(|| {
-        if segment.eq_ignore_ascii_case("universal") {
-            Some(DataSpaceId::UNIVERSAL)
-        } else {
-            view.nexus()
-                .dataspace_catalog
-                .by_alias(segment)
-                .map(|entry| entry.id)
-        }
-    })
+    .map_err(super::live_dataspace_resolution_error)?
     .ok_or_else(|| {
         conversion_error(format!(
             "unknown or inactive dataspace alias `{segment}` in contract_alias"
@@ -359,7 +350,8 @@ pub(crate) async fn handler_contract_deployment_state(
         });
     }
     let alias = parse_exact_contract_alias(&request.contract_alias)?;
-    if let Some(route) = super::torii_contract_target_read_route(app.as_ref(), None, Some(&alias)) {
+    if let Some(route) = super::torii_contract_target_read_route(app.as_ref(), None, Some(&alias))?
+    {
         return Ok(super::execute_torii_single_route_read(
             &app,
             route,

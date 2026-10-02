@@ -248,7 +248,7 @@ impl StateTransaction<'_, '_> {
     /// # Errors
     /// Rejects post-genesis capacity replacement, malformed profiles and above-cap Time counts.
     pub(crate) fn validate_execution_output_parameter(
-        &self,
+        &mut self,
         parameter: &Parameter,
     ) -> Result<(), InstructionExecutionError> {
         let current = self.world.parameters.get().block();
@@ -264,7 +264,9 @@ impl StateTransaction<'_, '_> {
                     None,
                     None,
                 )
-                .map_err(invalid)?;
+                .map_err(invalid)?
+                .with_sns(&self.world.smart_contract_state, None)
+                .map_err(|error| error.retain_in_instruction(self))?;
             }
             Parameter::Block(BlockParameter::ExecutionOutput(next)) => {
                 if self.block_height() != 1 {

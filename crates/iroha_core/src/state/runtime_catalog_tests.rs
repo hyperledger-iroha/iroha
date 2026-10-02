@@ -530,7 +530,7 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             DataSpaceId::new(12)
         );
         assert!(transaction.lane_manifests.has_manifest(LaneId::new(5)));
-        let native = crate::sumeragi::lanes::lane_policy(&transaction.world)
+        let native = crate::sumeragi::lanes::lane_policy(&transaction.world).expect("completed original routing metadata read")
             .expect("physical registration also stages its native lane policy");
         let fixed = native.fixed_lane(LaneId::new(5)).unwrap();
         assert_eq!(
@@ -570,7 +570,7 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
         );
         assert!(runtime_catalog_from_world(&block.world).unwrap().is_none());
         assert!(
-            crate::sumeragi::lanes::lane_policy(&block.world).is_none(),
+            crate::sumeragi::lanes::lane_policy(&block.world).expect("completed original routing metadata read").is_none(),
             "aborting the catalog transaction must also discard native lane activation"
         );
     });
@@ -606,7 +606,7 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
             .unwrap();
         transaction.apply();
         step::advance(&mut block, &LaneStepInput::default()).unwrap();
-        let mut policy = lane_policy(&block.world).unwrap();
+        let mut policy = lane_policy(&block.world).expect("completed original routing metadata read").unwrap();
         assert_eq!(policy.lane_params, params);
         let record = block
             .world
@@ -667,20 +667,20 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
         };
         let private = make_tx(dataspace);
         assert_eq!(
-            inputs.execution_route(&private, 4),
+            inputs.execution_route(&private, 4).expect("completed original routing read"),
             None,
             "private work cannot escape to universal before activation is applied"
         );
         assert_eq!(
-            inputs.execution_route(&private, 5),
+            inputs.execution_route(&private, 5).expect("completed original routing read"),
             Some(crate::queue::RoutingDecision::new(lane, dataspace))
         );
         assert_eq!(
-            inputs.execution_route(&make_tx(DataSpaceId::new(777)), 5),
+            inputs.execution_route(&make_tx(DataSpaceId::new(777)), 5).expect("completed original routing read"),
             None
         );
         assert_eq!(
-            inputs.execution_route(&make_tx(DataSpaceId::UNIVERSAL), 5),
+            inputs.execution_route(&make_tx(DataSpaceId::UNIVERSAL), 5).expect("completed original routing read"),
             Some(crate::queue::RoutingDecision::new(
                 LaneId::SINGLE,
                 DataSpaceId::UNIVERSAL
@@ -739,7 +739,7 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
             ));
             for height in 2..=5 {
                 assert_eq!(
-                    inputs.execution_route(&control, height),
+                    inputs.execution_route(&control, height).expect("completed original routing read"),
                     Some(crate::queue::RoutingDecision::new(
                         LaneId::SINGLE,
                         DataSpaceId::UNIVERSAL,

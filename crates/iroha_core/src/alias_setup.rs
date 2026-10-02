@@ -69,6 +69,7 @@ fn dataspace_bootstrap_grant(
 pub struct AliasSetupError {
     code: &'static str,
     message: String,
+    deferred: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 impl AliasSetupError {
     /// Construct a coded classifier failure.
@@ -77,8 +78,25 @@ impl AliasSetupError {
         Self {
             code,
             message: message.into(),
+            deferred: None,
         }
     }
+    /// Borrow the original local refusal; code/message never recreate this owner.
+    pub fn deferral(&self) -> Option<&crate::execution_attempt::ExecutionDeferred> {
+        self.deferred.as_ref()
+    }
+
+    fn from_sns_with_code(code: &'static str, error: crate::sns::SnsError) -> Self {
+        if let crate::sns::SnsError::Deferred(reason) = error {
+            return Self {
+                code: "alias.local_deferred",
+                message: String::new(),
+                deferred: Some(reason),
+            };
+        }
+        Self::new(code, error.to_string())
+    }
+
     /// Stable machine-readable error code.
     #[must_use]
     pub const fn code(&self) -> &'static str {
@@ -91,6 +109,13 @@ impl AliasSetupError {
     }
 }
 fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
+    if let crate::sns::SnsError::Deferred(reason) = error {
+        return AliasSetupError {
+            code: "alias.local_deferred",
+            message: String::new(),
+            deferred: Some(reason),
+        };
+    }
     let text = error.to_string();
     let code = if text.contains(crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE) {
         crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
@@ -101,6 +126,12 @@ fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
             crate::sns::SnsError::BadRequest(_) => "alias.name.invalid",
             crate::sns::SnsError::Conflict(_) => "alias.state.conflict",
             crate::sns::SnsError::Internal(_) => "alias.state.invalid",
+            crate::sns::SnsError::Deferred(reason) => {
+                return AliasSetupError::from_sns_with_code(
+                    "alias.local_deferred",
+                    crate::sns::SnsError::Deferred(reason),
+                );
+            }
         }
     };
     AliasSetupError::new(code, text)
@@ -309,7 +340,7 @@ pub fn validate_alias_quote_guard(
         ));
     }
     let policy = crate::sns::policy_by_id(world, quote.selector.suffix_id)
-        .map_err(|error| AliasSetupError::new("alias.quote.policy_invalid", error.to_string()))?
+        .map_err(|error| AliasSetupError::from_sns_with_code("alias.quote.policy_invalid", error))?
         .ok_or_else(|| {
             AliasSetupError::new(
                 "alias.quote.policy_missing",
@@ -352,7 +383,7 @@ fn authority_can_manage_alias_target(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     target: &AliasTargetV1,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     match target {
         AliasTargetV1::Dataspace(value) => crate::alias::authority_can_manage_account_alias_scope(
             world,
@@ -388,6 +419,7 @@ pub fn validate_alias_intent_authority(
 ) -> Result<(), AliasSetupError> {
     if alias_intent_owner(intent) == authority
         || authority_can_manage_alias_target(world, authority, &intent.target())
+            .map_err(sns_error)?
     {
         return Ok(());
     }
@@ -438,6 +470,7 @@ pub fn classify_alias_lease_renewal(
         active_alias_lifecycle_record(world, catalog, &renewal.target, now_ms)?;
     if record.owner != *authority
         && !authority_can_manage_alias_target(world, authority, &renewal.target)
+            .map_err(sns_error)?
     {
         return Err(AliasSetupError::new(
             "alias.lifecycle.authority_forbidden",
@@ -503,7 +536,7 @@ fn validate_alias_auto_renew_config(
     let suffix_id = target_suffix_id(target);
     let policy = crate::sns::policy_by_id(world, suffix_id)
         .map_err(|error| {
-            AliasSetupError::new("alias.auto_renew.policy_invalid", error.to_string())
+            AliasSetupError::from_sns_with_code("alias.auto_renew.policy_invalid", error)
         })?
         .ok_or_else(|| {
             AliasSetupError::new(

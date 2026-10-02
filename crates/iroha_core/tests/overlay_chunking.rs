@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
 use iroha_core::{
-    state::{StateReadOnly, WorldReadOnly},
+    state::WorldReadOnly,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;

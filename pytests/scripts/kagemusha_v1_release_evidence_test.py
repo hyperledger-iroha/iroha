@@ -40,6 +40,7 @@ INTERNAL_HELPER_PROOF_LENGTHS = {
     "guard_bundle": (12_000, 12_032),
     "mint_hash_shard": (8_064, 8_096),
     "mint_hash_claim": (12_064, 12_096),
+    "ordinary_app_guard": (12_128, 12_160),
 }
 
 
@@ -437,8 +438,8 @@ def _fixture(
         helper_protocols.append(
             {
                 "helper": helper,
-                "eq_protocol_digest": _digest(5 + index * 2),
-                "ep_protocol_digest": _digest(6 + index * 2),
+                "eq_protocol_digest": _digest(19 if helper == "ordinary_app_guard" else 5 + index * 2),
+                "ep_protocol_digest": _digest(20 if helper == "ordinary_app_guard" else 6 + index * 2),
                 "eq_proof_bytes": eq_proof_bytes,
                 "ep_proof_bytes": ep_proof_bytes,
             }
@@ -1126,7 +1127,7 @@ def test_release_artifact_ordinals_match_current_rust_model() -> None:
         for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
     ]
     assert rust_roles == expected
-    assert len(rust_roles) == 50
+    assert len(rust_roles) == 54
 
 
 def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
@@ -1186,7 +1187,7 @@ def test_release_rejects_missing_inner_mint_artifacts(
     fixture.write_manifest()
     result = _run(fixture)
     assert result.returncode == 1
-    assert "artifact inventory must contain exactly the 50 V1 roles" in result.stderr
+    assert "artifact inventory must contain exactly the 54 V1 roles" in result.stderr
 
 
 def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
@@ -1308,7 +1309,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "terminal_authorization_vk_ep",
         "commit_wrapper_vk_ep",
     }
-    assert len(profile["helper_circuits"]) == 6
+    assert len(profile["helper_circuits"]) == 7
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
@@ -1327,7 +1328,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         VERIFIER.ACCEPTANCE_CASES
     )
     assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
-    assert len(projection["artifact_inventory"]) == 50
+    assert len(projection["artifact_inventory"]) == 54
     assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
         "inner_state_pk_eq",
         "inner_state_vk_eq",
@@ -1363,6 +1364,12 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "mint_hash_claim_vk_eq",
         "mint_hash_claim_pk_ep",
         "mint_hash_claim_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][50:54] == [
+        "ordinary_app_guard_pk_eq",
+        "ordinary_app_guard_vk_eq",
+        "ordinary_app_guard_pk_ep",
+        "ordinary_app_guard_vk_ep",
     ]
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
@@ -1531,6 +1538,38 @@ def test_internal_helper_proof_evidence_must_match_each_pinned_parity(
     result = _run(fixture)
     assert result.returncode == 1
     assert "release-pinned per-parity lengths" in result.stderr
+
+
+@pytest.mark.parametrize("helper", sorted(VERIFIER.INTERNAL_PROOF_HELPERS))
+@pytest.mark.parametrize("parity", ["eq", "ep"])
+@pytest.mark.parametrize("excess", [0, 32])
+def test_internal_helper_protocol_enforces_each_native_resource_bound(
+    helper: str, parity: str, excess: int
+) -> None:
+    # Parse public protocol metadata directly, before reading or allocating proof files.
+    protocols = {
+        name: _digest(index)
+        for index, name in enumerate((
+            "state_eq_protocol_digest", "state_ep_protocol_digest",
+            "terminal_authorization_eq_protocol_digest", "terminal_authorization_ep_protocol_digest",
+            "commit_wrapper_eq_protocol_digest", "commit_wrapper_ep_protocol_digest",
+        ), start=1)
+    }
+    protocols["helper_protocols"] = [
+        {"helper": name, "eq_protocol_digest": _digest(7 + index * 2),
+         "ep_protocol_digest": _digest(8 + index * 2),
+         "eq_proof_bytes": 32 if name in VERIFIER.INTERNAL_PROOF_HELPERS else 0,
+         "ep_proof_bytes": 64 if name in VERIFIER.INTERNAL_PROOF_HELPERS else 0}
+        for index, name in enumerate(VERIFIER.HELPERS)
+    ]
+    row = next(row for row in protocols["helper_protocols"] if row["helper"] == helper)
+    row[f"{parity}_proof_bytes"] = VERIFIER.INTERNAL_PROOF_RESOURCE_MAX_BYTES + excess
+    parser = object.__new__(VERIFIER.EvidenceVerifier)
+    if excess:
+        with pytest.raises(VERIFIER.KagemushaEvidenceError, match="at most 64 MiB each"):
+            parser._verify_protocols(protocols)
+    else:
+        assert parser._verify_protocols(protocols) == protocols
 
 
 @pytest.mark.parametrize("bad_length", [0, 8_001])

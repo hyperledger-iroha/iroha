@@ -128,17 +128,6 @@ mod ordinary_issuer_equation;
         feature = "kagemusha-real-proof-harness"
     )
 ))]
-pub(crate) use ordinary_guard_data_binding::{
-    KagemushaOrdinaryGuardDataBindingV1, constrain_ordinary_guard_data_binding_v1,
-};
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 mod ordinary_platform_equation;
 #[cfg(all(
     feature = "zk-halo2-ipa",
@@ -329,11 +318,15 @@ pub use generation::{
     prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
     prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
 };
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-real-proof-harness")
+))]
+pub use guard_bundle::KagemushaPlatformCredentialRelationCircuitV1;
 pub(crate) use guard_bundle::device_authority_commitment_v1;
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
-    KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,
-    KagemushaPlatformCredentialStatementV1,
+    KagemushaPlatformCredentialRelationWitnessV1, KagemushaPlatformCredentialStatementV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use guard_verifier::KagemushaAuthenticatedGuardBundleVerifierV1;

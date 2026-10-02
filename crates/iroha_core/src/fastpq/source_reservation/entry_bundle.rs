@@ -285,7 +285,6 @@ impl EntryBundleReservationTransaction<'_> {
         self.inner.owner_usage(&owner.inner)
     }
 
-    #[cfg(test)]
     /// Exact block usage including this physical fragment's pending replacements.
     pub(crate) fn usage(&self) -> SourceUsage {
         self.inner.usage()

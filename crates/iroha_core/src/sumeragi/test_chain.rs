@@ -1775,7 +1775,7 @@ pub(super) fn prepare_configured_genesis(
                             .map(|(index, output)| (index, output.result()))
                             .collect::<Vec<_>>();
                         Err(format!(
-                            "original native genesis execution: {error}; failed outputs: {failures:?}"
+                            "original native genesis execution: {error}; failed outputs: {failures:?}; rejection: {error:?}"
                         ))
                     }
                 },

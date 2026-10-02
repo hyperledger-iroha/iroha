@@ -36,11 +36,9 @@ use std::{
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
-use std::{fs, fs::OpenOptions};
+use std::{fs, fs::OpenOptions, os::unix::fs::OpenOptionsExt as _};
 use zeroize::Zeroizing;
 
-const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;
-const _: [(); KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1] = [(); KagemushaArtifactRoleV1::ALL.len()];
 const EXPERIMENTAL_ARTIFACT_INVENTORY_JSON_MAX_BYTES_V1: usize = 64 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1: &str =
@@ -192,7 +190,7 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
-    /// Authenticate one signed proof-only testnet release and its exact 50 artifacts.
+    /// Authenticate one signed proof-only testnet release and its complete artifact inventory.
     #[command(name = "authenticate-experimental-release-v1")]
     AuthenticateExperimentalReleaseV1(AuthenticateExperimentalReleaseV1Args),
     /// Sign one experimental release approval with one owner-held authority key.
@@ -220,7 +218,7 @@ struct AuthenticateReleaseV1Args {
     /// Canonical JSON recursive-verifier profile consumed by Core.
     #[arg(long, value_name = "PATH")]
     recursive_profile: PathBuf,
-    /// Absolute directory containing all 50 SHA-256-addressed release artifacts.
+    /// Absolute directory containing the complete set of SHA-256-addressed release artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// Canonical output from the separately pinned authority-review verifier.
@@ -268,10 +266,10 @@ struct PrepareExperimentalReleaseV1Args {
     /// Canonical Norito typed structural-evidence receipt from a trusted evidence producer.
     #[arg(long, value_name = "PATH")]
     validation_receipt: PathBuf,
-    /// Typed JSON array of all 50 role-to-content-address bindings.
+    /// Typed JSON array of the complete ordered role-to-content-address bindings.
     #[arg(long, value_name = "PATH")]
     artifact_inventory: PathBuf,
-    /// Canonical absolute directory of the 50 content-addressed proof artifacts.
+    /// Canonical absolute directory of all content-addressed proof artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// Canonical absolute directory of all SHA-256-addressed receipt evidence files.
@@ -320,7 +318,7 @@ struct AuthenticateExperimentalReleaseV1Args {
     /// Canonical Norito threshold attestation over the experimental release.
     #[arg(long, value_name = "PATH")]
     attestation: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     #[command(flatten)]
@@ -342,8 +340,8 @@ struct ExperimentalOperatorPinsV1 {
     #[arg(long, value_name = "LOWER_HEX")]
     expected_asset_incarnation: String,
     /// Independently pinned decimal asset scale.
-    #[arg(long, value_name = "DECIMAL")]
-    expected_asset_scale: u32,
+    #[arg(long = "expected-asset-scale", value_name = "DECIMAL")]
+    asset_scale: u32,
     /// Independently pinned reserve-liability pool identifier as lowercase hex.
     #[arg(long, value_name = "LOWER_HEX")]
     expected_liability_pool_id: String,
@@ -360,7 +358,7 @@ struct SignExperimentalReleaseApprovalV1Args {
     /// Independently trusted canonical Norito release-authority policy.
     #[arg(long, value_name = "PATH")]
     authority_policy: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// One owner-held mode-0600 Kagami private-key record.
@@ -384,7 +382,7 @@ struct AssembleExperimentalReleaseV1Args {
     /// Independently trusted canonical Norito release-authority policy.
     #[arg(long, value_name = "PATH")]
     authority_policy: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// One canonical Norito approval; repeat for each independent authority.
@@ -769,7 +767,11 @@ fn prepare_experimental_release_v1<T: Write>(
         "authority_policy_digest",
         &hex::encode(subject.authority_policy_digest),
     )?;
-    insert_json_field(&mut report, "artifact_count", &50_u64)?;
+    insert_json_field(
+        &mut report,
+        "artifact_count",
+        &u64::try_from(manifest.artifacts.len())?,
+    )?;
     insert_json_field(
         &mut report,
         "evidence_file_count",
@@ -941,7 +943,7 @@ fn validate_experimental_operator_pins_v1(
             &pins.expected_asset_incarnation,
             "expected asset incarnation",
         )?,
-        asset_scale: pins.expected_asset_scale,
+        asset_scale: pins.asset_scale,
         liability_pool_id: parse_lower_sha256(
             &pins.expected_liability_pool_id,
             "expected liability pool identifier",
@@ -1159,13 +1161,16 @@ fn assemble_experimental_release_v1<T: Write>(
 fn validate_exact_release_inventory_v1(
     artifacts: &[KagemushaArtifactBindingV1],
 ) -> color_eyre::Result<()> {
-    if artifacts.len() != KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1
+    if artifacts.len() != KagemushaArtifactRoleV1::ALL.len()
         || artifacts
             .iter()
             .zip(KagemushaArtifactRoleV1::ALL)
             .any(|(binding, expected)| binding.role != expected)
     {
-        bail!("KAGEMUSHA V1 release requires the exact ordered 50-role artifact inventory");
+        bail!(
+            "KAGEMUSHA V1 release requires the exact ordered {}-role artifact inventory",
+            KagemushaArtifactRoleV1::ALL.len()
+        );
     }
     for (index, binding) in artifacts.iter().enumerate() {
         if binding.sha256 == [0; 32]
@@ -1447,7 +1452,7 @@ fn normalize_release_projection_value(value: JsonValue) -> color_eyre::Result<Js
                         bail!("{field} JSON tuple is malformed");
                     }
                     let width = if field == "issuer_signature" { 64 } else { 65 };
-                    JsonValue::String(fixed_byte_array_to_hex(tuple.remove(0), width, &field)?)
+                    JsonValue::String(fixed_hex_to_lowercase(tuple.remove(0), width, &field)?)
                 } else if let Some(tag) = release_unit_enum_tag(&field) {
                     JsonValue::String(tagged_unit_enum_name(value, tag, &field)?)
                 } else {
@@ -1509,17 +1514,16 @@ fn tagged_unit_enum_name(
     tag: &str,
     description: &str,
 ) -> color_eyre::Result<String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| eyre!("{description} must be a tagged unit enum"))?;
+    let JsonValue::Object(mut object) = value else {
+        bail!("{description} must be a tagged unit enum");
+    };
     if object.len() != 2 || !object.get("value").is_some_and(JsonValue::is_null) {
         bail!("{description} tagged unit enum is malformed");
     }
-    object
-        .get(tag)
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| eyre!("{description} tagged unit enum lacks tag `{tag}`"))
+    match object.remove(tag) {
+        Some(JsonValue::String(name)) => Ok(name),
+        _ => Err(eyre!("{description} tagged unit enum lacks tag `{tag}`")),
+    }
 }
 
 fn fixed_byte_array_to_hex(
@@ -1527,14 +1531,14 @@ fn fixed_byte_array_to_hex(
     expected_len: usize,
     description: &str,
 ) -> color_eyre::Result<String> {
-    let values = value
-        .as_array()
-        .ok_or_else(|| eyre!("{description} must be a fixed byte array"))?;
+    let JsonValue::Array(values) = value else {
+        bail!("{description} must be a fixed byte array");
+    };
     if values.len() != expected_len {
         bail!("{description} fixed byte array has the wrong length");
     }
     let bytes = values
-        .iter()
+        .into_iter()
         .map(|value| {
             value
                 .as_u64()
@@ -1543,6 +1547,27 @@ fn fixed_byte_array_to_hex(
         })
         .collect::<color_eyre::Result<Vec<_>>>()?;
     Ok(hex::encode(bytes))
+}
+
+fn fixed_hex_to_lowercase(
+    value: JsonValue,
+    expected_len: usize,
+    description: &str,
+) -> color_eyre::Result<String> {
+    let JsonValue::String(encoded) = value else {
+        bail!("{description} must be a fixed-width Norito hexadecimal string");
+    };
+    if encoded.len()
+        != expected_len
+            .checked_mul(2)
+            .ok_or_else(|| eyre!("{description} width overflow"))?
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
+    {
+        bail!("{description} is not the canonical fixed-width Norito hexadecimal encoding");
+    }
+    Ok(encoded.to_ascii_lowercase())
 }
 
 fn python_canonical_json_bytes(value: &JsonValue, pretty: bool) -> color_eyre::Result<Vec<u8>> {
@@ -1754,7 +1779,6 @@ fn hash_immutable_file_exact(
     }
     let mut options = OpenOptions::new();
     options.read(true);
-    use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
     let file = options
         .open(path)
@@ -2043,7 +2067,6 @@ fn read_bounded_immutable_file_unix(
     options.read(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options
@@ -2092,7 +2115,7 @@ mod tests {
                 expected_release_id: "22".repeat(32),
                 expected_asset_identity_digest: "33".repeat(32),
                 expected_asset_incarnation: "44".repeat(32),
-                expected_asset_scale: 2,
+                asset_scale: 2,
                 expected_liability_pool_id: "55".repeat(32),
             },
         }
@@ -2205,7 +2228,7 @@ mod tests {
         let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_dir.path())
             .expect("content-addressed artifact resolver");
         rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path())
-            .expect("all 50 real artifact bindings match");
+            .expect("all real artifact bindings match");
         let evidence_bytes = b"observed structural circuit rows";
         let evidence = KagemushaEvidenceFileV1 {
             sha256: sha256(evidence_bytes),
@@ -2232,6 +2255,134 @@ mod tests {
         fs::write(resolver.path_for_digest(artifacts[0].sha256), [0xff])
             .expect("substitute one proof artifact");
         assert!(rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn experimental_preparation_reports_the_verified_complete_inventory() {
+        use iroha_data_model::testing::kagemusha_release::KagemushaExperimentalReleaseFixtureV1;
+
+        // Synthetic structural reports exercise the preparer, never release qualification.
+        let parent = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = tempfile::tempdir_in(parent).unwrap();
+        let root = directory.path();
+        let artifact_root = root.join("artifacts");
+        let evidence_root = root.join("evidence");
+        fs::create_dir(&artifact_root).unwrap();
+        fs::create_dir(&evidence_root).unwrap();
+        let artifacts = write_experimental_artifact_fixture(&artifact_root);
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([0x73; 32])),
+        );
+        let scope = KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: [0x31; 32],
+            asset_incarnation: [0x32; 32],
+            asset_scale: 2,
+            liability_pool_id: [0x33; 32],
+        };
+        let fixture = KagemushaExperimentalReleaseFixtureV1::new_with_evidence(
+            artifacts.clone(),
+            network_id,
+            scope,
+            |mut binding| {
+                let bytes = binding.sha256;
+                binding.sha256 = sha256(bytes);
+                binding.byte_len = u64::try_from(bytes.len()).unwrap();
+                fs::write(evidence_root.join(hex::encode(binding.sha256)), bytes).unwrap();
+                binding
+            },
+        );
+        let mut receipt = fixture.receipt;
+        let context = norito::json!({ "test_only": true });
+        let commands = norito::json!([{ "test_only": true }]);
+        receipt.evidence_closure.candidate_context_digest =
+            raw_python_projection_digest(CANDIDATE_CONTEXT_DIGEST_DOMAIN_V1, &context).unwrap();
+        receipt.evidence_closure.verification_records_digest =
+            raw_python_projection_digest(VERIFICATION_RECORDS_DIGEST_DOMAIN_V1, &commands).unwrap();
+        receipt.evidence_closure.verification_record_count = 1;
+        let mut manifest = fixture.manifest;
+        manifest.profile_digest = receipt.profile_digest;
+        manifest.hardware_policy_digest = receipt.hardware_policy_digest;
+        manifest.validation_receipt_digest = receipt.canonical_experimental_digest().unwrap();
+        manifest.enabled_profiles = receipt
+            .profile_qualifications
+            .iter()
+            .map(|row| row.profile)
+            .collect();
+        let manifest = manifest.seal().unwrap();
+        let inventory =
+            normalize_release_projection_value(norito::json::to_value(&artifacts).unwrap())
+                .unwrap();
+        let projection = norito::json!({
+            "schema": (TESTNET_AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1),
+            "schema_version": 1,
+            "verification_scope": (TESTNET_AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1),
+            "receipt_projection": (normalize_release_projection_value(norito::json::to_value(&receipt).unwrap()).unwrap()),
+            "artifact_inventory_review_sha256": (hex::encode(sha256(python_canonical_json_bytes(&inventory, true).unwrap()))),
+            "artifact_inventory": (inventory),
+            "manifest_sha256": (hex::encode(receipt.evidence_closure.evidence_manifest.sha256)),
+            "candidate_context": (context),
+            "verifier_commands": (commands),
+        });
+        let projection_bytes = python_canonical_json_bytes(&projection, true).unwrap();
+        let mut args = PrepareExperimentalReleaseV1Args {
+            validation_receipt: root.join("receipt.norito"),
+            artifact_inventory: root.join("inventory.json"),
+            artifact_root,
+            evidence_root,
+            authority_policy: root.join("policy.norito"),
+            authority_review_projection: root.join("review.json"),
+            authority_review_projection_sha256: hex::encode(sha256(&projection_bytes)),
+            network_id: network_id.to_string(),
+            asset_identity_digest: hex::encode(scope.asset_identity_digest),
+            asset_incarnation: hex::encode(scope.asset_incarnation),
+            asset_scale: scope.asset_scale,
+            liability_pool_id: hex::encode(scope.liability_pool_id),
+            output_dir: root.join("prepared"),
+        };
+        for (path, bytes) in [
+            (
+                &args.validation_receipt,
+                norito::encode_canonical(&receipt).unwrap(),
+            ),
+            (
+                &args.artifact_inventory,
+                norito::json::to_vec(&artifacts).unwrap(),
+            ),
+            (
+                &args.authority_policy,
+                norito::encode_canonical(&fixture.authority_policy).unwrap(),
+            ),
+            (&args.authority_review_projection, projection_bytes),
+        ] {
+            fs::write(path, bytes).unwrap();
+        }
+        let mut writer = std::io::BufWriter::new(Vec::new());
+        prepare_experimental_release_v1(&args, &mut writer).unwrap();
+        let report = norito::json::from_slice_value(&writer.into_inner().unwrap()).unwrap();
+        assert_eq!(
+            report.get("artifact_count").and_then(JsonValue::as_u64),
+            Some(54)
+        );
+        let prepared = KagemushaReleaseManifestV1::decode_canonical_exact(
+            &fs::read(args.output_dir.join("manifest.norito")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prepared, manifest);
+        assert_eq!(prepared.artifacts, artifacts);
+        assert_eq!(
+            report.get("release_authenticated"),
+            Some(&JsonValue::Bool(false))
+        );
+        fs::write(
+            &args.artifact_inventory,
+            norito::json::to_vec(&artifacts[..50].to_vec()).unwrap(),
+        )
+        .unwrap();
+        args.output_dir = root.join("incomplete");
+        let mut writer = std::io::BufWriter::new(Vec::new());
+        assert!(prepare_experimental_release_v1(&args, &mut writer).is_err());
+        assert!(!args.output_dir.exists());
     }
 
     #[test]
@@ -2379,12 +2530,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn experimental_signing_key_requires_owner_only_canonical_custody() {
+        use std::os::unix::fs::PermissionsExt as _;
         let parent = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
         let directory = tempfile::Builder::new()
             .prefix(".kagemusha-approval-key-")
             .tempdir_in(parent)
             .expect("private key fixture directory");
-        use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
             .expect("harden fixture directory");
         let key = KeyPair::random();
@@ -2465,6 +2616,25 @@ mod tests {
     fn exact_inventory_rejects_omission_reorder_and_duplicate_hash() {
         let inventory = artifact_inventory();
         validate_exact_release_inventory_v1(&inventory).expect("accept ordered inventory");
+        assert_eq!(inventory.len(), 54);
+        assert!(validate_exact_release_inventory_v1(&inventory[..50]).is_err());
+        for role in [
+            KagemushaArtifactRoleV1::OrdinaryAppGuardPkEq,
+            KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+            KagemushaArtifactRoleV1::OrdinaryAppGuardPkEp,
+            KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+        ] {
+            let index = inventory.iter().position(|row| row.role == role).unwrap();
+            let mut omitted = inventory.clone();
+            omitted.remove(index);
+            assert!(validate_exact_release_inventory_v1(&omitted).is_err());
+            let mut substituted = inventory.clone();
+            substituted[index].role = KagemushaArtifactRoleV1::ParamsEq;
+            assert!(validate_exact_release_inventory_v1(&substituted).is_err());
+            let mut reordered = inventory.clone();
+            reordered.swap(index, 0);
+            assert!(validate_exact_release_inventory_v1(&reordered).is_err());
+        }
 
         let mut missing = inventory.clone();
         missing.pop();
@@ -2481,7 +2651,7 @@ mod tests {
 
     #[test]
     fn provider_issuer_signature_projection_requires_exact_raw_tuple_width() {
-        let raw = norito::json!({ "issuer_signature": (vec![vec![1_u8; 64]]) });
+        let raw = norito::json!({ "issuer_signature": (vec![[1_u8; 64]]) });
         let normalized = normalize_release_projection_value(raw).unwrap();
         assert_eq!(
             normalized
@@ -2490,10 +2660,13 @@ mod tests {
             Some("01".repeat(64).as_str())
         );
         for value in [
-            norito::json!({ "issuer_signature": (vec![vec![1_u8; 63]]) }),
-            norito::json!({ "issuer_signature": (vec![vec![1_u8; 65]]) }),
+            norito::json!({ "issuer_signature": (vec![[1_u8; 63]]) }),
+            norito::json!({ "issuer_signature": (vec![[1_u8; 65]]) }),
             norito::json!({ "issuer_signature": [] }),
             norito::json!({ "issuer_signature": [[1_u8], [1_u8]] }),
+            norito::json!({ "issuer_signature": (vec![vec![1_u8; 64]]) }),
+            norito::json!({ "issuer_signature": (vec!["GG".repeat(64)]) }),
+            norito::json!({ "issuer_signature": (vec!["aa".repeat(64)]) }),
         ] {
             assert!(normalize_release_projection_value(value).is_err());
         }
@@ -2578,7 +2751,7 @@ mod tests {
                 b"corrupt",
                 b"corrupt",
                 b"corrupt",
-                br#"{}"#,
+                br"{}",
                 Path::new("/"),
             )
             .is_err()

@@ -83,7 +83,9 @@ impl KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1<'_> {
             .approval_integrity_lease
             .as_ref()
     }
-    pub(crate) fn previous_app_attest_counter_floor(&self) -> Option<u32> {
+    /// Original Apple assertion floor retained before this captured approval.
+    /// Reading it grants no current approval or financial publication authority.
+    pub fn previous_app_attest_counter_floor(&self) -> Option<u32> {
         self.journal
             .pending
             .as_ref()
@@ -328,6 +330,13 @@ mod tests {
         let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let tmp = tempfile::tempdir().unwrap();
         let mut journal = journal(&fixture, &tmp.path().join("capture"));
+        assert_eq!(
+            journal
+                .approved_at_trusted_time(302)
+                .unwrap()
+                .previous_app_attest_counter_floor(),
+            None,
+        );
         journal
             .persist_bootstrap_capture_at_checked_native_time(302)
             .unwrap();
@@ -345,6 +354,7 @@ mod tests {
         assert!(journal.approved_at_trusted_time(1500).is_err());
         let cap = journal.captured_bootstrap_at_native_time(1500).unwrap();
         assert_eq!(cap.captured_at_ms(), 302);
+        assert_eq!(cap.previous_app_attest_counter_floor(), None);
         assert_eq!(cap.original(), original);
         assert_eq!(cap.authorization_binding_digest().unwrap(), binding);
         assert!(cap.original_approval_integrity_lease().is_none());

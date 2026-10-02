@@ -3,8 +3,6 @@
 /// Original finite allocation pool passed from startup into State and restore.
 pub use iroha_allocation::AllocationBudget;
 
-#[cfg(test)]
-use crate::block::ValidBlock;
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
@@ -26,8 +24,6 @@ use crate::private_settlement::{
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
 use eyre::Result;
-#[cfg(test)]
-use eyre::{WrapErr, eyre};
 use iroha_config::parameters::actual::{
     LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
 };
@@ -177,8 +173,7 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use iroha_data_model::{
-    block::consensus::ConsensusMode, events::pipeline::PipelineEventBox,
-    transaction::signed::TransactionResult,
+    events::pipeline::PipelineEventBox, transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -198,8 +193,6 @@ use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity},
 };
-#[cfg(test)]
-use iroha_primitives::{numeric::Numeric, time::TimeSource};
 use iroha_schema::Ident;
 use mv::{
     Key as MvKey, Value as MvValue,
@@ -223,8 +216,6 @@ pub use range_bounds::{
     AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
-#[cfg(test)]
-use std::str::FromStr;
 use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
@@ -357,6 +348,7 @@ mod fastpq_rejection_tail;
 mod fastpq_source_quota_tests;
 mod prepared_transfer_transcript;
 mod replay_outputs;
+pub(crate) mod sns_maintenance;
 pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
@@ -384,8 +376,6 @@ pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
-#[cfg(test)]
-pub(crate) use lane_authority::resolve_global_route;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -1606,7 +1596,8 @@ pub struct BlockHashes {
 mod block_hashes_admission;
 use block_hashes_admission::BlockHashPolicy;
 pub use block_hashes_admission::{
-    BlockHashAdmissionError, StateAdmissionError, StateBlockStartError, StateStorageAdmissionError,
+    BlockHashAdmissionError, RootScopeDecodeRefusal, StateAdmissionError, StateBlockStartError,
+    StateStorageAdmissionError,
 };
 pub use storage_transactions::{MembershipAdmissionError, MembershipRestoreError};
 #[path = "state/local_storage_refusal.rs"]
@@ -12823,7 +12814,18 @@ impl<'state> StateBlock<'state> {
                 self.world.governance_locks.iter(),
                 None,
                 None,
-            )?;
+            )?
+            .with_sns(&self.world.smart_contract_state, None)
+            .map_err(|error| match error {
+                crate::sns::SnsError::Deferred(reason) => {
+                    if self.local_storage_refusal.is_none() {
+                        self.local_storage_refusal =
+                            Some(StateStorageAdmissionError::SnsMaintenance(reason));
+                    }
+                    "local retained SNS admission did not complete".into()
+                }
+                error => error.to_string(),
+            })?;
             let scope = Hash::new(
                 norito::encode_canonical(&(self.network_id, height, self._curr_block.hash()))
                     .map_err(|error| error.to_string())?,
@@ -12881,7 +12883,7 @@ impl<'state> StateBlock<'state> {
     }
 
     #[cfg(test)]
-    fn fastpq_source_usage_for_testing(
+    pub(crate) fn fastpq_source_usage_for_testing(
         &self,
     ) -> (
         crate::fastpq::source_reservation::SourceUsage,
@@ -17772,7 +17774,7 @@ impl DetachedStateTransactionDelta {
         authority: &AccountId,
         account_id: &AccountId,
         now_ms: u64,
-    ) -> Result<bool, ValidationFail> {
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if authority == account_id {
             return Ok(true);
         }
@@ -17783,7 +17785,9 @@ impl DetachedStateTransactionDelta {
                 &alias,
                 now_ms,
             )
-            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            .map_err(|error| {
+                error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()))
+            })?
             .as_ref()
                 != Some(account_id)
             {
@@ -27464,11 +27468,22 @@ impl State {
             &mut world,
             &default_sns_payment_asset_id,
         )
-        .map_err(|error| {
-            MergeLedgerCommitError::ExecutionStatePublication(format!(
+        .map_err(|error| match error {
+            crate::sns::SnsError::Deferred(reason) => MergeLedgerCommitError::ExecutionDeferred(reason),
+            error => MergeLedgerCommitError::ExecutionStatePublication(format!(
                 "persisted SNS namespace policy is incompatible with the first-release state: {error}"
-            ))
+            )),
         })?;
+        world
+            .validate_retained_mandatory_sources()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(error)
+                }
+            })?;
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
         Self::seed_existing_domain_name_records(&mut world);
         #[cfg(feature = "telemetry")]
@@ -28861,10 +28876,13 @@ impl State {
         }
         sb.ordinary_carrier_membership_source = ordinary_source;
         if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
-            routes.fill_from_preblock(&sb, source);
+            routes
+                .fill_from_preblock(&sb, source)
+                .map_err(StateBlockStartError::ExecutionDeferred)?;
         }
         sb.network_policy_routes = policy_routes;
         sb.freeze_fastpq_source_context();
+        sb.require_storage_admission()?;
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
         if matches!(sb.fastpq_source_quota, Some(Err(_))) {
@@ -28928,8 +28946,7 @@ impl State {
         // large stack slots live throughout that execution in debug builds.
         Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)
             .map_err(StateBlockStartError::Storage)?;
-        Self::apply_block_start_parliament_enactments(&mut sb, now_h)
-            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;
         // SCCP block-start work (the heartbeat marker, `specs/sccp.md` §4.3.2) runs with the
         // due Parliament certificates, before the block's transactions.
         let sccp_header = sb._curr_block;
@@ -28991,10 +29008,10 @@ impl State {
     /// A failed effect drops its original transaction before a separate
     /// transaction records the deterministic failure in the same block.
     #[inline(never)]
-    fn apply_block_start_parliament_enactments(
+    fn apply_block_start_parliament_enactments<E: std::fmt::Debug>(
         sb: &mut StateBlock<'_>,
         now_h: u64,
-    ) -> Result<(), StateStorageAdmissionError> {
+    ) -> Result<(), StateBlockStartError<E>> {
         if let Some((enact_at_height, attempts)) =
             sb.world.parliament_certified_enactments.iter().next()
             && *enact_at_height < now_h
@@ -29020,11 +29037,12 @@ impl State {
                 governance_attempt_id,
                 &mut enactment,
             )
-            .unwrap_or_else(|error| {
-                panic!(
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => StateBlockStartError::ExecutionDeferred(reason),
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => panic!(
                     "due Parliament certificate {governance_attempt_id:?} is invalid at block-start height {now_h}: {error:?}"
-                )
-            }) {
+                ),
+            })? {
                 crate::smartcontracts::isi::world::isi::DueParliamentCertificateExecutionV1::Applied => {
                     enactment.apply();
                 }
@@ -29040,11 +29058,12 @@ impl State {
                         failure_root,
                         &mut failure,
                     )
-                    .unwrap_or_else(|error| {
-                        panic!(
+                    .map_err(|error| match error {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => StateBlockStartError::ExecutionDeferred(reason),
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => panic!(
                             "failed to record Parliament execution failure {governance_attempt_id:?} at block-start height {now_h}: {error:?}"
-                        )
-                    });
+                        ),
+                    })?;
                     failure.apply();
                 }
             }
@@ -29550,6 +29569,7 @@ impl State {
         let mut state_block =
             self.construct_acquired_block(acquired, curr_block, core::convert::identity);
         state_block.freeze_fastpq_source_context();
+        state_block.require_storage_admission()?;
         state_block.freeze_axt_block_start();
         Ok(state_block)
     }
@@ -29640,10 +29660,13 @@ impl State {
         }
         state_block.ordinary_carrier_membership_source = ordinary_source;
         if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
-            routes.fill_from_preblock(&state_block, source);
+            routes
+                .fill_from_preblock(&state_block, source)
+                .map_err(StateBlockStartError::ExecutionDeferred)?;
         }
         state_block.network_policy_routes = policy_routes;
         state_block.freeze_fastpq_source_context();
+        state_block.require_storage_admission()?;
         state_block.freeze_axt_block_start();
         stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
         if matches!(state_block.fastpq_source_quota, Some(Err(_))) {
@@ -38044,7 +38067,7 @@ impl<'state> StateBlock<'state> {
     fn prepare_owned_time_phase(
         &mut self,
         block_header: &BlockHeader,
-    ) -> Result<(TimeEvent, usize), String> {
+    ) -> Result<(TimeEvent, usize), crate::execution_attempt::ExecutionAttemptError<String>> {
         // Refuse a pristine/probe scope before events, maintenance or matching.
         let max_time_trigger_invocations = self.time_trigger_invocation_limit()?;
         if *block_header != self._curr_block
@@ -38055,6 +38078,12 @@ impl<'state> StateBlock<'state> {
         {
             return Err("Time phase requires the exact active output owner".into());
         }
+        self.fastpq_source_quota
+            .as_mut()
+            .ok_or("SNS Time source quota is absent")?
+            .as_mut()
+            .map_err(|error| error.clone())?
+            .begin_sns_time()?;
         let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
@@ -38079,11 +38108,22 @@ impl<'state> StateBlock<'state> {
         // Owner-authorized alias lease renewal is native block maintenance, not a
         // synthetic client transaction or subscription trigger. The sweep is
         // bounded and advances a durable cursor in canonical storage-key order.
-        if let Err(error) = crate::sns::process_alias_auto_renewals(self) {
-            if self.local_storage_refusal.is_none() {
-                self.local_storage_refusal = Some(error.clone());
-            }
-            return Err(error.to_string());
+        if let Err(error) =
+            crate::sns::process_alias_auto_renewals(sns_maintenance::SnsTimeMaintenance {
+                block: self,
+            })
+        {
+            return Err(match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    if self.local_storage_refusal.is_none() {
+                        self.local_storage_refusal = Some(error.clone());
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+                }
+            });
         }
         Ok((time_event, max_time_trigger_invocations))
     }
@@ -42048,118 +42088,144 @@ impl StateTransaction<'_, '_> {
             )
         }))
     }
-    fn trigger_args_from_event(&self, event: &EventBox) -> Json {
+    fn trigger_args_from_event(
+        &self,
+        event: &EventBox,
+    ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
-            EventBox::ExecuteTrigger(ev) => ev.args().clone(),
+            EventBox::ExecuteTrigger(ev) => Ok(ev.args().clone()),
             EventBox::Data(shared) => self.trigger_args_from_data_event(shared.as_ref()),
-            _ => Json::default(),
+            _ => Ok(Json::default()),
         }
     }
-    fn trigger_host_args(&self, event: &EventBox, fallback: Json) -> Json {
+    fn trigger_host_args(
+        &self,
+        event: &EventBox,
+        fallback: Json,
+    ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match event {
             EventBox::ExecuteTrigger(_) | EventBox::Data(_) => self.trigger_args_from_event(event),
-            _ => fallback,
+            _ => Ok(fallback),
         }
     }
-    fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
+    fn trigger_args_from_data_event(
+        &self,
+        event: &data_pre::DataEvent,
+    ) -> Result<Json, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         use data_pre::{AssetEvent, DataEvent, DomainEvent};
-        let mut payload = norito::json!({
-            "kind": "other",
-            "op": "none",
-        });
+        // Argument construction is part of the unfinished local attempt: the
+        // checked JSON parser can refuse an inherited decode budget as well.
+        fn value<T: norito::json::JsonSerialize + ?Sized>(
+            source: &T,
+        ) -> Result<
+            norito::json::Value,
+            crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+        > {
+            norito::json::to_value(source).map_err(|error| match error {
+                norito::json::Error::DecodeResourceLimit => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                    )
+                }
+                norito::json::Error::AllocationFailed => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                    )
+                }
+                error => crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    ValidationFail::InternalError(error.to_string()),
+                ),
+            })
+        }
+        let finish = |payload: norito::json::Value| {
+            Json::from_norito_value_ref(&payload).map_err(|error| {
+                crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+                    ValidationFail::InternalError(error.to_string())
+                })
+            })
+        };
+        let other = || {
+            let mut details = norito::json::Map::new();
+            details.insert("kind".to_owned(), value("other")?);
+            details.insert("op".to_owned(), value("none")?);
+            finish(norito::json::Value::Object(details))
+        };
         let (asset_event, event_domain) = match event {
             DataEvent::Domain(DomainEvent::Asset(scoped)) => (&scoped.event, Some(&scoped.domain)),
             DataEvent::Asset(event) => (event, None),
-            _ => return Json::from(payload),
+            _ => return other(),
         };
         if let AssetEvent::Transferred(transfer) = asset_event {
             let source = transfer.source();
             let destination = transfer.destination();
             let mut details = norito::json::Map::new();
-            details.insert("kind".to_owned(), norito::json!("asset_transfer"));
-            details.insert("op".to_owned(), norito::json!("transferred"));
+            details.insert("kind".to_owned(), value(&"asset_transfer")?);
+            details.insert("op".to_owned(), value(&"transferred")?);
             details.insert(
                 "asset_definition_id".to_owned(),
-                norito::json!(source.definition().to_string()),
+                value(&source.definition().to_string())?,
             );
-            details.insert(
-                "source_asset_id".to_owned(),
-                norito::json!(source.to_string()),
-            );
+            details.insert("source_asset_id".to_owned(), value(&source.to_string())?);
             details.insert(
                 "destination_asset_id".to_owned(),
-                norito::json!(destination.to_string()),
+                value(&destination.to_string())?,
             );
             details.insert(
                 "source_account_id".to_owned(),
-                norito::json!(source.account().to_string()),
+                value(&source.account().to_string())?,
             );
             details.insert(
                 "destination_account_id".to_owned(),
-                norito::json!(destination.account().to_string()),
+                value(&destination.account().to_string())?,
             );
-            details.insert(
-                "amount".to_owned(),
-                norito::json!(transfer.amount().to_string()),
-            );
-            return Json::from(norito::json::Value::Object(details));
+            details.insert("amount".to_owned(), value(&transfer.amount().to_string())?);
+            return finish(norito::json::Value::Object(details));
         }
         let (op, changed) = match asset_event {
             AssetEvent::Added(changed) => ("added", changed),
             AssetEvent::Removed(changed) => ("removed", changed),
-            _ => return Json::from(payload),
+            _ => return other(),
         };
         let asset_id = changed.asset();
         let amount_str = changed.amount().to_string();
         let asset_definition_id = asset_id.definition().to_string();
         let alias_observation_time_ms = self.block_unix_timestamp_ms();
-        let alias_domains: Vec<String> = self
-            .world
-            .bound_account_aliases(asset_id.account())
-            .into_iter()
-            .filter(|alias| {
-                matches!(
-                    crate::sns::resolve_active_account_alias(
-                        &self.world,
-                        &self.nexus.dataspace_catalog,
-                        alias,
-                        alias_observation_time_ms,
-                    ),
-                    Ok(Some(ref resolved)) if resolved == asset_id.account()
-                )
-            })
-            .filter_map(|alias| {
-                alias
-                    .domain_id(&self.nexus.dataspace_catalog)
-                    .ok()
+        let active_domain = |alias: &iroha_data_model::account::rekey::AccountAlias| {
+            let resolved = crate::sns::resolve_active_account_alias(
+                &self.world,
+                &self.nexus.dataspace_catalog,
+                alias,
+                alias_observation_time_ms,
+            )
+            .map_err(|error| {
+                error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()))
+            })?;
+            Ok::<_, crate::execution_attempt::ExecutionAttemptError<ValidationFail>>(
+                (resolved.as_ref() == Some(asset_id.account()))
+                    .then(|| {
+                        alias
+                            .domain_id(&self.nexus.dataspace_catalog)
+                            .ok()
+                            .flatten()
+                    })
                     .flatten()
-                    .map(|domain| domain.to_string())
-            })
-            .collect();
+                    .map(|domain| domain.to_string()),
+            )
+        };
+        let mut alias_domains = Vec::new();
+        for alias in self.world.bound_account_aliases(asset_id.account()) {
+            if let Some(domain) = active_domain(&alias)? {
+                alias_domains.push(domain);
+            }
+        }
         let account_domain = self
             .world
             .accounts
             .get(asset_id.account())
-            .and_then(|value| {
-                value.as_ref().label().and_then(|label| {
-                    if !matches!(
-                        crate::sns::resolve_active_account_alias(
-                            &self.world,
-                            &self.nexus.dataspace_catalog,
-                            label,
-                            alias_observation_time_ms,
-                        ),
-                        Ok(Some(ref resolved)) if resolved == asset_id.account()
-                    ) {
-                        return None;
-                    }
-                    label
-                        .domain_id(&self.nexus.dataspace_catalog)
-                        .ok()
-                        .flatten()
-                        .map(|domain| domain.to_string())
-                })
-            })
+            .and_then(|value| value.as_ref().label())
+            .map(active_domain)
+            .transpose()?
+            .flatten()
             .or_else(|| {
                 alias_domains
                     .iter()
@@ -42185,29 +42251,28 @@ impl StateTransaction<'_, '_> {
             .or_else(|| event_domain.map(ToString::to_string));
         let account_id = asset_id.account().to_string();
         let mut details = norito::json::Map::new();
-        details.insert("kind".to_owned(), norito::json!("asset_change"));
-        details.insert("op".to_owned(), norito::json!(op));
+        details.insert("kind".to_owned(), value(&"asset_change")?);
+        details.insert("op".to_owned(), value(&op)?);
         details.insert(
             "asset_definition_id".to_owned(),
-            norito::json!(asset_definition_id),
+            value(&asset_definition_id)?,
         );
         if let Some(asset_definition_name) = asset_definition_name.as_ref() {
             details.insert(
                 "asset_definition_name".to_owned(),
-                norito::json!(asset_definition_name),
+                value(&asset_definition_name)?,
             );
         }
         if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
             details.insert(
                 "asset_definition_domain".to_owned(),
-                norito::json!(asset_definition_domain),
+                value(&asset_definition_domain)?,
             );
         }
-        details.insert("account_id".to_owned(), norito::json!(account_id));
-        details.insert("account_domain".to_owned(), norito::json!(account_domain));
-        details.insert("amount".to_owned(), norito::json!(amount_str));
-        payload = norito::json::Value::Object(details);
-        Json::from(payload)
+        details.insert("account_id".to_owned(), value(&account_id)?);
+        details.insert("account_domain".to_owned(), value(&account_domain)?);
+        details.insert("amount".to_owned(), value(&amount_str)?);
+        finish(norito::json::Value::Object(details))
     }
     fn execute_generic_ivm_trigger_program(
         &mut self,
@@ -42218,10 +42283,11 @@ impl StateTransaction<'_, '_> {
         summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, ValidationFail> {
+        let artifact = crate::executor::root_scope::captured_artifact_id(self, summary.code_hash)?;
         crate::smartcontracts::ivm::validate_generic_execution_context(
             &self.world,
             metadata,
-            crate::executor::root_scope::captured_artifact_id(self, summary.code_hash)?,
+            artifact,
         )?;
         let eff_cycles =
             crate::executor::validate_prepared_ivm_execution_policy(self, &summary.metadata)?;
@@ -42256,12 +42322,15 @@ impl StateTransaction<'_, '_> {
             })?;
         vm.set_max_cycles(eff_cycles.get());
         vm.set_gas_limit(gas_limit);
-        let host_args = self.trigger_host_args(event, Json::default());
+        let host_args = self
+            .trigger_host_args(event, Json::default())
+            .map_err(|error| self.attempt_error_to_validation_fail(error))?;
         let accounts = self.trigger_accounts_snapshot();
         let streaming_metadata =
             crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
         let bound_contract_records =
-            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self)
+                .map_err(|error| self.attempt_error_to_validation_fail(error))?;
         let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             accounts,
@@ -42606,6 +42675,7 @@ impl StateTransaction<'_, '_> {
                     self,
                     &invocation.contract_address,
                 )
+                .map_err(|error| self.attempt_error_to_validation_fail(error))?
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract instance `{}` not found in WSV",
@@ -42631,6 +42701,7 @@ impl StateTransaction<'_, '_> {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },
                         )
+                        .map_err(|error| self.attempt_error_to_validation_fail(error))?
                         .ok_or_else(|| {
                             ValidationFail::NotPermitted(format!(
                                 "contract bytecode `{}` not found in WSV",
@@ -42709,7 +42780,8 @@ impl StateTransaction<'_, '_> {
                         summary.prepared_contract(),
                         &invocation.entrypoint,
                         &identity,
-                    )?;
+                    )
+                    .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                 let transition = crate::executor::validate_prepared_contract_lifecycle_call(
                     &self.world,
                     &identity.contract_address,
@@ -42971,7 +43043,8 @@ impl StateTransaction<'_, '_> {
                                     prepared_contract,
                                     &selector,
                                     &runtime_identity,
-                                )?;
+                                )
+                                .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let contract_subject =
                                 crate::smartcontracts::code::fetch_bound_contract_subject(
                                     self,
@@ -42995,7 +43068,9 @@ impl StateTransaction<'_, '_> {
                                 transition.is_none(),
                                 "trigger lifecycle selectors are rejected before state validation"
                             );
-                            let trigger_args = self.trigger_args_from_event(&event);
+                            let trigger_args = self
+                                .trigger_args_from_event(&event)
+                                .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let mut contract_call_context =
                                 crate::executor::parse_prepared_trigger_call_execution_context(
                                     &contract_call_metadata,
@@ -43029,7 +43104,8 @@ impl StateTransaction<'_, '_> {
                         })?;
                             }
                             let host_args = self
-                                .trigger_host_args(&event, contract_call_context.args().clone());
+                                .trigger_host_args(&event, contract_call_context.args().clone())
+                                .map_err(|error| self.attempt_error_to_validation_fail(error))?;
                             let contract_runtime_context = contract_call_context.runtime_context();
                             // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                             // which we collect after `vm.run()` and return as the trigger step.

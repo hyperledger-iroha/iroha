@@ -1,11 +1,6 @@
 // Component and refusal tests; synthetic metadata never admits encrypted execution.
 use super::*;
-use crate::{
-    kura::Kura,
-    prelude::World,
-    query::store::LiveQueryStore,
-    state::{State, StateReadOnly},
-};
+use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
 use iroha_crypto::{
     Algorithm, KeyPair, PolicyCommitment, PrivateKey, Signature, SignatureOf,
     derive_phone_retail_nullifier_v1, ram_lfe_output_hash,

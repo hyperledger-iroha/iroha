@@ -168,11 +168,7 @@ pub(super) struct KagemushaTransportDeciderEpCircuitV1 {
     pub(super) builder: BaseCircuitBuilder<Fq>,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 /// Measured row/cell inventory for one compact transport-decider parity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct KagemushaTransportDeciderCapacityProfileV1 {
@@ -192,11 +188,7 @@ pub(super) struct KagemushaTransportDeciderCapacityProfileV1 {
 }
 
 impl KagemushaTransportDeciderEqCircuitV1 {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(super) fn capacity_profile(
         &self,
     ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String> {
@@ -205,11 +197,7 @@ impl KagemushaTransportDeciderEqCircuitV1 {
 }
 
 impl KagemushaTransportDeciderEpCircuitV1 {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
+    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
     pub(super) fn capacity_profile(
         &self,
     ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String> {
@@ -217,11 +205,7 @@ impl KagemushaTransportDeciderEpCircuitV1 {
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn transport_capacity_profile_v1<F>(
     builder: &BaseCircuitBuilder<F>,
 ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String>
@@ -272,11 +256,7 @@ where
     })
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 fn packed_rows_v1(cells: &[usize], columns: &[usize], label: &str) -> Result<usize, String> {
     if cells.len() != columns.len() {
         return Err(format!("transport {label} phase inventory mismatch"));

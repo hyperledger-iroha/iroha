@@ -95,6 +95,13 @@ cannot acquire a typed frame API from reconstruction alone. The retired
 `#[norito(schema_name = "...")]` attribute is rejected; root projections belong
 in the canonical `#[norito_schema(...)]` declaration. All frame writers, readers,
 collection collectors and map iterators use `schema::identity::frame_hash`.
+Derived `static_frame_name()` borrows the exact explicit root projection or
+complete nominal literal without constructing a `String`. Generic and erased
+lifetime compositions still retain all arguments; only an explicitly declared
+fixed projection can supply a static root for a lifetime-bearing owner. A manual
+static nominal declaration never substitutes for its independent root projection.
+The hash domain, declared names, immutable fixture bytes and wire layouts are
+unchanged. Other serializer allocations remain subject to their own admission.
 Streaming padding follows the known container representation, without inspecting
 hashes to select a layout. Structural schema exports remain inspection data.
 

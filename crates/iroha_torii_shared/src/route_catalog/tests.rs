@@ -147,7 +147,6 @@ mod tests {
             application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
             application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
             aliases::RESOLVE,
-            aliases::RESOLVE_INDEX,
             aliases::BY_ACCOUNT,
         ] {
             assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
@@ -210,6 +209,29 @@ mod tests {
     }
 
     #[test]
+    fn signed_alias_enumeration_retains_dataspace_visibility_and_requires_account_authentication() {
+        let route = aliases::RESOLVE_INDEX;
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+        assert!(route.requires_private_no_store());
+        assert_eq!(validate_catalog(&[route]), Ok(()));
+        for authentication in [
+            AuthenticationPolicy::Unauthenticated,
+            AuthenticationPolicy::ToriiDefault,
+            AuthenticationPolicy::OperatorSignature,
+            AuthenticationPolicy::CanonicalSignedBody,
+            AuthenticationPolicy::ProtocolHandshake,
+        ] {
+            let errors =
+                validate_catalog(&[route.with_authentication(authentication)]).unwrap_err();
+            assert!(errors.iter().any(|error| error.kind
+                == CatalogValidationErrorKind::DataspaceVisibleRequiresAccountAuthentication));
+        }
+    }
+    #[test]
     fn dataspace_admission_rejects_a_hollow_authentication_witness() {
         let route = RouteDescriptor::new(
             "test.dataspace_without_optional_auth",
@@ -222,7 +244,7 @@ mod tests {
         );
         let errors = validate_catalog(&[route]).expect_err("missing optional auth must fail");
         assert!(errors.iter().any(|error| {
-            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresOptionalAuthentication
+            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresAccountAuthentication
         }));
     }
     #[test]
@@ -358,9 +380,18 @@ mod tests {
             RouteEffect::ReadOnly
         );
         assert_eq!(kagemusha::AUTHORITY_ORIGINALS.method(), HttpMethod::Post);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.admission(), AdmissionPolicy::AuthenticatedAccount);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.authentication(), AuthenticationPolicy::CanonicalAccountSignature);
-        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::AUTHORITY_ORIGINALS.effect(),
+            RouteEffect::ReadOnly
+        );
         let mcp = catalog.project(CatalogProjection::Mcp, enabled);
         assert_eq!(mcp.len(), 4);
         assert_eq!(
@@ -998,11 +1029,7 @@ mod tests {
     }
     #[test]
     fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
-        for route in [
-            aliases::RESOLVE,
-            aliases::RESOLVE_INDEX,
-            aliases::BY_ACCOUNT,
-        ] {
+        for route in [aliases::RESOLVE, aliases::BY_ACCOUNT] {
             assert_eq!(
                 route.authentication(),
                 AuthenticationPolicy::OptionalCanonicalAccountSignature,

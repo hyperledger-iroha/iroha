@@ -56,7 +56,7 @@ impl<'de> DeserializePayload<'de> for Format {
             .expect("stored logger format strings must parse successfully")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as DeserializePayload>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::try_deserialize(archived.cast())?;
         Format::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }
@@ -141,7 +141,7 @@ impl<'de> DeserializePayload<'de> for Directives {
         Self::try_deserialize(archived).expect("stored logger directives must parse successfully")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as DeserializePayload>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::try_deserialize(archived.cast())?;
         Directives::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }

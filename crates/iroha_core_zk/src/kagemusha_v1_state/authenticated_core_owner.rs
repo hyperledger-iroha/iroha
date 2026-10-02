@@ -23,18 +23,15 @@ mod ordinary_bootstrap_owner;
 mod ordinary_enrollment;
 #[cfg(feature = "kagemusha-production-prover")]
 pub use ordinary_bootstrap_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
+pub(crate) use ordinary_enrollment::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
+#[cfg(feature = "kagemusha-production-prover")]
+pub(crate) use ordinary_enrollment::verify_ordinary_bootstrap_guard_v1;
 pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryApprovalV1,
     KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
     KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
-};
-pub(crate) use ordinary_enrollment::{
-    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
-    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
 };
 
 #[path = "authenticated_core_dispatch.rs"]

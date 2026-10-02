@@ -43,8 +43,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
     @Test
     fun `coordinator methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..18).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(25, cases.size)
+        assertEquals((1..21).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(28, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
@@ -276,7 +276,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
     }
 
     @Test
-    fun `App Attest commit acknowledgment binds every original byte and exact next counter`() {
+    fun `App Attest commit acknowledgment binds every original byte and the actual monotonic counter`() {
         val method = KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
         val selection = domain + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(403).array() +
@@ -289,18 +289,69 @@ class KagemushaCoreCoordinatorFrameV1Test {
         selection[323] = 1
         selection[331] = 2
         selection.fill(0, 428, 460)
-        selection[428] = 4
-        selection[444] = 5
+        selection[428] = 70
+        selection[444] = 71
         val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
-            selection, byteArrayOf(0xa2.toByte(), 1, 2), KagemushaCoreCoordinatorFrameV1.u32(4),
+            selection, originalAppAttestAssertion(11u), KagemushaCoreCoordinatorFrameV1.u32(4),
             ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
+        // The wallet's u128 index may be far beyond the unrelated signed u32 hardware counter.
+        val wideIndex = request.map { it.copyOf() }.toMutableList()
+        wideIndex[2][443] = 1
+        wideIndex[2][459] = 1
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, wideIndex)
+        val financialOverflow = request.map { it.copyOf() }.toMutableList()
+        financialOverflow[2].fill(0xff.toByte(), 428, 444)
+        financialOverflow[2].fill(0, 444, 460)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, financialOverflow)
+        }
+        val skippedIndex = request.map { it.copyOf() }.toMutableList()
+        skippedIndex[2][444] = 72
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, skippedIndex)
+        }
+        val enrollment = request.map { it.copyOf() }.toMutableList()
+        enrollment[2][331] = 0
+        enrollment[2].fill(0, 364, 396)
+        enrollment[2].fill(0, 396, 428)
+        enrollment[2].fill(0, 428, 460)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        enrollment[2][428] = 1
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        }
         val encoded = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, request)
         val response = listOf(request[0], MessageDigest.getInstance("SHA-256").digest(request[1]),
             MessageDigest.getInstance("SHA-256").digest(request[2]),
             MessageDigest.getInstance("SHA-256").digest(request[3]),
-            KagemushaCoreCoordinatorFrameV1.u32(5), request[5], request[6])
+            KagemushaCoreCoordinatorFrameV1.u32(11), request[5], request[6])
         val reply = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, response)
         KagemushaCoreCoordinatorFrameV1.decodeResponse(method, encoded, reply)
+        val derivedCounter = response.map { it.copyOf() }.toMutableList()
+        derivedCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(5)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, derivedCounter)
+        }
+        val assertion = originalAppAttestAssertion(11u)
+        val unknownKey = assertion.copyOf().also { it[2] = 'x'.code.toByte() }
+        val noncanonicalMap = byteArrayOf(0xb8.toByte(), 2) + assertion.copyOfRange(1, assertion.size)
+        val indefiniteMap = assertion.copyOf().also { it[0] = 0xbf.toByte() }
+        val duplicateKey = byteArrayOf(0xa2.toByte()) + assertion.copyOfRange(1, 58) + assertion.copyOfRange(1, 58)
+        val malformedUtf8 = assertion.copyOf().also { it[2] = 0xff.toByte() }
+        val wrongAuthenticatorType = assertion.copyOf().also { it[19] = 0x78 }
+        val noncanonicalAuthenticatorLength = assertion.copyOfRange(0, 19) +
+            byteArrayOf(0x59, 0, 37) + assertion.copyOfRange(21, assertion.size)
+        for (malformed in listOf(byteArrayOf(0xa2.toByte(), 1, 2), assertion + byteArrayOf(0),
+                assertion.copyOf(assertion.size - 1), unknownKey, noncanonicalMap, indefiniteMap, duplicateKey,
+                malformedUtf8, wrongAuthenticatorType, noncanonicalAuthenticatorLength,
+                originalAppAttestAssertion(4u), originalAppAttestAssertion(3u))) {
+            val invalid = request.map { it.copyOf() }.toMutableList()
+            invalid[3] = malformed
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, invalid)
+            }
+        }
+
         for (offset in listOf(57, 331, 428, 444)) {
             val changed = request.map { it.copyOf() }.toMutableList()
             changed[2][offset] = (changed[2][offset].toInt() xor 1).toByte()
@@ -309,7 +360,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
             }
         }
         val otherCounter = request.map { it.copyOf() }.toMutableList()
-        otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(3)
+        otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(11)
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
         }
@@ -333,6 +384,14 @@ class KagemushaCoreCoordinatorFrameV1Test {
             KagemushaCoreCoordinatorFrameV1.encodeRequest(method, exhausted)
         }
     }
+
+    /** Canonical original-byte shape only; no real App Attest signature or hardware authority. */
+    private fun originalAppAttestAssertion(counter: UInt): ByteArray =
+        byteArrayOf(0xa2.toByte(), 0x71) + "authenticatorData".toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x58, 37) + ByteArray(32) { 0x42 } + byteArrayOf(0x40) +
+            ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(counter.toInt()).array() +
+            byteArrayOf(0x69) + "signature".toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x48, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01)
 
     private class Fixture(val name: String, val method: KagemushaCoreCoordinatorMethodV1, val request: ByteArray, val response: ByteArray)
 

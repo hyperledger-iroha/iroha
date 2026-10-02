@@ -31,6 +31,7 @@ pub(crate) struct PreparedSourceQuota {
     #[cfg(test)]
     mandatory_ceiling: SourceUsage,
     profile: FastpqSourcePolicyV1,
+    sns_time_started: bool,
 }
 
 /// Disposable physical contribution whose failed preparation cannot be ignored.
@@ -105,6 +106,8 @@ pub(crate) struct SourceQuotaTransaction<'a> {
     ordinary: Option<EntryBundleReservationTransaction<'a>>,
     mandatory: Option<EntryBundleReservationTransaction<'a>>,
     allow_governance_purposes: bool,
+    sns_purpose: Option<(Hash, EntryBundleOwner)>,
+    sns_time_started: bool,
     failed: bool,
     failure: Option<SourceQuotaFailure>,
 }
@@ -116,6 +119,8 @@ impl SourceQuotaTransaction<'_> {
             ordinary: None,
             mandatory: None,
             allow_governance_purposes: false,
+            sns_purpose: None,
+            sns_time_started: false,
             failed: true,
             failure: Some(SourceQuotaFailure::Invariant(error)),
         }
@@ -159,7 +164,12 @@ impl SourceQuotaTransaction<'_> {
             return Err("FASTPQ source transaction was poisoned".into());
         }
         let journal = if protocol_purpose {
-            if !self.allow_governance_purposes {
+            if !self.allow_governance_purposes
+                && !self
+                    .sns_purpose
+                    .as_ref()
+                    .is_some_and(|(entry, _)| *entry == hash)
+            {
                 return Err("quantity capture has no retained mandatory owner".into());
             }
             &self.mandatory
@@ -180,6 +190,48 @@ impl SourceQuotaTransaction<'_> {
         self.allow_governance_purposes = true;
     }
 
+    /// Consumed releases remain charged while new configurations can still reach Time.
+    pub(crate) fn pending_time_consumed_usage(&self) -> Result<Option<SourceUsage>, String> {
+        if self.failed {
+            return Err("FASTPQ source transaction was poisoned".into());
+        }
+        if self.sns_time_started {
+            return Ok(None);
+        }
+        self.mandatory
+            .as_ref()
+            .map(|ledger| Some(ledger.usage()))
+            .ok_or_else(|| "SNS mandatory source journal is unavailable".into())
+    }
+
+    /// Retain one exact renewal purpose from the authenticated Time transaction.
+    /// The original mandatory ledger owns both the entry and its rollback.
+    pub(crate) fn retain_sns_purpose(&mut self, hash: Hash) -> Result<(), String> {
+        if self.failed
+            || !self.sns_time_started
+            || self.allow_governance_purposes
+            || self.sns_purpose.is_some()
+        {
+            return Err("SNS source requires one fresh Time-maintenance transaction".into());
+        }
+        let result = self
+            .mandatory
+            .as_mut()
+            .ok_or_else(|| "SNS mandatory source journal is unavailable".to_owned())?
+            .open_entry(hash)
+            .map_err(|error| error.to_string());
+        match result {
+            Ok(owner) => {
+                self.sns_purpose = Some((hash, owner));
+                Ok(())
+            }
+            Err(error) => {
+                self.fail_preparation(error.clone());
+                Err(error)
+            }
+        }
+    }
+
     /// Measure the exact whole committed/pending/candidate bundle before movement.
     pub(crate) fn replace_entry<'a, I>(
         &mut self,
@@ -195,7 +247,12 @@ impl SourceQuotaTransaction<'_> {
         }
         let result = (|| {
             let transaction = if protocol_purpose {
-                if !self.allow_governance_purposes {
+                if !self.allow_governance_purposes
+                    && !self
+                        .sns_purpose
+                        .as_ref()
+                        .is_some_and(|(entry, _)| *entry == hash)
+                {
                     return Err(SourceQuotaFailure::Invariant(
                         "protocol source has no authenticated mandatory owner".into(),
                     ));
@@ -210,7 +267,15 @@ impl SourceQuotaTransaction<'_> {
             let invariant =
                 |error: ReservationError| SourceQuotaFailure::Invariant(error.to_string());
             let owner = if protocol_purpose {
-                transaction.open_entry(hash).map_err(invariant)?
+                if let Some((_, owner)) = self
+                    .sns_purpose
+                    .as_ref()
+                    .filter(|(entry, _)| *entry == hash)
+                {
+                    owner.clone()
+                } else {
+                    transaction.open_entry(hash).map_err(invariant)?
+                }
             } else {
                 transaction
                     .existing_entry(hash)
@@ -312,6 +377,15 @@ fn construction(value: FastpqSourceLimitsV1) -> Result<FastpqSourceStatementBuil
 }
 
 impl PreparedSourceQuota {
+    /// Enter the one checked Time phase before any renewal transaction is opened.
+    pub(crate) fn begin_sns_time(&mut self) -> Result<(), String> {
+        if self.sns_time_started {
+            return Err("SNS Time phase cannot repeat".into());
+        }
+        self.sns_time_started = true;
+        Ok(())
+    }
+
     /// Prepare conservative ceilings from an already frozen canonical policy.
     ///
     /// Reserve every potential Pipeline/Time call and the complete retained
@@ -386,6 +460,7 @@ impl PreparedSourceQuota {
             #[cfg(test)]
             mandatory_ceiling: usage(mandatory),
             profile,
+            sns_time_started: false,
         })
     }
 
@@ -403,6 +478,8 @@ impl PreparedSourceQuota {
             ordinary: Some(ordinary),
             mandatory: Some(mandatory),
             allow_governance_purposes: false,
+            sns_purpose: None,
+            sns_time_started: self.sns_time_started,
             failed: false,
             failure: None,
         })

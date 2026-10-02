@@ -2,7 +2,7 @@
 
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
-    state::{StateReadOnly, WorldReadOnly},
+    state::WorldReadOnly,
     sumeragi::{
         crypto::BlsCrypto,
         lanes::merge::{NoLanes, expand},

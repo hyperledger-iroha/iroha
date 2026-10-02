@@ -76,15 +76,18 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
             .routing_plans
             .get(&hash)
             .map(|entry| entry.value().coordinator_route()),
-        Some(RoutingDecision::default())
+        Some(refreshed)
     );
     assert_eq!(
         queue
             .routing_plan_hint(&hash)
             .map(|plan| plan.coordinator_route()),
-        Some(RoutingDecision::default())
+        Some(refreshed)
     );
     assert!(!queue.accepted_work_validation_faulted());
+    let selected = Arc::new(queue).bounded_pending_snapshot(&state.view(), nonzero!(1_usize)).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].entrypoint(), tx.entrypoint());
 }
 
 #[test]

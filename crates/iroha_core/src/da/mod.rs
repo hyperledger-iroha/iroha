@@ -22,11 +22,6 @@ use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
 use iroha_crypto::Hash;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_crypto::HashOf;
-#[cfg(test)]
-use iroha_data_model::nexus::{
-    AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-    AUTOSCALE_META_MANAGED,
-};
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId},

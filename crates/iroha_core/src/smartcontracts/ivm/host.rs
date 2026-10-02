@@ -698,6 +698,9 @@ pub type CoreHost = CoreHostImpl<NoQueryState>;
 /// Errors returned while constructing a core host from a state snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreHostStateError {
+    /// A deployed contract registry read was rejected or remains locally unfinished.
+    #[error("contract registry snapshot: {0}")]
+    ContractRegistry(crate::execution_attempt::ExecutionAttemptError<ValidationFail>),
     /// The world-state ZK registry is internally inconsistent.
     #[error("invalid ZK snapshot state: {0}")]
     ZkSnapshot(ivm::VMError),
@@ -939,7 +942,15 @@ fn map_validation_fail(error: &ValidationFail) -> ivm::VMError {
         _ => ivm::VMError::DecodeError,
     }
 }
-fn map_query_execution_error(error: &QueryExecutionFail) -> ivm::VMError {
+fn map_query_execution_error(
+    error: &crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+) -> ivm::VMError {
+    let error = match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            return reason.clone().into_vm_error();
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+    };
     match error {
         QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
         _ => ivm::VMError::DecodeError,
@@ -1049,7 +1060,11 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     match validated.execute_ephemeral_with_stats(state.query_handle(), state, authority, budget) {
         Ok((QueryResponse::Singular(output), stats)) => Ok((Some(output), stats)),
         Ok((QueryResponse::Iterable(_), _)) => Err(ivm::VMError::DecodeError),
-        Err(error) if is_missing_query_error(&error) => Ok((None, QueryExecutionStats::default())),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error))
+            if is_missing_query_error(&error) =>
+        {
+            Ok((None, QueryExecutionStats::default()))
+        }
         Err(error) => Err(map_query_execution_error(&error)),
     }
 }
@@ -1254,11 +1269,14 @@ pub trait QueryStateRefOps {
     fn bound_contract_dispatch_identity_by_address(
         &self,
         contract_address: &ContractAddress,
-    ) -> Option<(
-        crate::smartcontracts::code::BoundContractIdentity,
-        AccountId,
-        usize,
-    )>;
+    ) -> Result<
+        Option<(
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+            usize,
+        )>,
+        ivm::VMError,
+    >;
     /// Prepare a content-addressed cache miss while borrowing deployed bytecode in place.
     fn prepare_contract_cache_miss(
         &self,
@@ -1302,7 +1320,7 @@ pub trait QueryStateRefOps {
         contract_address: &ContractAddress,
         entrypoint: &str,
         permission: Option<&str>,
-    ) -> Result<(), ValidationFail>;
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>;
     /// Validate that a nested target is executable and not awaiting a lifecycle hook.
     ///
     /// # Errors
@@ -2013,11 +2031,14 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
     fn bound_contract_dispatch_identity_by_address(
         &self,
         contract_address: &ContractAddress,
-    ) -> Option<(
-        crate::smartcontracts::code::BoundContractIdentity,
-        AccountId,
-        usize,
-    )> {
+    ) -> Result<
+        Option<(
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+            usize,
+        )>,
+        ivm::VMError,
+    > {
         match *self {
             QueryStateRef::View(view) => {
                 CoreHostImpl::<NoQueryState>::bound_contract_dispatch_identity(
@@ -2069,7 +2090,9 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                 })
             }
         };
-        prepared.ok_or(ivm::VMError::PermissionDenied)?
+        prepared
+            .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
+            .ok_or(ivm::VMError::PermissionDenied)?
     }
     fn subscription_context_for_trigger(
         &self,
@@ -2134,7 +2157,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         contract_address: &ContractAddress,
         entrypoint: &str,
         permission: Option<&str>,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match *self {
             QueryStateRef::View(view) => {
                 crate::executor::enforce_named_contract_entrypoint_permission(
@@ -2428,7 +2451,7 @@ impl HostExecutionArtifacts {
     fn validate_queued_authorization(
         world: &impl WorldReadOnly,
         queued: &QueuedInstruction,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         match (
             queued.contract_runtime_context.as_ref(),
             queued.entrypoint_authorization.as_ref(),
@@ -2453,16 +2476,18 @@ impl HostExecutionArtifacts {
                     return Err(ValidationFail::NotPermitted(
                         "queued contract effect does not match its immutable authorization snapshot"
                             .to_owned(),
-                    ));
+                    ).into());
                 }
                 authorization.validate(world)
             }
             (Some(_), None) => Err(ValidationFail::NotPermitted(
                 "queued contract effect is missing its immutable authorization snapshot".to_owned(),
-            )),
+            )
+            .into()),
             (None, Some(_)) => Err(ValidationFail::InternalError(
                 "queued entrypoint authorization has no contract runtime context".to_owned(),
-            )),
+            )
+            .into()),
             (None, None) => Ok(()),
         }
     }
@@ -2482,7 +2507,7 @@ impl HostExecutionArtifacts {
             StatePath,
             Option<ContractEntrypointAuthorizationSnapshot>,
         >,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if durable_state_overlay.len() != durable_state_authorizations.len()
             || !durable_state_overlay
                 .keys()
@@ -2490,19 +2515,20 @@ impl HostExecutionArtifacts {
         {
             return Err(ValidationFail::InternalError(
                 "durable state overlay authorization keys are structurally inconsistent".to_owned(),
-            ));
+            )
+            .into());
         }
         for (path, authorization) in durable_state_authorizations {
             if Self::durable_path_requires_authorization(path) && authorization.is_none() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
-                )));
+                )).into());
             }
             if let Some(authorization) = authorization {
                 if !authorization.owns_durable_state_path(path) {
                     return Err(ValidationFail::NotPermitted(format!(
                         "durable state path `{path}` does not belong to its contract authorization snapshot"
-                    )));
+                    )).into());
                 }
                 authorization.validate(world)?;
             }
@@ -2638,7 +2664,8 @@ impl HostExecutionArtifacts {
                     "contract execution root authorization contains a parent invocation".to_owned(),
                 ));
             }
-            root.validate_for_authority(&tx.world, authority)?;
+            root.validate_for_authority(&tx.world, authority)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             for authorization in self
                 .queued
                 .iter()
@@ -2658,13 +2685,15 @@ impl HostExecutionArtifacts {
             }
         }
         for queued in &self.queued {
-            Self::validate_queued_authorization(&tx.world, queued)?;
+            Self::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         Self::validate_durable_authorizations(
             &tx.world,
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
-        )?;
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         // The actual consumed group must fit before its first call-hash,
         // confidential-work, instruction, AXT or durable-state effect is applied.
         tx.admit_host_execution_effects(self.queued.iter().map(|queued| &queued.instruction))?;
@@ -2675,9 +2704,12 @@ impl HostExecutionArtifacts {
         let executor = tx.world.executor.clone();
         for queued in &self.queued {
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-                authorization.validate_for_authority(&tx.world, authority)?;
+                authorization
+                    .validate_for_authority(&tx.world, authority)
+                    .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
-            Self::validate_queued_authorization(&tx.world, queued)?;
+            Self::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             executor.execute_instruction_with_contract_runtime_context(
                 tx,
                 &queued.authority,
@@ -2688,12 +2720,17 @@ impl HostExecutionArtifacts {
             // the selected root and the just-executed leaf before advancing or committing any
             // other artifact.
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-                authorization.validate_for_authority(&tx.world, authority)?;
+                authorization
+                    .validate_for_authority(&tx.world, authority)
+                    .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
-            Self::validate_queued_authorization(&tx.world, queued)?;
+            Self::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-            authorization.validate_for_authority(&tx.world, authority)?;
+            authorization
+                .validate_for_authority(&tx.world, authority)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         // Revalidate once after all queued effects, but before the durable lifecycle tombstone is
         // committed. A helper contract can otherwise stage a deactivate/reactivate ABA while a
@@ -2712,7 +2749,8 @@ impl HostExecutionArtifacts {
             &tx.world,
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
-        )?;
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         Self::record_completed_axt_states(tx, self.completed_axt)?;
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
@@ -2721,7 +2759,9 @@ impl HostExecutionArtifacts {
                     .get(&path)
                     .and_then(Option::as_ref)
                 {
-                    authorization.validate(&tx.world)?;
+                    authorization
+                        .validate(&tx.world)
+                        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
                 }
                 if let Some(stored) = value {
                     tx.world.smart_contract_state.insert(path.clone(), stored);
@@ -2933,7 +2973,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     ///
     /// Returns [`CoreHostStateError`] when the state contains an inconsistent
-    /// ZK registry or a non-canonical AXT policy snapshot.
+    /// ZK registry, a non-canonical AXT policy snapshot, or an invalid contract registry.
+    /// Local registry resource refusal retains its unfinished attempt in the error.
     pub fn from_state(
         authority: AccountId,
         state: &crate::state::State,
@@ -2951,7 +2992,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_public_inputs_from_parameters(view.world().parameters());
         host.set_vrf_epoch_seeds_from_state(&view);
         host.set_bound_contract_records_by_subject_snapshot(
-            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view),
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view)
+                .map_err(CoreHostStateError::ContractRegistry)?,
         );
         host.set_zk_snapshots_from_world(view.world(), &view.zk)
             .map_err(CoreHostStateError::ZkSnapshot)?;
@@ -3272,10 +3314,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             crate::smartcontracts::code::BoundContractIdentity,
             AccountId,
         ),
-        ValidationFail,
+        crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
     > {
         let identity =
-            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
+            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)?
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract instance `{contract_address}` has no valid live identity binding"
@@ -3284,12 +3326,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if identity.contract_alias.as_ref() != expected_alias {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{contract_address}` alias changed before runtime binding"
-            )));
+            ))
+            .into());
         }
         if identity.code_hash != contract.code_hash() {
             return Err(ValidationFail::NotPermitted(format!(
                 "contract instance `{contract_address}` code binding changed before runtime binding"
-            )));
+            ))
+            .into());
         }
         let contract_subject =
             crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)
@@ -3312,7 +3356,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the live identity, alias, subject, or code binding is absent or changed;
     /// if the selector is not a transaction-capable entrypoint; if its lifecycle is unavailable;
-    /// or if the host authority lacks its state-derived permission.
+    /// or if the host authority lacks its state-derived permission. Resource refusal
+    /// remains a local deferred attempt and never authorizes a partial binding.
     pub fn bind_authorized_deployed_contract_runtime_context(
         &mut self,
         state: &impl StateReadOnly,
@@ -3320,7 +3365,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         expected_alias: Option<&ContractAlias>,
         contract: &ivm::PreparedContract,
         selector: &str,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         self.clear_contract_runtime_binding();
         let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
             state,
@@ -3356,7 +3401,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the live identity, alias, subject, or code binding is absent or changed;
     /// if the selector is not a read-only view; if the lifecycle blocks views; or if the host
-    /// authority lacks its state-derived permission.
+    /// authority lacks its state-derived permission. Resource refusal remains a local
+    /// deferred attempt and never authorizes a partial binding.
     pub fn bind_authorized_deployed_contract_view_runtime_context(
         &mut self,
         state: &impl StateReadOnly,
@@ -3364,7 +3410,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         expected_alias: Option<&ContractAlias>,
         contract: &ivm::PreparedContract,
         selector: &str,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         self.clear_contract_runtime_binding();
         let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
             state,
@@ -5176,7 +5222,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     "contract execution root authorization contains a parent invocation".to_owned(),
                 ));
             }
-            root.validate_for_authority(&tx.world, authority)?;
+            root.validate_for_authority(&tx.world, authority)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             if queued
                 .iter()
                 .filter_map(|queued| queued.entrypoint_authorization.as_ref())
@@ -5194,13 +5241,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         }
         for queued in &queued {
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)?;
+            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         HostExecutionArtifacts::validate_durable_authorizations(
             &tx.world,
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
-        )?;
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         HostExecutionArtifacts::seed_queued_call_hash_if_missing(tx, &queued)?;
         let confidential_gas_delta =
             crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
@@ -5209,7 +5258,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let executor = tx.world.executor.clone();
         for queued in &queued {
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)?;
+            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             executor.execute_instruction_with_contract_runtime_context(
                 tx,
                 &queued.authority,
@@ -5220,15 +5270,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .or(contract_runtime_context),
             )?;
             if let Some(root) = self.current_entrypoint_authorization.as_ref() {
-                root.validate_for_authority(&tx.world, authority)?;
+                root.validate_for_authority(&tx.world, authority)
+                    .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
-            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)?;
+            HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)
+                .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
         HostExecutionArtifacts::validate_durable_authorizations(
             &tx.world,
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
-        )?;
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         self.flush_completed_axt(tx)?;
         self.flush_durable_state(tx)?;
         Ok(queued
@@ -6843,21 +6896,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn resolve_bound_contract_dispatch_identity_by_address(
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    ) -> Option<(
-        crate::smartcontracts::code::BoundContractIdentity,
-        AccountId,
-        usize,
-    )> {
+    ) -> Result<
+        Option<(
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+            usize,
+        )>,
+        ivm::VMError,
+    > {
         if let Some(state_ref) = self.query_state.get() {
             // A live query view is authoritative. Never fall back to a stale
             // construction-time snapshot when an instance has been removed.
             return state_ref.bound_contract_dispatch_identity_by_address(contract_address);
         }
-        let record = self
+        let Some(record) = self
             .bound_contract_records_by_subject
             .values()
-            .find(|record| record.contract_address == *contract_address)?;
-        Some((
+            .find(|record| record.contract_address == *contract_address)
+        else {
+            return Ok(None);
+        };
+        Ok(Some((
             crate::smartcontracts::code::BoundContractIdentity {
                 contract_address: record.contract_address.clone(),
                 contract_alias: record.contract_alias.clone(),
@@ -6866,7 +6925,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             },
             record.contract_subject.clone(),
             record.code_bytes.len(),
-        ))
+        )))
     }
     fn prepare_nested_contract(
         &self,
@@ -7150,6 +7209,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let reserved_gas = vm.syscall_reserved_gas();
         let (identity, contract_subject, artifact_bytes) = self
             .resolve_bound_contract_dispatch_identity_by_address(&contract_address)
+            .map_err(|error| ivm::VMError::metered(request_gas, error))?
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
         let request_gas = Self::nested_contract_host_gas(request_bytes, artifact_bytes, 0);
         // Cache warmth is local process state and cannot affect consensus gas.
@@ -7201,7 +7261,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         permission.as_deref(),
                     )
                     .map_err(|error| {
-                        ivm::VMError::metered(request_gas, map_validation_fail(&error))
+                        ivm::VMError::metered(
+                            request_gas,
+                            error.into_vm_error(|error| map_validation_fail(&error)),
+                        )
                     })?;
             }
             state_ref.smart_contract_heap_limit()
@@ -8011,7 +8074,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             state.world(),
             contract_address,
         )
-        .map_err(|_| ivm::VMError::PermissionDenied)?;
+        .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?;
         let code_hash = state
             .world()
             .contract_instances()
@@ -9393,7 +9456,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .get(path)
                 .and_then(Option::as_ref)
             {
-                authorization.validate(&tx.world)?;
+                authorization
+                    .validate(&tx.world)
+                    .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             }
             if let Some(stored) = value {
                 tx.world
@@ -9466,29 +9531,42 @@ impl<QS> CoreHostImpl<QS> {
     fn bound_contract_dispatch_identity<R: StateReadOnly>(
         state: &R,
         contract_address: &ContractAddress,
-    ) -> Option<(
-        crate::smartcontracts::code::BoundContractIdentity,
-        AccountId,
-        usize,
-    )> {
+    ) -> Result<
+        Option<(
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+            usize,
+        )>,
+        ivm::VMError,
+    > {
         crate::executor::root_scope::ensure_committed_contract_scope(
             state.world(),
             contract_address,
         )
-        .ok()?;
-        let identity =
-            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)?;
-        let subject =
-            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)?;
-        let artifact_len = state
-            .world()
-            .contract_code()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                identity.contract_address.dataspace_id().ok()?,
+        .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?;
+        let Some(identity) =
+            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
+                .map_err(|error| error.into_vm_error(|_| ivm::VMError::PermissionDenied))?
+        else {
+            return Ok(None);
+        };
+        let Some(subject) =
+            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)
+        else {
+            return Ok(None);
+        };
+        let Ok(dataspace) = identity.contract_address.dataspace_id() else {
+            return Ok(None);
+        };
+        let Some(bytes) = state.world().contract_code().get(
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                dataspace,
                 identity.code_hash,
-            ))?
-            .len();
-        Some((identity, subject, artifact_len))
+            ),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some((identity, subject, bytes.len())))
     }
     fn resolve_account_alias<R: StateReadOnly>(
         state: &R,
@@ -9501,7 +9579,12 @@ impl<QS> CoreHostImpl<QS> {
             state.world(),
             authority,
             &alias_label,
-        ) {
+        )
+        .map_err(|error| {
+            error
+                .into_attempt_error(|_| ivm::VMError::DecodeError)
+                .into_vm_error(core::convert::identity)
+        })? {
             return Err(ivm::VMError::PermissionDenied);
         }
         let now_ms = state.latest_block().map_or(0, |block| {
@@ -9513,8 +9596,11 @@ impl<QS> CoreHostImpl<QS> {
             &alias_label,
             now_ms,
         )
-        .map_err(|_| ivm::VMError::DecodeError)?
-        {
+        .map_err(|error| {
+            error
+                .into_attempt_error(|_| ivm::VMError::DecodeError)
+                .into_vm_error(core::convert::identity)
+        })? {
             return Ok(account_id);
         }
         Err(ivm::VMError::DecodeError)
@@ -11660,6 +11746,7 @@ seiyaku StateBackedBinding {
         let view = state.view();
         let record =
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+                .expect("registry read completes")
                 .expect("installed contract record");
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
             .expect("prepare installed contract");
@@ -11671,6 +11758,7 @@ seiyaku StateBackedBinding {
             &prepared,
             "execute",
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("bind authorized transaction entrypoint");
         assert_eq!(host.execution_class, HostExecutionClass::Contract);
         let context = host
@@ -11702,6 +11790,7 @@ seiyaku StateBackedBinding {
             &prepared,
             "inspect",
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("bind authorized view entrypoint");
         assert_eq!(host.execution_class, HostExecutionClass::View);
         let context = host
@@ -11758,6 +11847,7 @@ seiyaku ReadOnlyBinding {
         let view = state.view();
         let record =
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+                .expect("registry read completes")
                 .expect("installed contract record");
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
             .expect("prepare installed contract");
@@ -11769,6 +11859,7 @@ seiyaku ReadOnlyBinding {
             &prepared,
             "inspect",
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("bind authorized view entrypoint");
         let effect_syscalls = ivm_sys::abi_syscall_list()
             .iter()
@@ -12194,9 +12285,11 @@ seiyaku PrivilegedBinding {
         let view = state.view();
         let legitimate =
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &legitimate_address)
+                .expect("registry read completes")
                 .expect("legitimate contract record");
         let privileged =
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &privileged_address)
+                .expect("registry read completes")
                 .expect("privileged contract record");
         let legitimate_prepared =
             ivm::prepare_contract(Arc::<[u8]>::from(legitimate.code_bytes.clone()))
@@ -12213,6 +12306,7 @@ seiyaku PrivilegedBinding {
                 &legitimate_prepared,
                 "execute",
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("bind legitimate entrypoint");
         };
         let assert_cleared = |host: &CoreHost| {
@@ -12236,7 +12330,8 @@ seiyaku PrivilegedBinding {
                 Some(&forged_alias),
                 &legitimate_prepared,
                 "execute",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -12248,7 +12343,8 @@ seiyaku PrivilegedBinding {
                 legitimate.contract_alias.as_ref(),
                 &privileged_prepared,
                 "administer",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -12260,7 +12356,8 @@ seiyaku PrivilegedBinding {
                 privileged.contract_alias.as_ref(),
                 &privileged_prepared,
                 "administer",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -12272,7 +12369,8 @@ seiyaku PrivilegedBinding {
                 legitimate.contract_alias.as_ref(),
                 &legitimate_prepared,
                 "inspect",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -12284,7 +12382,8 @@ seiyaku PrivilegedBinding {
                 legitimate.contract_alias.as_ref(),
                 &legitimate_prepared,
                 "execute",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -12296,7 +12395,8 @@ seiyaku PrivilegedBinding {
                 legitimate.contract_alias.as_ref(),
                 &legitimate_prepared,
                 "forged_selector",
-            ),
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection),
             Err(ValidationFail::NotPermitted(_))
         ));
         assert_cleared(&host);
@@ -13769,7 +13869,10 @@ seiyaku PrivilegedBinding {
                 CoreHost::contract_instance_by_address(&view, &address),
                 Err(ivm::VMError::PermissionDenied)
             ));
-            assert!(CoreHost::bound_contract_dispatch_identity(&view, &address).is_none());
+            assert!(matches!(
+                CoreHost::bound_contract_dispatch_identity(&view, &address),
+                Err(ivm::VMError::PermissionDenied)
+            ));
         }
         let local = ContractAddress::derive(&network, &authority, 0, own).unwrap();
         assert!(
@@ -15072,11 +15175,13 @@ seiyaku StaleRuntimeBinding {
         let view = state.view();
         let identity =
             crate::smartcontracts::code::fetch_bound_contract_identity(&view, &contract_address)
+                .expect("registry read completes")
                 .expect("installed contract identity");
         let stale_identity = crate::smartcontracts::code::fetch_bound_contract_identity(
             &view,
             &stale_contract_address,
         )
+        .expect("registry read completes")
         .expect("stale contract identity");
         let code = view
             .world()
@@ -15112,6 +15217,7 @@ seiyaku StaleRuntimeBinding {
             summary.prepared_contract(),
             "update",
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("bind callable entrypoint");
         let call_context = host
             .current_contract_runtime_context
@@ -15141,6 +15247,7 @@ seiyaku StaleRuntimeBinding {
             summary.prepared_contract(),
             "inspect",
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect("bind view entrypoint");
         assert_eq!(
             host.current_contract_runtime_context
@@ -15157,6 +15264,7 @@ seiyaku StaleRuntimeBinding {
                 stale_summary.prepared_contract(),
                 "update",
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("stale prepared code must fail closed");
         assert!(
             matches!(error, ValidationFail::NotPermitted(_)),
@@ -15404,7 +15512,13 @@ seiyaku StaleRuntimeBinding {
         )
         .with_executable(Executable::ContractCall(invocation))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(
+            next_height,
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
         let mut stx =
             block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         stx.current_dataspace_id = Some(dataspace);
@@ -15473,6 +15587,7 @@ seiyaku StaleRuntimeBinding {
             encoded_contract_arguments_from_json(state, &contract_address, entrypoint, payload);
         let expected_code_hash =
             crate::smartcontracts::code::fetch_instance_binding(&state.view(), &contract_address)
+                .expect("registry read completes")
                 .expect("installed test contract binding");
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
@@ -19147,6 +19262,33 @@ seiyaku Callee {
     }
     #[test]
     fn repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime() {
+        // Successful cache retention uses a process-global 64 MiB owner. Isolate this
+        // exact residency test so unrelated parallel owners cannot refuse its return;
+        // preserve the production cap and every warm-path gas and counter assertion.
+        const CHILD: &str = "IROHA_CORE_NESTED_CACHE_TEST_CHILD";
+        const NAME: &str = "smartcontracts::ivm::host::tests::repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime";
+        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new(NAME)) {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve Core nested-cache test executable"),
+            )
+            .arg(NAME)
+            .args(["--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD, NAME)
+            .output()
+            .expect("execute exact nested-cache test child");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "{NAME} failed in its isolated harness\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            assert!(
+                stdout.contains(&format!("test {NAME} ... ok"))
+                    && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+                "{NAME} did not complete exactly once\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            return;
+        }
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -19242,6 +19384,7 @@ seiyaku Callee {
         let stale_record = {
             let view = populated_state.view();
             crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract)
+                .expect("registry read completes")
                 .expect("installed contract record")
         };
         let empty_state = contract_test_state(&authority);
@@ -19254,6 +19397,7 @@ seiyaku Callee {
         host.set_query_state(&empty_view);
         assert!(
             host.resolve_bound_contract_dispatch_identity_by_address(&contract)
+                .expect("original live scope read completes")
                 .is_none(),
             "an authoritative live view must fail closed instead of reviving a stale snapshot"
         );
@@ -19667,11 +19811,16 @@ seiyaku HeldCallee {
 "#,
             1,
         );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
-            .commit_empty_block_for_testing()
-            .expect("commit the execution-height bootstrap block");
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        assert_eq!(
+            state.committed_height(),
+            1,
+            "original signed genesis is already applied"
+        );
+        let parent = state
+            .view()
+            .latest_block_hash()
+            .expect("original signed genesis hash");
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), Some(parent), None, 0, 0));
         {
             let mut tx = block.transaction();
             let binding = tx
@@ -19915,6 +20064,7 @@ seiyaku EffectfulView {
         // nested-call boundary would silently roll back.
         let record =
             crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &callee)
+                .expect("registry read completes")
                 .expect("installed effectful contract record");
         let mut malicious_manifest = record.manifest;
         let descriptor = malicious_manifest
@@ -20709,8 +20859,6 @@ seiyaku Callee {
         .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
         let mut world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
         let mut permissions = Permissions::new();
         assert!(
@@ -20722,12 +20870,8 @@ seiyaku Callee {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-        let state = State::new_for_testing(world, kura, query);
+        let state =
+            signed_contract_host_state(crate::sumeragi::test_chain::TestChainConfig::new(world, 0));
         let caller_contract = install_contract(
             &state,
             &authority,
@@ -21080,8 +21224,6 @@ seiyaku Callee {
         .build(&authority);
         let source_asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
         let (world, retail_domain_id) = if case.setup.uses_domain() {
             let payment_asset_literal = if case.setup.uses_configured_policy_payment_asset() {
                 "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -21156,9 +21298,20 @@ seiyaku Callee {
             ));
             parameters.commit();
         }
-        let mut state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.set_dataspace_catalog_for_testing(catalog);
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+        config.chain_id = ChainId::from("test-chain");
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.dataspace_catalog = catalog.clone();
+        nexus.configured_dataspace_catalog = catalog;
+        // Alias authorization is independent of monetary admission. Bind the
+        // zero-fee policy and catalog before preparing this exact signed genesis.
+        nexus.fees.base_fee = 0_u32.into();
+        nexus.fees.per_byte_fee = 0_u32.into();
+        nexus.fees.per_instruction_fee = 0_u32.into();
+        nexus.fees.per_gas_unit_fee = 0_u32.into();
+        config.nexus = Some(nexus);
+        let state = signed_contract_host_state(config);
         AliasContractCaseState {
             state,
             authority,
@@ -21199,7 +21352,13 @@ seiyaku Callee {
         case: &AliasContractCaseV1,
         fixture: &AliasContractCaseState,
     ) -> Option<AccountAlias> {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            fixture.state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        );
         let mut block = fixture.state.block(header);
         let mut tx = block.transaction();
         if let Some(seed) = case.setup_seed {
@@ -21652,20 +21811,15 @@ seiyaku Callee {
             [source_asset],
             [],
         );
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit_empty_block_for_testing()
-            .expect("commit bootstrap block");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+        let state =
+            signed_contract_host_state(crate::sumeragi::test_chain::TestChainConfig::new(world, 0));
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        );
         let mut block = state.block(header);
         let source = artifact_test_signed_root(*block.network_id(), &outer_authority);
         let source_call = Hash::from(source.hash_as_entrypoint());
@@ -21888,6 +22042,7 @@ seiyaku DurableOwner {
             &state.view(),
             &contract_address,
         )
+        .expect("registry read completes")
         .expect("installed contract identity");
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),

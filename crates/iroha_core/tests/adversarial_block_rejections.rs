@@ -8,7 +8,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair};

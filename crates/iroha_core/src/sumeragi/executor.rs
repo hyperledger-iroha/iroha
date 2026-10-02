@@ -740,6 +740,8 @@ struct GlobalPayloadBuild {
 
 struct Worker<'s> {
     payload_build: Option<GlobalPayloadBuild>,
+    /// Exact latest local routing refusal, kept outside deterministic verdicts.
+    routing_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
     context: &'s ExecutorContext,
     state: &'s State,
     applied: (u64, Hash32),
@@ -772,6 +774,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
     let state = Arc::clone(&context.state);
     let mut worker = Worker {
         payload_build: None,
+        routing_refusal: None,
         context,
         state: &state,
         applied: context.applied,
@@ -1119,7 +1122,15 @@ impl<'s> Worker<'s> {
             &*self.context.lane_blocks,
             Duration::from_millis(scheduled.params.exec_budget_ms),
         ) {
-            Ok(expansion) => expansion,
+            Ok(expansion) => {
+                self.routing_refusal = None;
+                expansion
+            }
+            Err(lanes::merge::MergeError::RoutingDeferred(reason)) => {
+                let message = reason.to_string();
+                self.routing_refusal = Some(reason);
+                return ExecOutcome::Failed(message);
+            }
             Err(lanes::merge::MergeError::Pending(reason)) => {
                 return ExecOutcome::Failed(reason);
             }
@@ -1182,6 +1193,9 @@ impl<'s> Worker<'s> {
             }
         };
         if let Err(error) = overlay.take_sumeragi_lanes() {
+            if let lanes::step::LaneStepError::Deferred(reason) = &error {
+                self.routing_refusal = Some(reason.clone());
+            }
             return classify_lane_step(height, &error);
         }
         let inputs = match overlay.take_sumeragi_execution_inputs() {
@@ -2066,6 +2080,11 @@ impl<'s> Worker<'s> {
             match lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height) {
                 Ok(merges) => merges,
                 Err(error) => {
+                    if let Some(reason) = error.get_ref().and_then(|source| {
+                        source.downcast_ref::<crate::execution_attempt::ExecutionDeferred>()
+                    }) {
+                        self.routing_refusal = Some(reason.clone());
+                    }
                     let reason = format!("lane storage during payload selection: {error}");
                     if matches!(
                         error.kind(),
@@ -2077,12 +2096,22 @@ impl<'s> Worker<'s> {
                     return Err(PublicationError::RecoveryRequired(reason));
                 }
             };
-        let mut selected = payload::select(
+        let mut selected = match payload::select(
             self.state,
             queue,
             max_bytes.saturating_sub(PAYLOAD_OVERHEAD),
             merges.transactions,
-        );
+        ) {
+            Ok(selected) => {
+                self.routing_refusal = None;
+                selected
+            }
+            Err(reason) => {
+                let message = reason.to_string();
+                self.routing_refusal = Some(reason);
+                return Err(PublicationError::Retryable(message));
+            }
+        };
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
             return Ok((None, false));
@@ -2095,7 +2124,15 @@ impl<'s> Worker<'s> {
         while !selected.is_empty() || !merges.merges.is_empty() {
             let block =
                 match payload::assemble_with_merges(self.state, assembly, &selected, &merges) {
-                    Ok(block) => block,
+                    Ok(block) => {
+                        self.routing_refusal = None;
+                        block
+                    }
+                    Err(payload::PayloadError::RoutingDeferred(reason)) => {
+                        let message = reason.to_string();
+                        self.routing_refusal = Some(reason);
+                        return Err(PublicationError::Retryable(message));
+                    }
                     Err(error) => {
                         iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
                         return Err(PublicationError::Retryable(format!(
@@ -2236,7 +2273,9 @@ fn invalid(height: u64, reason: &dyn std::fmt::Display) -> ExecOutcome {
 /// Custody allocator refusal is local; a semantic lane transition defect is deterministic.
 fn classify_lane_step(height: u64, error: &lanes::step::LaneStepError) -> ExecOutcome {
     match error {
-        lanes::step::LaneStepError::CustodyAllocation => ExecOutcome::Failed(error.to_string()),
+        lanes::step::LaneStepError::Deferred(_) | lanes::step::LaneStepError::CustodyAllocation => {
+            ExecOutcome::Failed(error.to_string())
+        }
         _ => invalid(height, error),
     }
 }

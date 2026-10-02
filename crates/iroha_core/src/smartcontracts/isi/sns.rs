@@ -28,41 +28,40 @@ impl ValidSingularQuery for FindDataspaceNameOwnerById {
             self.dataspace_id(),
             state_ro.query_ledger_time_ms(),
         )
-        .map_err(|error| QueryError::Conversion(error.to_string()))?
+        .map_err(|error| match error {
+            crate::sns::SnsError::Deferred(_) => QueryError::GasBudgetExceeded,
+            error => QueryError::Conversion(error.to_string()),
+        })?
         .ok_or(QueryError::NotFound)
     }
 }
-fn alias_lease_instruction_error(err: crate::sns::SnsError) -> InstructionExecutionError {
-    match err {
-        error @ crate::sns::SnsError::RegistrationNotFound { .. } => {
-            InstructionExecutionError::InvariantViolation(error.to_string().into())
-        }
-        crate::sns::SnsError::NotFound(message)
-        | crate::sns::SnsError::BadRequest(message)
-        | crate::sns::SnsError::Conflict(message)
-        | crate::sns::SnsError::Internal(message) => {
-            InstructionExecutionError::InvariantViolation(message.into())
-        }
-    }
+fn alias_lease_instruction_error(
+    err: crate::sns::SnsError,
+    state: &mut StateTransaction<'_, '_>,
+) -> InstructionExecutionError {
+    err.retain_in_instruction(state)
 }
-fn sns_mutation_instruction_error(err: crate::sns::SnsError) -> InstructionExecutionError {
+fn sns_mutation_instruction_error(
+    err: crate::sns::SnsError,
+    state: &mut StateTransaction<'_, '_>,
+) -> InstructionExecutionError {
     match err {
-        error @ crate::sns::SnsError::RegistrationNotFound { .. } => {
-            InstructionExecutionError::InvariantViolation(error.to_string().into())
-        }
         crate::sns::SnsError::BadRequest(message) => InstructionExecutionError::InvalidParameter(
             InvalidParameterError::SmartContract(message.into()),
         ),
-        crate::sns::SnsError::NotFound(message)
-        | crate::sns::SnsError::Conflict(message)
-        | crate::sns::SnsError::Internal(message) => {
-            InstructionExecutionError::InvariantViolation(message.into())
-        }
+        error => error.retain_in_instruction(state),
     }
 }
 fn alias_setup_instruction_error(
     error: crate::alias_setup::AliasSetupError,
+    state: &mut StateTransaction<'_, '_>,
 ) -> InstructionExecutionError {
+    if let Some(reason) = error.deferral() {
+        let _ = state.defer_execution(reason.clone());
+        return InstructionExecutionError::InvariantViolation(
+            "local alias setup did not complete".into(),
+        );
+    }
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         error.to_string().into(),
     ))
@@ -70,10 +69,15 @@ fn alias_setup_instruction_error(
 fn namespace_from_suffix_id(
     suffix_id: SuffixId,
 ) -> Result<crate::sns::SnsNamespace, InstructionExecutionError> {
-    crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(sns_mutation_instruction_error)
+    // This pure numeric namespace check has no decoder or allocation scope.
+    crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(|error| {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            error.to_string().into(),
+        ))
+    })
 }
 fn ensure_configured_policy_payment_asset(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     namespace: crate::sns::SnsNamespace,
 ) -> Result<(), InstructionExecutionError> {
     crate::sns::ensure_namespace_policy_payment_asset_matches_configured(
@@ -81,7 +85,7 @@ fn ensure_configured_policy_payment_asset(
         namespace,
         &state_transaction.nexus.fees.fee_asset_id,
     )
-    .map_err(sns_mutation_instruction_error)
+    .map_err(|error| sns_mutation_instruction_error(error, state_transaction))
 }
 fn account_controller_for(
     owner: &AccountId,
@@ -157,7 +161,7 @@ fn grant_exact_alias_permissions(
 }
 fn ensure_active_alias_record(
     target: &iroha_data_model::alias_setup::AliasTargetV1,
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<
     (
         iroha_data_model::sns::NameSelectorV1,
@@ -172,12 +176,12 @@ fn ensure_active_alias_record(
         target,
         now_ms,
     )
-    .map_err(alias_setup_instruction_error)?;
+    .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
     let selector = crate::alias_setup::selector_for_resolved_alias_target(target)
-        .map_err(alias_setup_instruction_error)?;
+        .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
     let record =
         crate::sns::get_name_record_by_selector(state_transaction.world(), &selector, now_ms)
-            .map_err(alias_lease_instruction_error)?;
+            .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
     if !matches!(record.status, iroha_data_model::sns::NameStatus::Active) {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -194,7 +198,7 @@ fn authority_can_manage_alias_target(
     world: &impl crate::state::WorldReadOnly,
     authority: &AccountId,
     target: &iroha_data_model::alias_setup::AliasTargetV1,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     match target {
         iroha_data_model::alias_setup::AliasTargetV1::Dataspace(value) => {
             crate::alias::authority_can_manage_account_alias_scope(
@@ -221,10 +225,11 @@ fn ensure_alias_lifecycle_authority(
     record: &iroha_data_model::sns::NameRecordV1,
     target: &iroha_data_model::alias_setup::AliasTargetV1,
     authority: &AccountId,
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     if record.owner == *authority
         || authority_can_manage_alias_target(state_transaction.world(), authority, target)
+            .map_err(|error| alias_lease_instruction_error(error, state_transaction))?
     {
         return Ok(());
     }
@@ -255,7 +260,7 @@ impl Execute for EnsureAlias {
             now_ms,
             state_transaction.nexus.endorsement.quorum > 0,
         )
-        .map_err(alias_setup_instruction_error)?;
+        .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         // Classification deliberately precedes all quote-guard checks. Exact
         // replay and derived-state repair never quote or charge a lease.
         match disposition {
@@ -266,7 +271,7 @@ impl Execute for EnsureAlias {
                     authority,
                     &intent,
                 )
-                .map_err(alias_setup_instruction_error)?;
+                .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
                 repair_alias_intent_resource(&intent, state_transaction)?;
                 grant_exact_alias_permissions(&intent, state_transaction)?;
                 return Ok(());
@@ -277,7 +282,7 @@ impl Execute for EnsureAlias {
                     authority,
                     &intent,
                 )
-                .map_err(alias_setup_instruction_error)?;
+                .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
             }
             AliasPlanDispositionV1::Conflict => {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -292,7 +297,7 @@ impl Execute for EnsureAlias {
         let namespace = namespace_from_suffix_id(crate::alias_setup::target_suffix_id(&target))?;
         ensure_configured_policy_payment_asset(state_transaction, namespace)?;
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
-            .map_err(alias_setup_instruction_error)?;
+            .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let owner = crate::alias_setup::alias_intent_owner(&intent).clone();
         let quote = crate::sns::quote_resolved_name_registration(
             state_transaction.world(),
@@ -302,17 +307,17 @@ impl Execute for EnsureAlias {
             acquisition.pricing_class_hint,
             now_ms,
         )
-        .map_err(alias_lease_instruction_error)?;
+        .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
         crate::alias_setup::validate_alias_quote_guard(
             state_transaction.world(),
             &quote,
             &quote_guard,
             now_ms,
         )
-        .map_err(alias_setup_instruction_error)?;
+        .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let controllers = vec![account_controller_for(&owner)?];
         let metadata = crate::alias_setup::alias_registration_metadata(&target)
-            .map_err(alias_setup_instruction_error)?;
+            .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
         crate::sns::register_resolved_name(
             state_transaction,
@@ -326,7 +331,7 @@ impl Execute for EnsureAlias {
                 metadata,
             },
         )
-        .map_err(alias_lease_instruction_error)?;
+        .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
         repair_alias_intent_resource(&intent, state_transaction)?;
         grant_exact_alias_permissions(&intent, state_transaction)?;
         Ok(())
@@ -367,14 +372,14 @@ impl Execute for RenewAliasLease {
             target_expiry_ms,
             now_ms,
         )
-        .map_err(alias_lease_instruction_error)?;
+        .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
         crate::alias_setup::validate_alias_quote_guard(
             state_transaction.world(),
             &quote,
             &quote_guard,
             now_ms,
         )
-        .map_err(alias_setup_instruction_error)?;
+        .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let payment = charge_sns_quote(&quote, authority.clone(), authority, state_transaction)?;
         crate::sns::renew_resolved_name(
             state_transaction,
@@ -384,15 +389,18 @@ impl Execute for RenewAliasLease {
             payment,
         )
         .map(|_| ())
-        .map_err(alias_lease_instruction_error)
+        .map_err(|error| alias_lease_instruction_error(error, state_transaction))
     }
 }
 fn validate_auto_renew_config(
     config: &AliasAutoRenewConfigV1,
     policy: &iroha_data_model::sns::SuffixPolicyV1,
 ) -> Result<(), Error> {
-    crate::alias_setup::validate_alias_auto_renew_ranges(config)
-        .map_err(alias_setup_instruction_error)?;
+    crate::alias_setup::validate_alias_auto_renew_ranges(config).map_err(|error| {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            error.to_string().into(),
+        ))
+    })?;
     if config.term_years < policy.min_term_years || config.term_years > policy.max_term_years {
         return Err(InstructionExecutionError::InvalidParameter(
             InvalidParameterError::SmartContract(
@@ -458,7 +466,7 @@ impl Execute for ConfigureAliasAutoRenew {
             .into());
         }
         let current = crate::sns::alias_auto_renew_state(state_transaction.world(), &target)
-            .map_err(alias_lease_instruction_error)?;
+            .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
         let current_revision = current.as_ref().map_or(0, |state| state.revision);
         if current_revision != expected_revision {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -481,7 +489,7 @@ impl Execute for ConfigureAliasAutoRenew {
         }
         if let Some(config) = config.as_ref() {
             let policy = crate::sns::policy_by_id(state_transaction.world(), selector.suffix_id)
-                .map_err(alias_lease_instruction_error)?
+                .map_err(|error| alias_lease_instruction_error(error, state_transaction))?
                 .ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
                         "SNS policy is missing for the auto-renew target"
@@ -498,7 +506,7 @@ impl Execute for ConfigureAliasAutoRenew {
         })?;
         let state = AliasAutoRenewStateV1::new(target, record.owner, revision, config);
         crate::sns::persist_alias_auto_renew_state(state_transaction, &state)
-            .map_err(alias_lease_instruction_error)?;
+            .map_err(|error| alias_lease_instruction_error(error, state_transaction))?;
         Ok(())
     }
 }
@@ -1357,7 +1365,7 @@ mod tests {
         // actual retained parent, with no synthetic Network transaction.
         let source = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, ALICE_KEYPAIR.private_key());
-        let (mut block, _recording, outputs, _) =
+        let (block, _recording, outputs, _) =
             crate::state::run_empty_network_owner_fixture(state, &source);
         assert!(
             outputs.is_empty(),
@@ -1464,6 +1472,371 @@ mod tests {
             "invalid persisted timing must suspend before any debit"
         );
     }
+    #[test]
+    fn sns_configuration_keeps_consumed_governance_capacity_until_the_original_time_sweep() {
+        use crate::state::{
+            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+        };
+        use iroha_data_model::governance::conviction::{PlainVotingContextV1, PlainVotingResultV1};
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let mut retained =
+            crate::sns::alias_auto_renew_state(fixture.state.view().world(), &fixture.target)
+                .unwrap()
+                .unwrap();
+        let config = retained.config.take().unwrap();
+        let cap = iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap()
+            .mandatory
+            .max_retained_obligations;
+        {
+            let mut setup = fixture.state.block(next_header_at(&fixture.state, 0));
+            let mut tx = setup.transaction();
+            crate::sns::persist_alias_auto_renew_state(&mut tx, &retained).unwrap();
+            for index in 0..cap - 1 {
+                let target =
+                    iroha_data_model::alias_setup::AliasTargetV1::Domain(ResolvedDomainV1::new(
+                        DomainId::try_new(format!("reserved-{index}"), "universal").unwrap(),
+                        DataSpaceId::UNIVERSAL,
+                    ));
+                let record = AliasAutoRenewStateV1::new(
+                    target,
+                    fixture.owner.clone(),
+                    1,
+                    Some(config.clone()),
+                );
+                crate::sns::persist_alias_auto_renew_state(&mut tx, &record).unwrap();
+            }
+            tx.world.governance_referenda.insert(
+                "original-release".into(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Zk,
+                    plain_context: PlainVotingContextV1::NotApplicable,
+                    plain_result: PlainVotingResultV1::NotApplicable,
+                },
+            );
+            tx.world.put_governance_locks(
+                "original-release".into(),
+                GovernanceLocksForReferendum {
+                    locks: std::collections::BTreeMap::from([(
+                        fixture.collector.clone(),
+                        GovernanceLockRecord {
+                            owner: fixture.collector.clone(),
+                            amount: Quantity::one(),
+                            slashed: Quantity::zero(),
+                            expiry_height: 1,
+                            direction: 0,
+                            duration_blocks: 1,
+                            custody: GovernanceLockCustody {
+                                escrowed: true,
+                                asset_definition_id: fixture.payment_asset.clone(),
+                                bond_escrow_account: fixture.owner.clone(),
+                                slash_receiver_account: fixture.collector.clone(),
+                            },
+                        },
+                    )]),
+                },
+            );
+            tx.apply();
+            setup.commit_world_overlay_for_testing().unwrap();
+        }
+        let source =
+            iroha_data_model::block::builder::BlockBuilder::new(next_header_at(&fixture.state, 1))
+                .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let (mut block, _recorder) =
+            crate::block::ValidBlock::start_component_execution(&source, &fixture.state).unwrap();
+        assert!(
+            block
+                .world
+                .governance_locks
+                .get("original-release")
+                .is_none()
+        );
+        let (_, consumed) = block.fastpq_source_usage_for_testing();
+        assert_eq!(
+            (
+                consumed.executed_entries,
+                consumed.transcripts,
+                consumed.deltas
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.owner),
+            Quantity::one()
+        );
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.collector),
+            Quantity::one()
+        );
+        let key = crate::sns::alias_auto_renew_storage_key(&fixture.target).unwrap();
+        let original = block.world.smart_contract_state.get(&key).unwrap().clone();
+        {
+            let mut tx = block.transaction();
+            let error = ConfigureAliasAutoRenew::new(
+                fixture.target.clone(),
+                retained.revision,
+                Some(config.clone()),
+            )
+            .execute(&fixture.owner, &mut tx)
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("consumed mandatory sources"),
+                "{error}"
+            );
+            assert_eq!(tx.world.smart_contract_state.get(&key), Some(&original));
+            assert!(
+                tx.execution_deferral().is_none(),
+                "intrinsic capacity is a completed refusal"
+            );
+        }
+        assert_eq!(block.fastpq_source_usage_for_testing().1, consumed);
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.collector),
+            Quantity::one()
+        );
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        block.execute_ordinary_output_plan(&source, None).unwrap();
+        // The genuine producer completed Time. A later configuration does not
+        // retroactively join that sweep; its next-carrier retained obligation fits.
+        {
+            let mut tx = block.transaction();
+            ConfigureAliasAutoRenew::new(fixture.target.clone(), retained.revision, Some(config))
+                .execute(&fixture.owner, &mut tx)
+                .unwrap();
+            tx.apply();
+        }
+        assert_eq!(block.fastpq_source_usage_for_testing().1, consumed);
+        let configured = crate::sns::alias_auto_renew_state(&block.world, &fixture.target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(configured.revision, retained.revision + 1);
+        assert!(configured.config.is_some());
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.owner),
+            Quantity::one()
+        );
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.collector),
+            Quantity::one()
+        );
+    }
+
+    fn sns_zero_decode_allocation() -> norito::DecodeLimits {
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX)
+    }
+
+    #[test]
+    fn sns_original_signed_root_readers_preserve_local_decode_refusal_and_retry() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let view = fixture.state.view();
+        let config = crate::sns::alias_auto_renew_state(view.world(), &fixture.target)
+            .unwrap()
+            .unwrap();
+        let record = crate::sns::record_by_selector(view.world(), &fixture.selector)
+            .unwrap()
+            .unwrap();
+        let policy = crate::sns::policy_by_id(view.world(), fixture.selector.suffix_id)
+            .unwrap()
+            .unwrap();
+        for reader in 0..3 {
+            let error = norito::with_decode_limits_scope(sns_zero_decode_allocation(), || {
+                match reader {
+                    0 => crate::sns::alias_auto_renew_state(view.world(), &fixture.target)
+                        .map(|_| ()),
+                    1 => {
+                        crate::sns::record_by_selector(view.world(), &fixture.selector).map(|_| ())
+                    }
+                    _ => crate::sns::policy_by_id(view.world(), fixture.selector.suffix_id)
+                        .map(|_| ()),
+                }
+                .unwrap_err()
+            });
+            assert!(
+                matches!(error, crate::sns::SnsError::Deferred(_)),
+                "reader {reader}: {error}"
+            );
+            assert!(matches!(
+                error.into_attempt_error::<()>(|_| panic!(
+                    "local refusal is not a completed verdict"
+                )),
+                crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+            ));
+        }
+        assert_eq!(
+            crate::sns::alias_auto_renew_state(view.world(), &fixture.target)
+                .unwrap()
+                .unwrap(),
+            config
+        );
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap(),
+            record
+        );
+        assert_eq!(
+            crate::sns::policy_by_id(view.world(), fixture.selector.suffix_id)
+                .unwrap()
+                .unwrap(),
+            policy
+        );
+        drop(view);
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        let mut tx = block.transaction();
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&fixture.selector),
+            vec![0xff],
+        );
+        let malformed = crate::sns::record_by_selector(tx.world(), &fixture.selector).unwrap_err();
+        assert!(
+            malformed.deferral().is_none(),
+            "malformed authoritative bytes remain terminal"
+        );
+    }
+
+    #[test]
+    fn sns_configure_decode_refusal_latches_original_state_and_same_instruction_retries() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let original =
+            crate::sns::alias_auto_renew_state(fixture.state.view().world(), &fixture.target)
+                .unwrap()
+                .unwrap();
+        let command = ConfigureAliasAutoRenew::new(
+            fixture.target.clone(),
+            original.revision,
+            original.config.clone(),
+        );
+        let source =
+            iroha_data_model::block::builder::BlockBuilder::new(next_header_at(&fixture.state, 1))
+                .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        {
+            let (mut block, _recorder) =
+                crate::block::ValidBlock::start_component_execution(&source, &fixture.state)
+                    .unwrap();
+            let mut tx = block.transaction();
+            norito::with_decode_limits_scope(sns_zero_decode_allocation(), || {
+                command.clone().execute(&fixture.owner, &mut tx)
+            })
+            .unwrap_err();
+            assert!(tx.execution_deferral().is_some());
+            assert_eq!(
+                crate::sns::alias_auto_renew_state(tx.world(), &fixture.target)
+                    .unwrap()
+                    .unwrap(),
+                original
+            );
+            tx.apply();
+            assert!(
+                block.reserve_ordinary_execution_outputs(&source).is_err(),
+                "a deferred transaction cannot publish"
+            );
+        }
+        assert_eq!(
+            crate::sns::alias_auto_renew_state(fixture.state.view().world(), &fixture.target)
+                .unwrap()
+                .unwrap(),
+            original
+        );
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        let mut tx = block.transaction();
+        command.execute(&fixture.owner, &mut tx).unwrap();
+        assert!(tx.execution_deferral().is_none());
+        tx.apply();
+        let after = crate::sns::alias_auto_renew_state(&block.world, &fixture.target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.revision, original.revision + 1);
+        assert_eq!(after.config, original.config);
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.owner),
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.collector),
+            Quantity::zero()
+        );
+    }
+
+    #[test]
+    fn sns_time_decode_refusal_cannot_publish_failure_counter_or_debit_before_retry() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let original =
+            crate::sns::alias_auto_renew_state(fixture.state.view().world(), &fixture.target)
+                .unwrap()
+                .unwrap();
+        let now = AUTO_RENEW_EXPIRY_MS - AUTO_RENEW_WINDOW_MS;
+        let source = iroha_data_model::block::builder::BlockBuilder::new(next_header_at(
+            &fixture.state,
+            now,
+        ))
+        .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        {
+            let (mut block, _recorder) =
+                crate::block::ValidBlock::start_component_execution(&source, &fixture.state)
+                    .unwrap();
+            block.reserve_ordinary_execution_outputs(&source).unwrap();
+            let error = norito::with_decode_limits_scope(sns_zero_decode_allocation(), || {
+                block.execute_ordinary_output_plan(&source, None)
+            })
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+                ),
+                "{error}"
+            );
+            assert!(block.retained_execution_outputs_for_test().is_err());
+            assert_eq!(
+                crate::sns::alias_auto_renew_state(&block.world, &fixture.target)
+                    .unwrap()
+                    .unwrap(),
+                original
+            );
+            assert_eq!(
+                asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.owner),
+                Quantity::from(2_u32)
+            );
+            assert_eq!(
+                asset_balance_in_world(&block.world, &fixture.payment_asset, &fixture.collector),
+                Quantity::zero()
+            );
+        }
+        assert_eq!(
+            crate::sns::alias_auto_renew_state(fixture.state.view().world(), &fixture.target)
+                .unwrap()
+                .unwrap(),
+            original
+        );
+        run_alias_auto_renew_maintenance(&fixture.state, now);
+        let view = fixture.state.view();
+        let after = crate::sns::alias_auto_renew_state(view.world(), &fixture.target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.revision, original.revision + 1);
+        assert_eq!(after.failure_count, 0);
+        assert_eq!(after.next_retry_at_ms, None);
+        assert_eq!(after.suspended_reason, None);
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            AUTO_RENEW_EXPIRY_MS + AUTO_RENEW_YEAR_MS
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.owner),
+            "1.5".parse().unwrap()
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.collector),
+            "0.5".parse().unwrap()
+        );
+    }
+
     #[test]
     fn native_auto_renew_debits_exact_owner_quote_once() {
         let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
@@ -3491,10 +3864,7 @@ mod tests {
     // or caller-authored execution output. This grants no runtime authority.
     #[test]
     fn retail_registration_bare_multisig_then_existing_primary_alias_executes_atomically() {
-        use crate::{
-            state::StateReadOnly as _,
-            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
-        };
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_allocation::AllocationBudget;
         use iroha_data_model::{
             IntoKeyValue,
@@ -3650,24 +4020,71 @@ mod tests {
                 valid_until_ms: 120_000,
             },
         );
+        let exact_management = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(alias.canonical_name.domain_id().unwrap()),
+        });
+        assert!(
+            world
+                .view()
+                .account_permissions()
+                .get(&registrar)
+                .unwrap()
+                .contains(&exact_management)
+        );
+        assert!(
+            crate::alias::authority_can_manage_resolved_account_alias(
+                &world.view(),
+                &registrar,
+                &alias
+            )
+            .unwrap()
+        );
         let mut config = TestChainConfig::new(world, 1_000);
         config.genesis_key = registrar_key.clone();
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.dataspace_catalog = catalog.clone();
+        // Both supplied configuration cuts describe this same pre-genesis catalog.
+        nexus.configured_dataspace_catalog = catalog.clone();
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         config.nexus = Some(nexus);
         let mut chain = CertifiedTestChain::start(config).unwrap();
+        {
+            let original = chain.state().view();
+            assert!(
+                original
+                    .world()
+                    .account_permissions()
+                    .get(&registrar)
+                    .is_some_and(|grants| grants.contains(&exact_management)),
+                "signed genesis retains exact management grant: {:?}",
+                original.world().account_permissions().get(&registrar)
+            );
+            assert!(
+                crate::alias::authority_can_manage_resolved_account_alias(
+                    original.world(),
+                    &registrar,
+                    &alias
+                )
+                .unwrap()
+            );
+        }
         let instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
             Register::account(Account::new(signer.clone())).into(),
             Register::account(bare_wallet.clone()).into(),
             ensure.clone().into(),
         ];
         let signed = chain.sign(&registrar_key, instructions, 1_999);
-        assert_eq!(chain.commit_at(2_000, vec![signed]), vec![true]);
+        let accepted = chain.commit_at(2_000, vec![signed]);
         let tip = chain.committed(2);
+        assert_eq!(
+            accepted,
+            vec![true],
+            "original native output: {:?}",
+            tip.block().network_output_at(0)
+        );
         let (wallet_original, signer_original, lease_original, payer_after, collector_after) = {
             let view = chain.state().view();
             let wallet_original = view.world().accounts().get(&wallet).unwrap().clone();

@@ -72,7 +72,7 @@ impl BodyReadJob for KeyedRead {
                                 invalid("stored block has no certificate"),
                             )),
                             CertificateReadError::Decode(error) => {
-                                Err(BodyReadError::Decode(error))
+                                Err(BodyReadError::from_decode(error))
                             }
                             CertificateReadError::Admission(error) if error.is_local_refusal() => {
                                 Ok(BodyReadPoll::Pending(error))
@@ -141,12 +141,11 @@ impl BodyReadJob for KeyedRead {
                     Ok(_) => return Ok(BodyReadPoll::Absent),
                     Err((job, error)) => {
                         self.phase = Phase::VerifyingOther(job);
+                        if error.is_local_refusal() {
+                            return Err(BodyReadError::Io(io::ErrorKind::WouldBlock.into()));
+                        }
                         return Err(BodyReadError::Io(io::Error::new(
-                            if error.is_local_refusal() {
-                                io::ErrorKind::WouldBlock
-                            } else {
-                                io::ErrorKind::InvalidData
-                            },
+                            io::ErrorKind::InvalidData,
                             format!("stored availability restoration: {error:?}"),
                         )));
                     }

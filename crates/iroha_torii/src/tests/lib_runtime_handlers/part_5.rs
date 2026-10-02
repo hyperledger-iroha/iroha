@@ -1813,9 +1813,28 @@ pub(crate) fn native_ingress_app_with_world_at_time_for_test(
     world: World,
     genesis_time_ms: u64,
 ) -> SharedAppState {
-    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, genesis_time_ms))
-        .expect("prepare signed native ingress genesis");
+    native_ingress_app_with_config_for_test(iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        world,
+        genesis_time_ms,
+    ))
+}
+
+/// Bind physical routing labels to the same genuine signed global committee.
+pub(crate) fn native_ingress_app_with_world_and_nexus_for_test(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> SharedAppState {
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+    config.nexus = Some(nexus);
+    native_ingress_app_with_config_for_test(config)
+}
+
+fn native_ingress_app_with_config_for_test(
+    config: iroha_core::sumeragi::test_chain::TestChainConfig,
+) -> SharedAppState {
+    use iroha_core::sumeragi::test_chain::CertifiedTestChain;
+    let prepared =
+        CertifiedTestChain::prepare(config).expect("prepare signed native ingress genesis");
     let validator = prepared.validator_keys[0].clone();
     let chain =
         CertifiedTestChain::from_prepared(prepared).expect("execute signed native ingress genesis");
@@ -1824,6 +1843,10 @@ pub(crate) fn native_ingress_app_with_world_at_time_for_test(
     unique.chain_id = Arc::new(chain.state().view().chain_id().clone());
     unique.state = chain.state().clone();
     unique.kura = chain.kura().clone();
+    {
+        let view = unique.state.view();
+        unique.queue.reconfigure_nexus(view.nexus(), &view, None);
+    }
     unique.local_peer_id = Some(PeerId::new(validator.public_key().clone()));
     unique.torii_proxy_bridge_signer = validator;
     unique.signed_query_admission = Arc::new(

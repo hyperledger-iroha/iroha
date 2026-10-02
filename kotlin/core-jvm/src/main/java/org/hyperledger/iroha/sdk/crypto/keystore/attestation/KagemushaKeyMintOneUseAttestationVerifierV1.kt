@@ -58,7 +58,7 @@ internal object KagemushaSelectionFrameV1 {
     private const val BEFORE = 428
     private const val AFTER = 444
 
-    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+    private fun requireShape(frame: ByteArray, allowEnrollment: Boolean) {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -79,28 +79,42 @@ internal object KagemushaSelectionFrameV1 {
             frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
         ) { "Core S has a zero policy or hardware generation" }
         val operation = frame[OPERATION].toInt() and 0xff
-        require(operation in 1..5) { "Core S has an invalid monetary operation" }
+        require(operation in (if (allowEnrollment) 0..5 else 1..5)) { "Core S has an invalid monetary operation" }
         val outgoing = operation == 2 || operation == 4
         require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
             frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
         ) { "Core S has the wrong outgoing commitment shape" }
+    }
+
+    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+        requireShape(frame, allowEnrollment = false)
         require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
             frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
             frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
         ) { "Core S differs from the selected lane or exact-next indices" }
     }
 
-    fun requireAppAttest(frame: ByteArray, previous: UInt) {
-        require(previous != UInt.MAX_VALUE && frame.size == FRAME_BYTES) {
-            "App Attest Core S counter or width is invalid"
-        }
-        fun index(value: UInt): ByteArray = ByteArray(16).also { bytes ->
-            for (offset in 0 until 4) {
-                bytes[offset] = (value.toLong() ushr (offset * 8)).toByte()
+    /** The financial u128 transition is independent of App Attest's signed u32 counter. */
+    fun requireAppAttest(frame: ByteArray) {
+        requireShape(frame, allowEnrollment = true)
+        val before = frame.copyOfRange(BEFORE, BEFORE + 16)
+        val after = frame.copyOfRange(AFTER, AFTER + 16)
+        if (frame[OPERATION] == 0.toByte()) {
+            require(before.all { it == 0.toByte() } && after.all { it == 0.toByte() }) {
+                "App Attest enrollment has a financial transition"
+            }
+        } else {
+            val next = before.copyOf()
+            var carry = 1
+            for (offset in next.indices) {
+                val value = (next[offset].toInt() and 0xff) + carry
+                next[offset] = value.toByte()
+                carry = value ushr 8
+            }
+            require(carry == 0 && next.contentEquals(after)) {
+                "App Attest Core S has invalid exact-next financial indices"
             }
         }
-        requireExact(frame, frame.copyOfRange(LANE, LANE + 32),
-            index(previous), index(previous + 1u))
     }
 }
 

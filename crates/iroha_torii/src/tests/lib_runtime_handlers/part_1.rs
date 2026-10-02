@@ -282,12 +282,10 @@ impl ReadinessNode {
         let node_key = KeyPair::from_seed(vec![0xD9; 32], Algorithm::BlsNormal);
         let node = iroha_core::sumeragi::node::start(NodeInputs {
             state: Arc::clone(&state),
-            kura: Arc::clone(&kura),
             queue: Arc::clone(&app.queue),
             events: tokio::sync::broadcast::channel(16).0,
             net: Arc::new(DisconnectedTransport),
             key_pair: node_key.clone(),
-            chain_id: state.chain_id_ref().to_string(),
             genesis: Some(genesis),
             beacon_signer: None,
             mint_finality_authority: None,

@@ -7,6 +7,7 @@
 mod settlement_atomic;
 mod settlement_pair;
 
+use crate::execution_attempt::ExecutionDeferred;
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
@@ -97,6 +98,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
+
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
 /// Read-only transaction fields consumed by deterministic lane and dataspace routing.
@@ -190,9 +192,12 @@ impl TransactionRoutingView for TransactionPayload {
 pub use iroha_data_model::block::lane_admission::{
     NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan,
 };
-/// Deterministic routing resolution failure against configured Nexus catalogs.
+/// Routing resolution failure or unfinished local read against configured Nexus catalogs.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RoutingResolveError {
+    /// An original local routing read did not complete; this is never a route rejection.
+    #[error("routing deferred: {0}")]
+    Deferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// An atomic settlement cannot be routed because its signed movement list is invalid.
     #[error("invalid atomic settlement movements: {reason}")]
     InvalidAtomicSettlement {
@@ -328,6 +333,7 @@ impl RoutingResolveError {
     #[must_use]
     pub const fn as_label(&self) -> &'static str {
         match self {
+            Self::Deferred(_) => "routing_deferred",
             Self::InvalidAtomicSettlement { .. } => "invalid_atomic_settlement",
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
@@ -370,10 +376,7 @@ pub fn evaluate_policy_plan_with_catalog(
     dataspace_catalog: &DataSpaceCatalog,
     tx: &dyn TransactionRoutingView,
 ) -> Result<RoutingPlan, RoutingResolveError> {
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| rule_matches(rule, tx, None));
+    let matched_rule = first_matching_rule(&policy.rules, |rule| rule_matches(rule, tx, None))?;
     if transaction_contains_fx_corridor_settlement(tx)
         && let Some(decision) =
             settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
@@ -563,10 +566,9 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world, ledger_time_ms));
+    let matched_rule = first_matching_rule(&policy.rules, |rule| {
+        rule_matches_with_world(rule, tx, dataspace_catalog, world, ledger_time_ms)
+    })?;
     if let Some(plan) = native_amx_fx_routing_plan_with_world(
         tx,
         matched_rule,
@@ -614,7 +616,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     )?;
     apply_authority_dataspace_target(
         &mut target,
-        authority_dataspace_target_with_world(Some(world), tx, ledger_time_ms),
+        authority_dataspace_target_with_world(Some(world), tx, ledger_time_ms)?,
         matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
     );
     resolve_policy_routing_plan(
@@ -1357,7 +1359,7 @@ fn transfer_batch_targets(
     mut definition: impl FnMut(
         &AssetDefinitionId,
     ) -> Result<AssetBalanceDefinitionRouteTarget, RoutingResolveError>,
-    mut account: impl FnMut(&AccountId) -> Option<DataSpaceId>,
+    mut account: impl FnMut(&AccountId) -> Result<Option<DataSpaceId>, ExecutionDeferred>,
 ) -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
     let mut targets = BTreeSet::new();
     for entry in batch.entries() {
@@ -1366,7 +1368,7 @@ fn transfer_batch_targets(
         targets.extend(asset_balance_operation_concrete_dataspaces(
             definition(entry.asset_definition())?,
             None,
-            [account(entry.from()), account(entry.to())],
+            [account(entry.from())?, account(entry.to())?],
         ));
     }
     Ok(targets)
@@ -2663,12 +2665,9 @@ pub(crate) fn native_execution_target<W: WorldReadOnly>(
     let control_plane = match transaction_executable(tx) {
         Some(Executable::Instructions(instructions)) => {
             !instructions.is_empty()
-                && instructions.iter().all(|instruction| {
-                    instruction
-                        .as_any()
-                        .is::<iroha_data_model::isi::SetParameter>()
-                        || instruction_routes_to_universal_dataspace(&**instruction)
-                })
+                && instructions
+                    .iter()
+                    .all(|instruction| instruction_routes_to_universal_dataspace(&**instruction))
         }
         _ => false,
     };
@@ -2728,11 +2727,7 @@ pub(crate) fn native_instruction_execution_target<W: WorldReadOnly>(
     }
     Ok(NativeExecutionTarget {
         dataspace: target.dataspace_id,
-        global: target.coordinator_route
-            || instruction
-                .as_any()
-                .is::<iroha_data_model::isi::SetParameter>()
-            || instruction_routes_to_universal_dataspace(instruction),
+        global: target.coordinator_route || instruction_routes_to_universal_dataspace(instruction),
     })
 }
 
@@ -3118,7 +3113,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         if alias_dataspaces.is_empty() {
             insert_native_amx_participant(
                 dataspaces,
-                account_dataspace_target(Some(world), &primary.account, ledger_time_ms),
+                account_dataspace_target(Some(world), &primary.account, ledger_time_ms)?,
             );
         } else {
             for dataspace in alias_dataspaces {
@@ -3155,7 +3150,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             if nested_dataspaces.is_empty() {
                 insert_native_amx_participant(
                     &mut nested_dataspaces,
-                    account_dataspace_target(Some(world), account, ledger_time_ms),
+                    account_dataspace_target(Some(world), account, ledger_time_ms)?,
                 );
             }
             Ok(nested_dataspaces)
@@ -3172,12 +3167,17 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 stack,
                 |instructions, stack| collect_payload(instructions, &approve.account, stack),
             )?
-            .unwrap_or_else(|| {
-                account_dataspace_target(Some(world), &approve.account, ledger_time_ms)
-                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
-                    .into_iter()
-                    .collect()
-            }),
+            .map_or_else(
+                || -> Result<_, ExecutionDeferred> {
+                    Ok(
+                        account_dataspace_target(Some(world), &approve.account, ledger_time_ms)?
+                            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+                            .into_iter()
+                            .collect(),
+                    )
+                },
+                Ok,
+            )?,
             MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
             | MultisigInstructionBox::InvalidateOutstanding(_) => BTreeSet::new(),
@@ -3268,8 +3268,12 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 )?,
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
-                    account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms),
-                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms),
+                    account_dataspace_target(
+                        Some(world),
+                        &transfer.source.account,
+                        ledger_time_ms,
+                    )?,
+                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms)?,
                 ],
             );
             return Ok(());
@@ -3290,7 +3294,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     Some(world),
                     &mint.destination.account,
                     ledger_time_ms,
-                )],
+                )?],
             );
             return Ok(());
         }
@@ -3310,7 +3314,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     Some(world),
                     &burn.destination.account,
                     ledger_time_ms,
-                )],
+                )?],
             );
             return Ok(());
         }
@@ -3454,11 +3458,16 @@ fn instruction_uses_universal_alias_registry(instruction: &dyn Instruction) -> b
     any.is::<iroha_data_model::isi::alias_setup::EnsureAlias>()
         || any.is::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
 }
-/// Instructions that always execute in the universal dataspace: the universal alias registry
-/// private-root admission/anchoring, and every SCCP v1 instruction, which execute serially so outbound nonces
-/// and leaf indices are deterministic (`specs/sccp.md` §4.5, §4.19).
+/// Universal control instructions share one scope across native ordering and physical policy.
+/// Parameter changes, alias registry work, private-root admission and SCCP execute on the
+/// global chain even when the authority has a private account route. SCCP's serial ordering
+/// also preserves outbound nonces and leaf indices (`specs/sccp.md` §4.5, §4.19).
 fn instruction_routes_to_universal_dataspace(instruction: &dyn Instruction) -> bool {
-    instruction_uses_universal_alias_registry(instruction)
+    (!cfg!(all(test, sumeragi_core_mutation = "HC41"))
+        && instruction
+            .as_any()
+            .is::<iroha_data_model::isi::SetParameter>())
+        || instruction_uses_universal_alias_registry(instruction)
         || crate::smartcontracts::isi::sccp::is_sccp_instruction(instruction)
         || instruction
             .as_any()
@@ -3536,13 +3545,16 @@ fn instruction_transaction_dataspace_target(
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
         return Ok(
-            compare_and_set_primary_account_alias_dataspace_target(primary).or_else(|| {
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &primary.account,
-                    state_view.map(state_view_ledger_time_ms),
-                )
-            }),
+            compare_and_set_primary_account_alias_dataspace_target(primary).map_or_else(
+                || {
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &primary.account,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
+                },
+                |target| Ok(Some(target)),
+            )?,
         );
     }
     if let Some(multisig) = multisig_instruction(instruction) {
@@ -3587,13 +3599,16 @@ fn instruction_transaction_dataspace_target(
                 dataspace_catalog,
                 state_view,
             )?
-            .or_else(|| {
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &grant.destination,
-                    state_view.map(state_view_ledger_time_ms),
-                )
-            })),
+            .map_or_else(
+                || {
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &grant.destination,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
+                },
+                |target| Ok(Some(target)),
+            )?),
             GrantBox::RolePermission(grant) => {
                 dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
             }
@@ -3607,13 +3622,16 @@ fn instruction_transaction_dataspace_target(
                 dataspace_catalog,
                 state_view,
             )?
-            .or_else(|| {
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &revoke.destination,
-                    state_view.map(state_view_ledger_time_ms),
-                )
-            })),
+            .map_or_else(
+                || {
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &revoke.destination,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
+                },
+                |target| Ok(Some(target)),
+            )?),
             RevokeBox::RolePermission(revoke) => {
                 dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
             }
@@ -3695,7 +3713,7 @@ fn instruction_transaction_dataspace_target(
                 state_view.map(StateView::world),
                 &set.object,
                 state_view.map(state_view_ledger_time_ms),
-            )),
+            )?),
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target(
                 &set.object,
                 None,
@@ -3720,7 +3738,7 @@ fn instruction_transaction_dataspace_target(
                 state_view.map(StateView::world),
                 &remove.object,
                 state_view.map(state_view_ledger_time_ms),
-            )),
+            )?),
             RemoveKeyValueBox::AssetDefinition(remove) => asset_definition_dataspace_target(
                 &remove.object,
                 None,
@@ -3760,12 +3778,12 @@ fn instruction_transaction_dataspace_target(
                         state_view.map(StateView::world),
                         &transfer.source.account,
                         state_view.map(state_view_ledger_time_ms),
-                    ),
+                    )?,
                     account_dataspace_target(
                         state_view.map(StateView::world),
                         &transfer.destination,
                         state_view.map(state_view_ledger_time_ms),
-                    ),
+                    )?,
                 ],
             )),
             TransferBox::Nft(transfer) => domain_dataspace_target_with_state(
@@ -3788,7 +3806,7 @@ fn instruction_transaction_dataspace_target(
                     state_view.map(StateView::world),
                     &mint.destination.account,
                     state_view.map(state_view_ledger_time_ms),
-                )],
+                )?],
             )),
             MintBox::TriggerRepetitions(_) => Ok(None),
         };
@@ -3806,7 +3824,7 @@ fn instruction_transaction_dataspace_target(
                     state_view.map(StateView::world),
                     &burn.destination.account,
                     state_view.map(state_view_ledger_time_ms),
-                )],
+                )?],
             )),
             BurnBox::TriggerRepetitions(_) => Ok(None),
         };
@@ -3931,9 +3949,10 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
         return Ok(
-            compare_and_set_primary_account_alias_dataspace_target(primary).or_else(|| {
-                account_dataspace_target(Some(world), &primary.account, ledger_time_ms)
-            }),
+            compare_and_set_primary_account_alias_dataspace_target(primary).map_or_else(
+                || account_dataspace_target(Some(world), &primary.account, ledger_time_ms),
+                |target| Ok(Some(target)),
+            )?,
         );
     }
     if let Some(multisig) = multisig_instruction(instruction) {
@@ -3987,7 +4006,10 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                 world,
                 ledger_time_ms,
             )?
-            .or_else(|| account_dataspace_target(Some(world), &grant.destination, ledger_time_ms))),
+            .map_or_else(
+                || account_dataspace_target(Some(world), &grant.destination, ledger_time_ms),
+                |target| Ok(Some(target)),
+            )?),
             GrantBox::RolePermission(grant) => dataspace_scoped_permission_target_with_world(
                 &grant.object,
                 dataspace_catalog,
@@ -4005,9 +4027,10 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                 world,
                 ledger_time_ms,
             )?
-            .or_else(|| {
-                account_dataspace_target(Some(world), &revoke.destination, ledger_time_ms)
-            })),
+            .map_or_else(
+                || account_dataspace_target(Some(world), &revoke.destination, ledger_time_ms),
+                |target| Ok(Some(target)),
+            )?),
             RevokeBox::RolePermission(revoke) => dataspace_scoped_permission_target_with_world(
                 &revoke.object,
                 dataspace_catalog,
@@ -4109,7 +4132,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                 Some(world),
                 &set.object,
                 ledger_time_ms,
-            )),
+            )?),
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target_with_world(
                 &set.object,
                 None,
@@ -4139,7 +4162,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                 Some(world),
                 &remove.object,
                 ledger_time_ms,
-            )),
+            )?),
             RemoveKeyValueBox::AssetDefinition(remove) => {
                 asset_definition_dataspace_target_with_world(
                     &remove.object,
@@ -4184,8 +4207,12 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                 )?,
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
-                    account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms),
-                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms),
+                    account_dataspace_target(
+                        Some(world),
+                        &transfer.source.account,
+                        ledger_time_ms,
+                    )?,
+                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms)?,
                 ],
             )),
             TransferBox::Nft(transfer) => domain_dataspace_target_with_world(
@@ -4210,7 +4237,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                     Some(world),
                     &mint.destination.account,
                     ledger_time_ms,
-                )],
+                )?],
             )),
             MintBox::TriggerRepetitions(_) => Ok(None),
         };
@@ -4229,7 +4256,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
                     Some(world),
                     &burn.destination.account,
                     ledger_time_ms,
-                )],
+                )?],
             )),
             BurnBox::TriggerRepetitions(_) => Ok(None),
         };
@@ -4564,12 +4591,12 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
                     state_view.map(StateView::world),
                     &transfer.source.account,
                     state_view.map(state_view_ledger_time_ms),
-                ),
+                )?,
                 account_dataspace_target(
                     state_view.map(StateView::world),
                     &transfer.destination,
                     state_view.map(state_view_ledger_time_ms),
-                ),
+                )?,
             ],
         )));
     }
@@ -4585,7 +4612,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
                 state_view.map(StateView::world),
                 &mint.destination.account,
                 state_view.map(state_view_ledger_time_ms),
-            )],
+            )?],
         )));
     }
     if let Some(BurnBox::Asset(burn)) = any.downcast_ref::<BurnBox>() {
@@ -4600,7 +4627,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
                 state_view.map(StateView::world),
                 &burn.destination.account,
                 state_view.map(state_view_ledger_time_ms),
-            )],
+            )?],
         )));
     }
     if let Some(primary) =
@@ -4846,8 +4873,8 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
             )?,
             asset_id_explicit_dataspace_target(&transfer.source),
             [
-                account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms),
-                account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms),
+                account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms)?,
+                account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms)?,
             ],
         )));
     }
@@ -4864,7 +4891,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
                 Some(world),
                 &mint.destination.account,
                 ledger_time_ms,
-            )],
+            )?],
         )));
     }
     if let Some(BurnBox::Asset(burn)) = any.downcast_ref::<BurnBox>() {
@@ -4880,7 +4907,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
                 Some(world),
                 &burn.destination.account,
                 ledger_time_ms,
-            )],
+            )?],
         )));
     }
     if let Some(primary) =
@@ -5290,9 +5317,10 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
                 ledger_time_ms,
                 &mut target_fx_overlay,
             )?;
-            let dataspace_id = instruction_target.or_else(|| {
-                account_dataspace_target(Some(world), &propose.account, ledger_time_ms)
-            });
+            let dataspace_id = instruction_target.map_or_else(
+                || account_dataspace_target(Some(world), &propose.account, ledger_time_ms),
+                |target| Ok(Some(target)),
+            )?;
             let mut concrete_dataspaces = BTreeSet::new();
             let mut concrete_fx_overlay = outer_fx_overlay.clone();
             let mut requires_universal_coordinator = false;
@@ -5459,13 +5487,16 @@ fn multisig_propose_transaction_dataspace_target(
             instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
         }),
     )?;
-    Ok(instruction_target.or_else(|| {
-        account_dataspace_target(
-            state_view.map(StateView::world),
-            &propose.account,
-            state_view.map(state_view_ledger_time_ms),
-        )
-    }))
+    Ok(instruction_target.map_or_else(
+        || {
+            account_dataspace_target(
+                state_view.map(StateView::world),
+                &propose.account,
+                state_view.map(state_view_ledger_time_ms),
+            )
+        },
+        |target| Ok(Some(target)),
+    )?)
 }
 fn multisig_approve_transaction_dataspace_target(
     approve: &MultisigApprove,
@@ -5490,13 +5521,16 @@ fn multisig_approve_transaction_dataspace_target(
             )?,
             None => None,
         };
-    Ok(proposal_target.or_else(|| {
-        account_dataspace_target(
-            Some(world),
-            &approve.account,
-            state_view.map(state_view_ledger_time_ms),
-        )
-    }))
+    Ok(proposal_target.map_or_else(
+        || {
+            account_dataspace_target(
+                Some(world),
+                &approve.account,
+                state_view.map(state_view_ledger_time_ms),
+            )
+        },
+        |target| Ok(Some(target)),
+    )?)
 }
 fn multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
     approve: &MultisigApprove,
@@ -5522,8 +5556,10 @@ fn multisig_approve_transaction_dataspace_target_with_world_and_fx_overlay<W: Wo
         }
         None => None,
     };
-    Ok(proposal_target
-        .or_else(|| account_dataspace_target(Some(world), &approve.account, ledger_time_ms)))
+    Ok(proposal_target.map_or_else(
+        || account_dataspace_target(Some(world), &approve.account, ledger_time_ms),
+        |target| Ok(Some(target)),
+    )?)
 }
 fn multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldReadOnly>(
     propose: &MultisigPropose,
@@ -5540,8 +5576,10 @@ fn multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay<W: Wo
         ledger_time_ms,
         &mut nested_fx_overlay,
     )?;
-    Ok(instruction_target
-        .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms)))
+    Ok(instruction_target.map_or_else(
+        || account_dataspace_target(Some(world), &propose.account, ledger_time_ms),
+        |target| Ok(Some(target)),
+    )?)
 }
 fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
     if let Some(top_up) = any.downcast_ref::<TopUpKagemushaV1>() {
@@ -6277,47 +6315,50 @@ fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,
     account_id: &AccountId,
     ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    let world = world?;
-    // A persisted scope-directory entry is the committed routing view. Do not
-    // let a partial alias index narrow or override it.
+) -> Result<Option<DataSpaceId>, ExecutionDeferred> {
+    let Some(world) = world else {
+        return Ok(None);
+    };
+    // A persisted directory remains authoritative; SNS fallback cannot narrow it.
     if world.account_scope_directory().get(account_id).is_some() {
-        let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
+        let Ok(hierarchy) = world.account_scope_hierarchy(account_id) else {
+            return Ok(None);
+        };
         let mut dataspaces = hierarchy.keys();
-        let dataspace_id = *dataspaces.next()?;
+        let Some(&dataspace_id) = dataspaces.next() else {
+            return Ok(None);
+        };
         if dataspaces.next().is_some() {
-            return Some(DataSpaceId::UNIVERSAL);
+            return Ok(Some(DataSpaceId::UNIVERSAL));
         }
-        return (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id);
+        return Ok((dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id));
     }
-    let account = world.accounts().get(account_id)?;
+    let Some(account) = world.accounts().get(account_id) else {
+        return Ok(None);
+    };
     let mut dataspaces = BTreeSet::new();
     let mut primary_dataspace = None;
     if let Some(now_ms) = ledger_time_ms {
         if let Some(label) = account.as_ref().label()
-            && matches!(
-                crate::sns::resolve_active_account_alias(
-                    world,
-                    world.dataspace_catalog(),
-                    label,
-                    now_ms,
-                ),
-                Ok(Some(ref resolved)) if resolved == account_id
-            )
+            && original_account_alias_matches(
+                world,
+                world.dataspace_catalog(),
+                label,
+                account_id,
+                now_ms,
+            )?
         {
             primary_dataspace = Some(label.dataspace);
             dataspaces.insert(label.dataspace);
         }
         for alias in world.bound_account_aliases(account_id) {
-            if matches!(
-                crate::sns::resolve_active_account_alias(
-                    world,
-                    world.dataspace_catalog(),
-                    &alias,
-                    now_ms,
-                ),
-                Ok(Some(ref resolved)) if resolved == account_id
-            ) {
+            if original_account_alias_matches(
+                world,
+                world.dataspace_catalog(),
+                &alias,
+                account_id,
+                now_ms,
+            )? {
                 dataspaces.insert(alias.dataspace);
             }
         }
@@ -6333,18 +6374,23 @@ fn account_dataspace_target<W: WorldReadOnly>(
         dataspaces.insert(DataSpaceId::UNIVERSAL);
     }
     if dataspaces.len() > 1 {
-        return Some(DataSpaceId::UNIVERSAL);
+        return Ok(Some(DataSpaceId::UNIVERSAL));
     }
-    let dataspace_id = *dataspaces.iter().next()?;
-    (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
+    Ok(dataspaces
+        .iter()
+        .next()
+        .copied()
+        .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL))
 }
 fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     world: Option<&W>,
     tx: &dyn TransactionRoutingView,
     ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    tx.authority_opt()
-        .and_then(|authority| account_dataspace_target(world, authority, ledger_time_ms))
+) -> Result<Option<DataSpaceId>, ExecutionDeferred> {
+    match tx.authority_opt() {
+        Some(authority) => account_dataspace_target(world, authority, ledger_time_ms),
+        None => Ok(None),
+    }
 }
 fn domain_dataspace_target_with_state(
     domain_id: &DomainId,
@@ -6489,6 +6535,15 @@ fn dataspace_alias_target_with_world<W: WorldReadOnly>(
     {
         Ok(dataspace_id) => Ok(Some(dataspace_id)),
         Err(crate::sns::SnsError::NotFound(_)) => Ok(None),
+        Err(crate::sns::SnsError::Deferred(reason)) => {
+            if cfg!(all(test, sumeragi_core_mutation = "HC38")) {
+                return Err(RoutingResolveError::DataspaceAliasResolution {
+                    alias: dataspace_alias.to_owned(),
+                    reason: reason.to_string(),
+                });
+            }
+            Err(reason.into())
+        }
         Err(error) => Err(RoutingResolveError::DataspaceAliasResolution {
             alias: dataspace_alias.to_owned(),
             reason: error.to_string(),
@@ -7350,24 +7405,28 @@ fn dataspace_scoped_permission_target(
                 .payload()
                 .try_into_any_norito::<CanManageFeeSponsorProgram>()
                 .ok()
-                .and_then(|token| {
+                .map(|token| {
                     account_dataspace_target(
                         state_view.map(StateView::world),
                         &token.sponsor,
                         state_view.map(state_view_ledger_time_ms),
                     )
-                })),
+                })
+                .transpose()?
+                .flatten()),
             "CanEnrollFeeSponsorProgram" => Ok(permission
                 .payload()
                 .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
                 .ok()
-                .and_then(|token| {
+                .map(|token| {
                     account_dataspace_target(
                         state_view.map(StateView::world),
                         &token.program_id.sponsor,
                         state_view.map(state_view_ledger_time_ms),
                     )
-                })),
+                })
+                .transpose()?
+                .flatten()),
             _ => Ok(None),
         };
     }
@@ -7589,16 +7648,18 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .payload()
                 .try_into_any_norito::<CanManageFeeSponsorProgram>()
                 .ok()
-                .and_then(|token| {
-                    account_dataspace_target(Some(world), &token.sponsor, ledger_time_ms)
-                })),
+                .map(|token| account_dataspace_target(Some(world), &token.sponsor, ledger_time_ms))
+                .transpose()?
+                .flatten()),
             "CanEnrollFeeSponsorProgram" => Ok(permission
                 .payload()
                 .try_into_any_norito::<CanEnrollFeeSponsorProgram>()
                 .ok()
-                .and_then(|token| {
+                .map(|token| {
                     account_dataspace_target(Some(world), &token.program_id.sponsor, ledger_time_ms)
-                })),
+                })
+                .transpose()?
+                .flatten()),
             _ => Ok(None),
         };
     }
@@ -8073,15 +8134,14 @@ pub fn resolve_query_routing_decision(
     state_view: Option<&StateView<'_>>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     if let Some(state_view) = state_view {
-        let matched_rule = policy
-            .rules
-            .iter()
-            .find(|rule| query_rule_matches(rule, authority, Some(state_view)));
+        let matched_rule = first_matching_rule(&policy.rules, |rule| {
+            query_rule_matches(rule, authority, Some(state_view))
+        })?;
         let target_dataspace = account_dataspace_target(
             Some(state_view.world()),
             authority,
             Some(state_view_ledger_time_ms(state_view)),
-        );
+        )?;
         return resolve_policy_routing_decision(
             policy,
             matched_rule,
@@ -8096,10 +8156,9 @@ pub fn resolve_query_routing_decision(
             )),
         );
     }
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| query_rule_matches(rule, authority, None));
+    let matched_rule = first_matching_rule(&policy.rules, |rule| {
+        query_rule_matches(rule, authority, None)
+    })?;
     resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -8120,10 +8179,10 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
-    let matched_rule = policy.rules.iter().find(|rule| {
+    let matched_rule = first_matching_rule(&policy.rules, |rule| {
         query_rule_matches_with_world(rule, authority, dataspace_catalog, world, ledger_time_ms)
-    });
-    let target_dataspace = account_dataspace_target(Some(world), authority, ledger_time_ms);
+    })?;
+    let target_dataspace = account_dataspace_target(Some(world), authority, ledger_time_ms)?;
     resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -8171,25 +8230,36 @@ pub fn resolve_routing_decision(
     }
     Ok(decision)
 }
+fn first_matching_rule<'a>(
+    rules: &'a [LaneRoutingRule],
+    mut matches: impl FnMut(&LaneRoutingRule) -> Result<bool, ExecutionDeferred>,
+) -> Result<Option<&'a LaneRoutingRule>, ExecutionDeferred> {
+    for rule in rules {
+        if matches(rule)? {
+            return Ok(Some(rule));
+        }
+    }
+    Ok(None)
+}
 fn rule_matches(
     rule: &LaneRoutingRule,
     tx: &dyn TransactionRoutingView,
     state_view: Option<&StateView<'_>>,
-) -> bool {
-    let matcher = &rule.matcher;
-    if let Some(account) = matcher.account.as_deref()
-        && !tx
-            .authority_opt()
-            .is_some_and(|authority| account_matches(account, authority, state_view))
-    {
-        return false;
+) -> Result<bool, ExecutionDeferred> {
+    if let Some(account) = rule.matcher.account.as_deref() {
+        let Some(authority) = tx.authority_opt() else {
+            return Ok(false);
+        };
+        if !account_matches(account, authority, state_view)? {
+            return Ok(false);
+        }
     }
-    if let Some(instruction) = matcher.instruction.as_deref()
-        && !instructions_match(instruction, tx, state_view)
+    if let Some(instruction) = rule.matcher.instruction.as_deref()
+        && !instructions_match(instruction, tx, state_view)?
     {
-        return false;
+        return Ok(false);
     }
-    true
+    Ok(true)
 }
 fn rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
@@ -8197,7 +8267,7 @@ fn rule_matches_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     matchers_match_with_world(
         rule.matcher.account.as_deref(),
         rule.matcher.instruction.as_deref(),
@@ -8210,6 +8280,8 @@ fn rule_matches_with_world<W: WorldReadOnly>(
 /// Whether `tx` satisfies every present matcher: its authority matches `account` (an account
 /// id, an encoded account id or an alias resolved in `world`) and one of its instructions
 /// matches `instruction`.
+///
+/// Local refusal retains the original reader reason; it is not a completed mismatch.
 pub(crate) fn matchers_match_with_world<W: WorldReadOnly>(
     account: Option<&str>,
     instruction: Option<&str>,
@@ -8217,32 +8289,46 @@ pub(crate) fn matchers_match_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
-    if let Some(account) = account
-        && !tx.authority_opt().is_some_and(|authority| {
-            account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
-        })
-    {
-        return false;
+) -> Result<bool, ExecutionDeferred> {
+    if let Some(account) = account {
+        let Some(authority) = tx.authority_opt() else {
+            return Ok(false);
+        };
+        if !account_matches_with_world(
+            account,
+            authority,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )? {
+            return Ok(false);
+        }
     }
     if let Some(instruction) = instruction
-        && !instructions_match_with_world(instruction, tx, dataspace_catalog, world, ledger_time_ms)
+        && !instructions_match_with_world(
+            instruction,
+            tx,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?
     {
-        return false;
+        return Ok(false);
     }
-    true
+    Ok(true)
 }
 fn query_rule_matches(
     rule: &LaneRoutingRule,
     authority: &AccountId,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     if rule.matcher.instruction.is_some() {
-        return false;
+        return Ok(false);
     }
-    rule.matcher.account.as_deref().map_or(true, |account| {
-        account_matches(account, authority, state_view)
-    })
+    match rule.matcher.account.as_deref() {
+        Some(account) => account_matches(account, authority, state_view),
+        None => Ok(true),
+    }
 }
 fn query_rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
@@ -8250,43 +8336,52 @@ fn query_rule_matches_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     if rule.matcher.instruction.is_some() {
-        return false;
+        return Ok(false);
     }
-    rule.matcher.account.as_deref().map_or(true, |account| {
-        account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
-    })
+    match rule.matcher.account.as_deref() {
+        Some(account) => {
+            account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
+        }
+        None => Ok(true),
+    }
 }
-fn account_matches_literal_or_encoded(pattern: &str, authority: &AccountId) -> bool {
-    if authority.to_string() == pattern {
-        return true;
+fn account_matches_literal_or_encoded(
+    pattern: &str,
+    authority: &AccountId,
+) -> Result<bool, ExecutionDeferred> {
+    use iroha_data_model::account::address::{AccountAddress, AccountAddressError};
+    match AccountAddress::parse_encoded(pattern, None).and_then(|address| address.to_account_id()) {
+        Ok(parsed) => Ok(parsed == *authority),
+        Err(AccountAddressError::DecodeResourceLimit) => {
+            #[cfg(all(test, sumeragi_core_mutation = "HC40"))]
+            return Ok(false);
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC40")))]
+            Err(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
+        }
+        Err(_) => Ok(false),
     }
-    iroha_data_model::account::AccountId::parse_encoded(pattern)
-        .is_ok_and(|parsed| parsed == *authority)
 }
 fn account_matches(
     pattern: &str,
-    authority: &iroha_data_model::account::AccountId,
+    authority: &AccountId,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let pattern = pattern.trim();
     if pattern.is_empty() {
-        return false;
+        return Ok(false);
     }
-    if account_matches_literal_or_encoded(pattern, authority) {
-        return true;
+    match state_view {
+        Some(view) => account_matches_with_world(
+            pattern,
+            authority,
+            &view.nexus().dataspace_catalog,
+            view.world(),
+            Some(state_view_ledger_time_ms(view)),
+        ),
+        None => account_matches_literal_or_encoded(pattern, authority),
     }
-    let Some(state_view) = state_view else {
-        return false;
-    };
-    account_matches_with_world(
-        pattern,
-        authority,
-        &state_view.nexus().dataspace_catalog,
-        state_view.world(),
-        Some(state_view_ledger_time_ms(state_view)),
-    )
 }
 fn account_matches_with_world<W: WorldReadOnly>(
     pattern: &str,
@@ -8294,13 +8389,13 @@ fn account_matches_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let pattern = pattern.trim();
     if pattern.is_empty() {
-        return false;
+        return Ok(false);
     }
-    if account_matches_literal_or_encoded(pattern, authority) {
-        return true;
+    if account_matches_literal_or_encoded(pattern, authority)? {
+        return Ok(true);
     }
     if let Some(scope) = pattern.strip_prefix("*@") {
         return account_matches_alias_scope_with_world(
@@ -8311,27 +8406,41 @@ fn account_matches_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-    AccountAlias::from_literal(pattern, dataspace_catalog)
-        .ok()
-        .is_some_and(|alias| {
-            ledger_time_ms.is_some_and(|now_ms| {
-                matches!(
-                    crate::sns::resolve_active_account_alias(
-                        world,
-                        dataspace_catalog,
-                        &alias,
-                        now_ms,
-                    ),
-                    Ok(Some(ref resolved)) if resolved == authority
-                )
-            })
-        })
+    let (Ok(alias), Some(now_ms)) = (
+        AccountAlias::from_literal(pattern, dataspace_catalog),
+        ledger_time_ms,
+    ) else {
+        return Ok(false);
+    };
+    original_account_alias_matches(world, dataspace_catalog, &alias, authority, now_ms)
+}
+
+fn original_account_alias_matches<W: WorldReadOnly>(
+    world: &W,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    account: &AccountId,
+    now_ms: u64,
+) -> Result<bool, ExecutionDeferred> {
+    match crate::sns::resolve_active_account_alias(world, catalog, alias, now_ms) {
+        Ok(resolved) => Ok(resolved.as_ref() == Some(account)),
+        Err(crate::sns::SnsError::Deferred(reason)) => {
+            #[cfg(all(test, sumeragi_core_mutation = "HC40"))]
+            {
+                drop(reason);
+                Ok(false)
+            }
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC40")))]
+            Err(reason)
+        }
+        Err(_) => Ok(false),
+    }
 }
 fn account_matches_alias_scope(
     scope: &str,
     account_id: &AccountId,
     state_view: &StateView<'_>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     account_matches_alias_scope_with_world(
         scope,
         account_id,
@@ -8346,15 +8455,14 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let scope = scope.trim().to_ascii_lowercase();
     if scope.is_empty() {
-        return false;
+        return Ok(false);
     }
-    // When the committed directory has an entry, it is authoritative: malformed
-    // or missing scope material must not fall through to a partial alias index.
+    // The maintained directory is authoritative, including malformed/missing scope material.
     if world.account_scope_directory().get(account_id).is_some() {
-        return world
+        return Ok(world
             .account_scope_hierarchy(account_id)
             .ok()
             .is_some_and(|hierarchy| {
@@ -8366,27 +8474,14 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
                             .into_iter()
                             .any(|domain| domain.to_string().eq_ignore_ascii_case(scope.as_str()))
                 })
-            });
+            }));
     }
     let Some(now_ms) = ledger_time_ms else {
-        return false;
+        return Ok(false);
     };
-    world
-        .bound_account_aliases(account_id)
-        .into_iter()
-        .any(|alias| {
-            if !matches!(
-                crate::sns::resolve_active_account_alias(
-                    world,
-                    dataspace_catalog,
-                    &alias,
-                    now_ms,
-                ),
-                Ok(Some(ref resolved)) if resolved == account_id
-            ) {
-                return false;
-            }
-            alias
+    for alias in world.bound_account_aliases(account_id) {
+        if original_account_alias_matches(world, dataspace_catalog, &alias, account_id, now_ms)?
+            && alias
                 .to_literal(dataspace_catalog)
                 .ok()
                 .and_then(|literal| {
@@ -8395,24 +8490,34 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
                         .map(|(_, alias_scope)| alias_scope == scope.as_str())
                 })
                 .unwrap_or(false)
-        })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn instructions_match(
     matcher: &str,
     tx: &dyn TransactionRoutingView,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
     if matcher_norm.is_empty() {
-        return false;
+        return Ok(false);
     }
     let (matcher_label, destination_scope) = split_instruction_matcher(&matcher_norm);
     if matcher_label.is_empty() {
-        return false;
+        return Ok(false);
     }
-    tx.any_matching_instruction(&mut |instruction| {
-        instruction_matches(matcher_label, destination_scope, instruction, state_view)
-    })
+    let Some(executable) = tx.executable() else {
+        return Ok(false);
+    };
+    for instruction in executable.explicit_instructions() {
+        if instruction_matches(matcher_label, destination_scope, &**instruction, state_view)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn instructions_match_with_world<W: WorldReadOnly>(
     matcher: &str,
@@ -8420,25 +8525,31 @@ fn instructions_match_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
     if matcher_norm.is_empty() {
-        return false;
+        return Ok(false);
     }
     let (matcher_label, destination_scope) = split_instruction_matcher(&matcher_norm);
     if matcher_label.is_empty() {
-        return false;
+        return Ok(false);
     }
-    tx.any_matching_instruction(&mut |instruction| {
-        instruction_matches_with_world(
+    let Some(executable) = tx.executable() else {
+        return Ok(false);
+    };
+    for instruction in executable.explicit_instructions() {
+        if instruction_matches_with_world(
             matcher_label,
             destination_scope,
-            instruction,
+            &**instruction,
             dataspace_catalog,
             world,
             ledger_time_ms,
-        )
-    })
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
     if let Some((label, domain)) = matcher.rsplit_once('@')
@@ -8457,25 +8568,25 @@ fn instruction_matches(
     destination_scope: Option<&str>,
     instruction: &dyn Instruction,
     state_view: Option<&StateView<'_>>,
-) -> bool {
-    if destination_scope.is_some_and(|scope| {
-        !transfer_destination_matches_alias_scope(instruction, scope, state_view)
-    }) {
-        return false;
+) -> Result<bool, ExecutionDeferred> {
+    if let Some(scope) = destination_scope
+        && !transfer_destination_matches_alias_scope(instruction, scope, state_view)?
+    {
+        return Ok(false);
     }
     if instruction_label_matches(matcher, instruction) {
-        return true;
+        return Ok(true);
     }
     let id = Instruction::id(instruction).to_ascii_lowercase();
     if matches_label(matcher, &id) {
-        return true;
+        return Ok(true);
     }
-    id.split("::").any(|segment| {
+    Ok(id.split("::").any(|segment| {
         matches_label(matcher, segment)
             || segment
                 .strip_suffix("box")
                 .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
-    })
+    }))
 }
 fn instruction_matches_with_world<W: WorldReadOnly>(
     matcher: &str,
@@ -8484,67 +8595,72 @@ fn instruction_matches_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
-    if destination_scope.is_some_and(|scope| {
-        !transfer_destination_matches_alias_scope_with_world(
+) -> Result<bool, ExecutionDeferred> {
+    if let Some(scope) = destination_scope
+        && !transfer_destination_matches_alias_scope_with_world(
             instruction,
             scope,
             dataspace_catalog,
             world,
             ledger_time_ms,
-        )
-    }) {
-        return false;
+        )?
+    {
+        return Ok(false);
     }
     if instruction_label_matches(matcher, instruction) {
-        return true;
+        return Ok(true);
     }
     let id = Instruction::id(instruction).to_ascii_lowercase();
     if matches_label(matcher, &id) {
-        return true;
+        return Ok(true);
     }
-    id.split("::").any(|segment| {
+    Ok(id.split("::").any(|segment| {
         matches_label(matcher, segment)
             || segment
                 .strip_suffix("box")
                 .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
-    })
+    }))
 }
 fn transfer_destination_matches_alias_scope(
     instruction: &dyn Instruction,
     scope: &str,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let scope = scope.trim();
     if scope.is_empty() {
-        return false;
+        return Ok(false);
     }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
-        return state_view.is_some_and(|view| {
-            batch
-                .entries()
-                .iter()
-                .any(|entry| account_matches_alias_scope(scope, entry.to(), view))
-        });
+        let Some(view) = state_view else {
+            return Ok(false);
+        };
+        for entry in batch.entries() {
+            if account_matches_alias_scope(scope, entry.to(), view)? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
-        return false;
+        return Ok(false);
     };
     let destination = match transfer {
-        TransferBox::Domain(transfer) => {
-            return domain_scope_matches(scope, &transfer.object);
-        }
+        TransferBox::Domain(transfer) => return Ok(domain_scope_matches(scope, &transfer.object)),
         TransferBox::AssetDefinition(transfer) => {
-            return asset_definition_scope_matches(scope, &transfer.object, state_view);
+            return Ok(asset_definition_scope_matches(
+                scope,
+                &transfer.object,
+                state_view,
+            ));
         }
         TransferBox::Asset(transfer) => &transfer.destination,
         TransferBox::Nft(transfer) => &transfer.destination,
     };
-    let Some(state_view) = state_view else {
-        return false;
+    let Some(view) = state_view else {
+        return Ok(false);
     };
-    account_matches_alias_scope(scope, destination, state_view)
+    account_matches_alias_scope(scope, destination, view)
 }
 fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
@@ -8552,32 +8668,39 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, ExecutionDeferred> {
     let scope = scope.trim();
     if scope.is_empty() {
-        return false;
+        return Ok(false);
     }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
-        return batch.entries().iter().any(|entry| {
-            account_matches_alias_scope_with_world(
+        for entry in batch.entries() {
+            if account_matches_alias_scope_with_world(
                 scope,
                 entry.to(),
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
-        });
+            )? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
-        return false;
+        return Ok(false);
     };
     let destination = match transfer {
         TransferBox::Domain(transfer) => {
-            return domain_scope_matches(scope, &transfer.object);
+            return Ok(domain_scope_matches(scope, &transfer.object));
         }
         TransferBox::AssetDefinition(transfer) => {
-            return asset_definition_scope_matches_with_world(scope, &transfer.object, world);
+            return Ok(asset_definition_scope_matches_with_world(
+                scope,
+                &transfer.object,
+                world,
+            ));
         }
         TransferBox::Asset(transfer) => &transfer.destination,
         TransferBox::Nft(transfer) => &transfer.destination,
@@ -8851,11 +8974,8 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &dyn TransactionRoutingView,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let matched_rule = self
-            .policy
-            .rules
-            .iter()
-            .find(|rule| rule_matches(rule, tx, None));
+        let matched_rule =
+            first_matching_rule(&self.policy.rules, |rule| rule_matches(rule, tx, None))?;
         if transaction_contains_fx_corridor_settlement(tx)
             && let Some(decision) = settlement_routing_decision(
                 tx,
@@ -8970,11 +9090,8 @@ impl LaneRouter for ConfigLaneRouter {
         {
             return Ok(None);
         }
-        let matched_rule = self
-            .policy
-            .rules
-            .iter()
-            .find(|rule| rule_matches(rule, tx, None));
+        let matched_rule =
+            first_matching_rule(&self.policy.rules, |rule| rule_matches(rule, tx, None))?;
         if let Some(plan) = dataspace_scoped_permission_routing_plan(
             tx,
             matched_rule,
@@ -9005,11 +9122,10 @@ impl LaneRouter for ConfigLaneRouter {
             return Ok(None);
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx)
-            && !self
-                .policy
-                .rules
-                .iter()
-                .any(|rule| query_rule_matches(rule, account_id, None))
+            && !first_matching_rule(&self.policy.rules, |rule| {
+                query_rule_matches(rule, account_id, None)
+            })?
+            .is_some()
         {
             return Ok(None);
         }
@@ -9052,11 +9168,8 @@ impl ConfigLaneRouter {
         {
             return Ok(false);
         }
-        let matched_rule = self
-            .policy
-            .rules
-            .iter()
-            .any(|rule| rule_matches(rule, tx, None));
+        let matched_rule =
+            first_matching_rule(&self.policy.rules, |rule| rule_matches(rule, tx, None))?.is_some();
         Ok(!matched_rule)
     }
 }
@@ -9147,7 +9260,6 @@ mod sccp_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::World;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -12043,6 +12155,8 @@ mod tests {
             RoutingPlan::single(RoutingDecision::new(delivery_lane, delivery_dataspace,)),
         );
     }
+    #[path = "router_account_refusal_tests.rs"]
+    mod account_refusal_tests;
     include!("router_transfer_batch_tests.rs");
     include!("router_route_resolution_tests.rs"); // Preserve stable route-resolution test paths.
     #[test]
@@ -13298,6 +13412,127 @@ mod tests {
             .expect("noncanonical matcher must leave the canonical default route valid");
         assert_eq!(decision.lane_id, LaneId::SINGLE);
     }
+    #[test]
+    fn original_dataspace_alias_read_refusal_keeps_routing_retryable() {
+        let (owner, owner_key) = gen_account_in("original_route_owner");
+        let world = world_with_dynamic_dataspace("alpha", &owner);
+        let catalog = DataSpaceCatalog::default();
+        let selector = crate::sns::selector_for_dataspace_alias("alpha").unwrap();
+        let key = crate::sns::record_storage_key(&selector);
+        let original = world.smart_contract_state.view().get(&key).unwrap().clone();
+        let target = crate::sns::dataspace_id_for_sns_alias("alpha").unwrap();
+        let route =
+            || dataspace_alias_target_with_world("alpha", Some(&catalog), &world.view(), Some(0));
+        assert_eq!(route().unwrap(), Some(target));
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || route().unwrap_err(),
+        );
+        assert_eq!(
+            refused.as_label(),
+            "routing_deferred",
+            "an unfinished original SNS read became a permanent route error: {refused:?}"
+        );
+        assert_eq!(world.smart_contract_state.view().get(&key), Some(&original));
+        assert_eq!(route().unwrap(), Some(target));
+
+        let tx = sample_transaction(
+            &owner,
+            owner_key.private_key(),
+            vec![Register::domain(Domain::new(DomainId::try_new("bank", "alpha").unwrap())).into()],
+        );
+        let lanes = iroha_data_model::sumeragi_lanes::SumeragiLaneState::default();
+        let view = world.view();
+        let inputs = crate::sumeragi::lanes::routing::RoutingInputs {
+            root_scope: Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+            policy: None,
+            lanes: &lanes,
+            dataspaces: &catalog,
+            world: &view,
+            ledger_time_ms: 0,
+        };
+        let completed = inputs.execution_route(&tx, 2).unwrap();
+        let original = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || inputs.execution_route(&tx, 2).unwrap_err(),
+        );
+        assert_eq!(
+            original.reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert_eq!(inputs.execution_route(&tx, 2).unwrap(), completed);
+    }
+    #[test]
+    fn original_physical_policy_read_refusal_never_enters_captured_row() {
+        use crate::execution_attempt::ExecutionAttemptError;
+        use crate::state::network_policy_routes::CapturedNetworkPolicyRoute;
+        let (owner, signer) = gen_account_in("original_physical_route_owner");
+        let mut world = world_with_dynamic_dataspace("alpha", &owner);
+        let (id, account) = Account::new(owner.clone()).build(&owner).into_key_value();
+        world.accounts.insert(id, account);
+        let selector = crate::sns::selector_for_dataspace_alias("alpha").unwrap();
+        let key = crate::sns::record_storage_key(&selector);
+        let original = world.smart_contract_state.view().get(&key).unwrap().clone();
+        let state = crate::state::State::new_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let tx = sample_transaction(
+            &owner,
+            signer.private_key(),
+            vec![Register::domain(Domain::new(DomainId::try_new("bank", "alpha").unwrap())).into()],
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            nonzero!(2_u64),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let resolve = || {
+            crate::queue::policy_route::PhysicalExecutionPolicyRoute::resolve(
+                &block.nexus,
+                &block.world,
+                &tx,
+                1,
+                0,
+            )
+        };
+        assert!(
+            matches!(resolve(), Err(ExecutionAttemptError::Rejected(_))),
+            "dynamic SNS scope has no admitted physical lane"
+        );
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || resolve().unwrap_err(),
+        );
+        assert!(
+            matches!(refused, ExecutionAttemptError::Deferred(ref reason) if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        let overlay = block.transaction();
+        assert!(
+            CapturedNetworkPolicyRoute::for_component(&tx, &overlay, RoutingDecision::default())
+                .is_ok()
+        );
+        let captured = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || CapturedNetworkPolicyRoute::for_component(&tx, &overlay, RoutingDecision::default()),
+        );
+        assert_eq!(
+            captured.err().unwrap().reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert_eq!(
+            overlay.world.smart_contract_state().get(&key),
+            Some(&original)
+        );
+        assert!(
+            CapturedNetworkPolicyRoute::for_component(&tx, &overlay, RoutingDecision::default())
+                .is_ok()
+        );
+    }
+
     #[test]
     fn matches_account_alias_scope_rule() {
         let (uae_id, uae_keypair) = gen_account_in("uae");
@@ -16189,20 +16424,26 @@ mod tests {
         let world = crate::state::World::default();
         {
             let view = world.view();
-            assert!(rule_matches_with_world(
-                &router.policy.rules[0],
-                &tx,
-                &router.dataspace_catalog,
-                &view,
-                Some(0),
-            ));
-            assert!(rule_matches_with_world(
-                &router.policy.rules[1],
-                &tx,
-                &router.dataspace_catalog,
-                &view,
-                Some(0),
-            ));
+            assert!(
+                rule_matches_with_world(
+                    &router.policy.rules[0],
+                    &tx,
+                    &router.dataspace_catalog,
+                    &view,
+                    Some(0),
+                )
+                .expect("completed fixture account routing")
+            );
+            assert!(
+                rule_matches_with_world(
+                    &router.policy.rules[1],
+                    &tx,
+                    &router.dataspace_catalog,
+                    &view,
+                    Some(0),
+                )
+                .expect("completed fixture account routing")
+            );
         }
         let expected = expected_fx_plan(
             source_lane,

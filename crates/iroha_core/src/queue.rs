@@ -41,8 +41,6 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 #[cfg(test)]
-use indexmap::IndexSet;
-#[cfg(test)]
 use iroha_config::parameters::actual::LaneConfig as LaneGeometry;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
@@ -65,6 +63,7 @@ use iroha_data_model::{
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
         InstructionBox,
+        error::Mismatch,
         kagemusha_v1::{
             KagemushaOperationKindV1, KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1,
             RedeemKagemushaV1, TopUpKagemushaV1,
@@ -77,8 +76,8 @@ use iroha_data_model::{
         },
     },
     transaction::{
-        Executable, ExecutableBatchItem, SignedTransaction, TransactionEntrypoint,
-        signed::TransactionPayload,
+        Executable, ExecutableBatchItem, SignedTransaction, TransactionDomain,
+        TransactionEntrypoint, signed::TransactionPayload,
     },
 };
 use iroha_logger::{trace, warn};
@@ -93,12 +92,8 @@ use iroha_torii_shared::status::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 #[cfg(test)]
-use norito::codec::Encode;
-#[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-#[cfg(test)]
-pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, TransactionRoutingView, evaluate_policy_plan_with_catalog,
@@ -111,8 +106,6 @@ pub use router::{
 pub(crate) use router::{
     matchers_match_with_world, native_execution_target, native_instruction_execution_target,
 };
-#[cfg(test)]
-use std::sync::Barrier;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
@@ -1386,12 +1379,16 @@ impl BackpressureHandle {
 #[derive(Error, Clone, Debug, displaydoc::Display)]
 #[allow(variant_size_differences)]
 pub enum Error {
+    /// Local admission did not complete: {0}
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// Queue is full
     Full,
     /// Queue latency budget is saturated
     LatencySaturated,
     /// Transaction expired
     Expired,
+    /// Signed transaction domain does not match the committed admission State: {0}
+    TransactionDomainMismatch(Mismatch<TransactionDomain>),
     /// Transaction is already applied
     InBlockchain,
     /// User reached maximum number of transactions in the queue
@@ -1472,6 +1469,17 @@ pub enum Error {
         /// Exact local invariant failure.
         reason: String,
     },
+}
+
+impl From<RoutingResolveError> for Error {
+    fn from(error: RoutingResolveError) -> Self {
+        match error {
+            RoutingResolveError::Deferred(reason) => Self::Deferred(reason),
+            error => Self::UnresolvedRoute {
+                reason: error.to_string(),
+            },
+        }
+    }
 }
 
 /// Require a single resolved route supported by the current consensus executor.
@@ -1730,9 +1738,7 @@ impl Queue {
                 .resolve_precomputed_routing_plan_with_view(&tx, &view, plan)
                 .map_err(|error| Failure {
                     tx: tx.clone().into(),
-                    err: Error::UnresolvedRoute {
-                        reason: error.to_string(),
-                    },
+                    err: error.into(),
                 })?;
             self.admit_in_view(tx, plan, &view, None)?;
             accepted += 1;
@@ -3096,7 +3102,15 @@ impl Queue {
             .saturating_add(self.effective_tx_time_to_live(tx));
         Self::duration_to_millis(deadline)
     }
-    fn map_nexus_fee_admission_error(err: NexusFeeAdmissionError) -> Error {
+    fn map_nexus_fee_admission_error(
+        err: crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+    ) -> Error {
+        let err = match err {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                return Error::Deferred(reason);
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(err) => err,
+        };
         match err {
             NexusFeeAdmissionError::Rejected { code, reason } => {
                 Error::NexusFeeAdmissionRejected { code, reason }
@@ -3620,7 +3634,10 @@ impl Queue {
                             }
                             continue;
                         }
-                        Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
+                        Err(
+                            RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                            | RoutingResolveError::Deferred(_),
+                        ) => {
                             if let Err(requeue_hash) = self.tx_gossip.push(hash) {
                                 warn!(
                                     tx = %requeue_hash,
@@ -3752,8 +3769,11 @@ impl Queue {
             .read()
             .try_route_plan_with_view(tx.as_accepted(), view)
             .and_then(|plan| resolve_routing_plan_for_queue_admission(plan, nexus, height))
-            .map_err(|error| RoutingResolveError::OrdinaryRouteUnavailable {
-                reason: error.to_string(),
+            .map_err(|error| match error {
+                RoutingResolveError::Deferred(_) => error,
+                error => RoutingResolveError::OrdinaryRouteUnavailable {
+                    reason: error.to_string(),
+                },
             })?;
         validate_current_admission_route(&fresh).map_err(|error| {
             RoutingResolveError::OrdinaryRouteUnavailable {
@@ -3851,7 +3871,11 @@ impl Queue {
                 Err(error) => Err(error),
             };
             if let Err(error) = result.as_ref()
-                && !matches!(error, RoutingResolveError::OrdinaryRouteUnavailable { .. })
+                && !matches!(
+                    error,
+                    RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                        | RoutingResolveError::Deferred(_)
+                )
             {
                 self.mark_accepted_work_validation_fault(hash, "queued_route_lookup", error, None);
             }
@@ -3898,6 +3922,10 @@ impl Queue {
     }
     /// Whether the exact input remains locally pending at this applied State.
     pub fn contains_pending_hash(&self, hash: EntrypointHash, state: &State) -> bool {
+        #[cfg(test)]
+        if let Some(reached) = self.pending_hash_state_view_handoff.lock().take() {
+            let _ = reached.try_send(());
+        }
         let view = state.view();
         let _guard = self.push_remove_lock.lock();
         self.txs
@@ -3976,9 +4004,7 @@ impl Queue {
             .and_then(|plan| Self::resolve_view_routing_plan(plan, state_view))
             .map_err(|error| Failure {
                 tx: tx.clone().into(),
-                err: Error::UnresolvedRoute {
-                    reason: error.to_string(),
-                },
+                err: error.into(),
             })?;
         self.admit_in_view(tx, plan, state_view, gossip_payload)
     }
@@ -4014,9 +4040,7 @@ impl Queue {
         }
         .map_err(|error| Failure {
             tx: tx.clone().into(),
-            err: Error::UnresolvedRoute {
-                reason: error.to_string(),
-            },
+            err: error.into(),
         })?;
         self.admit_in_view(tx, plan, &view, gossip_payload)
     }
@@ -4027,6 +4051,22 @@ impl Queue {
         view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        // Preacceptance belongs to the original signed security domain. It cannot
+        // authorize another State's queue, fee reservations, indexes or gossip.
+        let actual = match tx.entrypoint() {
+            TransactionEntrypoint::External(signed) => *signed.domain(),
+            TransactionEntrypoint::SealedCommitment(commitment) => {
+                TransactionDomain::Network(commitment.payload().network_id)
+            }
+            TransactionEntrypoint::SealedReveal(reveal) => *reveal.signed_transaction().domain(),
+        };
+        let expected = TransactionDomain::Network(*view.network_id());
+        if actual != expected && !cfg!(all(test, sumeragi_core_mutation = "HC22")) {
+            return Err(Failure {
+                tx: Box::new(tx),
+                err: Error::TransactionDomainMismatch(Mismatch { expected, actual }),
+            });
+        }
         let checked = tx.into_checked(view).map_err(|(tx, _)| Failure {
             tx: tx.into(),
             err: Error::InBlockchain,
@@ -5544,7 +5584,10 @@ impl Queue {
                     }
                     self.routing_plans.insert(hash, plan);
                 }
-                Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {}
+                Err(
+                    RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                    | RoutingResolveError::Deferred(_),
+                ) => {}
                 Err(error) => {
                     fault.get_or_insert((hash, error));
                 }
@@ -5846,7 +5889,6 @@ pub mod tests {
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness},
     };
     use iroha_data_model::{
-        IntoKeyValue,
         account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
@@ -7046,9 +7088,9 @@ pub mod tests {
             queue
                 .routing_plans
                 .get(&tx_hash)
-                .expect("immutable routing plan")
+                .expect("refreshed Ordinary routing plan")
                 .coordinator_route(),
-            RoutingDecision::default()
+            RoutingDecision::new(lane_id, dataspace_id)
         );
         let admitted = queue
             .txs
@@ -7078,7 +7120,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn autoscale_scale_out_preserves_pending_default_route() {
+    fn autoscale_scale_out_refreshes_pending_ordinary_application_route() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -7155,6 +7197,15 @@ pub mod tests {
         // This synthetic future-lane fixture has an explicit canonical runtime owner.
         state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 2);
+        let expected = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+        let original = queue
+            .txs
+            .get(&tx_hash)
+            .unwrap()
+            .as_accepted()
+            .entrypoint_bytes()
+            .to_vec();
+        let original_owner = Arc::clone(queue.txs.get(&tx_hash).unwrap().value());
         let committed_nexus = state.nexus_snapshot();
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
@@ -7163,9 +7214,9 @@ pub mod tests {
             queue
                 .routing_plans
                 .get(&tx_hash)
-                .expect("immutable plan")
+                .expect("refreshed Ordinary plan")
                 .coordinator_route(),
-            RoutingDecision::default()
+            expected
         );
         let admitted_plan = queue
             .routing_plans
@@ -7174,16 +7225,24 @@ pub mod tests {
             .clone();
         assert_eq!(
             admitted_plan.coordinator_route(),
-            RoutingDecision::default(),
-            "autoscale scale-out must preserve the exact admitted proposal routing plan"
+            expected,
+            "autoscale scale-out must refresh the Ordinary application admission hint"
         );
         assert_eq!(
             queue
                 .routing_plan_hint(&tx_hash)
                 .map(|plan| plan.coordinator_route()),
-            Some(RoutingDecision::default()),
-            "the queue-owned plan store must preserve the exact admitted plan"
+            Some(expected),
+            "the queue-owned plan store must follow current application policy"
         );
+        let retained = queue.txs.get(&tx_hash).unwrap();
+        assert!(Arc::ptr_eq(retained.value(), &original_owner));
+        assert_eq!(
+            retained.as_accepted().entrypoint_bytes().as_slice(),
+            original.as_slice()
+        );
+        assert_eq!(queue.active_len(), 1);
+        drop(retained);
         assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
@@ -9585,6 +9644,7 @@ pub mod tests {
         assert!(!queue.pressure_snapshot().saturated_by_bytes);
     }
     include!("queue/current_admission_tests.rs");
+    include!("queue/domain_admission_tests.rs");
     #[test]
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
@@ -9646,11 +9706,36 @@ pub mod tests {
             }
             world.commit();
         }
-        // The original signed genesis derives the real roster and height-one subject.
-        let chain =
+        // Genesis creates the real bridge roster; its initial non-rotation height
+        // has no attestation subject. Commit actual signed work at the original
+        // roster's heartbeat to obtain a certified rotation subject.
+        let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(world, 0)).expect("signed SCCP genesis");
+        assert!(subjects::statement_digest_of(&chain.state().view(), 1).is_none());
+        let heartbeat = {
+            let view = chain.state().view();
+            let (_, original_roster) =
+                roster::current(view.world()).expect("original genesis roster");
+            original_roster
+                .valid_from_ms
+                .checked_add(
+                    view.world()
+                        .sccp_parameters()
+                        .as_ref()
+                        .unwrap()
+                        .roster_max_age_ms,
+                )
+                .expect("original heartbeat time fits u64")
+        };
+        let work = chain.sign(
+            &ALICE_KEYPAIR,
+            [Log::new(Level::INFO, "certified SCCP heartbeat".into()).into()],
+            heartbeat,
+        );
+        assert_eq!(chain.commit_at(heartbeat, vec![work]), vec![true]);
+        let subject_height = chain.height();
         let state = chain.state();
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(heartbeat));
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let accepted = |keypair: &KeyPair, instructions: Vec<InstructionBox>| {
             let transaction = TransactionBuilder::new_with_time_source(
@@ -9686,11 +9771,11 @@ pub mod tests {
                     .expect("original bridge key is a roster member"),
             )
             .expect("four-member index fits u8");
-            let digest = subjects::statement_digest_of(&view, 1)
-                .expect("original committed genesis statement digest");
+            let digest = subjects::statement_digest_of(&view, subject_height)
+                .expect("original committed rotation statement digest");
             let instruction = SubmitSccpAttestationsV1 {
                 entries: vec![SccpAttestationSignatureV1 {
-                    height: 1,
+                    height: subject_height,
                     signer_index,
                     signature: key.sign_digest(&digest).expect("sign committed statement"),
                 }],
@@ -10488,4 +10573,53 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn original_fee_admission_refusal_preserves_queue_retry_owner() {
+    let budget = iroha_allocation::AllocationBudget::new(8);
+    let occupied = budget.try_reserve_bytes(8).unwrap();
+    let original = budget.try_reserve_bytes(1).unwrap_err();
+    let error = Queue::map_nexus_fee_admission_error(
+        crate::execution_attempt::ExecutionAttemptError::Deferred(original.clone().into()),
+    );
+    let Error::Deferred(owner) = error else {
+        panic!("local fee refusal became a completed queue rejection");
+    };
+    assert_eq!(owner.allocation_refusal(), Some(&original));
+    let deterministic = Queue::map_nexus_fee_admission_error(
+        NexusFeeAdmissionError::Rejected {
+            code: FeeRejectionCode::AuthorityPayerInsufficient,
+            reason: "actual insufficient balance".into(),
+        }
+        .into(),
+    );
+    assert!(matches!(
+        deterministic,
+        Error::NexusFeeAdmissionRejected {
+            code: FeeRejectionCode::AuthorityPayerInsufficient,
+            ..
+        }
+    ));
+    drop(occupied);
+}
+
+#[cfg(test)]
+#[test]
+fn original_routing_refusal_preserves_queue_retry_owner_and_completed_errors() {
+    let budget = iroha_allocation::AllocationBudget::new(8);
+    let occupied = budget.try_reserve_bytes(8).unwrap();
+    let original = budget.try_reserve_bytes(1).unwrap_err();
+    let error = Error::from(RoutingResolveError::Deferred(original.clone().into()));
+    let Error::Deferred(owner) = error else {
+        panic!("unfinished routing became a completed queue rejection");
+    };
+    assert_eq!(owner.allocation_refusal(), Some(&original));
+    assert!(matches!(
+        Error::from(RoutingResolveError::StaleRoutingPlan),
+        Error::UnresolvedRoute { .. }
+    ));
+    drop(occupied);
+    assert!(budget.try_reserve_bytes(1).is_ok());
 }

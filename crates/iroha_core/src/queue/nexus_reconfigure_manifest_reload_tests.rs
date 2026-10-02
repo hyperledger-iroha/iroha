@@ -78,24 +78,28 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
     let (canonical_validator, _) = gen_account_in("wonderland");
     let (stale_validator, _) = gen_account_in("wonderland");
     let registry = |validator: AccountId| {
-        let lane = LaneConfig::default();
-        Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
-            lane.id,
-            LaneManifestStatus {
-                lane: lane.id,
-                alias: lane.alias,
-                dataspace: lane.dataspace_id,
-                visibility: lane.visibility,
-                storage: lane.storage,
-                governance: lane.governance,
-                manifest_path: Some(PathBuf::from("/tmp/state-authority.manifest.json")),
-                governance_rules: Some(GovernanceRules {
-                    validators: vec![validator],
-                    ..GovernanceRules::default()
-                }),
-                privacy_commitments: Vec::new(),
-            },
-        )])))
+        use iroha_data_model::nexus::{NativeLaneManifestV1, NativeLaneValidatorBindingV1};
+        let directory = tempdir().expect("original manifest source directory");
+        let descriptor = NativeLaneManifestV1 {
+            lane: Some("default".to_owned()),
+            version: Some(1),
+            validators: Some(vec![NativeLaneValidatorBindingV1 {
+                validator: Some(validator.to_string()),
+                peer_id: Some(PeerId::from(validator.expect_single_signatory().clone()).to_string()),
+                ..NativeLaneValidatorBindingV1::default()
+            }]),
+            ..NativeLaneManifestV1::default()
+        };
+        fs::write(directory.path().join("default.manifest.json"), norito::json::to_vec(&descriptor).unwrap()).unwrap();
+        let frozen = Arc::new(LaneManifestRegistry::from_config(
+            &LaneCatalog::default(), &GovernanceCatalog::default(),
+            &LaneRegistry { manifest_directory: Some(directory.path().to_path_buf()), ..LaneRegistry::default() },
+        ));
+        assert_eq!(frozen.lane_rules(LaneId::SINGLE).unwrap().validators, vec![validator]);
+        // Publication consumes the materialized source; deleted files cannot
+        // become a second authority during either State/Queue reconfiguration.
+        drop(directory);
+        frozen
     };
     // Exercise both State entry points: a fresh empty Queue and a stale Queue
     // must adopt installed authority; stale Queue policy must never resurrect

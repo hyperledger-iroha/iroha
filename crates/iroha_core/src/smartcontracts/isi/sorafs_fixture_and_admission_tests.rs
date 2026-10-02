@@ -457,7 +457,7 @@ fn sorafs_component_fee_source_requires_a_retained_finite_producer() {
         .expect("the same exact hash is admitted only with its finite retained producer");
     assert!(stx.world.pin_manifests.get(&default_digest()).is_some());
     assert!(
-        crate::executor::root_scope::execution_root_scope(&stx).is_err(),
+        crate::executor::root_scope::execution_root_scope(&mut stx).is_err(),
         "component E custody must not create immutable ordinary execution authority"
     );
 }

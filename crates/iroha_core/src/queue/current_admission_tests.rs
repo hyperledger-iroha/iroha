@@ -158,10 +158,10 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
 
 #[test]
 fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
-    let busy_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+    let busy_route = RoutingDecision::default();
     let mut nexus = test_nexus_for_routes(&[
-        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         (busy_route.lane_id, busy_route.dataspace_id),
+        (LaneId::new(1), DataSpaceId::new(7)),
     ]);
     nexus.routing_policy.default_lane = busy_route.lane_id;
     nexus.routing_policy.default_dataspace = busy_route.dataspace_id;
@@ -215,9 +215,21 @@ fn current_payload_selects_full_block_gas_call_with_idle_catalog_route() {
     queue
         .push_with_lane_with_state_and_routing_plan(accepted, &state, plan.clone())
         .unwrap();
-    // Selection neither divides the input's gas budget nor transfers pending ownership.
+    // The physical application fixture alone grants no native root route.
+    assert!(crate::sumeragi::payload::select(&state, &queue, max_bytes, 0).expect("completed routing read").is_empty());
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
+    assert_eq!(crate::sumeragi::lanes::routing::committed_root_scope(&state.world_view()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global));
+    // Explicit component root metadata permits selection; it does not authenticate
+    // genesis execution or grant finality. The actual gas and input owners stay intact.
     for _ in 0..2 {
-        let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes, 0);
+        let selected = crate::sumeragi::payload::select(&state, &queue, max_bytes, 0).expect("completed routing read");
         assert_eq!(
             selected.len(),
             1,
@@ -289,7 +301,7 @@ fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack(
     let assert_retained = || {
         assert_eq!((queue.active_len(), queue.queued_len()), (2, 2));
         for _ in 0..2 {
-            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0);
+            let selected = crate::sumeragi::payload::select(&state, &queue, 1024 * 1024, 0).expect("completed routing read");
             assert_eq!(
                 selected
                     .iter()

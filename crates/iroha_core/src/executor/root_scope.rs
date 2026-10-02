@@ -7,12 +7,15 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
-use crate::{state::StateTransaction, sumeragi::lanes::routing::committed_root_scope};
+use crate::{
+    state::{RootScopeDecodeRefusal, StateStorageAdmissionError, StateTransaction},
+    sumeragi::lanes::routing::read_committed_root_scope,
+};
 
 /// Read execution authority from the original genesis capability or immutable committed metadata.
 /// A header-shaped bootstrap overlay has no authority on its own.
 pub(crate) fn execution_root_scope(
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
 ) -> Result<SumeragiRootScope, ValidationFail> {
     if let Some(genesis) = state.genesis_execution_scope.as_ref() {
         return genesis
@@ -24,13 +27,43 @@ pub(crate) fn execution_root_scope(
             "genesis instruction execution requires its authenticated source capability",
         ));
     }
-    committed_root_scope(&state.world)
-        .ok_or_else(|| denied("instruction execution requires immutable root scope"))
+    match read_committed_root_scope(&state.world) {
+        Ok(Some(scope)) => Ok(scope),
+        Ok(None) => Err(denied(
+            "instruction execution requires immutable root scope",
+        )),
+        Err(error) => {
+            let refusal = match error {
+                norito::json::Error::DecodeResourceLimit => RootScopeDecodeRefusal::Budget,
+                norito::json::Error::AllocationFailed => RootScopeDecodeRefusal::Allocator,
+                // Intrinsic malformed/depth errors are not a local retry policy.
+                _ => {
+                    return Err(denied(
+                        "instruction execution requires immutable root scope",
+                    ));
+                }
+            };
+            if cfg!(all(test, sumeragi_core_mutation = "HC27")) {
+                return Err(ValidationFail::InternalError(
+                    "local execution-root read did not complete".into(),
+                ));
+            }
+            state.arm_local_storage_refusal(StateStorageAdmissionError::RootScopeDecode(refusal));
+            Err(state.defer_execution(match refusal {
+                RootScopeDecodeRefusal::Budget => {
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                }
+                RootScopeDecodeRefusal::Allocator => {
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                }
+            }))
+        }
+    }
 }
 
 /// Bind an unbound code hash to the actual source's already-captured execution dataspace.
 pub(crate) fn captured_artifact_id(
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
     code_hash: iroha_crypto::Hash,
 ) -> Result<iroha_data_model::smart_contract::ContractArtifactId, ValidationFail> {
     Ok(iroha_data_model::smart_contract::ContractArtifactId::new(
@@ -41,7 +74,7 @@ pub(crate) fn captured_artifact_id(
 
 /// Exact source-owned native execution dataspace, without an implicit universal default.
 pub(crate) fn captured_dataspace(
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
 ) -> Result<iroha_model_base::topology::DataSpaceId, ValidationFail> {
     let scope = execution_root_scope(state)?;
     let dataspace = state
@@ -61,7 +94,7 @@ pub(crate) fn captured_dataspace(
 /// Private contracts execute through exact on-chain addresses, including atomic batches.
 /// Unbound raw IVM/proved overlays cannot acquire a root-local durable-state namespace.
 pub(crate) fn ensure_executable_scope(
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
     executable: &iroha_data_model::transaction::Executable,
 ) -> Result<(), ValidationFail> {
     if matches!(
@@ -81,7 +114,7 @@ pub(crate) fn ensure_executable_scope(
 
 /// Require an address-bound call to stay in the signed private root, including its native route.
 pub(crate) fn ensure_contract_scope(
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
     address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> Result<(), ValidationFail> {
     let scope = execution_root_scope(state)?;
@@ -101,10 +134,27 @@ pub(crate) fn ensure_contract_scope(
 pub(crate) fn ensure_committed_contract_scope(
     world: &impl crate::state::WorldReadOnly,
     address: &iroha_data_model::smart_contract::ContractAddress,
-) -> Result<(), ValidationFail> {
-    let scope = committed_root_scope(world)
-        .ok_or_else(|| denied("contract execution requires immutable root scope"))?;
-    ensure_address_scope(scope, address)
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let scope = match read_committed_root_scope(world) {
+        Ok(Some(scope)) => scope,
+        Err(error) if !cfg!(all(test, sumeragi_core_mutation = "HC30")) => {
+            let reason = match error {
+                norito::json::Error::DecodeResourceLimit => {
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                }
+                norito::json::Error::AllocationFailed => {
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                }
+                _ => return Err(denied("contract execution requires immutable root scope").into()),
+            };
+            return Err(ExecutionAttemptError::Deferred(reason.into()));
+        }
+        Ok(None) | Err(_) => {
+            return Err(denied("contract execution requires immutable root scope").into());
+        }
+    };
+    ensure_address_scope(scope, address).map_err(Into::into)
 }
 
 /// Require registry reads to belong to the immutable root's exact dataspace.
@@ -112,15 +162,38 @@ pub(crate) fn ensure_committed_contract_scope(
 pub(crate) fn ensure_committed_artifact_scope(
     world: &impl crate::state::WorldReadOnly,
     artifact: &iroha_data_model::smart_contract::ContractArtifactId,
-) -> Result<(), ValidationFail> {
-    let scope = committed_root_scope(world)
-        .ok_or_else(|| denied("artifact access requires immutable root scope"))?;
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let scope = match read_committed_root_scope(world) {
+        Ok(Some(scope)) => scope,
+        Err(error)
+            if !cfg!(all(
+                test,
+                any(
+                    sumeragi_core_mutation = "HC28",
+                    sumeragi_core_mutation = "HC30"
+                )
+            )) =>
+        {
+            let reason = match error {
+                norito::json::Error::DecodeResourceLimit => {
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+                }
+                norito::json::Error::AllocationFailed => {
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                }
+                _ => return Err(denied("artifact access requires immutable root scope").into()),
+            };
+            return Err(ExecutionAttemptError::Deferred(reason.into()));
+        }
+        Ok(None) | Err(_) => {
+            return Err(denied("artifact access requires immutable root scope").into());
+        }
+    };
     if let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope
         && artifact.dataspace_id != dataspace_id
     {
-        return Err(denied(
-            "private root cannot access a foreign artifact dataspace",
-        ));
+        return Err(denied("private root cannot access a foreign artifact dataspace").into());
     }
     Ok(())
 }
@@ -143,7 +216,7 @@ fn ensure_address_scope(
 /// Static transaction routing is insufficient for generated instructions and deferred multisig.
 pub(crate) fn ensure_instruction_scope(
     instruction: &InstructionBox,
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFail> {
     let scope = execution_root_scope(state)?;
     let SumeragiRootScope::Dataspace { dataspace_id, .. } = scope else {
@@ -161,7 +234,7 @@ pub(crate) fn ensure_instruction_scope(
 
 fn ensure_private_instruction(
     instruction: &InstructionBox,
-    state: &StateTransaction<'_, '_>,
+    state: &mut StateTransaction<'_, '_>,
     dataspace: iroha_model_base::topology::DataSpaceId,
     depth: usize,
 ) -> Result<(), ValidationFail> {
@@ -170,13 +243,25 @@ fn ensure_private_instruction(
             "private instruction nesting exceeds the bounded scope review",
         ));
     }
+    // These are the global coordinator's operations, including at genesis. The
+    // private bootstrap exception below grants local initialization authority only.
+    if !cfg!(all(test, sumeragi_core_mutation = "HC26"))
+        && is_global_amx_coordinator_instruction(instruction)
+    {
+        return Err(denied(
+            "AMX coordinator requires the authenticated global root",
+        ));
+    }
     let target = crate::queue::native_instruction_execution_target(
         &**instruction,
         &state.nexus.dataspace_catalog,
         &state.world,
         state.block_unix_timestamp_ms(),
     )
-    .map_err(|_| denied("private instruction has no exact native dataspace target"))?;
+    .map_err(|error| match error {
+        crate::queue::RoutingResolveError::Deferred(reason) => state.defer_execution(reason),
+        _ => denied("private instruction has no exact native dataspace target"),
+    })?;
     let bootstrap = state.genesis_execution_scope.is_some();
     let parameter = instruction.as_any().is::<SetParameter>();
     if target.dataspace.is_some_and(|target| target != dataspace)
@@ -225,6 +310,17 @@ fn ensure_private_instruction(
     Err(denied(
         "instruction has no reviewed private-root scope owner",
     ))
+}
+
+fn is_global_amx_coordinator_instruction(instruction: &InstructionBox) -> bool {
+    use iroha_data_model::isi::sumeragi_amx::{
+        BeginAmxV1, RegisterAmxDataspaceV1, RelayAmxHandoffV1, RelayAmxPreparedV1,
+    };
+    let instruction = instruction.as_any();
+    instruction.is::<RegisterAmxDataspaceV1>()
+        || instruction.is::<BeginAmxV1>()
+        || instruction.is::<RelayAmxPreparedV1>()
+        || instruction.is::<RelayAmxHandoffV1>()
 }
 
 fn is_reviewed_root_local_instruction(instruction: &InstructionBox) -> bool {

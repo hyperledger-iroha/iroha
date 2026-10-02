@@ -33,6 +33,7 @@ pub(super) struct MainTerminalLinkPlanV1 {
 
 impl MainTerminalLinkPlanV1 {
     /// Conservative public stack/heap charge retained during all MAIN device phases.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + 64
@@ -282,11 +283,15 @@ impl MainTerminalLinkPlanV1 {
         point: F,
         alphas: &[E],
     ) -> Result<E, ZkX509StarkErrorV1> {
+        if !point.is_canonical() {
+            return Err(ZkX509StarkErrorV1::ConstraintOpening);
+        }
         self.evaluate_with_v1(E::from_base(point), alphas, |column| {
             groups
                 .get(column.group)
                 .and_then(|group| group.aux_current.get(column.column))
                 .copied()
+                .filter(|value| value.is_canonical())
                 .map(E::from_base)
                 .ok_or(ZkX509StarkErrorV1::ConstraintOpening)
         })
@@ -451,6 +456,9 @@ impl MainTerminalLinkPlanV1 {
                     || replay[0].len() > difference.len()
                 {
                     return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                if replay[0].iter().any(|value| !value.is_canonical()) {
+                    return Err(ZkX509StarkErrorV1::NonCanonicalField);
                 }
                 for (target, value) in difference.iter_mut().zip(replay[0].iter()) {
                     *target = if subtract {
@@ -658,23 +666,32 @@ mod tests {
         );
         assert_eq!(calls.get(), 0);
         let mut malformed = alphas;
-        malformed[191] = E::from_base(F(u64::MAX));
+        malformed[191] =
+            E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
         assert!(
             plan.evaluate_with_v1(E::from_base(F(7)), &malformed, |_| Ok(E::ONE))
                 .is_err()
         );
         assert!(
-            plan.evaluate_with_v1(E::from_base(F(u64::MAX)), &alphas, |_| Ok(E::ONE))
-                .is_err()
+            plan.evaluate_with_v1(
+                E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]),
+                &alphas,
+                |_| Ok(E::ONE)
+            )
+            .is_err()
         );
         assert!(
-            plan.evaluate_with_v1(E::from_base(F(7)), &alphas, |_| Ok(E::from_base(F(
-                u64::MAX
-            ))))
+            plan.evaluate_with_v1(E::from_base(F(7)), &alphas, |_| Ok(
+                E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO])
+            ))
             .is_err()
         );
         assert!(plan.evaluate_v1(&[], E::from_base(F(7)), &alphas).is_err());
         assert!(plan.evaluate_base_v1(&[], F(7), &alphas).is_err());
+        assert_eq!(
+            plan.evaluate_base_v1(&[], F(u64::MAX), &alphas),
+            Err(ZkX509StarkErrorV1::ConstraintOpening),
+        );
         for point in plan
             .links
             .iter()

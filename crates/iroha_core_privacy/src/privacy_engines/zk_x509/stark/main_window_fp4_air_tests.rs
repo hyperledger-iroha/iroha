@@ -109,7 +109,8 @@ fn window_fp4_binds_private_cross_and_scalar_columns_and_preserves_degree_four()
                     .unwrap(),
                 original
             );
-            changed[2][column] = E::from_base(F(u64::MAX));
+            changed[2][column] =
+                E::from_raw_coefficients_for_testing([F(u64::MAX), F::ZERO, F::ZERO, F::ZERO]);
             assert!(
                 evaluator
                     .evaluate_residues_v1(opening(&changed), &changed[4], challenges)

@@ -129,3 +129,108 @@ fn snapshot_mode_retains_its_string_payload() {
     }
     assert_invalid_string::<Mode>("unknown");
 }
+
+fn assert_manual_context_error<T>(expected: &T)
+where
+    T: SerializePayload + for<'de> DeserializePayload<'de> + Display,
+{
+    let _layout = DecodeFlagsGuard::enter(0);
+    let bytes = explicit_field_payload(expected);
+    let archived = norito::core::archived_from_slice::<u8>(&bytes).unwrap();
+    let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        T::try_deserialize(archived.archived().cast())
+    }));
+    assert!(
+        matches!(missing, Ok(Err(norito::Error::MissingPayloadContext))),
+        "a fallible config decoder must return missing context instead of panicking"
+    );
+    let decoded = {
+        let _payload = norito::core::PayloadCtxGuard::enter(archived.bytes());
+        T::try_deserialize(archived.archived().cast())
+            .unwrap_or_else(|error| panic!("original payload retry: {error}"))
+    };
+    assert_eq!(decoded.to_string(), expected.to_string());
+    assert_eq!(explicit_field_payload(&decoded), bytes);
+}
+
+fn assert_manual_string_refusal<T>(expected: &T)
+where
+    T: SerializePayload + for<'de> DeserializePayload<'de> + Display,
+{
+    let _layout = DecodeFlagsGuard::enter(0);
+    let bytes = explicit_field_payload(expected);
+    let archived = norito::core::archived_from_slice::<u8>(&bytes).unwrap();
+    let _payload = norito::core::PayloadCtxGuard::enter(archived.bytes());
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let producer = norito::with_decode_limits_scope(limits, || {
+        String::try_deserialize(archived.archived().cast()).unwrap_err()
+    });
+    assert!(matches!(
+        producer,
+        norito::Error::TotalAllocationExceeded { limit: 0, .. }
+    ));
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        norito::with_decode_limits_scope(limits, || T::try_deserialize(archived.archived().cast()))
+    }));
+    let Ok(Err(error)) = refused else {
+        panic!("a fallible config decoder must return the original String allocation refusal")
+    };
+    assert_eq!(
+        error.decode_resource_error(),
+        producer.decode_resource_error()
+    );
+    let decoded = T::try_deserialize(archived.archived().cast())
+        .unwrap_or_else(|error| panic!("same-payload retry: {error}"));
+    assert_eq!(decoded.to_string(), expected.to_string());
+    assert_eq!(explicit_field_payload(&decoded), bytes);
+}
+
+#[test]
+fn manual_decode_logger_format_returns_missing_context() {
+    assert_manual_context_error(&Format::Full);
+}
+
+#[test]
+fn manual_decode_logger_format_preserves_original_string_refusal() {
+    assert_manual_string_refusal(&Format::Full);
+}
+
+#[test]
+fn manual_decode_logger_directives_returns_missing_context() {
+    assert_manual_context_error(&"iroha_core=trace,axum=warn".parse::<Directives>().unwrap());
+}
+
+#[test]
+fn manual_decode_logger_directives_preserves_original_string_refusal() {
+    assert_manual_string_refusal(&"iroha_core=trace,axum=warn".parse::<Directives>().unwrap());
+}
+
+#[test]
+fn manual_decode_kura_init_mode_returns_missing_context() {
+    assert_manual_context_error(&InitMode::Strict);
+}
+
+#[test]
+fn manual_decode_kura_init_mode_preserves_original_string_refusal() {
+    assert_manual_string_refusal(&InitMode::Strict);
+}
+
+#[test]
+fn manual_decode_kura_fsync_mode_returns_missing_context() {
+    assert_manual_context_error(&FsyncMode::Batched);
+}
+
+#[test]
+fn manual_decode_kura_fsync_mode_preserves_original_string_refusal() {
+    assert_manual_string_refusal(&FsyncMode::Batched);
+}
+
+#[test]
+fn manual_decode_snapshot_mode_returns_missing_context() {
+    assert_manual_context_error(&Mode::ReadWrite);
+}
+
+#[test]
+fn manual_decode_snapshot_mode_preserves_original_string_refusal() {
+    assert_manual_string_refusal(&Mode::ReadWrite);
+}

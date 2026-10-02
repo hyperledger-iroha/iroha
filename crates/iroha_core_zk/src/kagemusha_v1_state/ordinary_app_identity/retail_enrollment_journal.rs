@@ -143,7 +143,7 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
         if reservation.retained_prepared_owner()?.native_scope != pending.preparation.native_scope {
             return Err(Rejected);
         }
-        let mut journal = PrivateJournal::open_existing(root, FORMAT).map_err(|_| Custody)?;
+        let journal = PrivateJournal::open_existing(root, FORMAT).map_err(|_| Custody)?;
         let mut rows = Vec::new();
         journal
             .scan_complete(|_, raw| {

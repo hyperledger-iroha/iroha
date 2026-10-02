@@ -49,6 +49,26 @@ struct Marker;
 #[norito_schema(name = "example::Envelope")]
 struct Envelope<'a, T: ?Sized, const N: usize, const C: char, const B: bool>(PhantomData<&'a T>);
 
+#[derive(NoritoSchema)]
+#[norito_schema(name = "example::ProjectedBorrowed", frame = "wire::ProjectedBorrowed")]
+struct ProjectedBorrowed<'a>(PhantomData<&'a str>);
+
+struct ManualProjection;
+
+impl NoritoSchema for ManualProjection {
+    fn nominal_name() -> String {
+        String::from("example::ManualProjection")
+    }
+
+    fn static_nominal_name() -> Option<&'static str> {
+        Some("example::ManualProjection")
+    }
+
+    fn frame_name() -> String {
+        String::from("wire::ManualProjection")
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -411,5 +431,51 @@ fn composed_nominal_identities_keep_type_const_and_erased_lifetime_arguments() {
     ] {
         assert!(matches!(identity, Cow::Owned(_)));
         assert_eq!(identity, expected);
+    }
+}
+
+#[test]
+fn static_frame_names_borrow_only_exact_complete_root_identities() {
+    assert_eq!(Marker::static_frame_name(), Some("example::Marker"));
+    assert_eq!(
+        original::Leaf::static_frame_name(),
+        Some("example.status.leaf")
+    );
+    assert_eq!(
+        relocated::Leaf::static_frame_name(),
+        Some("example.status.leaf")
+    );
+    assert_eq!(
+        ProjectedBorrowed::static_frame_name(),
+        Some("wire::ProjectedBorrowed")
+    );
+    assert_eq!(ProjectedBorrowed::static_nominal_name(), None);
+    assert_eq!(
+        ProjectedBorrowed::nominal_name(),
+        "example::ProjectedBorrowed<'_>"
+    );
+    assert_eq!(
+        <Envelope<'_, Marker, 7, 'λ', true>>::static_frame_name(),
+        None
+    );
+    // A manual nominal declaration grants no authority to replace its root projection.
+    assert_eq!(ManualProjection::static_frame_name(), None);
+    assert_eq!(
+        frame_hash::<ManualProjection>(),
+        norito::core::schema_hash_for_name("wire::ManualProjection")
+    );
+    for (name, hash) in [
+        (Marker::frame_name(), frame_hash::<Marker>()),
+        (original::Leaf::frame_name(), frame_hash::<original::Leaf>()),
+        (
+            ProjectedBorrowed::frame_name(),
+            frame_hash::<ProjectedBorrowed>(),
+        ),
+        (
+            <Envelope<'_, Marker, 7, 'λ', true>>::frame_name(),
+            frame_hash::<Envelope<'_, Marker, 7, 'λ', true>>(),
+        ),
+    ] {
+        assert_eq!(hash, norito::core::schema_hash_for_name(&name));
     }
 }

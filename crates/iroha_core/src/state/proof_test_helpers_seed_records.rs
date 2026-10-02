@@ -519,7 +519,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
         events::pipeline::{BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox},
         transaction::{Executable, IvmBytecode},
     };
-    pipeline_trigger_transaction!(mut state, block1, state_block, stx);
+    pipeline_trigger_transaction!(state, block1, state_block, stx);
     let trigger_id: TriggerId = "missing_bytecode_pipeline".parse().unwrap();
     let mut raw = Vec::new();
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -603,7 +603,7 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
     let state = authenticate_trigger_fixture(state);
 
     let_row! { block2 = trigger_component_block(&state, 2) };
-    let (mut state_block, _recording, outputs, _) =
+    let (state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
@@ -687,7 +687,7 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
     let state = authenticate_trigger_fixture(state);
 
     let_row! { block2 = trigger_component_block(&state, 2) };
-    let (mut state_block, _recording, outputs, _) =
+    let (state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
@@ -764,7 +764,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     let state = authenticate_trigger_fixture(state);
 
     let_row! { block2 = trigger_component_block(&state, 2) };
-    let (mut state_block, recording, outputs, fragments_before) =
+    let (state_block, recording, outputs, fragments_before) =
         crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
@@ -800,7 +800,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     drop(recording);
 
     let_row! { block3 = trigger_component_block(&state, 3) };
-    let (mut state_block, _recording, outputs, _) =
+    let (state_block, _recording, outputs, _) =
         crate::state::run_empty_network_owner_fixture(&state, block3.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {

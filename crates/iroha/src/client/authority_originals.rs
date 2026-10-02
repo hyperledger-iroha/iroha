@@ -21,7 +21,7 @@ impl Client {
     ///
     /// This constructs the canonical request itself using the configured genesis-derived
     /// network, exact typed selector and fresh nonzero entropy. Torii separately requires
-    /// that holder's current native CanReadAllLedgerData grant. The listener token is a
+    /// that holder's current native `CanReadAllLedgerData` grant. The listener token is a
     /// distinct configured transport credential; an FI application bearer is rejected.
     /// The canonical POST signs the entire original body plus exact URI/timestamp/nonce.
     /// Its body-derived challenge is echoed once in the finality header and native statement.
@@ -111,14 +111,13 @@ impl Client {
             .headers()
             .get_all("X-Iroha-Finality-Challenge")
             .iter();
-        if let Some(value) = response_challenges.next() {
-            if response_challenges.next().is_some()
-                || value.to_str().ok() != Some(derived_hex.as_str())
-            {
-                return Err(eyre!(
-                    "native authority originals response finality header changed exact derived challenge"
-                ));
-            }
+        if let Some(value) = response_challenges.next()
+            && (response_challenges.next().is_some()
+                || value.to_str().ok() != Some(derived_hex.as_str()))
+        {
+            return Err(eyre!(
+                "native authority originals response finality header changed exact derived challenge"
+            ));
         }
         let media_type = Self::response_content_type(&response)
             .split(';')

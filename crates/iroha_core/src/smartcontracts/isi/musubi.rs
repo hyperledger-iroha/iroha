@@ -72,7 +72,8 @@ impl Execute for RegisterMusubiNamespaceBindingV1 {
                         authority,
                         state_transaction,
                         rejection_reason,
-                    )?;
+                    )
+                    .map_err(|error| namespace_attempt_error(error, state_transaction))?;
                     return Ok(());
                 }
                 let policy = state_transaction.world.musubi_registry_policy.get().clone();
@@ -93,7 +94,8 @@ impl Execute for RegisterMusubiNamespaceBindingV1 {
                     authority,
                     state_transaction,
                     rejection_reason,
-                )?;
+                )
+                .map_err(|error| namespace_attempt_error(error, state_transaction))?;
                 let event = MusubiEvent::NamespaceBound(self.binding.clone());
                 state_transaction
                     .world
@@ -795,7 +797,8 @@ impl Execute for PublishMusubiReleaseV1 {
                                 authority,
                                 state_transaction,
                                 rejection_reason,
-                            )?;
+                            )
+                            .map_err(|error| namespace_attempt_error(error, state_transaction))?;
                             let package = MusubiPackageRecordV1 {
                                 package: release_id.package.clone(),
                                 claimed_namespace: self.namespace,
@@ -2380,7 +2383,7 @@ fn execute_governance_mutation<'block, 'state>(
     let result = execute(state_transaction, &mut rejection_reason);
     #[cfg(feature = "telemetry")]
     {
-        if result.is_err() {
+        if result.is_err() && state_transaction.execution_deferral().is_none() {
             state_transaction
                 .telemetry
                 .record_musubi_governance_rejection(action, rejection_reason);
@@ -2499,26 +2502,40 @@ fn ensure_archive_manager(
     }
     Ok(())
 }
+fn namespace_attempt_error(
+    error: crate::execution_attempt::ExecutionAttemptError<Error>,
+    state: &mut StateTransaction<'_, '_>,
+) -> Error {
+    match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            let _ = state.defer_execution(reason);
+            invariant("local Musubi namespace resolution did not complete")
+        }
+    }
+}
 fn ensure_namespace_registration_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let (owner, generation) = namespace_owner_and_generation(binding, state_transaction)?;
     binding
         .validate_authority_generation(generation)
         .map_err(|error| invalid_parameter(error.reason()))?;
     ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
+        .map_err(Into::into)
 }
 fn ensure_namespace_current_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let (owner, _) = namespace_owner_and_generation(binding, state_transaction)?;
     ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
+        .map_err(Into::into)
 }
 fn ensure_resolved_namespace_owner(
     binding: &MusubiNamespaceBindingV1,
@@ -2539,7 +2556,7 @@ fn ensure_resolved_namespace_owner(
 fn namespace_owner_and_generation(
     binding: &MusubiNamespaceBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(AccountId, u64), Error> {
+) -> Result<(AccountId, u64), crate::execution_attempt::ExecutionAttemptError<Error>> {
     validate_namespace_home_dataspace(
         binding,
         state_transaction.world(),
@@ -2567,18 +2584,18 @@ fn namespace_owner_and_generation(
             Ok((owner, generation))
         }
         MusubiPackageScopeV1::DataspaceRoot => {
-            crate::sns::active_dataspace_owner_and_generation_by_alias(
+            Ok(crate::sns::active_dataspace_owner_and_generation_by_alias(
                 state_transaction.world(),
                 binding.namespace.dataspace_segment(),
                 state_transaction.block_unix_timestamp_ms(),
             )
-            .map_err(|error| invariant(error.to_string()))?
+            .map_err(|error| error.into_attempt_error(|error| invariant(error.to_string())))?
             .ok_or_else(|| {
                 invariant(format!(
                     "Musubi namespace dataspace '{}' has no active SNS owner",
                     binding.namespace.dataspace_segment()
                 ))
-            })
+            })?)
         }
     }
 }
@@ -2587,24 +2604,22 @@ fn validate_namespace_home_dataspace(
     world: &impl WorldReadOnly,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     current_time_ms: u64,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let alias = binding.namespace.dataspace_segment();
-    let resolved = crate::sns::resolve_active_dataspace_id_by_alias(
-        world,
-        catalog,
-        alias,
-        current_time_ms,
-    )
-    .map_err(|error| {
+    let resolved =
+        crate::sns::resolve_active_dataspace_id_by_alias(world, catalog, alias, current_time_ms)
+            .map_err(|error| {
+                error.into_attempt_error(|error| {
         invariant(format!(
             "Musubi namespace dataspace alias '{alias}' cannot be resolved canonically: {error}"
         ))
-    })?;
+    })
+            })?;
     if resolved != binding.home_dataspace {
         return Err(invariant(format!(
             "Musubi namespace dataspace alias '{alias}' resolves to {resolved}, not declared home dataspace {}",
             binding.home_dataspace
-        )));
+        )).into());
     }
     Ok(())
 }
@@ -2614,7 +2629,7 @@ fn ensure_namespace_claim_authority(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let (owner, generation) = namespace_owner_and_generation(binding, state_transaction)?;
     validate_namespace_claim_authority_classified(
         binding,
@@ -2625,6 +2640,7 @@ fn ensure_namespace_claim_authority(
         execution_height(state_transaction),
         Some(rejection_reason),
     )
+    .map_err(Into::into)
 }
 #[cfg(test)]
 fn validate_namespace_claim_authority(

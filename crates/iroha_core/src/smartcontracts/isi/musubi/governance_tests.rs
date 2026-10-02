@@ -1090,6 +1090,104 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
         if message.contains("pin manifests cannot be reused")));
 }
 #[test]
+fn namespace_binding_sns_refusal_retains_original_owner_before_replay_and_retries() {
+    let state = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(1).expect("nonzero block height"),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let owner = account(1);
+    let selector =
+        crate::sns::selector_for_dataspace_alias("sora").expect("dataspace alias selector");
+    let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+        .expect("account address");
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
+    metadata.insert(
+        crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+            .parse()
+            .expect("dataspace id metadata key"),
+        iroha_primitives::json::Json::new(7_u64),
+    );
+    let record = iroha_data_model::sns::NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+        0,
+        0,
+        10,
+        20,
+        30,
+        metadata,
+    );
+    transaction
+        .world
+        .smart_contract_state_mut_for_testing()
+        .insert(crate::sns::record_storage_key(&selector), record.encode());
+    let binding = MusubiNamespaceBindingV1 {
+        namespace: "sora".parse().expect("namespace"),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
+        scope: MusubiPackageScopeV1::DataspaceRoot,
+        generation: 1,
+    };
+    transaction
+        .world
+        .musubi_namespace_bindings
+        .insert(binding.namespace.clone(), binding.clone());
+    let mut closed_policy = MusubiRegistryPolicyV1::default();
+    closed_policy.revision = 2;
+    closed_policy.mode = MusubiRegistryAdmissionModeV1::Closed;
+    *transaction.world.musubi_registry_policy.get_mut() = closed_policy;
+    let key = crate::sns::record_storage_key(&selector);
+    let original = transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .unwrap()
+        .clone();
+    transaction.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    let mut retry_block = state.block(iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(2).unwrap(),
+        None,
+        None,
+        1,
+        0,
+    ));
+    let command = RegisterMusubiNamespaceBindingV1::new(binding.clone(), u64::MAX);
+    {
+        let mut tx = retry_block.transaction();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let original_attempt = command.clone();
+        let result =
+            norito::with_decode_limits_scope(limits, || original_attempt.execute(&owner, &mut tx));
+        assert!(result.is_err());
+        assert!(tx.execution_deferral().is_some());
+        assert_eq!(tx.world.smart_contract_state.get(&key), Some(&original));
+        assert_eq!(
+            tx.world.musubi_namespace_bindings.get(&binding.namespace),
+            Some(&binding)
+        );
+        assert!(tx.world.take_external_events().is_empty());
+    }
+    let mut retry = retry_block.transaction();
+    command.clone().execute(&owner, &mut retry).unwrap();
+    assert!(retry.execution_deferral().is_none());
+    assert!(retry.world.take_external_events().is_empty());
+    retry.world.smart_contract_state.insert(key, vec![0xff]);
+    assert!(command.execute(&owner, &mut retry).is_err());
+    assert!(retry.execution_deferral().is_none());
+    assert!(retry.world.take_external_events().is_empty());
+}
+#[test]
 fn namespace_binding_replay_requires_current_owner_authorization() {
     let state = State::new_for_testing(
         World::new(),

@@ -1515,8 +1515,8 @@ use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
 #[cfg(feature = "app_api")]
 use crate::tests_runtime_handlers::{
     bind_account_alias_for_test, bind_contract_alias_for_test, bind_dynamic_account_alias_for_test,
-    configure_multiple_dataspace_routes_for_test, configure_private_ingress_routes_for_test,
-    world_with_account_bound_to_dataspace, world_with_target_and_caller_bound_to_dataspace,
+    configure_private_ingress_routes_for_test, world_with_account_bound_to_dataspace,
+    world_with_target_and_caller_bound_to_dataspace,
 };
 use crate::{
     limits,
@@ -2251,7 +2251,7 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
-fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) -> SharedAppState {
+fn onboarding_alias_test_world(authority: &AccountId, domain_owner: &AccountId) -> World {
     let mut accounts = vec![Account::new(authority.clone()).build(authority)];
     if domain_owner != authority {
         accounts.push(Account::new(domain_owner.clone()).build(domain_owner));
@@ -2278,6 +2278,10 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
     let mut world = World::with_assets(domains, accounts, [fee_definition], [fee_asset], []);
     install_account_alias_policy_for_test(&mut world, authority);
     install_onboarding_parent_leases_for_test(&mut world, domain_owner);
+    world
+}
+fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) -> SharedAppState {
+    let world = onboarding_alias_test_world(authority, domain_owner);
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world,
         recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),

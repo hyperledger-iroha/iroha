@@ -208,7 +208,7 @@ pub(crate) mod kagemusha_top_up_admission_tests {
                 &accepted,
                 &state_transaction,
                 route,
-            );
+            ).expect("completed original physical policy capture");
         let error = StateBlock::validate_stateful_admission(
             transaction,
             &mut state_transaction,

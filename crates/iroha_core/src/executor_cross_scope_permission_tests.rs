@@ -174,7 +174,7 @@ mod cross_scope_permission_tests {
         // Holding a malformed selector never lets its holder copy it.
         for selector in noncanonical_selectors {
             assert!(matches!(
-                allowed(selector),
+                allowed(selector).map_err(crate::execution_attempt::expect_completed_rejection),
                 Err(ValidationFail::NotPermitted(_))
             ));
         }

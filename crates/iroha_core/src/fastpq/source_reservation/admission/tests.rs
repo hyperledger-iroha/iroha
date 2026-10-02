@@ -387,3 +387,82 @@ fn candidate_quantity_capture_can_only_inspect_retained_invocations() {
             .is_err()
     );
 }
+
+#[test]
+fn sns_time_owner_is_exact_and_rollback_preserves_original_capacity() {
+    let mut quota = prepared(0);
+    let hash = Hash::new(b"original SNS renewal");
+    let foreign = Hash::new(b"another renewal");
+    {
+        let mut before_time = quota.transaction().unwrap();
+        assert!(before_time.retain_sns_purpose(hash).is_err());
+        assert_eq!(
+            before_time.pending_time_consumed_usage().unwrap(),
+            Some(SourceUsage::ZERO)
+        );
+    }
+    quota.begin_sns_time().unwrap();
+    assert!(quota.begin_sns_time().is_err());
+    {
+        let mut renewal = quota.transaction().unwrap();
+        assert_eq!(renewal.pending_time_consumed_usage().unwrap(), None);
+        renewal.retain_sns_purpose(hash).unwrap();
+        renewal
+            .require_existing_quantity_capture_entry(hash, true)
+            .unwrap();
+        assert!(
+            renewal
+                .require_existing_quantity_capture_entry(foreign, true)
+                .is_err()
+        );
+        assert!(renewal.retain_sns_purpose(foreign).is_err());
+        // Dropping the same physical transaction cancels the unapplied purpose.
+    }
+    assert_eq!(quota.mandatory_usage(), SourceUsage::ZERO);
+    {
+        let ordinary = quota.transaction().unwrap();
+        assert!(
+            ordinary
+                .require_existing_quantity_capture_entry(hash, true)
+                .is_err()
+        );
+    }
+    let mut retry = quota.transaction().unwrap();
+    retry.retain_sns_purpose(hash).unwrap();
+    retry
+        .require_existing_quantity_capture_entry(hash, true)
+        .unwrap();
+    retry.commit();
+    assert_eq!(quota.mandatory_usage().executed_entries, 1);
+    assert_eq!(quota.ordinary_usage(), SourceUsage::ZERO);
+}
+
+#[test]
+fn sns_pending_time_observes_consumed_governance_entries_without_refunding_them() {
+    let mut quota = prepared(0);
+    let mut release = quota.transaction().unwrap();
+    release.authorize_governance_purposes();
+    release
+        .replace_entry(Hash::new(b"released governance custody"), true, [])
+        .unwrap();
+    release.commit();
+    let consumed = quota.mandatory_usage();
+    assert_eq!(consumed.executed_entries, 1);
+    {
+        let pending = quota.transaction().unwrap();
+        assert_eq!(
+            pending.pending_time_consumed_usage().unwrap(),
+            Some(consumed)
+        );
+    }
+    quota.begin_sns_time().unwrap();
+    assert_eq!(
+        quota
+            .transaction()
+            .unwrap()
+            .pending_time_consumed_usage()
+            .unwrap(),
+        None
+    );
+    assert_eq!(quota.mandatory_usage(), consumed);
+}

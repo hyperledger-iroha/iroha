@@ -174,91 +174,131 @@ fn resolved_account_alias_from_numeric(
     let canonical_name = literal.parse::<AccountAliasName>().ok()?;
     Some(ResolvedAccountAliasV1::new(canonical_name, alias.dataspace))
 }
+/// Construct only the exact typed token while retaining any local JSON refusal.
+fn permission_target<T: iroha_executor_data_model::permission::Permission>(
+    permission: T,
+) -> Result<Permission, crate::sns::SnsError> {
+    let value = norito::json::to_value(&permission).map_err(|error| match error {
+        norito::json::Error::DecodeResourceLimit => crate::sns::SnsError::Deferred(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+        ),
+        norito::json::Error::AllocationFailed => crate::sns::SnsError::Deferred(
+            ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+        ),
+        error => crate::sns::SnsError::Internal(format!(
+            "exact alias permission cannot be encoded: {error}"
+        )),
+    })?;
+    let payload = iroha_primitives::json::Json::from_norito_value_ref(&value).map_err(|error| {
+        match crate::execution_attempt::norito_decode_attempt_error(error, |error| {
+            crate::sns::SnsError::Internal(format!(
+                "exact alias permission cannot be retained: {error}"
+            ))
+        }) {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                crate::sns::SnsError::Deferred(reason)
+            }
+        }
+    })?;
+    Ok(Permission::new(T::name(), payload))
+}
 fn authority_has_exact_alias_permission<T>(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &ResolvedAccountAliasV1,
     permission: impl FnOnce(AccountAliasPermissionScope) -> T,
-) -> bool
+) -> Result<bool, crate::sns::SnsError>
 where
-    T: Into<Permission>,
+    T: iroha_executor_data_model::permission::Permission,
 {
-    authority_has_permission(
-        world,
-        authority,
-        &permission(AccountAliasPermissionScope::Alias(alias.clone())).into(),
-    )
+    let target = permission_target(permission(AccountAliasPermissionScope::Alias(
+        alias.clone(),
+    )))?;
+    Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when the authority holds the exact permission required to resolve `alias`.
 ///
 /// Domain-qualified aliases require their exact domain permission. Dataspace permission applies
 /// only to domainless aliases, so a domain grant neither widens to sibling domains nor to the
 /// enclosing dataspace.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &AccountAlias,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     if let Some(resolved) = resolved_account_alias_from_numeric(world, alias)
         && authority_has_exact_alias_permission(world, authority, &resolved, |scope| {
             CanResolveAccountAlias { scope }
-        })
+        })?
     {
-        return true;
+        return Ok(true);
     }
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(Some(domain_id)) => {
-            let domain_permission: Permission = CanResolveAccountAlias {
+            let domain_permission = permission_target(CanResolveAccountAlias {
                 scope: AccountAliasPermissionScope::Domain(domain_id),
-            }
-            .into();
-            authority_has_permission(world, authority, &domain_permission)
+            })?;
+            Ok(authority_has_permission(
+                world,
+                authority,
+                &domain_permission,
+            ))
         }
         Ok(None) => {
-            let dataspace_permission: Permission = CanResolveAccountAlias {
+            let dataspace_permission = permission_target(CanResolveAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
-            }
-            .into();
-            authority_has_permission(world, authority, &dataspace_permission)
+            })?;
+            Ok(authority_has_permission(
+                world,
+                authority,
+                &dataspace_permission,
+            ))
         }
-        Err(_) => false,
+        Err(_) => Ok(false),
     }
 }
 /// Return `true` when the authority may resolve an exact resolved account alias.
 ///
 /// Exact alias permission is checked before applicable domain or dataspace scope.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_resolve_resolved_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &ResolvedAccountAliasV1,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     if authority_has_exact_alias_permission(world, authority, alias, |scope| {
         CanResolveAccountAlias { scope }
-    }) {
-        return true;
+    })? {
+        return Ok(true);
     }
     let scope = match alias.canonical_name.domain_id() {
         Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
         None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
     };
-    authority_has_permission(
-        world,
-        authority,
-        &Permission::from(CanResolveAccountAlias { scope }),
-    )
+    let target = permission_target(CanResolveAccountAlias { scope })?;
+    Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when the authority holds the exact permissions required to mutate `alias`.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_manage_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &AccountAlias,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     if let Some(resolved) = resolved_account_alias_from_numeric(world, alias)
         && authority_has_exact_alias_permission(world, authority, &resolved, |scope| {
             CanManageAccountAlias { scope }
-        })
+        })?
     {
-        return true;
+        return Ok(true);
     }
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(domain_id) => authority_can_manage_account_alias_scope(
@@ -267,31 +307,31 @@ pub fn authority_can_manage_account_alias(
             alias.dataspace,
             domain_id.as_ref(),
         ),
-        Err(_) => false,
+        Err(_) => Ok(false),
     }
 }
 /// Return `true` when the authority may mutate an exact resolved account alias.
 ///
 /// Exact alias permission is checked before applicable domain or dataspace scope.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_manage_resolved_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &ResolvedAccountAliasV1,
-) -> bool {
+) -> Result<bool, crate::sns::SnsError> {
     if authority_has_exact_alias_permission(world, authority, alias, |scope| {
         CanManageAccountAlias { scope }
-    }) {
-        return true;
+    })? {
+        return Ok(true);
     }
     let scope = match alias.canonical_name.domain_id() {
         Some(domain_id) => AccountAliasPermissionScope::Domain(domain_id),
         None => AccountAliasPermissionScope::Dataspace(alias.dataspace_id),
     };
-    authority_has_permission(
-        world,
-        authority,
-        &Permission::from(CanManageAccountAlias { scope }),
-    )
+    let target = permission_target(CanManageAccountAlias { scope })?;
+    Ok(authority_has_permission(world, authority, &target))
 }
 /// Return `true` when `authority` holds account-alias management permission for an explicit
 /// dataspace/domain scope.
@@ -301,29 +341,33 @@ pub fn authority_can_manage_resolved_account_alias(
 ///
 /// This variant remains usable while a dynamic dataspace alias is inactive, allowing a stale
 /// binding to be cleared without trusting caller-supplied namespace metadata.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_manage_account_alias_scope(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     dataspace: DataSpaceId,
     domain: Option<&DomainId>,
-) -> bool {
-    let permission: Permission = match domain {
-        Some(domain_id) => CanManageAccountAlias {
+) -> Result<bool, crate::sns::SnsError> {
+    let permission = match domain {
+        Some(domain_id) => permission_target(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
-        }
-        .into(),
-        None => CanManageAccountAlias {
+        })?,
+        None => permission_target(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(dataspace),
-        }
-        .into(),
+        })?,
     };
-    authority_has_permission(world, authority, &permission)
+    Ok(authority_has_permission(world, authority, &permission))
 }
 /// Return `true` when `authority` holds the asset-definition-alias capability for `alias`.
 ///
 /// An exact alias-and-definition grant is checked first. A qualified alias otherwise requires its
 /// exact domain scope, while a dataspace-root alias requires only its exact dataspace scope.
 /// Account-alias permissions are intentionally not consulted.
+///
+/// # Errors
+/// Returns the original local construction refusal or a malformed exact token error.
 pub fn authority_can_manage_asset_definition_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -331,29 +375,26 @@ pub fn authority_can_manage_asset_definition_alias(
     alias: &iroha_data_model::asset::AssetDefinitionAlias,
     dataspace: DataSpaceId,
     domain: Option<&DomainId>,
-) -> bool {
-    let exact: Permission = CanManageAssetDefinitionAlias {
+) -> Result<bool, crate::sns::SnsError> {
+    let exact = permission_target(CanManageAssetDefinitionAlias {
         scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
             alias.clone(),
             dataspace,
             asset_definition_id.clone(),
         )),
-    }
-    .into();
+    })?;
     if authority_has_permission(world, authority, &exact) {
-        return true;
+        return Ok(true);
     }
-    let scoped: Permission = match domain {
-        Some(domain) => CanManageAssetDefinitionAlias {
+    let scoped = match domain {
+        Some(domain) => permission_target(CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
-        }
-        .into(),
-        None => CanManageAssetDefinitionAlias {
+        })?,
+        None => permission_target(CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace),
-        }
-        .into(),
+        })?,
     };
-    authority_has_permission(world, authority, &scoped)
+    Ok(authority_has_permission(world, authority, &scoped))
 }
 /// Return whether an exact asset-definition-alias permission targets a live binding.
 ///
@@ -614,6 +655,198 @@ mod tests {
     }
     fn alias_storage() -> AliasStorage {
         AliasStorage::new(alias_attester(0xA2))
+    }
+    #[test]
+    fn original_alias_permission_construction_never_panics_under_local_json_refusal() {
+        use iroha_data_model::{Registrable, account::Account};
+        let owner = owner();
+        let domain = DomainId::try_new("retail", "universal").unwrap();
+        let alias = ResolvedAccountAliasV1::new(
+            "alice@retail.universal".parse().unwrap(),
+            DataSpaceId::UNIVERSAL,
+        );
+        let permission = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain),
+        });
+        let mut world =
+            crate::state::World::with([], [Account::new(owner.clone()).build(&owner)], []);
+        world.account_permissions.insert(
+            owner.clone(),
+            std::collections::BTreeSet::from([permission.clone()]),
+        );
+        let view = world.view();
+        assert!(authority_can_manage_resolved_account_alias(&view, &owner, &alias).unwrap());
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || authority_can_manage_resolved_account_alias(&view, &owner, &alias),
+            )
+        }));
+        assert!(
+            result.is_ok(),
+            "original permission lookup may defer but cannot panic on local JSON refusal"
+        );
+        assert!(matches!(
+            result.unwrap(),
+            Err(crate::sns::SnsError::Deferred(_))
+        ));
+        assert!(
+            view.account_permissions()
+                .get(&owner)
+                .unwrap()
+                .contains(&permission)
+        );
+        assert!(authority_can_manage_resolved_account_alias(&view, &owner, &alias).unwrap());
+    }
+    #[test]
+    fn all_alias_permission_readers_preserve_refusal_direct_role_and_revocation() {
+        use iroha_data_model::{
+            Registrable,
+            account::Account,
+            role::{Role, RoleId},
+        };
+        use std::collections::BTreeSet;
+        let owner = owner();
+        let domain = DomainId::try_new("retail", "universal").unwrap();
+        let alias = ResolvedAccountAliasV1::new(
+            "alice@retail.universal".parse().unwrap(),
+            DataSpaceId::UNIVERSAL,
+        );
+        let numeric = AccountAlias::new(
+            "alice".parse().unwrap(),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "retail".parse().unwrap(),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "usd".parse().unwrap(),
+        );
+        let asset_alias = "usd#retail.universal".parse().unwrap();
+        let permissions: BTreeSet<Permission> = [
+            CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain.clone()),
+            }
+            .into(),
+            CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain.clone()),
+            }
+            .into(),
+            CanManageAssetDefinitionAlias {
+                scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
+            }
+            .into(),
+        ]
+        .into();
+        let mut world =
+            crate::state::World::with([], [Account::new(owner.clone()).build(&owner)], []);
+        let check = |world: &crate::state::WorldView<'_>, index| match index {
+            0 => authority_can_resolve_account_alias(world, &owner, &numeric),
+            1 => authority_can_resolve_resolved_account_alias(world, &owner, &alias),
+            2 => authority_can_manage_account_alias(world, &owner, &numeric),
+            3 => authority_can_manage_resolved_account_alias(world, &owner, &alias),
+            4 => authority_can_manage_account_alias_scope(
+                world,
+                &owner,
+                DataSpaceId::UNIVERSAL,
+                Some(&domain),
+            ),
+            5 => authority_can_manage_asset_definition_alias(
+                world,
+                &owner,
+                &asset,
+                &asset_alias,
+                DataSpaceId::UNIVERSAL,
+                Some(&domain),
+            ),
+            _ => unreachable!(),
+        };
+        world
+            .account_permissions
+            .insert(owner.clone(), permissions.clone());
+        for index in 0..6 {
+            let view = world.view();
+            assert!(check(&view, index).unwrap(), "direct reader {index}");
+            let refused = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || check(&view, index),
+            );
+            assert!(
+                matches!(refused, Err(crate::sns::SnsError::Deferred(_))),
+                "reader {index}: {refused:?}"
+            );
+            assert_eq!(
+                view.account_permissions().get(&owner).unwrap(),
+                &permissions
+            );
+            assert!(check(&view, index).unwrap(), "same original grant retries");
+        }
+        world
+            .account_permissions
+            .insert(owner.clone(), BTreeSet::new());
+        let role_id: RoleId = "alias_permission_role".parse().unwrap();
+        let mut role = Role::new(role_id.clone(), owner.clone());
+        for permission in &permissions {
+            role = role.add_permission(permission.clone());
+        }
+        world.roles.insert(role_id.clone(), role.build(&owner));
+        let membership = crate::role::RoleIdWithOwner::new(owner.clone(), role_id);
+        world.account_roles.insert(membership.clone(), ());
+        for index in 0..6 {
+            assert!(
+                check(&world.view(), index).unwrap(),
+                "assigned role {index}"
+            );
+        }
+        {
+            let mut roles = world.account_roles.block();
+            assert_eq!(roles.remove(membership), Some(()));
+            roles.commit();
+        }
+        for index in 0..6 {
+            assert!(
+                !check(&world.view(), index).unwrap(),
+                "revoked role {index}"
+            );
+        }
+        let malformed = permissions
+            .iter()
+            .map(|permission| {
+                Permission::new(
+                    permission.name().to_owned(),
+                    iroha_primitives::json::Json::from_raw_json("null".to_owned()).unwrap(),
+                )
+            })
+            .collect();
+        world.account_permissions.insert(owner.clone(), malformed);
+        for index in 0..6 {
+            assert!(
+                !check(&world.view(), index).unwrap(),
+                "malformed grant {index}"
+            );
+        }
+        let wrong_domain = DomainId::try_new("other", "universal").unwrap();
+        world.account_permissions.insert(
+            owner.clone(),
+            BTreeSet::from([
+                CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(wrong_domain.clone()),
+                }
+                .into(),
+                CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(wrong_domain.clone()),
+                }
+                .into(),
+                CanManageAssetDefinitionAlias {
+                    scope: AssetDefinitionAliasPermissionScope::Domain(wrong_domain),
+                }
+                .into(),
+            ]),
+        );
+        for index in 0..6 {
+            assert!(!check(&world.view(), index).unwrap(), "wrong scope {index}");
+        }
     }
     #[test]
     fn storage_roundtrip() {

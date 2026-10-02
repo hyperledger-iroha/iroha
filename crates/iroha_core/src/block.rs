@@ -71,8 +71,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
-use iroha_primitives::numeric::Numeric;
-#[cfg(test)]
 use iroha_primitives::numeric::Quantity;
 #[cfg(test)]
 use iroha_primitives::small::SmallVec;
@@ -369,8 +367,6 @@ mod overlay_error_tests {
 }
 const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST;
-#[cfg(test)]
-pub(crate) use self::event::EventProducer;
 pub(crate) use self::event::WithEvents;
 pub use self::{chained::Chained, commit::CommittedBlock, new::NewBlock, valid::ValidBlock};
 use crate::da::{
@@ -403,7 +399,6 @@ use crate::{
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     pipeline::{overlay::TxOverlay, smallset::sort_dedup_u32_in_place},
     state::StateBlock,
-    tx::is_quarantine_transaction,
 };
 use crate::{
     prelude::*,
@@ -420,8 +415,6 @@ type WithCommittedBlockEvents = WithEvents<CommittedBlockEval>;
 struct PreparedBlockTransaction {
     metadata: crate::tx::PreparedTransactionMetadata,
 }
-#[cfg(test)]
-use crate::tx::QUARANTINE_METADATA_KEY;
 #[cfg(test)]
 #[derive(Clone)]
 struct AccessIds {
@@ -598,8 +591,29 @@ pub(crate) fn parse_account_literal_with_world(
     if literal.is_empty() {
         return Ok(None);
     }
-    if let Ok(account_id) = AccountId::parse_encoded(literal) {
-        return Ok(Some(account_id));
+    // Use the typed address boundary so a local allocation refusal cannot become alias absence.
+    use iroha_data_model::account::address::{AccountAddress, AccountAddressError};
+    let prefix = iroha_data_model::account::address::chain_discriminant();
+    if !literal.contains('@') {
+        let parsed =
+            AccountAddress::from_i105_for_discriminant(literal, Some(prefix)).and_then(|address| {
+                if address.to_i105_for_discriminant(prefix)? != literal {
+                    return Err(AccountAddressError::UnsupportedAddressFormat);
+                }
+                address.to_account_id()
+            });
+        match parsed {
+            Ok(account_id) => return Ok(Some(account_id)),
+            Err(AccountAddressError::DecodeResourceLimit) => {
+                if cfg!(all(test, sumeragi_core_mutation = "HC37")) {
+                    return Ok(None);
+                }
+                return Err(crate::sns::SnsError::Deferred(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                ));
+            }
+            Err(_) => {}
+        }
     }
     let Ok(alias) = AccountAlias::from_literal(literal, dataspace_catalog) else {
         return Ok(None);
@@ -638,28 +652,54 @@ pub(crate) fn resolve_network_xor_asset_definition(
     world: &impl WorldReadOnly,
     input: &str,
     now_ms: u64,
-) -> Option<AssetDefinitionId> {
+) -> Result<Option<AssetDefinitionId>, crate::execution_attempt::ExecutionDeferred> {
     if input.trim() != input
         || (input != "xor#universal" && AssetDefinitionId::parse_address_literal(input).is_err())
     {
-        return None;
+        return Ok(None);
     }
-    let asset = parse_asset_definition_literal_with_world(world, input, now_ms)?;
-    let pin = match world.sumeragi_npos_parameters() {
-        Some(params) => params.xor_asset_definition_id,
-        None => {
-            if world.parameters().custom().contains_key(
-                &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
-            ) {
-                return None;
+    let Some(asset) = parse_asset_definition_literal_with_world(world, input, now_ms) else {
+        return Ok(None);
+    };
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+    let parameter_id = SumeragiNposParameters::parameter_id();
+    let pin = match world.parameters().custom().get(&parameter_id) {
+        Some(custom) => {
+            if custom.id() != &parameter_id {
+                return Ok(None);
             }
-            AssetDefinitionId::parse_address_literal(
+            let params =
+                match norito::json::from_str::<SumeragiNposParameters>(custom.payload().get()) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        match crate::execution_attempt::json_decode_attempt_error(error, |_| ()) {
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                                if cfg!(all(test, sumeragi_core_mutation = "HC37")) {
+                                    return Ok(None);
+                                }
+                                return Err(reason);
+                            }
+                            crate::execution_attempt::ExecutionAttemptError::Rejected(()) => {
+                                return Ok(None);
+                            }
+                        }
+                    }
+                };
+            if params.validate().is_err() {
+                return Ok(None);
+            }
+            params.xor_asset_definition_id
+        }
+        None => {
+            let Ok(default) = AssetDefinitionId::parse_address_literal(
                 &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
-            )
-            .ok()?
+            ) else {
+                return Ok(None);
+            };
+            default
         }
     };
-    (asset == pin).then_some(asset)
+    Ok((asset == pin).then_some(asset))
 }
 #[cfg(test)]
 #[test]
@@ -671,8 +711,16 @@ fn network_xor_resolver_requires_exact_committed_identity() {
         iroha_model_base::domain::DomainId::try_new("test", "universal").expect("test domain"),
         "currency".parse().expect("name"),
     );
-    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_some());
-    assert!(resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0).is_none());
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &canonical, 0)
+            .expect("completed pin read")
+            .is_some()
+    );
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0)
+            .expect("completed pin read")
+            .is_none()
+    );
     let mut parameters = world.parameters.block();
     parameters.get_mut().set_parameter(Parameter::Custom(
         SumeragiNposParameters {
@@ -683,12 +731,55 @@ fn network_xor_resolver_requires_exact_committed_identity() {
     ));
     parameters.commit();
     assert_eq!(
-        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0),
+        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0)
+            .expect("completed pin read"),
         Some(other)
     );
-    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_none());
     assert!(
-        resolve_network_xor_asset_definition(&world.view(), &format!(" {canonical}"), 0).is_none()
+        resolve_network_xor_asset_definition(&world.view(), &canonical, 0)
+            .expect("completed pin read")
+            .is_none()
+    );
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &format!(" {canonical}"), 0)
+            .expect("completed pin read")
+            .is_none()
+    );
+}
+#[cfg(test)]
+#[test]
+fn original_canonical_account_refusal_does_not_fall_through_to_alias_absence() {
+    let world = crate::state::World::default();
+    let account = iroha_test_samples::ALICE_ID.clone();
+    let literal = account.to_string();
+    let read = || {
+        parse_account_literal_with_world(
+            &world.view(),
+            world.view().dataspace_catalog(),
+            &literal,
+            0,
+        )
+    };
+    assert_eq!(read().unwrap(), Some(account.clone()));
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+        read,
+    );
+    assert!(
+        matches!(refused, Err(crate::sns::SnsError::Deferred(ref reason))
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+        "{refused:?}"
+    );
+    assert_eq!(read().unwrap(), Some(account));
+    assert_eq!(
+        parse_account_literal_with_world(
+            &world.view(),
+            world.view().dataspace_catalog(),
+            "not-an-account",
+            0
+        )
+        .unwrap(),
+        None
     );
 }
 #[cfg(test)]
@@ -1777,6 +1868,7 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
     fn from(error: crate::sumeragi::lanes::merge::MergeError) -> Self {
         use crate::sumeragi::lanes::merge::MergeError;
         match error {
+            MergeError::RoutingDeferred(reason) => Self::ExecutionDeferred(reason),
             MergeError::Storage(source) => Self::LaneStorage(source),
             MergeError::Pending(reason) => Self::LocalStorageRecoveryRequired { reason },
             MergeError::Invalid(reason) => Self::ExecutionContextInvalid(reason),
@@ -5382,7 +5474,8 @@ pub(crate) mod valid {
             if block.header().is_genesis() {
                 return Ok(());
             }
-            let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state);
+            let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(state)
+                .map_err(BlockValidationError::ExecutionDeferred)?;
             let inputs = routing.inputs(state.world());
             for (index, (entrypoint, context)) in block
                 .external_entrypoints_slice()
@@ -5397,6 +5490,7 @@ pub(crate) mod valid {
                 );
                 let expected = inputs
                     .execution_route(&accepted, block.header().height().get())
+                    .map_err(BlockValidationError::ExecutionDeferred)?
                     .ok_or_else(|| {
                         Self::execution_context_error(
                             "committed native execution route is unavailable",
@@ -6986,7 +7080,7 @@ pub(crate) mod valid {
                 .next()
                 .expect("routing failure fixture has one entrypoint")
                 .hash();
-            let (mut state_block, state_block_recorder) =
+            let (mut state_block, _state_block_recorder) =
                 crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
                     .expect("original writer-first component execution");
             assert!(
@@ -9287,7 +9381,7 @@ pub(crate) mod tests {
                     AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
                 })
                 .collect::<Vec<_>>();
-            let previous = previous_block_at_height(1);
+            let _previous = previous_block_at_height(1);
             let previous = state.view().latest_block().expect("original genesis");
             let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
             let block = BlockBuilder::new_with_time_source(accepted, time_source)
@@ -9368,7 +9462,7 @@ pub(crate) mod tests {
         )
         .with_instructions([instruction])
         .sign(keypair.private_key());
-        let previous = previous_block_at_height(1);
+        let _previous = previous_block_at_height(1);
         let previous = state.view().latest_block().expect("original genesis");
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
@@ -11146,7 +11240,7 @@ seiyaku DynamicTarget {
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let previous = previous_block_at_height(1);
+        let _previous = previous_block_at_height(1);
         let previous = state.view().latest_block().expect("original genesis");
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))
@@ -11193,7 +11287,7 @@ seiyaku DynamicTarget {
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let previous = previous_block_at_height(1);
+        let _previous = previous_block_at_height(1);
         let previous = state.view().latest_block().expect("original genesis");
         let unverified_block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
             .chain(0, Some(&previous))

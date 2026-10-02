@@ -1,11 +1,13 @@
 //! Actual owned, borrowed and nested private instruction boundaries.
 
+mod amx_roles;
+
 use super::*;
 use crate::{
     executor::Executor,
     query::store::LiveQueryStore,
     smartcontracts::Execute as _,
-    state::{State, StateReadOnly as _, World},
+    state::{State, World},
     sumeragi::lanes::routing::test_support,
 };
 use iroha_crypto::{Hash, HashOf};
@@ -79,7 +81,7 @@ fn owned_borrowed_and_native_boxed_paths_reject_private_global_control_before_ef
     );
     assert!(control.execute(&ALICE_ID, &mut tx).is_err());
     assert!(
-        matches!(execution_root_scope(&tx).unwrap(), SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id == ds)
+        matches!(execution_root_scope(&mut tx).unwrap(), SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id == ds)
     );
     let log: InstructionBox = Log::new(iroha_data_model::Level::INFO, "root-local".into()).into();
     Executor::Initial
@@ -105,7 +107,7 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
         transaction_ttl_ms: None,
     };
     let instruction = InstructionBox::from(MultisigInstructionBox::Propose(propose));
-    assert!(ensure_instruction_scope(&instruction, &tx).is_err());
+    assert!(ensure_instruction_scope(&instruction, &mut tx).is_err());
     let no_scope: InstructionBox =
         CustomInstruction::new("unreviewed private-root operation").into();
     let peer_key =
@@ -117,7 +119,7 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
     .into();
     for unreviewed in [no_scope, register_peer] {
         assert!(
-            matches!(ensure_instruction_scope(&unreviewed, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
+            matches!(ensure_instruction_scope(&unreviewed, &mut tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
         );
     }
 }
@@ -134,17 +136,17 @@ fn private_contract_calls_require_exact_scope_and_raw_overlays_remain_closed() {
         (DataSpaceId::UNIVERSAL, false),
     ] {
         let address = ContractAddress::derive(&tx.network_id, &ALICE_ID, 0, target).unwrap();
-        assert_eq!(ensure_contract_scope(&tx, &address).is_ok(), allowed);
+        assert_eq!(ensure_contract_scope(&mut tx, &address).is_ok(), allowed);
         assert_eq!(
             ensure_committed_contract_scope(&tx.world, &address).is_ok(),
             allowed
         );
     }
     let bytecode = IvmBytecode::from_compiled(vec![1]);
-    assert!(ensure_executable_scope(&tx, &Executable::Ivm(bytecode.clone())).is_err());
+    assert!(ensure_executable_scope(&mut tx, &Executable::Ivm(bytecode.clone())).is_err());
     assert!(
         ensure_executable_scope(
-            &tx,
+            &mut tx,
             &Executable::IvmProved(IvmProved {
                 bytecode,
                 overlay: Vec::new().into(),
@@ -156,7 +158,7 @@ fn private_contract_calls_require_exact_scope_and_raw_overlays_remain_closed() {
     );
     tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let address = ContractAddress::derive(&tx.network_id, &ALICE_ID, 0, ds).unwrap();
-    assert!(ensure_contract_scope(&tx, &address).is_err());
+    assert!(ensure_contract_scope(&mut tx, &address).is_err());
 }
 
 #[test]
@@ -171,7 +173,7 @@ fn height_one_without_authenticated_genesis_capability_has_no_instruction_author
         let mut tx = block.transaction();
         let log: InstructionBox =
             Log::new(iroha_data_model::Level::INFO, "forged bootstrap".into()).into();
-        assert!(execution_root_scope(&tx).is_err());
+        assert!(execution_root_scope(&mut tx).is_err());
         assert!(
             Executor::Initial
                 .execute_instruction(&mut tx, &ALICE_ID, log.clone())
@@ -187,15 +189,15 @@ fn artifact_lookup_requires_both_captured_namespaces_and_preserves_full_width() 
     let mut block = state.block(header(2));
     let mut tx = block.transaction();
     let hash = Hash::new(b"artifact");
-    assert!(captured_artifact_id(&tx, hash).is_err());
+    assert!(captured_artifact_id(&mut tx, hash).is_err());
     bind_scope(&mut tx, ds);
-    let artifact = captured_artifact_id(&tx, hash).unwrap();
+    let artifact = captured_artifact_id(&mut tx, hash).unwrap();
     assert_eq!(artifact.dataspace_id, ds);
     assert_eq!(artifact.code_hash, hash);
     tx.world.current_dataspace_id = Some(DataSpaceId::new(17));
-    assert!(captured_artifact_id(&tx, hash).is_err());
+    assert!(captured_artifact_id(&mut tx, hash).is_err());
     bind_scope(&mut tx, DataSpaceId::new(17));
-    assert!(captured_artifact_id(&tx, hash).is_err());
+    assert!(captured_artifact_id(&mut tx, hash).is_err());
 }
 
 #[test]
@@ -275,4 +277,189 @@ fn private_roots_cannot_register_or_anchor_children_in_the_parent_registry() {
             .unwrap_err();
         assert!(error.to_string().contains("global-control"));
     }
+}
+
+#[test]
+fn malformed_root_metadata_is_terminal_and_cannot_acquire_retry_authority() {
+    use iroha_data_model::parameter::{
+        Parameter, custom::CustomParameter, system::consensus_metadata::handshake_meta_id,
+    };
+    for payload in ["null", "{}", "false", "\"global\""] {
+        let (state, ds) = private_state();
+        let mut block = state.block(header(2));
+        let mut tx = block.transaction();
+        bind_scope(&mut tx, ds);
+        tx.world
+            .parameters
+            .set_parameter(Parameter::Custom(CustomParameter::new(
+                handshake_meta_id(),
+                payload.parse::<iroha_primitives::json::Json>().unwrap(),
+            )));
+        assert!(matches!(
+            execution_root_scope(&mut tx),
+            Err(ValidationFail::NotPermitted(reason))
+                if reason == "instruction execution requires immutable root scope"
+        ));
+        assert!(tx.require_storage_admission().is_ok());
+        assert!(tx.execution_deferral().is_none());
+    }
+}
+
+#[test]
+fn readonly_manifest_query_preserves_malformed_and_foreign_rejections() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::smartcontracts::ValidSingularQuery as _;
+    use iroha_data_model::{
+        parameter::{
+            Parameter, custom::CustomParameter, system::consensus_metadata::handshake_meta_id,
+        },
+        query::{error::QueryExecutionFail, smart_contract::FindContractManifestByArtifactId},
+        smart_contract::ContractArtifactId,
+    };
+    let (state, own) = private_state();
+    let mut block = state.block(header(2));
+    let mut tx = block.transaction();
+    bind_scope(&mut tx, own);
+    let hash = Hash::new(b"scope query negative control");
+    let local = FindContractManifestByArtifactId::new(ContractArtifactId::new(own, hash));
+    let foreign = FindContractManifestByArtifactId::new(ContractArtifactId::new(
+        DataSpaceId::UNIVERSAL,
+        hash,
+    ));
+    assert!(matches!(
+        foreign.execute(&tx),
+        Err(ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message)))
+            if message.contains("private root cannot access a foreign artifact dataspace")
+    ));
+    for payload in ["null", "{}", "false", "\"global\""] {
+        tx.world
+            .parameters
+            .set_parameter(Parameter::Custom(CustomParameter::new(
+                handshake_meta_id(),
+                payload.parse::<iroha_primitives::json::Json>().unwrap(),
+            )));
+        assert!(matches!(
+            local.execute(&tx),
+            Err(ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message)))
+                if message.contains("artifact access requires immutable root scope")
+        ));
+        assert!(tx.require_storage_admission().is_ok());
+        assert!(tx.execution_deferral().is_none());
+    }
+}
+
+#[test]
+fn native_global_read_permission_borrows_exact_direct_and_role_grants_under_refusal() {
+    use iroha_data_model::{
+        permission::Permission,
+        role::{Role, RoleId},
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+    let (state, _) = private_state();
+    let mut block = state.block(header(2));
+    let mut tx = block.transaction();
+    let role_id: RoleId = "borrowed_global_reader".parse().unwrap();
+    for through_role in [false, true] {
+        for payload in ["null", "\"null\"", "false", "{}", "{\"null\":null}"] {
+            let permission = Permission::new(
+                "CanReadAllLedgerData".to_owned(),
+                payload.parse::<iroha_primitives::json::Json>().unwrap(),
+            );
+            tx.world
+                .account_permissions
+                .insert(ALICE_ID.clone(), BTreeSet::new());
+            tx.world.roles.insert(
+                role_id.clone(),
+                Role {
+                    id: role_id.clone(),
+                    permissions: if through_role {
+                        BTreeSet::from([permission.clone()])
+                    } else {
+                        BTreeSet::new()
+                    },
+                    permission_epochs: BTreeMap::new(),
+                },
+            );
+            if through_role {
+                tx.world.account_roles.insert(
+                    crate::role::RoleIdWithOwner::new(ALICE_ID.clone(), role_id.clone()),
+                    (),
+                );
+            } else {
+                tx.world
+                    .account_permissions
+                    .insert(ALICE_ID.clone(), BTreeSet::from([permission]));
+            }
+            let allowed = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+                || super::super::authority_has_native_global_read_permission(&tx.world, &ALICE_ID),
+            )
+            .unwrap();
+            assert_eq!(allowed, payload == "null");
+        }
+    }
+}
+
+#[test]
+fn original_private_instruction_routing_refusal_latches_before_scope_verdict() {
+    use crate::state::WorldReadOnly as _;
+    use iroha_data_model::{
+        account::AccountAddress,
+        domain::Domain,
+        isi::Register,
+        sns::{NameControllerV1, NameRecordV1},
+    };
+    use iroha_model_base::metadata::Metadata;
+    use mv::storage::StorageReadOnly as _;
+    use norito::codec::Encode as _;
+
+    let selector = crate::sns::selector_for_dataspace_alias("alpha").unwrap();
+    let address = AccountAddress::from_account_id(&ALICE_ID).unwrap();
+    let record = NameRecordV1::new(
+        selector.clone(),
+        ALICE_ID.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Metadata::default(),
+    );
+    let key = crate::sns::record_storage_key(&selector);
+    let original = record.encode();
+    let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+    world
+        .smart_contract_state_mut_for_testing()
+        .insert(key.clone(), original.clone());
+    let state = State::new_for_testing(
+        world,
+        crate::kura::Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let ds = crate::sns::dataspace_id_for_sns_alias("alpha").unwrap();
+    let instruction: InstructionBox = Register::domain(Domain::new(
+        iroha_model_base::domain::DomainId::try_new("bank", "alpha").unwrap(),
+    ))
+    .into();
+    let mut block = state.block(header(2));
+    {
+        let mut tx = block.transaction();
+        bind_scope(&mut tx, ds);
+        assert!(ensure_private_instruction(&instruction, &mut tx, ds, 0).is_ok());
+        assert!(tx.execution_deferral().is_none());
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
+            || assert!(ensure_private_instruction(&instruction, &mut tx, ds, 0).is_err()),
+        );
+        assert_eq!(
+            tx.execution_deferral().unwrap().reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
+        assert_eq!(tx.world.smart_contract_state().get(&key), Some(&original));
+    }
+    let mut retry = block.transaction();
+    bind_scope(&mut retry, ds);
+    assert!(ensure_private_instruction(&instruction, &mut retry, ds, 0).is_ok());
+    assert!(retry.execution_deferral().is_none());
 }

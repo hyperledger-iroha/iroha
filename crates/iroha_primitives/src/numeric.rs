@@ -142,7 +142,7 @@ impl<'a> DeserializePayload<'a> for NumericSpec {
     }
     fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
-        let scale = <Option<u32> as DeserializePayload>::deserialize(scale_arch);
+        let scale = <Option<u32> as DeserializePayload>::try_deserialize(scale_arch)?;
         Self::try_from_scale(scale)
             .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
     }

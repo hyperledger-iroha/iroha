@@ -349,7 +349,8 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         let policy_route =
             crate::state::network_policy_routes::CapturedNetworkPolicyRoute::for_component(
                 &accepted, &failed, route,
-            );
+            )
+            .expect("completed original physical policy capture");
         assert!(
             StateBlock::execute_accepted_transaction_in_overlay(
                 accepted,

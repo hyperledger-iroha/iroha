@@ -8,6 +8,51 @@ use iroha_data_model::isi::{
 use iroha_data_model::query::error::FindError;
 use std::num::NonZeroU64;
 
+/// Measure the component corpus through the real bounded canonical frame sizer.
+/// Fixed context hashes affect bytes but not lengths; no source authority is emitted.
+fn atomic_fixture_source_usage(
+    movements: &[AtomicSettlementMovement],
+) -> crate::fastpq::FastpqSourceTranscriptUsage {
+    use iroha_data_model::fastpq::{
+        TransferDeltaTranscript, TransferSmtWitness, TransferTranscript,
+    };
+    let entry = Hash::new(b"atomic-fixture-carrier");
+    let transcript = TransferTranscript {
+        batch_hash: entry,
+        authority_digest: Hash::new(b"atomic-fixture-authority-length"),
+        poseidon_preimage_digest: None,
+        deltas: movements
+            .iter()
+            .enumerate()
+            .map(|(index, movement)| TransferDeltaTranscript {
+                from_account: movement.source.account().clone(),
+                to_account: movement.recipient.clone(),
+                asset_definition: movement.source.definition().clone(),
+                amount: movement.quantity.clone(),
+                from_balance_before: Quantity::from(10_u32),
+                from_balance_after: Quantity::from(9_u32),
+                to_balance_before: Quantity::from(u64::try_from(index).unwrap()),
+                to_balance_after: Quantity::from(u64::try_from(index + 1).unwrap()),
+                from_smt_witness: TransferSmtWitness::default(),
+                to_smt_witness: TransferSmtWitness::default(),
+            })
+            .collect(),
+    };
+    crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage(
+        entry,
+        [&transcript],
+        crate::fastpq::FastpqSourceStatementBuildLimits {
+            max_executed_entries: 1,
+            max_transcripts: 1,
+            max_deltas: 255,
+            max_input_transcript_bytes: 1024 * 1024,
+            max_statement_bytes: 1024 * 1024,
+            max_total_statement_bytes: 1024 * 1024,
+        },
+    )
+    .expect("finite original component corpus frame")
+}
+
 fn atomic_state(count: usize) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
     atomic_state_in_scope(count, AssetBalanceScope::Global, AssetBalancePolicy::Global)
 }
@@ -54,15 +99,46 @@ fn atomic_state_in_scope(
         assets,
         [],
     );
-    (
-        State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ),
-        movements,
-        definition,
-    )
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    // The component's 255-payment corpus exceeds the bootstrap's 16-delta
+    // intrinsic limit. Install its explicit finite profile before the carrier
+    // freezes admission; derive exact byte caps from the actual finite corpus
+    // framing while retaining bootstrap transcript and mandatory obligations.
+    if count > 16 {
+        use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
+        let mut parameters = state.world.parameters.block();
+        let output = parameters.get().block().execution_output();
+        let old = parameters.get().block().fastpq_source();
+        let mut intrinsic = old.intrinsic;
+        let usage = atomic_fixture_source_usage(&movements);
+        intrinsic.max_deltas = u32::try_from(usage.deltas).expect("finite payment corpus");
+        intrinsic.max_input_transcript_bytes = intrinsic
+            .max_input_transcript_bytes
+            .max(u64::try_from(usage.input_transcript_bytes).unwrap());
+        intrinsic.max_statement_bytes = intrinsic
+            .max_statement_bytes
+            .max(u64::try_from(usage.max_statement_bytes).unwrap());
+        intrinsic.max_total_statement_bytes = intrinsic
+            .max_total_statement_bytes
+            .max(u64::try_from(usage.total_statement_bytes).unwrap());
+        let profile = FastpqSourcePolicyV1::from_sizing(
+            output,
+            intrinsic,
+            old.mandatory,
+            old.maximum_network_inputs(output)
+                .expect("bootstrap Network plan"),
+        )
+        .expect("finite component profile covers the original Network plan");
+        parameters
+            .get_mut()
+            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+        parameters.commit();
+    }
+    (state, movements, definition)
 }
 fn atomic_instruction(
     stx: &StateTransaction<'_, '_>,
@@ -646,4 +722,61 @@ fn atomic_settlement_final_source_or_destination_failure_preserves_all_prior_mov
         }
         assert_eq!(atomic_observable_state(&stx), before);
     }
+}
+
+#[test]
+fn atomic_settlement_bootstrap_delta_limit_refuses_without_movement_or_receipt() {
+    use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
+    let (state, movements, _) = atomic_state(17);
+    let mut parameters = state.world.parameters.block();
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(
+            FastpqSourcePolicyV1::bootstrap(),
+        )));
+    parameters.commit();
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    admission_validate_atomic(&CARPENTER_ID, &mut stx, &instruction)
+        .expect("complete authority and movement checks precede source admission");
+    let before = atomic_observable_state(&stx);
+    let error = instruction.execute(&CARPENTER_ID, &mut stx).unwrap_err();
+    assert_eq!(
+        error,
+        InstructionExecutionError::InvariantViolation(
+            crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION.into(),
+        ),
+    );
+    assert_eq!(atomic_observable_state(&stx), before);
+}
+
+#[test]
+fn atomic_fixture_profile_covers_the_complete_canonical_255_payment_corpus() {
+    let (state, movements, _) = atomic_state(255);
+    let usage = atomic_fixture_source_usage(&movements);
+    let intrinsic = state
+        .world
+        .view()
+        .parameters()
+        .block()
+        .fastpq_source()
+        .intrinsic;
+    assert_eq!(usage.transcripts, 1);
+    assert_eq!(usage.deltas, 255);
+    assert_eq!(intrinsic.max_deltas, 255);
+    assert!(
+        u64::try_from(usage.input_transcript_bytes).unwrap()
+            <= intrinsic.max_input_transcript_bytes
+    );
+    assert!(u64::try_from(usage.max_statement_bytes).unwrap() <= intrinsic.max_statement_bytes);
+    assert_eq!(usage.max_statement_bytes, usage.total_statement_bytes);
+    assert_eq!(
+        iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap()
+            .intrinsic
+            .max_deltas,
+        16
+    );
+    println!("Exact canonical 255-payment fixture usage: {usage:?}");
 }

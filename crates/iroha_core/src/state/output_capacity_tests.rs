@@ -172,7 +172,10 @@ fn no_hook_probe_refuses_time_before_event_or_maintenance_effects() {
     let events = probe.world.external_event_buf.len();
     assert!(probe.time_trigger_invocation_limit().is_err());
     let error = probe.prepare_owned_time_phase(&header()).unwrap_err();
-    assert!(error.contains("captured carrier output capacity"));
+    assert!(
+        crate::execution_attempt::expect_completed_rejection(error)
+            .contains("captured carrier output capacity")
+    );
     assert_eq!(probe.world.external_event_buf.len(), events);
     assert_eq!(
         probe

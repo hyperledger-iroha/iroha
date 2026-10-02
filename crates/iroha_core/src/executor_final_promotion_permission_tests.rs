@@ -335,7 +335,7 @@ mod final_promotion_permission_tests {
             ));
             let mut transaction = block.transaction();
             assert!(
-                super::super::root_scope::execution_root_scope(&transaction).is_ok(),
+                super::super::root_scope::execution_root_scope(&mut transaction).is_ok(),
                 "delegation matrix requires the authenticated ordinary execution root"
             );
             let role: RoleId = "final_promotion_operator".parse().expect("role id");

@@ -4,24 +4,23 @@
 //! The Native holder separately retains its exact Google/possession originals and current clock.
 //! A lease cannot select a new credential, key, trust policy, financial epoch or approval deadline.
 
+use super::ordinary_app_guard_binding::{
+    OrdinaryCredentialIssuerCellsV1, OrdinaryCredentialOriginalCellsV1,
+};
+#[cfg(test)]
 use super::{
-    DigestV1,
     canonical_preimage::assemble_canonical_preimage_v1,
-    guard_bundle::{assign_bytes, constant_bytes, hash},
-    ordinary_app_guard_binding::{
-        OrdinaryCredentialIssuerCellsV1, OrdinaryCredentialOriginalCellsV1,
-    },
+    guard_bundle::{constant_bytes, hash},
 };
-use crate::{
-    kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
-    pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
-};
+#[cfg(test)]
+use crate::pasta_sha256::PastaSha256JobsV1;
+use crate::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256ByteV1};
 use halo2_base::{
     AssignedValue,
     gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
+#[cfg(test)]
 use iroha_data_model::kagemusha::KagemushaPlayIntegrityRefreshLeaseOriginalLayoutV1;
-use sha2::{Digest as _, Sha256};
 
 pub(super) struct OrdinaryIntegrityLeaseCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) version: [PastaSha256ByteV1<F>; 2],

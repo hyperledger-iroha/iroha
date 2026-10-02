@@ -34,6 +34,16 @@ use private::{
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_air::rfc5280_io_witnesses_v1;
 #[cfg(test)]
+use super::p256_aggregate_adapter::P256CrossTraceTerminalRoleV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_aggregate_adapter::{
+    P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
+    evaluate_p256_bus_terminal_claim_equalities_v1,
+    evaluate_p256_cross_trace_terminal_claim_equalities_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_ecdsa_air::P256EcdsaRoleV1;
+#[cfg(test)]
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use super::{
     der_air::{
@@ -47,14 +57,8 @@ use super::{
         zk_x509_der_stark_node_factor_v1,
     },
     io_air::ZkX509IoSegmentRoleV1,
-    p256_aggregate_adapter::{
-        P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1, P256_X5S1_SIGNATURES_V1,
-        P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1, P256CrossTraceTerminalRoleV1,
-        evaluate_p256_bus_terminal_claim_equalities_v1,
-        evaluate_p256_cross_trace_terminal_claim_equalities_v1,
-    },
+    p256_aggregate_adapter::{P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1, P256_X5S1_SIGNATURES_V1},
     p256_cross_trace_bus::P256_CROSS_TRACE_LANES_V1,
-    p256_ecdsa_air::P256EcdsaRoleV1,
     profile::{
         ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CRL_ENTRIES_V1,
         ZK_X509_MAX_SERIAL_BYTES_V1, ZK_X509_UNCOMPRESSED_P256_BYTES_V1,
@@ -5067,9 +5071,13 @@ pub(crate) fn replay_zk_x509_sha_segment_terminal_claims_v1(
 const P256_TERMINAL_BUS_FAMILIES_V1: usize = 8;
 const P256_TERMINAL_CERTIFICATE_CROSS_SOURCES_V1: usize = 4;
 const P256_TERMINAL_WALLET_CROSS_SOURCES_V1: usize = 5;
+#[cfg(test)]
 const P256_TERMINAL_CROSS_START_V1: usize = 1;
+#[cfg(test)]
 const P256_TERMINAL_CROSS_TERMINAL_V1: usize = 2;
+#[cfg(test)]
 const P256_TERMINAL_FIRST_CROSS_FAMILY_V1: usize = P256_TERMINAL_BUS_FAMILIES_V1;
+#[cfg(test)]
 const P256_TERMINAL_SINK_FAMILY_V1: usize =
     P256_TERMINAL_FIRST_CROSS_FAMILY_V1 + P256_TERMINAL_WALLET_CROSS_SOURCES_V1;
 const P256_TERMINAL_CERTIFICATE_RECORDS_V1: usize = P256_TERMINAL_BUS_FAMILIES_V1
@@ -5083,6 +5091,7 @@ const P256_TERMINAL_WALLET_RECORDS_V1: usize = P256_TERMINAL_BUS_FAMILIES_V1
 const P256_TERMINAL_CLAIM_RECORDS_V1: usize = P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1
     * P256_TERMINAL_CERTIFICATE_RECORDS_V1
     + P256_TERMINAL_WALLET_RECORDS_V1;
+#[cfg(test)]
 const P256_CERTIFICATE_CROSS_ROLES_V1: [P256CrossTraceTerminalRoleV1;
     P256_TERMINAL_CERTIFICATE_CROSS_SOURCES_V1] = [
     P256CrossTraceTerminalRoleV1::ValueWriter,
@@ -5090,6 +5099,7 @@ const P256_CERTIFICATE_CROSS_ROLES_V1: [P256CrossTraceTerminalRoleV1;
     P256CrossTraceTerminalRoleV1::DigestReduction,
     P256CrossTraceTerminalRoleV1::ResultXReduction,
 ];
+#[cfg(test)]
 const P256_WALLET_CROSS_ROLES_V1: [P256CrossTraceTerminalRoleV1;
     P256_TERMINAL_WALLET_CROSS_SOURCES_V1] = [
     P256CrossTraceTerminalRoleV1::ValueWriter,
@@ -5106,6 +5116,7 @@ const _: () = assert!(P256_TERMINAL_WALLET_RECORDS_V1 == 76);
 const _: () = assert!(P256_TERMINAL_CLAIM_RECORDS_V1 == 348);
 /// Private prover products for one certificate-or-CRL P-256 equation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256CertificatePrivateProductsV1 {
     /// Eight role-ordered four-lane bus terminals.
     pub(crate) buses: P256BusTerminalClaimsV1,
@@ -5117,6 +5128,7 @@ pub(crate) struct ZkX509P256CertificatePrivateProductsV1 {
 }
 /// Private prover products for the wallet-ownership P-256 equation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256WalletPrivateProductsV1 {
     /// Eight role-ordered four-lane bus terminals.
     pub(crate) buses: P256BusTerminalClaimsV1,
@@ -5129,6 +5141,7 @@ pub(crate) struct ZkX509P256WalletPrivateProductsV1 {
 /// Private products retained only by the wiping bound P-256 witness owner.
 /// These values have no wire codec and never enter MAIN's public statement or transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509P256PrivateProductsV1 {
     /// Certificate slots zero through two followed by the signed CRL.
     pub(crate) certificate_or_crl:
@@ -5136,6 +5149,7 @@ pub(crate) struct ZkX509P256PrivateProductsV1 {
     /// Final wallet-ownership signature.
     pub(crate) wallet: ZkX509P256WalletPrivateProductsV1,
 }
+#[cfg(test)]
 fn empty_p256_bus_terminal_claims_v1() -> P256BusTerminalClaimsV1 {
     let zero = [F::ZERO; P256_CROSS_TRACE_LANES_V1];
     P256BusTerminalClaimsV1 {
@@ -5149,6 +5163,7 @@ fn empty_p256_bus_terminal_claims_v1() -> P256BusTerminalClaimsV1 {
         scalar_bus_window: zero,
     }
 }
+#[cfg(test)]
 fn p256_bus_terminal_claim_value_v1(
     buses: P256BusTerminalClaimsV1,
     family: usize,
@@ -5166,6 +5181,7 @@ fn p256_bus_terminal_claim_value_v1(
         _ => None,
     }
 }
+#[cfg(test)]
 fn set_p256_bus_terminal_claim_value_v1(
     buses: &mut P256BusTerminalClaimsV1,
     family: usize,
@@ -5187,6 +5203,7 @@ fn set_p256_bus_terminal_claim_value_v1(
     *target = value;
     Ok(())
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256PrivateProductsV1 {
     #[cfg(test)]
     pub(crate) fn canonical_zero_for_test_v1() -> Self {
@@ -5208,6 +5225,7 @@ impl ZkX509P256PrivateProductsV1 {
         claims.validate_air_terminals_v1()?;
         Ok(claims)
     }
+    #[cfg(test)]
     fn empty_v1() -> Self {
         Self {
             certificate_or_crl: core::array::from_fn(|_| ZkX509P256CertificatePrivateProductsV1 {
@@ -5260,6 +5278,7 @@ impl ZkX509P256PrivateProductsV1 {
             None
         }
     }
+    #[cfg(test)]
     fn signature_parts_mut_v1(
         &mut self,
         signature: usize,
@@ -5285,6 +5304,7 @@ impl ZkX509P256PrivateProductsV1 {
             None
         }
     }
+    #[cfg(test)]
     fn claim_address_v1(claim_index: usize) -> Option<(usize, usize, usize, usize)> {
         if claim_index >= P256_TERMINAL_CLAIM_RECORDS_V1 {
             return None;
@@ -5333,6 +5353,7 @@ impl ZkX509P256PrivateProductsV1 {
             0,
         ))
     }
+    #[cfg(test)]
     fn claim_value_v1(&self, claim_index: usize) -> Option<F> {
         let (signature, family, lane, endpoint) = Self::claim_address_v1(claim_index)?;
         let (buses, cross_sources, sink) = self.signature_parts_v1(signature)?;
@@ -5352,6 +5373,7 @@ impl ZkX509P256PrivateProductsV1 {
         }
         None
     }
+    #[cfg(test)]
     fn set_claim_value_v1(
         &mut self,
         claim_index: usize,

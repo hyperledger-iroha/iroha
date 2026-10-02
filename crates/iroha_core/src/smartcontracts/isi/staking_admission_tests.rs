@@ -30,7 +30,6 @@ fn original_staking_state(
 }
 
 fn original_staking_header(state: &State) -> iroha_data_model::block::BlockHeader {
-    use crate::state::StateReadOnly as _;
     iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         state.view().latest_block_hash(),
@@ -42,7 +41,6 @@ fn original_staking_header(state: &State) -> iroha_data_model::block::BlockHeade
 
 #[test]
 fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
-    use crate::state::StateReadOnly as _;
     let mut component = setup_state();
     set_epoch_length(&mut component, 6);
     let nexus = component.nexus_snapshot();
@@ -56,8 +54,8 @@ fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
     let header = original_staking_header(&state);
     assert_eq!(header.prev_block_hash(), Some(parent));
     let mut block = state.block(header);
-    let stx = block.transaction_for_callback_testing();
-    assert!(crate::executor::root_scope::execution_root_scope(&stx).is_ok());
+    let mut stx = block.transaction_for_callback_testing();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut stx).is_ok());
     assert_eq!(
         stx.world
             .sumeragi_npos_parameters()
@@ -71,8 +69,8 @@ fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
     drop(block);
     let component = setup_state();
     let mut block = component.block(original_staking_header(&component));
-    let stx = block.transaction_for_callback_testing();
-    assert!(crate::executor::root_scope::execution_root_scope(&stx).is_err());
+    let mut stx = block.transaction_for_callback_testing();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut stx).is_err());
 }
 
 // Exact candidate-consent, account-authority, and transaction rollback controls.

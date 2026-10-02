@@ -68,7 +68,8 @@ impl PhysicalExecutionPolicyRoute {
         tx: &dyn TransactionRoutingView,
         committed_height: u64,
         ledger_time_ms: u64,
-    ) -> Result<Self, PhysicalPolicyRouteRejection> {
+    ) -> Result<Self, crate::execution_attempt::ExecutionAttemptError<PhysicalPolicyRouteRejection>>
+    {
         let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
             nexus,
             tx,
@@ -77,8 +78,13 @@ impl PhysicalExecutionPolicyRoute {
             committed_height,
         )
         .and_then(|plan| resolve_plan_for_admission(plan, nexus, committed_height))
-        .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?;
-        Self::single(plan)
+        .map_err(|error| match error {
+            RoutingResolveError::Deferred(reason) => {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+            }
+            error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
+        })?;
+        Self::single(plan).map_err(Into::into)
     }
 
     /// Genesis retains bootstrap routing against its authenticated in-progress World.
@@ -88,7 +94,8 @@ impl PhysicalExecutionPolicyRoute {
         world: &W,
         tx: &dyn TransactionRoutingView,
         ledger_time_ms: u64,
-    ) -> Result<Self, PhysicalPolicyRouteRejection> {
+    ) -> Result<Self, crate::execution_attempt::ExecutionAttemptError<PhysicalPolicyRouteRejection>>
+    {
         Self::single(
             evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 nexus,
@@ -97,8 +104,14 @@ impl PhysicalExecutionPolicyRoute {
                 ledger_time_ms,
                 1,
             )
-            .map_err(|error| PhysicalPolicyRouteRejection::Routing(error.as_label()))?,
+            .map_err(|error| match error {
+                RoutingResolveError::Deferred(reason) => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                }
+                error => PhysicalPolicyRouteRejection::Routing(error.as_label()).into(),
+            })?,
         )
+        .map_err(Into::into)
     }
 
     fn single(plan: RoutingPlan) -> Result<Self, PhysicalPolicyRouteRejection> {

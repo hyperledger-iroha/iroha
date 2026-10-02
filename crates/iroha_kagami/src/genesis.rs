@@ -5,7 +5,7 @@ use color_eyre::eyre::eyre;
 use iroha_genesis::RawGenesisTransaction;
 use std::io::{BufWriter, Write};
 
-pub(super) fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+pub fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
     manifest: &RawGenesisTransaction,
     topology: &[iroha_model_base::peer::PeerId],
 ) -> color_eyre::Result<()> {
@@ -30,7 +30,7 @@ pub(super) fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_t
     Ok(())
 }
 
-pub(super) fn ensure_kagemusha_mint_finality_schedule_matches_consensus(
+pub fn ensure_kagemusha_mint_finality_schedule_matches_consensus(
     manifest: &RawGenesisTransaction,
 ) -> color_eyre::Result<()> {
     manifest.validate_mode_specific_consensus_parameters()
@@ -58,7 +58,7 @@ fn complete_test_genesis_builder(
 
 #[cfg(test)]
 /// Complete fixture context and mint-finality authority for the exact supplied peers.
-pub(crate) fn complete_test_genesis_builder_for_peers(
+pub fn complete_test_genesis_builder_for_peers(
     builder: iroha_genesis::GenesisBuilder,
     mut validators: Vec<iroha_model_base::peer::PeerId>,
 ) -> iroha_genesis::GenesisBuilder {
@@ -96,7 +96,7 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
 
 #[cfg(test)]
 /// Complete test genesis builders with the required first-release authority.
-pub(crate) trait CompleteTestGenesisBuilder {
+pub trait CompleteTestGenesisBuilder {
     /// Install required context and authority for a deterministic four-validator fixture.
     fn complete_for_test(self) -> Self;
     /// Install the supplied topology and its matching context and mint-finality authority.
@@ -150,10 +150,12 @@ mod authority_tests {
     fn genesis_topology_checks_generation_zero_independently_of_epoch_length() {
         let current = test_peers(0x30);
         for epoch_length in [3, 3_600] {
-            let mut npos = SumeragiNposParameters::default();
-            npos.epoch_length_blocks = NonZeroU64::new(epoch_length).unwrap();
-            npos.evidence_horizon_blocks = 1;
-            npos.slashing_delay_blocks = 1;
+            let npos = SumeragiNposParameters {
+                epoch_length_blocks: NonZeroU64::new(epoch_length).unwrap(),
+                evidence_horizon_blocks: 1,
+                slashing_delay_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
             let manifest = complete_test_genesis_builder_for_peers(
                 GenesisBuilder::new_without_executor(
                     ChainId::from("generation-zero-authority"),
@@ -237,10 +239,12 @@ mod authority_tests {
     #[test]
     fn genesis_epoch_requires_room_for_committed_beacon_authority() {
         for length in [1, 2, 3] {
-            let mut npos_parameters = SumeragiNposParameters::default();
-            npos_parameters.epoch_length_blocks = NonZeroU64::new(length).unwrap();
-            npos_parameters.evidence_horizon_blocks = length;
-            npos_parameters.slashing_delay_blocks = length;
+            let npos_parameters = SumeragiNposParameters {
+                epoch_length_blocks: NonZeroU64::new(length).unwrap(),
+                evidence_horizon_blocks: length,
+                slashing_delay_blocks: length,
+                ..SumeragiNposParameters::default()
+            };
             let manifest = complete_test_genesis_builder_for_peers(
                 GenesisBuilder::new_without_executor(
                     ChainId::from("initial-beacon-window"),
@@ -285,9 +289,7 @@ mod sign;
 pub use iroha_deploy::genesis::staging::bind_and_sign_staged_sumeragi_context;
 pub use iroha_deploy::genesis::staging::staged_signed_sumeragi_context_hashes;
 #[cfg(test)]
-pub(crate) use sign::{
-    prepared_native_test_chain, tests::native_genesis_fixture_with_instructions,
-};
+pub use sign::{prepared_native_test_chain, tests::native_genesis_fixture_with_instructions};
 mod validate;
 #[cfg(test)]
 pub use iroha_deploy::genesis::generate_default;

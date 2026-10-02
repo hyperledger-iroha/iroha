@@ -1053,6 +1053,15 @@ async fn execute_rotation_preparation(
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
     let authorizing_seats = exact_process_roster(network, &current_roster)?;
+    // The original ingress peer may have left the committee. Preserve the same
+    // operator and deadlines, but submit lifecycle control through an actual
+    // current voter selected by the genesis-authenticated finality above.
+    let control_peer = authorizing_seats
+        .first()
+        .ok_or_else(|| eyre!("authenticated current committee has no control ingress"))?;
+    let admin = rebind_blocking_client(admin, |builder| {
+        builder.torii_url = control_peer.client().client().endpoint().clone();
+    });
     let selection_evidence = ValidatorCommitteeSelectionEvidenceV1 {
         status,
         finality_journal,

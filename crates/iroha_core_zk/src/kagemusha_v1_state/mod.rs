@@ -25,12 +25,20 @@ pub use response_evidence_archive::{
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod authenticated_core_owner;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(crate) use authenticated_core_owner::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
 #[cfg(all(
     unix,
     feature = "kagemusha-production-prover",
     feature = "zk-halo2-ipa"
 ))]
 pub use authenticated_core_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
+#[cfg(all(
+    unix,
+    feature = "kagemusha-production-prover",
+    feature = "zk-halo2-ipa"
+))]
+pub(crate) use authenticated_core_owner::verify_ordinary_bootstrap_guard_v1;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use authenticated_core_owner::{
     KagemushaAuthenticatedBootstrapProvingSelectionV1, KagemushaAuthenticatedBootstrapStageV1,
@@ -48,13 +56,6 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
     KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
-};
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
-pub(crate) use authenticated_core_owner::{
-    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
-    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
-    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
-    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
 };
 #[cfg(unix)]
 mod ordinary_app_identity;
@@ -135,7 +136,11 @@ pub use candidate_lifecycle::{
     PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1, SenderOutboxReservationOutcomeV1,
 };
 pub use handoff_verification::KagemushaHandoffEvidenceV1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    all(unix, feature = "zk-halo2-ipa")
+))]
 pub use handoff_verification::{
     KagemushaHandoffEvidenceSizesV1, KagemushaHandoffSequenceVerificationV1,
     verify_kagemusha_handoff_evidence_sequence_v1, verify_kagemusha_handoff_evidence_v1,
@@ -145,7 +150,7 @@ pub use mint_fold_private_inputs::KagemushaMintFoldOpeningCapabilityV1;
 #[cfg(any(
     test,
     feature = "kagemusha-real-proof-harness",
-    all(unix, feature = "zk-halo2-ipa")
+    feature = "kagemusha-production-prover"
 ))]
 pub(crate) use mint_fold_private_inputs::KagemushaMintFoldOpeningWitnessV1;
 #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
@@ -154,8 +159,6 @@ pub use mint_inbox::*;
 pub(crate) use mint_inbox::{
     KagemushaTestnetVerifiedMintProofsV1, verify_applied_top_up_mint_stage_experimental_v1,
 };
-#[cfg(all(not(test), unix, feature = "zk-halo2-ipa"))]
-pub(crate) use mint_inbox_operations::MintCreditStageOutcomeV1;
 #[cfg(test)]
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
@@ -422,7 +425,7 @@ where
         self.store.recover_prepared(certificate)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Abort one uncommitted CAS without changing either authoritative committed root.
     pub(crate) fn abort_prepared(
         &mut self,
@@ -3001,7 +3004,7 @@ where
         KagemushaOutgoingCommitCapabilityV1::for_prepared(prepared)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Verify and persist a private redemption candidate proof before hardware consumes state.
     pub(crate) fn persist_outgoing_redemption_candidate(
         &mut self,
@@ -3408,7 +3411,7 @@ where
         Ok(authorization)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Verify and atomically apply one durably prepared finalized mint credit.
     pub(crate) fn mint_fold_prepared(
         &mut self,
@@ -3420,7 +3423,7 @@ where
         self.install_mint_fold(credit, preview, mint_finality, authorization, false)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     /// Release the byte-bounded WAL entry for an abandoned, uncommitted mint preview.
     pub(crate) fn abandon_mint_fold_preview(
         &mut self,

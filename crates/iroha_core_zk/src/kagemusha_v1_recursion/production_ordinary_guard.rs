@@ -5,7 +5,7 @@
 //! relation copies before returning. The nonexportable app key's private scalar is never used.
 
 use super::super::super::{
-    KagemushaPlatformCredentialStatementV1, KagemushaProviderRootCircuitParamsV1,
+    KagemushaPlatformCredentialStatementV1,
     ordinary_guard_circuit::{
         KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1,
         KagemushaOrdinaryGuardCircuitParamsV1, OrdinaryGuardWitnessV1,

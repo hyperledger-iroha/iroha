@@ -146,6 +146,83 @@ fn a_nested_scope_cannot_relax_its_outer_limit() {
     assert_sequence_limit(error, 3, 2);
 }
 #[test]
+fn decode_error_matches_the_surviving_original_budget() {
+    let sequence = norito::to_bytes(&vec![7_u64, 11, 13]).unwrap();
+    let text = norito::to_bytes(&String::from("bounded field")).unwrap();
+    for dimension in 0..4 {
+        let mut ceilings = [usize::MAX; 4];
+        ceilings[dimension] = 0;
+        let outer = DecodeLimits::new(ceilings[0], ceilings[1], ceilings[2], ceilings[3], 32);
+        let error = norito::with_decode_limits_scope(outer, || {
+            let inner = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+            let error = if dimension == 1 {
+                norito::decode_from_bytes_with_limits::<String>(&text, inner).unwrap_err()
+            } else {
+                norito::decode_from_bytes_with_limits::<Vec<u64>>(&sequence, inner).unwrap_err()
+            };
+            assert!(matches!(
+                (dimension, &error),
+                (0, Error::SequenceLengthExceeded { limit: 0, .. })
+                    | (1, Error::FieldLengthExceeded { limit: 0, .. })
+                    | (2, Error::TotalElementsExceeded { limit: 0, .. })
+                    | (3, Error::TotalAllocationExceeded { limit: 0, .. })
+            ));
+            assert!(norito::core::decode_error_matches_active_limits(&error));
+            error
+        });
+        assert!(!norito::core::decode_error_matches_active_limits(&error));
+        assert_eq!(
+            norito::decode_from_bytes::<Vec<u64>>(&sequence).unwrap(),
+            vec![7_u64, 11, 13]
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<String>(&text).unwrap(),
+            "bounded field"
+        );
+    }
+}
+#[test]
+fn decode_error_does_not_borrow_a_wider_scope_or_global_archive_cap() {
+    let sequence = norito::to_bytes(&vec![7_u64, 11, 13]).unwrap();
+    let text = norito::to_bytes(&String::from("bounded field")).unwrap();
+    let wide = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+    norito::with_decode_limits_scope(wide, || {
+        for dimension in 0..4 {
+            let mut ceilings = [usize::MAX; 4];
+            ceilings[dimension] = 0;
+            let inner = DecodeLimits::new(ceilings[0], ceilings[1], ceilings[2], ceilings[3], 32);
+            let error = if dimension == 1 {
+                norito::decode_from_bytes_with_limits::<String>(&text, inner).unwrap_err()
+            } else {
+                norito::decode_from_bytes_with_limits::<Vec<u64>>(&sequence, inner).unwrap_err()
+            };
+            assert!(error.decode_resource_error().is_some());
+            assert!(!norito::core::decode_error_matches_active_limits(&error));
+        }
+        let forged =
+            norito::core::frame_bare_with_header_flags::<Vec<u32>>(&u64::MAX.to_le_bytes(), 0)
+                .expect("frame the forged count with an explicit layout");
+        let error = norito::decode_from_bytes::<Vec<u32>>(&forged).unwrap_err();
+        let canonical_limit =
+            u64::try_from(norito::canonical_decode_limits(forged.len()).max_sequence_elements())
+                .unwrap();
+        assert!(
+            matches!(&error, Error::SequenceLengthExceeded { length: u64::MAX, limit } if *limit == canonical_limit)
+        );
+        assert!(!norito::core::decode_error_matches_active_limits(&error));
+        let mut inflated = sequence.clone();
+        let archive_limit = norito::core::max_archive_len();
+        let length_offset = 4 + 1 + 1 + 16 + 1;
+        inflated[length_offset..length_offset + 8]
+            .copy_from_slice(&(archive_limit + 1).to_le_bytes());
+        let error = norito::decode_from_bytes::<Vec<u64>>(&inflated).unwrap_err();
+        assert!(
+            matches!(&error, Error::ArchiveLengthExceeded { length, limit } if *length == archive_limit + 1 && *limit == archive_limit)
+        );
+        assert!(!norito::core::decode_error_matches_active_limits(&error));
+    });
+}
+#[test]
 fn resetting_layout_state_cannot_clear_an_active_sequence_limit() {
     let sequence = 3_u64.to_le_bytes();
     let error = norito::with_decode_limits(limits(2), || {

@@ -41,6 +41,7 @@ use crate::{
 /// Hash the same wrapper and whole original evidence that the signature equation consumed.
 /// The evidence tag is fixed by the release-selected platform circuit, not an assertion response.
 /// Variable DER widths/CBOR ordering retain one fixed 311-byte evidence capacity and SHA graph.
+#[cfg(test)]
 pub(super) fn constrain_ordinary_approval_proof_binding_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

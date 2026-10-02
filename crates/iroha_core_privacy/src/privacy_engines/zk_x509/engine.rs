@@ -93,8 +93,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // TODO: complete credential binding, hiding review and resource qualification
 // before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0xc8, 0x13, 0x7b, 0x55, 0x17, 0x2d, 0x79, 0xe9, 0x5d, 0x69, 0x82, 0x1d, 0x4c, 0xc0, 0x86, 0x5d,
-    0x58, 0xc3, 0x38, 0xe2, 0x33, 0xe0, 0x8b, 0x02, 0x2a, 0x6c, 0xd5, 0xec, 0x92, 0x9f, 0x54, 0xbc,
+    0x11, 0x00, 0x3e, 0xd1, 0xb6, 0x20, 0x6e, 0xd4, 0x1e, 0x59, 0xbe, 0xd5, 0x9c, 0x2b, 0xbd, 0x5a,
+    0xd0, 0x2e, 0x60, 0xe1, 0xf6, 0xae, 0xde, 0x93, 0x35, 0x3e, 0x29, 0xb7, 0x14, 0x39, 0x9a, 0x1a,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -763,6 +763,11 @@ mod tests {
         fields[14] =
             hex::decode("307915059aa0f173351facf134c2c08df720e365cfdb96c239eca44c07b654bb")
                 .unwrap();
+        // Preserve the exact pre-selected-input P256 compiler and schedule too.
+        // The schedule digest was recaptured from the committed compiler,
+        // then all four immutable historical SHA-256 pins were independently checked.
+        fields[27] = b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=sha3-384-opaque48-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release".to_vec();
+        fields[28] = hex::decode("27920427fcfec454c4454b1af2035f3b0af4dcadfeafb6c6824f93478217fc9a3107137c5eac8eacb141fe8e72d1384d").unwrap();
     }
     #[test]
     fn compiled_profile_binds_private_terminal_closure() {

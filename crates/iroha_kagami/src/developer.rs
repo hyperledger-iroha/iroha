@@ -24,7 +24,7 @@ use crate::{Outcome, RunArgs, localnet, tui};
 
 /// Store selection and output formatting for managed developer commands.
 #[derive(Debug, Clone, Args)]
-pub(crate) struct StoreArgs {
+pub struct StoreArgs {
     /// Private runtime store. By default each workspace has its own OS application-state directory.
     #[arg(long)]
     state: Option<PathBuf>,
@@ -53,15 +53,14 @@ impl StoreArgs {
     }
 
     fn open(&self) -> Result<ManagedStore> {
-        let root = match &self.state {
-            Some(path) => path.clone(),
-            None => {
-                let workspace = self
-                    .workspace
-                    .clone()
-                    .map_or_else(std::env::current_dir, Ok)?;
-                workspace_state_root(&default_state_root()?, &workspace)?
-            }
+        let root = if let Some(path) = &self.state {
+            path.clone()
+        } else {
+            let workspace = self
+                .workspace
+                .clone()
+                .map_or_else(std::env::current_dir, Ok)?;
+            workspace_state_root(&default_state_root()?, &workspace)?
         };
         ManagedStore::open(&root).map_err(Into::into)
     }
@@ -69,7 +68,7 @@ impl StoreArgs {
 
 /// Manage a persistent native four-validator local network.
 #[derive(Subcommand)]
-pub(crate) enum LocalnetCommand {
+pub enum LocalnetCommand {
     /// Generate, start, verify, and select a localnet without supplying configuration.
     Up(UpArgs),
     /// Observe the live supervisor and its retained environment.
@@ -85,7 +84,7 @@ pub(crate) enum LocalnetCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct NamedArgs {
+pub struct NamedArgs {
     /// Managed environment name.
     #[arg(default_value = "local")]
     name: String,
@@ -94,7 +93,7 @@ pub(crate) struct NamedArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct UpArgs {
+pub struct UpArgs {
     #[command(flatten)]
     named: NamedArgs,
     /// Complete generation and readiness budget in seconds.
@@ -103,7 +102,7 @@ pub(crate) struct UpArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct LogsArgs {
+pub struct LogsArgs {
     #[command(flatten)]
     named: NamedArgs,
     /// Validator index (0..3). Omit to read the supervisor log.
@@ -115,7 +114,7 @@ pub(crate) struct LogsArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct ResetArgs {
+pub struct ResetArgs {
     /// Exact environment to retire; required to make reset deliberate.
     name: String,
     #[command(flatten)]
@@ -124,7 +123,7 @@ pub(crate) struct ResetArgs {
 
 /// Select and inspect managed developer identities and endpoints.
 #[derive(Debug, Subcommand)]
-pub(crate) enum ContextCommand {
+pub enum ContextCommand {
     /// List retained contexts in this workspace.
     List(StoreArgs),
     /// Show the selected context, or one exact named context.
@@ -134,14 +133,14 @@ pub(crate) enum ContextCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct ContextShowArgs {
+pub struct ContextShowArgs {
     name: Option<String>,
     #[command(flatten)]
     store: StoreArgs,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct ContextUseArgs {
+pub struct ContextUseArgs {
     name: String,
     #[command(flatten)]
     store: StoreArgs,
@@ -149,13 +148,13 @@ pub(crate) struct ContextUseArgs {
 
 /// Compile and deploy through the canonical native service.
 #[derive(Debug, Subcommand)]
-pub(crate) enum ContractCommand {
+pub enum ContractCommand {
     /// Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed.
     Deploy(DeployArgs),
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct DeployArgs {
+pub struct DeployArgs {
     /// .ko source, .to artifact, Musubi.toml, or package directory (defaults to the current directory).
     #[arg(conflicts_with = "resume")]
     input: Option<PathBuf>,
@@ -186,7 +185,7 @@ pub(crate) struct DeployArgs {
 
 /// Internal entry point for the shared native supervisor.
 #[derive(Debug, Args)]
-pub(crate) struct WorkerArgs {
+pub struct WorkerArgs {
     #[arg(long)]
     root: PathBuf,
     #[arg(long)]
@@ -306,7 +305,7 @@ impl<T: Write> RunArgs<T> for ContractCommand {
         let input = if resume.is_none() {
             let path = args
                 .store
-                .resolve_path(args.input.as_deref().unwrap_or(Path::new(".")))?;
+                .resolve_path(args.input.as_deref().unwrap_or_else(|| Path::new(".")))?;
             Some(ContractInput::from_path(
                 &path,
                 args.package,

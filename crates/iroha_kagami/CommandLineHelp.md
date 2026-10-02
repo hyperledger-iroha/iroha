@@ -268,6 +268,7 @@ Generate an operator-owned network bundle without starting validators
 * `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
 
   Default value: `00000000-0000-0000-0000-000000000000`
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
 * `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
 
   Possible values: `dataspace`, `nexus`
@@ -501,7 +502,7 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `assemble-mobile-bootstrap-v1` — Authenticate and assemble distinct approvals into a mobile bootstrap package
 * `prepare-experimental-release-v1` — Prepare an unsigned testnet candidate from checked artifacts and typed evidence
 * `authenticate-release-v1` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
-* `authenticate-experimental-release-v1` — Authenticate one signed proof-only testnet release and its exact 50 artifacts
+* `authenticate-experimental-release-v1` — Authenticate one signed proof-only testnet release and its complete artifact inventory
 * `sign-experimental-release-approval-v1` — Sign one experimental release approval with one owner-held authority key
 * `assemble-experimental-release-v1` — Assemble independently signed approvals into one testnet attestation
 
@@ -519,7 +520,7 @@ Prepare one mobile checkpoint from an authenticated Experimental release
 * `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
 * `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
 * `--attestation <PATH>` — Canonical Norito threshold attestation over the experimental release
-* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--artifact-root <PATH>` — Canonical absolute directory containing all signed artifacts
 * `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
 * `--expected-release-id <LOWER_HEX>` — Independently pinned release identifier as lowercase hex
 * `--expected-asset-identity-digest <LOWER_HEX>` — Independently pinned asset identity digest as lowercase hex
@@ -598,8 +599,8 @@ Prepare an unsigned testnet candidate from checked artifacts and typed evidence
 ###### **Options:**
 
 * `--validation-receipt <PATH>` — Canonical Norito typed structural-evidence receipt from a trusted evidence producer
-* `--artifact-inventory <PATH>` — Typed JSON array of all 50 role-to-content-address bindings
-* `--artifact-root <PATH>` — Canonical absolute directory of the 50 content-addressed proof artifacts
+* `--artifact-inventory <PATH>` — Typed JSON array of the complete ordered role-to-content-address bindings
+* `--artifact-root <PATH>` — Canonical absolute directory of all content-addressed proof artifacts
 * `--evidence-root <PATH>` — Canonical absolute directory of all SHA-256-addressed receipt evidence files
 * `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
 * `--authority-review-projection <PATH>` — Canonical projection from the separately trusted release-evidence verifier
@@ -626,7 +627,7 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `--authority-policy <PATH>` — Canonical Norito locally trusted KAGEMUSHA V1 release-authority policy
 * `--attestation <PATH>` — Canonical Norito KAGEMUSHA V1 threshold attestation
 * `--recursive-profile <PATH>` — Canonical JSON recursive-verifier profile consumed by Core
-* `--artifact-root <PATH>` — Absolute directory containing all 50 SHA-256-addressed release artifacts
+* `--artifact-root <PATH>` — Absolute directory containing the complete set of SHA-256-addressed release artifacts
 * `--authority-review-projection <PATH>` — Canonical output from the separately pinned authority-review verifier
 * `--authority-review-projection-sha256 <LOWER_HEX>` — SHA-256 pin for the exact authority-review projection bytes
 * `--native-artifact-manifest <PATH>` — Canonical ABI25 c-jni native-artifact evidence manifest
@@ -637,7 +638,7 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 
 ## `kagami kagemusha authenticate-experimental-release-v1`
 
-Authenticate one signed proof-only testnet release and its exact 50 artifacts
+Authenticate one signed proof-only testnet release and its complete artifact inventory
 
 **Usage:** `kagami kagemusha authenticate-experimental-release-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --attestation <PATH> --artifact-root <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX>`
 
@@ -647,7 +648,7 @@ Authenticate one signed proof-only testnet release and its exact 50 artifacts
 * `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
 * `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
 * `--attestation <PATH>` — Canonical Norito threshold attestation over the experimental release
-* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--artifact-root <PATH>` — Canonical absolute directory containing all signed artifacts
 * `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
 * `--expected-release-id <LOWER_HEX>` — Independently pinned release identifier as lowercase hex
 * `--expected-asset-identity-digest <LOWER_HEX>` — Independently pinned asset identity digest as lowercase hex
@@ -668,7 +669,7 @@ Sign one experimental release approval with one owner-held authority key
 * `--manifest <PATH>` — Canonical Norito testnet-experimental release manifest
 * `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
 * `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
-* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--artifact-root <PATH>` — Canonical absolute directory containing all signed artifacts
 * `--signer-private-key <PATH>` — One owner-held mode-0600 Kagami private-key record
 * `--approval-output <PATH>` — New owner-only file for this authority's canonical Norito approval
 * `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
@@ -691,7 +692,7 @@ Assemble independently signed approvals into one testnet attestation
 * `--manifest <PATH>` — Canonical Norito testnet-experimental release manifest
 * `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
 * `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
-* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--artifact-root <PATH>` — Canonical absolute directory containing all signed artifacts
 * `--approval <PATH>` — One canonical Norito approval; repeat for each independent authority
 * `--attestation-output <PATH>` — New owner-only file for the canonical threshold attestation
 * `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex

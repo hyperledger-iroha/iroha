@@ -26,10 +26,7 @@ use halo2_base::{
     gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
     utils::CurveAffineExt as _,
 };
-use halo2_proofs::halo2curves::{
-    CurveAffine as _,
-    secp256r1::{Fq as P256Scalar, Secp256r1Affine},
-};
+use halo2_proofs::halo2curves::secp256r1::{Fq as P256Scalar, Secp256r1Affine};
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalEvidenceV1, KagemushaDeviceSignatureV1,
     KagemushaOrdinaryIssuerCircuitAdmissionV1, KagemushaPlayIntegrityBindingV1,

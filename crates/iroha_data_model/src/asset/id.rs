@@ -147,7 +147,7 @@ impl<'de> DeserializePayload<'de> for AssetDefinitionId {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let aid_bytes = <[u8; 16] as DeserializePayload>::deserialize(archived.cast());
+        let aid_bytes = <[u8; 16] as DeserializePayload>::try_deserialize(archived.cast())?;
         Self::from_uuid_bytes(aid_bytes)
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
@@ -459,6 +459,46 @@ mod tests {
         let s = format!("{id:?}");
         assert_eq!(s, id.canonical_literal());
     }
+    #[test]
+    fn asset_definition_id_binary_decode_preserves_local_refusal_and_uuid_checks() {
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .unwrap();
+        let bytes = norito::to_bytes(&expected).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<AssetDefinitionId>(&bytes).unwrap(),
+            expected
+        );
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || norito::decode_from_bytes::<AssetDefinitionId>(&bytes),
+        );
+        assert!(
+            matches!(
+                &refused,
+                Err(norito::Error::TotalAllocationExceeded { limit: 0, .. })
+            ),
+            "fallible asset decoder erased the original allocation refusal: {refused:?}"
+        );
+        let retried = norito::decode_from_bytes::<AssetDefinitionId>(&bytes).unwrap();
+        assert_eq!(retried, expected);
+        norito::verify_exact_frame(&retried, &bytes).unwrap();
+        let invalid = AssetDefinitionId { aid_bytes: [0; 16] };
+        let invalid_bytes = norito::to_bytes(&invalid).unwrap();
+        assert!(
+            matches!(
+                norito::decode_from_bytes::<AssetDefinitionId>(&invalid_bytes),
+                Err(norito::Error::Message(_))
+            ),
+            "fallible delegation must retain canonical UUID validation"
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(norito::decode_from_bytes::<AssetDefinitionId>(&trailing).is_err());
+    }
+
     #[test]
     fn asset_definition_id_parses_canonical_aid() {
         let expected = AssetDefinitionId::from_uuid_bytes([

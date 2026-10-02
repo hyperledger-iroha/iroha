@@ -2851,6 +2851,19 @@ pub mod isi {
                 authorization,
             })
         }
+        fn transcript_identity(
+            &self,
+            state: &StateTransaction<'_, '_>,
+        ) -> Result<iroha_crypto::Hash, Error> {
+            self.authorization.resolve_transcript_identity(
+                state,
+                &[(
+                    self.plan.source_id.clone(),
+                    self.plan.destination_id.clone(),
+                    self.plan.amount.clone(),
+                )],
+            )
+        }
         /// Apply the prepared movement, transcript and canonical events as one consumed action.
         fn apply(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
             self.apply_with_observability(state_transaction, true)
@@ -2867,14 +2880,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
             record_observability: bool,
         ) -> Result<(), Error> {
-            let bindings = vec![(
-                self.plan.source_id.clone(),
-                self.plan.destination_id.clone(),
-                self.plan.amount.clone(),
-            )];
-            let transcript_identity = self
-                .authorization
-                .resolve_transcript_identity(state_transaction, &bindings)?;
+            let transcript_identity = self.transcript_identity(state_transaction)?;
             let applied = if record_observability {
                 // The precheck owns the exact full-quantity delta. Finish transcript and
                 // source-context preparation before the main movement writes balances;
@@ -7513,7 +7519,7 @@ pub mod isi {
     }
     /// Consume one exact SNS renewal charge capability produced by the maintenance sweep.
     pub(crate) fn execute_verified_sns_auto_renewal_charge(
-        state_transaction: &mut StateTransaction<'_, '_>,
+        state_transaction: &mut crate::state::sns_maintenance::SnsMaintenanceTransaction<'_, '_>,
         authorization: crate::sns::VerifiedSnsAutoRenewalCharge,
     ) -> Result<(), Error> {
         let (selector, owner, current_expiry_ms, target_expiry_ms, source_id, destination, amount) =
@@ -7522,6 +7528,9 @@ pub mod isi {
         let record =
             crate::sns::get_name_record_by_selector(&state_transaction.world, &selector, now_ms)
                 .map_err(|error| {
+                    if error.deferral().is_some() {
+                        return error.retain_in_instruction(state_transaction);
+                    }
                     InstructionExecutionError::InvariantViolation(
                         format!("verified SNS renewal record is no longer valid: {error}").into(),
                     )
@@ -7534,6 +7543,9 @@ pub mod isi {
             now_ms,
         )
         .map_err(|error| {
+            if error.deferral().is_some() {
+                return error.retain_in_instruction(state_transaction);
+            }
             InstructionExecutionError::InvariantViolation(
                 format!("verified SNS renewal quote is no longer valid: {error}").into(),
             )
@@ -7560,7 +7572,7 @@ pub mod isi {
             destination_id.clone(),
             amount.clone(),
         ))?;
-        execute_numeric_asset_movement(
+        let movement = PreparedNumericAssetMovement::prepare(
             state_transaction,
             source_id,
             destination_id,
@@ -7569,7 +7581,12 @@ pub mod isi {
                 &owner,
                 EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding),
             ),
-        )
+        )?;
+        let identity = movement.transcript_identity(state_transaction)?;
+        state_transaction
+            .retain_source(identity)
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+        movement.apply(state_transaction)
     }
     fn resolve_fx_corridor_escrow_binding(
         state_transaction: &StateTransaction<'_, '_>,

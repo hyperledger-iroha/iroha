@@ -128,6 +128,7 @@ fn state_preflight_refusal_and_transaction_rollback_preserve_the_entire_reserve(
         assert!(
             tx.validate_fastpq_governance_lock("overflow", &ALICE_ID, &custody)
                 .unwrap_err()
+                .to_string()
                 .contains("global retained")
         );
         tx.validate_fastpq_governance_lock("last", &ALICE_ID, &custody)
@@ -339,4 +340,85 @@ fn restore_rejects_over_capacity_current_and_undo_without_publishing_partial_ind
         world.governance_locks.block_and_revert().len(),
         cap as usize + 1
     );
+}
+
+#[test]
+fn sns_restore_admits_original_current_and_undo_obligations_without_erasing_refusal() {
+    use iroha_data_model::alias_setup::{
+        AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1, ResolvedDomainV1,
+    };
+    use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+    use norito::codec::Encode;
+    let mut world = World::default();
+    crate::sns::seed_default_namespace_policies(&mut world);
+    let policy = crate::sns::policy_by_id(&world.view(), crate::sns::DOMAIN_NAME_SUFFIX_ID)
+        .unwrap()
+        .unwrap();
+    let config = AliasAutoRenewConfigV1 {
+        term_years: 1,
+        policy_version: policy.policy_version,
+        payment_asset: policy.payment_asset_id.parse().unwrap(),
+        max_amount: Quantity::one(),
+        renew_before_expiry_ms: 100,
+        retry_backoff_ms: 1,
+        max_failures: 3,
+    };
+    let cap = FastpqSourcePolicyV1::bootstrap()
+        .mandatory
+        .max_retained_obligations;
+    let record = |index| {
+        AliasAutoRenewStateV1::new(
+            AliasTargetV1::Domain(ResolvedDomainV1::new(
+                DomainId::try_new(format!("reserved-{index}"), "universal").unwrap(),
+                DataSpaceId::UNIVERSAL,
+            )),
+            ALICE_ID.clone(),
+            1,
+            Some(config.clone()),
+        )
+    };
+    for index in 0..cap {
+        let value = record(index);
+        world.smart_contract_state.insert(
+            crate::sns::alias_auto_renew_storage_key(&value.target).unwrap(),
+            value.encode(),
+        );
+    }
+    world.validate_retained_mandatory_sources().unwrap();
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || world.validate_retained_mandatory_sources().unwrap_err(),
+    );
+    assert!(
+        matches!(
+            refused,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+        ),
+        "{refused}"
+    );
+    world.validate_retained_mandatory_sources().unwrap();
+    let overflow = record(cap);
+    let key = crate::sns::alias_auto_renew_storage_key(&overflow.target).unwrap();
+    world
+        .smart_contract_state
+        .insert(key.clone(), overflow.encode());
+    let failed = world.validate_retained_mandatory_sources().unwrap_err();
+    assert!(
+        crate::execution_attempt::expect_completed_rejection(failed).contains("global retained")
+    );
+    {
+        let mut data = world.smart_contract_state.block();
+        data.remove(key.clone());
+        data.commit();
+    }
+    assert!(world.smart_contract_state.view().get(&key).is_none());
+    assert!(
+        world
+            .smart_contract_state
+            .block_and_revert()
+            .get(&key)
+            .is_some()
+    );
+    let undo = world.validate_retained_mandatory_sources().unwrap_err();
+    assert!(crate::execution_attempt::expect_completed_rejection(undo).contains("global retained"));
 }

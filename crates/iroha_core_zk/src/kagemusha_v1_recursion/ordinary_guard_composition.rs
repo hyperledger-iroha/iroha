@@ -30,10 +30,9 @@ use super::super::{
 };
 use super::{KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1};
 use crate::{
-    kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
+    kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128},
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
-use ff::Field as _;
 use halo2_base::{
     AssignedValue,
     gates::{GateInstructions as _, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},

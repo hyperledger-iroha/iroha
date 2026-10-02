@@ -1,14 +1,7 @@
 //! Original single-record transport checks. Synthetic bytes confer no native authority.
 
 use super::*;
-use sha2::Digest as _;
-use std::{
-    fs::OpenOptions,
-    os::{
-        fd::AsRawFd as _,
-        unix::fs::{FileExt as _, MetadataExt as _},
-    },
-};
+use std::{fs::OpenOptions, os::fd::AsRawFd as _};
 
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "original-record.wal",

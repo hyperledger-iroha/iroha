@@ -6252,7 +6252,6 @@ mod tests {
         pipeline::access::AccessSetSource,
         prelude::World,
         query::store::LiveQueryStore,
-        state::StateReadOnly,
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;

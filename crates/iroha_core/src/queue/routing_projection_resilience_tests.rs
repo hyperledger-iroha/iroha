@@ -104,16 +104,18 @@ async fn push_records_teu_from_ivm_metadata() {
 #[test]
 fn expired_event_uses_the_authoritative_full_plan() {
     let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+    let mut nexus = test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]);
+    nexus.routing_policy.default_lane = expected.lane_id;
+    nexus.routing_policy.default_dataspace = expected.dataspace_id;
     let state = State::new_with_nexus_for_testing(
-        world_with_test_domains(),
-        test_nexus_for_routes(&[(expected.lane_id, expected.dataspace_id)]),
-        LiveQueryStore::start_test(),
+        world_with_test_domains(), nexus, LiveQueryStore::start_test(),
     );
     let state = Arc::new(state);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let mut queue = Queue::test_with_router_for_routes(
         Config {
             transaction_time_to_live: Duration::from_millis(10),
+            expired_cull_interval: Duration::ZERO,
             ..config_factory()
         },
         &time_source,
@@ -123,10 +125,17 @@ fn expired_event_uses_the_authoritative_full_plan() {
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);
-    let tx = accepted_tx_by_someone(&time_source);
+    let tx = accepted_tx_with(
+        AccountId::new(ALICE_KEYPAIR.public_key().clone()), &ALICE_KEYPAIR, &time_source,
+        vec![Register::domain(Domain::new(
+            DomainId::try_new("expired", "test-dataspace-13").unwrap(),
+        )).into()], Metadata::default(),
+    );
     let signed_hash = tx.as_ref().hash();
     let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx, state.view()).expect("push tx");
+    assert_eq!(queue.routing_plan_hint(&hash).unwrap().coordinator_route(), expected);
+
     while event_receiver.try_recv().is_ok() {}
     time_handle.advance(Duration::from_millis(11));
     let guards = queue

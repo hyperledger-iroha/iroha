@@ -175,7 +175,7 @@ impl<'a> norito::core::DeserializePayload<'a> for ChainId {
         if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
             return ChainId::decode_wire(payload).map(|(chain, _)| chain);
         }
-        let string = norito::core::DeserializePayload::deserialize(archived.cast::<String>());
+        let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;
         string
             .parse()
             .map_err(|error: ParseError| norito::core::Error::Message(error.reason().into()))

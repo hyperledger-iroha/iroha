@@ -39,6 +39,11 @@ pub enum SnsError {
 impl From<CoreSnsError> for SnsError {
     fn from(error: CoreSnsError) -> Self {
         match error {
+            CoreSnsError::Deferred(_) => Self::Access(crate::Error::Query(
+                iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                ),
+            )),
             CoreSnsError::RegistrationNotFound { suffix_id, label } => {
                 Self::RegistrationNotFound(SnsRegistrationNotFoundV1::new(suffix_id, label))
             }

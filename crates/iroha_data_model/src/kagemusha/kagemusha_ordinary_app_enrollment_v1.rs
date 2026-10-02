@@ -1483,7 +1483,7 @@ fn credential_original_layout<T: Encode + norito::NoritoSchema>(
     if subject_offset != subject_bytes.len() {
         return Err("ordinary credential subject trailing fields".into());
     }
-    if &frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
+    if frame[ranges[0].start - prelude_len..ranges[0].end - prelude_len]
         != subject.version.to_le_bytes()
     {
         return Err("ordinary credential version scalar encoder differs".into());
@@ -2023,8 +2023,8 @@ mod tests {
             &f.certificate.subject.canonical_signing_bytes().unwrap(),
         );
         assert_eq!(
-            admit(&f, 300).unwrap_err(),
-            "ordinary issuer original/profile differs"
+            admit(&f, 300).err().as_deref(),
+            Some("ordinary issuer original/profile differs")
         );
         resign(&mut f);
         admit(&f, 300).unwrap();
@@ -2039,8 +2039,8 @@ mod tests {
         f.certificate.circuit_admission.signature =
             super::super::KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap();
         assert_eq!(
-            admit(&f, 300).unwrap_err(),
-            "ordinary circuit issuer signature rejected"
+            admit(&f, 300).err().as_deref(),
+            Some("ordinary circuit issuer signature rejected")
         );
     }
     fn approval(

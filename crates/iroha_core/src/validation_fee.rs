@@ -1,4 +1,5 @@
 //! Validator-side enforcement for chain-level validation-fee policy.
+use crate::execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error};
 use crate::{
     smartcontracts::isi::triggers::{
         set::{ExecutableRef, SetReadOnly as _},
@@ -1085,7 +1086,7 @@ impl TransferLocation for FeeAssetTransferSummary {
 pub(crate) fn enforce_validation_fee_admission(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<Option<ValidationFeeCredit>, TransactionRejectionReason> {
+) -> Result<Option<ValidationFeeCredit>, ExecutionAttemptError<TransactionRejectionReason>> {
     if is_validation_fee_control_plane_transaction(tx) {
         return Ok(None);
     }
@@ -1124,7 +1125,7 @@ pub(crate) fn enforce_validation_fee_admission(
     )
     .map_err(admission_rejection)?;
     ensure_validation_fee_credit_capacity(state_transaction, &credit)
-        .map_err(admission_rejection)?;
+        .map_err(|error| error.map_rejection(admission_rejection))?;
     Ok(Some(credit))
 }
 fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
@@ -1170,17 +1171,19 @@ fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
 /// effects are modeled directly.
 pub(crate) fn enforce_ivm_proved_completed_axt_admission(
     completed_envelopes: usize,
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFail> {
     if completed_envelopes == 0 {
         return Ok(());
     }
-    let policy = active_policy(state_transaction).map_err(|rejection| match rejection {
-        TransactionRejectionReason::Validation(fail) => fail,
-        other => ValidationFail::NotPermitted(format!(
-            "validation-fee policy resolution failed during IvmProved AXT admission: {other:?}"
-        )),
-    })?;
+    let policy = active_policy(state_transaction)
+        .map_err(|error| transaction_attempt_rejection(state_transaction, error))
+        .map_err(|rejection| match rejection {
+            TransactionRejectionReason::Validation(fail) => fail,
+            other => ValidationFail::NotPermitted(format!(
+                "validation-fee policy resolution failed during IvmProved AXT admission: {other:?}"
+            )),
+        })?;
     if policy.is_none() {
         return Ok(());
     }
@@ -1212,7 +1215,9 @@ pub(crate) fn enforce_deferred_instruction_list(
     instructions: &[InstructionBox],
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), TransactionRejectionReason> {
-    let Some(policy) = active_policy(state_transaction)? else {
+    let Some(policy) = active_policy(state_transaction)
+        .map_err(|error| transaction_attempt_rejection(state_transaction, error))?
+    else {
         return Ok(());
     };
     let hijiri = active_hijiri_parameters(state_transaction)?;
@@ -1253,7 +1258,7 @@ pub(crate) fn enforce_deferred_instruction_list(
         )
         .map_err(admission_rejection)?;
         ensure_validation_fee_credit_capacity(state_transaction, &credit)
-            .map_err(admission_rejection)?;
+            .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
         commit_validation_fee_credit(state_transaction, Some(&credit))?;
     }
     Ok(())
@@ -1341,15 +1346,16 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         )
         .map_err(admission_rejection)?;
     }
-    let registry = validated_policy_registry(state_transaction)?;
-    let active_policy =
-        active_policy_from_validated_registry(registry.as_ref(), state_transaction)?;
+    let registry = validated_policy_registry(state_transaction)
+        .map_err(|error| transaction_attempt_rejection(state_transaction, error))?;
+    let active_policy = active_policy_from_validated_registry(registry.as_ref(), state_transaction)
+        .map_err(|error| transaction_attempt_rejection(state_transaction, error))?;
     let payout_lifecycle = resolve_retained_payout_lifecycle(
         registry.as_ref(),
         state_transaction,
         runtime_origin.as_ref(),
     )
-    .map_err(admission_rejection)?;
+    .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
     let (fee_asset_definition_id, treasury_payout_authority) =
         if let Some(lifecycle) = payout_lifecycle.as_ref() {
             (
@@ -1420,7 +1426,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             amount: binding.batch_ds.clone(),
         };
         let available = read_validation_fee_credit_balance(state_transaction, &batch_credit)
-            .map_err(admission_rejection)?;
+            .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
         let xor_scale = validation_fee_payout_xor_scale(state_transaction, binding)
             .map_err(admission_rejection)?;
         let Some(terms) =
@@ -1440,7 +1446,8 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             return Ok(OpaqueDeferredValidationOutcome::NoOp);
         }
         let debit = batch_credit.with_amount(terms.debit_ds);
-        consume_validation_fee_credit(state_transaction, &debit).map_err(admission_rejection)?;
+        consume_validation_fee_credit(state_transaction, &debit)
+            .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
     }
     Ok(OpaqueDeferredValidationOutcome::Apply)
 }
@@ -2048,9 +2055,26 @@ fn enforce_deferred_policy_with_credit_and_hijiri(
     }
     Ok(credited_minor_units)
 }
+fn transaction_attempt_rejection(
+    state: &mut StateTransaction<'_, '_>,
+    error: ExecutionAttemptError<TransactionRejectionReason>,
+) -> TransactionRejectionReason {
+    match error {
+        ExecutionAttemptError::Rejected(error) => error,
+        ExecutionAttemptError::Deferred(reason) => {
+            TransactionRejectionReason::Validation(state.defer_execution(reason))
+        }
+    }
+}
+fn fee_attempt_rejection(
+    state: &mut StateTransaction<'_, '_>,
+    error: ExecutionAttemptError<ValidationFeeAdmissionError>,
+) -> TransactionRejectionReason {
+    transaction_attempt_rejection(state, error.map_rejection(admission_rejection))
+}
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
+) -> Result<Option<ValidationFeePolicyV1>, ExecutionAttemptError<TransactionRejectionReason>> {
     let registry = validated_policy_registry(state_transaction)?;
     active_policy_from_validated_registry(registry.as_ref(), state_transaction)
 }
@@ -2139,20 +2163,43 @@ fn resolve_hijiri_fee(
 
 fn validated_policy_registry(
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<Option<ValidationFeePolicyRegistryV1>, TransactionRejectionReason> {
-    validated_policy_registry_in_world(&state_transaction.world).map_err(admission_rejection)
+) -> Result<Option<ValidationFeePolicyRegistryV1>, ExecutionAttemptError<TransactionRejectionReason>>
+{
+    validated_policy_registry_in_world(&state_transaction.world)
+        .map_err(|error| error.map_rejection(admission_rejection))
 }
 
 fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
     world: &W,
-) -> Result<Option<ValidationFeePolicyRegistryV1>, ValidationFeeAdmissionError> {
+) -> Result<Option<ValidationFeePolicyRegistryV1>, ExecutionAttemptError<ValidationFeeAdmissionError>>
+{
     let parameter_id = ValidationFeePolicyRegistryV1::parameter_id();
     let Some(custom) = world.parameters().custom().get(&parameter_id) else {
         return Ok(None);
     };
-    let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom) else {
-        return Err(ValidationFeeAdmissionError::MalformedPolicyRegistryParameter);
-    };
+    if custom.id() != &parameter_id {
+        return Err(ValidationFeeAdmissionError::MalformedPolicyRegistryParameter.into());
+    }
+    let registry: ValidationFeePolicyRegistryV1 = norito::json::from_str(custom.payload().get())
+        .map_err(|error| match error {
+            norito::json::Error::DecodeResourceLimit
+                if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
+            {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
+                )
+            }
+            norito::json::Error::AllocationFailed
+                if !cfg!(all(test, sumeragi_core_mutation = "HC30")) =>
+            {
+                ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            }
+            _ => ExecutionAttemptError::Rejected(
+                ValidationFeeAdmissionError::MalformedPolicyRegistryParameter,
+            ),
+        })?;
     registry
         .validate()
         .map_err(|err| ValidationFeeAdmissionError::InvalidPolicyRegistry(err.to_string()))?;
@@ -2168,10 +2215,10 @@ fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
 /// registry cannot strand admission behind missing or mismatched proposal and Parliament records.
 pub(crate) fn validate_persisted_policy_registry_governance_v1<W: WorldReadOnly + ?Sized>(
     world: &W,
-) -> Result<(), String> {
+) -> Result<(), ExecutionAttemptError<String>> {
     validated_policy_registry_in_world(world)
         .map(drop)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.map_rejection(|error| error.to_string()))
 }
 
 /// Validate the restored registry against the exact network and active payout runtime.
@@ -2181,9 +2228,9 @@ pub(crate) fn validate_persisted_policy_registry_governance_v1<W: WorldReadOnly 
 pub(crate) fn validate_persisted_policy_registry_runtime_v1(
     state: &impl StateReadOnly,
     restored_height: u64,
-) -> Result<(), String> {
-    let Some(registry) =
-        validated_policy_registry_in_world(state.world()).map_err(|error| error.to_string())?
+) -> Result<(), ExecutionAttemptError<String>> {
+    let Some(registry) = validated_policy_registry_in_world(state.world())
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?
     else {
         return Ok(());
     };
@@ -2198,13 +2245,13 @@ pub(crate) fn validate_persisted_policy_registry_runtime_v1(
         return Ok(());
     }
     validate_treasury_payout_contract_subject(&entry.policy, state)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.map_rejection(|error| error.to_string()))
 }
 
 fn active_policy_from_validated_registry(
     registry: Option<&ValidationFeePolicyRegistryV1>,
     state_transaction: &StateTransaction<'_, '_>,
-) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
+) -> Result<Option<ValidationFeePolicyV1>, ExecutionAttemptError<TransactionRejectionReason>> {
     let Some(registry) = registry else {
         return Ok(None);
     };
@@ -2217,27 +2264,29 @@ fn active_policy_from_validated_registry(
     };
     let policy = entry.policy.clone();
     if let Some(reason) = policy.policy_invariant_error() {
-        return Err(admission_rejection(
-            ValidationFeeAdmissionError::InvalidPolicyInvariant(reason),
-        ));
+        return Err(
+            (admission_rejection(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason)))
+                .into(),
+        );
     }
     validate_policy_network_id(&policy, &state_transaction.network_id)
         .map_err(admission_rejection)?;
     if let Some(expires_after_height) = policy.expires_after_height {
         if current_height >= expires_after_height {
-            return Err(admission_rejection(
-                ValidationFeeAdmissionError::PolicyExpired {
+            return Err(
+                (admission_rejection(ValidationFeeAdmissionError::PolicyExpired {
                     expires_after_height,
                     current_height,
-                },
-            ));
+                }))
+                .into(),
+            );
         }
     }
     if policy.charging_mode == ValidationFeeChargingMode::Disabled {
         return Ok(None);
     }
     validate_treasury_payout_contract_subject(&policy, state_transaction)
-        .map_err(admission_rejection)?;
+        .map_err(|error| error.map_rejection(admission_rejection))?;
     Ok(Some(policy))
 }
 fn validate_registry_entry_governance<W: WorldReadOnly + ?Sized>(
@@ -2389,7 +2438,7 @@ fn validate_parliament_authorization<W: WorldReadOnly + ?Sized>(
 fn validate_treasury_payout_contract_subject(
     policy: &ValidationFeePolicyV1,
     state: &impl StateReadOnly,
-) -> Result<(), ValidationFeeAdmissionError> {
+) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     if !treasury_payout_exemption_enabled(policy) {
         return Ok(());
     }
@@ -2401,9 +2450,10 @@ fn validate_treasury_payout_contract_subject(
     )?;
     if binding.treasury_account_id != treasury {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            (ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the payout binding treasury differs from the policy treasury",
-            },
+            })
+            .into(),
         );
     }
     validate_treasury_payout_binding_contract_subject(binding, policy.ds_scale, state)
@@ -2413,30 +2463,40 @@ fn validate_treasury_payout_binding_contract_subject(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     ds_scale: u8,
     state: &impl StateReadOnly,
-) -> Result<(), ValidationFeeAdmissionError> {
+) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let Some(record) =
         crate::smartcontracts::code::fetch_bound_contract_record(state, &binding.contract_address)
+            .map_err(|error| {
+                error.map_rejection(|_| {
+                    ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
+                        treasury_account_id: binding.treasury_account_id.to_string(),
+                    }
+                })
+            })?
     else {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
+            (ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
                 treasury_account_id: binding.treasury_account_id.to_string(),
-            },
+            })
+            .into(),
         );
     };
     if record.contract_address != binding.contract_address
         || record.contract_subject != binding.treasury_account_id
     {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            (ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "contract address or immutable subject differs from the enacted binding",
-            },
+            })
+            .into(),
         );
     }
     if <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) != binding.code_hash {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            (ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "deployed code hash differs from the enacted binding",
-            },
+            })
+            .into(),
         );
     }
     let entrypoint = binding.entrypoint.as_ref();
@@ -2447,16 +2507,17 @@ fn validate_treasury_payout_binding_contract_subject(
         .is_some_and(|entrypoints| entrypoints.iter().any(|item| item.name == entrypoint))
     {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            (ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the enacted entrypoint is absent from the deployed manifest",
-            },
+            })
+            .into(),
         );
     }
     let lifecycle_seal = binding
         .lifecycle_seal()
         .map_err(|_| ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal)?;
     if lifecycle_seal == [0; 32] {
-        return Err(ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal);
+        return Err((ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal).into());
     }
     let ds_credit = ValidationFeeCredit {
         treasury_account_id: binding.treasury_account_id.clone(),
@@ -2476,9 +2537,10 @@ fn validate_treasury_payout_binding_contract_subject(
         )?;
     if xor_definition.spec().scale().is_none() {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            (ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the bound XOR asset must have a fixed minor-unit scale",
-            },
+            })
+            .into(),
         );
     }
     if xor_definition
@@ -2490,11 +2552,10 @@ fn validate_treasury_payout_binding_contract_subject(
             .check(binding.max_xor_out.as_numeric())
             .is_err()
     {
-        return Err(
+        return Err((
             ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the enacted XOR bounds do not satisfy the bound asset numeric specification",
-            },
-        );
+            }).into(),);
     }
     Ok(())
 }
@@ -2546,20 +2607,27 @@ fn runtime_origin_matches_payout_binding(
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
     origin: &OpaqueDeferredRuntimeOrigin<'_>,
-) -> bool {
+) -> Result<bool, ExecutionAttemptError<ValidationFeeAdmissionError>> {
     if !runtime_origin_claims_payout_binding(binding, origin) {
-        return false;
+        return Ok(false);
     }
-    crate::smartcontracts::code::fetch_bound_contract_record(
+    let record = match crate::smartcontracts::code::fetch_bound_contract_record(
         state_transaction,
         &binding.contract_address,
-    )
-    .is_some_and(|record| {
+    ) {
+        Ok(record) => record,
+        // A completed inaccessible/invalid subject is not the enacted runtime, as before.
+        Err(ExecutionAttemptError::Rejected(_)) => return Ok(false),
+        Err(ExecutionAttemptError::Deferred(reason)) => {
+            return Err(ExecutionAttemptError::Deferred(reason));
+        }
+    };
+    Ok(record.is_some_and(|record| {
         record.contract_address == binding.contract_address
             && record.contract_subject == binding.treasury_account_id
             && <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) == binding.code_hash
             && record.code_bytes.as_slice() == origin.code_bytes
-    })
+    }))
 }
 
 fn runtime_origin_claims_payout_binding(
@@ -2576,7 +2644,7 @@ fn resolve_retained_payout_lifecycle(
     registry: Option<&ValidationFeePolicyRegistryV1>,
     state_transaction: &StateTransaction<'_, '_>,
     runtime_origin: Option<&OpaqueDeferredRuntimeOrigin<'_>>,
-) -> Result<Option<ResolvedPayoutLifecycle>, ValidationFeeAdmissionError> {
+) -> Result<Option<ResolvedPayoutLifecycle>, ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let (Some(registry), Some(origin)) = (registry, runtime_origin) else {
         return Ok(None);
     };
@@ -2604,7 +2672,7 @@ fn resolve_retained_payout_lifecycle(
         }
         retained_identity_claimed = true;
         if !trigger_matches
-            || !runtime_origin_matches_payout_binding(binding, state_transaction, origin)
+            || !runtime_origin_matches_payout_binding(binding, state_transaction, origin)?
         {
             continue;
         }
@@ -2627,20 +2695,20 @@ fn resolve_retained_payout_lifecycle(
                 continue;
             }
             return Err(
-                ValidationFeeAdmissionError::AmbiguousTreasuryPayoutRuntimeIdentity {
+                (ValidationFeeAdmissionError::AmbiguousTreasuryPayoutRuntimeIdentity {
                     first_policy_hash_hex: hex::encode(existing.policy_hash),
                     second_policy_hash_hex: hex::encode(candidate.policy_hash),
-                },
+                })
+                .into(),
             );
         }
         resolved = Some(candidate);
     }
     if retained_identity_claimed && resolved.is_none() {
-        return Err(
+        return Err((
             ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the scheduled trigger or executed runtime identity matches a retained payout lifecycle but the pair is not exact",
-            },
-        );
+            }).into(),);
     }
     Ok(resolved)
 }
@@ -2773,15 +2841,24 @@ pub(crate) fn is_validation_fee_credit_state_key(key: &StatePath) -> bool {
 fn validation_fee_credit_state_keys(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<(StatePath, StatePath), ValidationFeeAdmissionError> {
+) -> Result<(StatePath, StatePath), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
         state_transaction,
         &credit.treasury_account_id,
-    ) else {
-        return Err(
+    )
+    .map_err(|error| {
+        error.map_rejection(|_| {
             ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
                 treasury_account_id: credit.treasury_account_id.to_string(),
-            },
+            }
+        })
+    })?
+    else {
+        return Err(
+            (ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
+                treasury_account_id: credit.treasury_account_id.to_string(),
+            })
+            .into(),
         );
     };
     Ok((
@@ -2800,15 +2877,24 @@ fn validation_fee_credit_state_keys(
 fn validation_fee_credit_projection_state_keys(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<(StatePath, StatePath, StatePath), ValidationFeeAdmissionError> {
+) -> Result<(StatePath, StatePath, StatePath), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
         state_transaction,
         &credit.treasury_account_id,
-    ) else {
-        return Err(
+    )
+    .map_err(|error| {
+        error.map_rejection(|_| {
             ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
                 treasury_account_id: credit.treasury_account_id.to_string(),
-            },
+            }
+        })
+    })?
+    else {
+        return Err(
+            (ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
+                treasury_account_id: credit.treasury_account_id.to_string(),
+            })
+            .into(),
         );
     };
     Ok((
@@ -2839,22 +2925,28 @@ pub(crate) fn encode_validation_fee_credit_state_value(
     })
     .map_err(|_| ivm::VMError::NoritoInvalid)
 }
-fn decode_validation_fee_credit_state_value(bytes: &[u8]) -> Option<Quantity> {
+fn decode_validation_fee_credit_state_value(
+    bytes: &[u8],
+) -> Result<Quantity, ExecutionAttemptError<()>> {
     if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
-        return None;
+        return Err(ExecutionAttemptError::Rejected(()));
     }
-    let record: StateValueRecordV1 = norito::decode_from_bytes(bytes).ok()?;
-    if norito::to_bytes(&record).ok()? != bytes {
-        return None;
-    }
-    let schema_payload = norito::to_bytes(&validation_fee_credit_state_schema()).ok()?;
+    let record: StateValueRecordV1 = norito::decode_from_bytes(bytes)
+        .map_err(|error| norito_decode_attempt_error(error, |_| ()))?;
+    norito::verify_exact_frame(&record, bytes)
+        .map_err(|error| norito_decode_attempt_error(error, |_| ()))?;
+    let schema_payload = norito::to_bytes(&validation_fee_credit_state_schema())
+        .map_err(|error| norito_decode_attempt_error(error, |_| ()))?;
     if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
-        return None;
+        return Err(ExecutionAttemptError::Rejected(()));
     }
     let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
-        return None;
+        return Err(ExecutionAttemptError::Rejected(()));
     };
-    ivm::numeric_tlv::decode_quantity_bytes(envelope).ok()
+    // The inner numeric-TLV parser has its own deterministic envelope/quantity checks;
+    // its errors are not evidence of a refusal by the outer Norito decode scope.
+    ivm::numeric_tlv::decode_quantity_bytes(envelope)
+        .map_err(|_| ExecutionAttemptError::Rejected(()))
 }
 fn validation_fee_credit_asset_spec(
     state: &impl StateReadOnly,
@@ -2895,13 +2987,13 @@ fn validation_fee_credit_asset_spec(
 fn read_validation_fee_credit_balance(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<Quantity, ValidationFeeAdmissionError> {
+) -> Result<Quantity, ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let (key, asset_key) = validation_fee_credit_state_keys(state_transaction, credit)?;
     let value_bytes = state_transaction.world.smart_contract_state.get(&key);
     let binding_bytes = state_transaction.world.smart_contract_state.get(&asset_key);
     let (Some(value_bytes), Some(binding_bytes)) = (value_bytes, binding_bytes) else {
         if value_bytes.is_some() || binding_bytes.is_some() {
-            return Err(if value_bytes.is_some() {
+            return Err((if value_bytes.is_some() {
                 ValidationFeeAdmissionError::MalformedCreditAssetBinding {
                     state_key: asset_key.to_string(),
                 }
@@ -2909,55 +3001,54 @@ fn read_validation_fee_credit_balance(
                 ValidationFeeAdmissionError::MalformedCreditBalance {
                     state_key: key.to_string(),
                 }
-            });
+            })
+            .into());
         }
         validation_fee_credit_asset_spec(state_transaction, credit)?;
         return Ok(Quantity::zero());
     };
-    let value = decode_validation_fee_credit_state_value(value_bytes).ok_or_else(|| {
-        ValidationFeeAdmissionError::MalformedCreditBalance {
+    let value = decode_validation_fee_credit_state_value(value_bytes).map_err(|error| {
+        error.map_rejection(|()| ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
-        }
+        })
     })?;
     let bound_asset =
-        norito::decode_from_bytes::<AssetDefinitionId>(binding_bytes).map_err(|_| {
+        norito::decode_from_bytes::<AssetDefinitionId>(binding_bytes).map_err(|error| {
+            norito_decode_attempt_error(error, |_| {
+                ValidationFeeAdmissionError::MalformedCreditAssetBinding {
+                    state_key: asset_key.to_string(),
+                }
+            })
+        })?;
+    norito::verify_exact_frame(&bound_asset, binding_bytes).map_err(|error| {
+        norito_decode_attempt_error(error, |_| {
             ValidationFeeAdmissionError::MalformedCreditAssetBinding {
                 state_key: asset_key.to_string(),
             }
-        })?;
-    if norito::to_bytes(&bound_asset)
-        .map_err(
-            |_| ValidationFeeAdmissionError::MalformedCreditAssetBinding {
-                state_key: asset_key.to_string(),
-            },
-        )?
-        .as_slice()
-        != binding_bytes.as_slice()
-    {
-        return Err(ValidationFeeAdmissionError::MalformedCreditAssetBinding {
-            state_key: asset_key.to_string(),
-        });
-    }
+        })
+    })?;
     if bound_asset != credit.fee_asset_definition_id {
-        return Err(ValidationFeeAdmissionError::CreditAssetBindingMismatch {
+        return Err((ValidationFeeAdmissionError::CreditAssetBindingMismatch {
             expected_asset_definition_id: credit.fee_asset_definition_id.to_string(),
             observed_asset_definition_id: bound_asset.to_string(),
-        });
+        })
+        .into());
     }
     let spec = validation_fee_credit_asset_spec(state_transaction, credit)?;
     if spec.check(value.as_numeric()).is_err() {
-        return Err(ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
+        return Err((ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
             asset_definition_id: credit.fee_asset_definition_id.to_string(),
             amount: value,
             allowed_scale: credit.asset_scale,
-        });
+        })
+        .into());
     }
     Ok(value)
 }
 fn ensure_validation_fee_credit_capacity(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<(), ValidationFeeAdmissionError> {
+) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let current = read_validation_fee_credit_balance(state_transaction, credit)?;
     current.checked_add(&credit.amount).map_err(|_| {
         ValidationFeeAdmissionError::CreditBalanceOverflow {
@@ -2982,15 +3073,15 @@ pub(crate) fn commit_validation_fee_credit(
         return Ok(());
     };
     let current = read_validation_fee_credit_balance(state_transaction, credit)
-        .map_err(admission_rejection)?;
+        .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
     let next = current.checked_add(&credit.amount).map_err(|_| {
         admission_rejection(ValidationFeeAdmissionError::CreditBalanceOverflow {
             current,
             additional: credit.amount.clone(),
         })
     })?;
-    let (key, asset_key) =
-        validation_fee_credit_state_keys(state_transaction, credit).map_err(admission_rejection)?;
+    let (key, asset_key) = validation_fee_credit_state_keys(state_transaction, credit)
+        .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
     let bytes = encode_validation_fee_credit_state_value(&next).map_err(|_| {
         admission_rejection(ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
@@ -3003,7 +3094,7 @@ pub(crate) fn commit_validation_fee_credit(
     })?;
     let (projection_key, projection_asset_key, projection_seal_key) =
         validation_fee_credit_projection_state_keys(state_transaction, credit)
-            .map_err(admission_rejection)?;
+            .map_err(|error| fee_attempt_rejection(state_transaction, error))?;
     let seal_bytes = norito::to_bytes(&credit.lifecycle_seal).map_err(|_| {
         admission_rejection(ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal)
     })?;
@@ -3032,7 +3123,7 @@ pub(crate) fn commit_validation_fee_credit(
 fn consume_validation_fee_credit(
     state_transaction: &mut StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<(), ValidationFeeAdmissionError> {
+) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     // This validator-side mutation is the single authoritative debit. The contract may read the
     // scoped counter to avoid queueing an unaffordable batch, but guest STATE_SET/DEL are denied
     // for this leaf so contract code cannot double-debit, replenish, or forge credit.
@@ -4517,6 +4608,8 @@ pub(crate) mod tests {
     include!("validation_fee/account_custody_admission_tests.rs");
     include!("validation_fee/runtime_tests.rs");
     include!("validation_fee/multisig_batch_tests.rs");
+    include!("validation_fee/registry_refusal_tests.rs");
+    include!("validation_fee/credit_refusal_tests.rs");
 
     fn staking_lifecycle_fee_instructions() -> Vec<InstructionBox> {
         use iroha_data_model::isi::staking::{

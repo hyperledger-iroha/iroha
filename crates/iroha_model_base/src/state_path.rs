@@ -125,7 +125,7 @@ impl<'a> norito::core::DeserializePayload<'a> for StatePath {
         if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
             return Self::decode_wire(payload).map(|(path, _)| path);
         }
-        let string = norito::core::DeserializePayload::deserialize(archived.cast::<String>());
+        let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;
         Self::from_str(string.as_str())
             .map_err(|error| norito::core::Error::Message(error.reason().into()))
     }

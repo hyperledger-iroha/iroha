@@ -1502,6 +1502,11 @@ struct LiveResolvedAccountAlias {
 }
 fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
     match error {
+        iroha_core::sns::SnsError::Deferred(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        }
         error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string()),
@@ -1911,7 +1916,7 @@ fn resolve_contract_alias_on_chain(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let alias_dataspace_id = contract_alias_dataspace_id(app.as_ref(), &contract_alias)
+    let alias_dataspace_id = contract_alias_dataspace_id(app.as_ref(), &contract_alias)?
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -9596,7 +9601,7 @@ async fn handler_accounts_onboarding_readiness(
             message: "account onboarding is not configured".to_owned(),
         });
     };
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer)?;
     let body = norito::json::to_json_pretty(&report).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to encode onboarding readiness report: {error}"
@@ -14994,9 +14999,7 @@ fn routing_resolve_error_to_torii_error(
     error: queue::RoutingResolveError,
 ) -> Error {
     Error::PushIntoQueue {
-        source: Box::new(queue::Error::UnresolvedRoute {
-            reason: error.to_string(),
-        }),
+        source: Box::new(error.into()),
         backpressure: current_torii_backpressure(app.as_ref()),
     }
 }
@@ -15118,20 +15121,6 @@ fn resolve_torii_route_for_dataspace_id(
         })
         .map(|lane| lane.id)
         .min()
-        .or_else(|| {
-            (dataspace_id != DataSpaceId::UNIVERSAL).then(|| {
-                nexus
-                    .lane_catalog
-                    .lanes()
-                    .iter()
-                    .find(|lane| {
-                        lane.id == LaneId::SINGLE
-                            && lane.dataspace_id == DataSpaceId::UNIVERSAL
-                            && torii_lane_active_for_routing(app, lane.id)
-                    })
-                    .map(|lane| lane.id)
-            })?
-        })
         .ok_or(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
     iroha_core::queue::resolve_routing_decision(
         RoutingDecision::new(lane_id, dataspace_id),
@@ -15866,9 +15855,7 @@ fn torii_route_for_lane_id(
         &nexus.dataspace_catalog,
     )
     .map_err(|error| Error::PushIntoQueue {
-        source: Box::new(queue::Error::UnresolvedRoute {
-            reason: error.to_string(),
-        }),
+        source: Box::new(error.into()),
         backpressure: current_torii_backpressure(app),
     })
 }
@@ -16322,6 +16309,46 @@ struct ToriiAliasLookupRouteAccess {
     route: RoutingDecision,
     filter_by_permission: bool,
 }
+fn torii_permission_target<T: iroha_executor_data_model::permission::Permission>(
+    token: T,
+) -> Result<Permission, Error> {
+    // The checked writer also visits nested account identities fallibly. The
+    // ordinary value conversion uses their infallible display serializer.
+    let encoded = norito::json::to_json_bounded(&token, iroha_primitives::json::MAX_JSON_BYTES)
+        .map_err(|error| match error {
+            norito::json::BoundedJsonError::DecodeResource(_)
+            | norito::json::BoundedJsonError::AllocationFailed => {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                ))
+            }
+            error => Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "permission encoding failed: {error}"
+            ))),
+        })?;
+    let value = norito::json::parse_value(&encoded).map_err(|error| match error {
+        norito::json::Error::DecodeResourceLimit | norito::json::Error::AllocationFailed => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        }
+        error => Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "permission encoding failed: {error}"
+        ))),
+    })?;
+    let payload = iroha_primitives::json::Json::from_norito_value_ref(&value).map_err(|error| {
+        if norito::core::decode_error_matches_active_limits(&error) {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        } else {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "permission retention failed: {error}"
+            )))
+        }
+    })?;
+    Ok(Permission::new(T::name(), payload))
+}
 fn torii_account_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -16399,104 +16426,90 @@ fn torii_authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &AccountAlias,
-) -> bool {
-    if let Ok(literal) = alias.to_literal(world.dataspace_catalog())
-        && let Ok(canonical_name) = literal.parse()
-    {
-        let exact_permission: Permission = CanResolveAccountAlias {
-            scope: AccountAliasPermissionScope::Alias(
-                iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                    canonical_name,
-                    alias.dataspace,
-                ),
-            ),
-        }
-        .into();
-        if torii_account_has_permission(world, authority, &exact_permission) {
-            return true;
-        }
-    }
-    match alias.domain_id(world.dataspace_catalog()) {
-        Ok(Some(domain_id)) => {
-            let domain_permission: Permission = CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain_id),
-            }
-            .into();
-            torii_account_has_permission(world, authority, &domain_permission)
-        }
-        Ok(None) => {
-            let dataspace_permission: Permission = CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
-            }
-            .into();
-            torii_account_has_permission(world, authority, &dataspace_permission)
-        }
-        Err(error) => {
-            iroha_logger::warn!(
-                authority = %authority,
-                alias = ?alias,
-                ?error,
-                "Torii alias lookup permission check rejected malformed alias scope"
-            );
-            false
-        }
-    }
+) -> Result<bool, Error> {
+    iroha_core::alias::authority_can_resolve_account_alias(world, authority, alias)
+        .map_err(live_dataspace_resolution_error)
 }
 fn torii_authority_can_resolve_resolved_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &iroha_data_model::alias_setup::ResolvedAccountAliasV1,
-) -> bool {
-    let exact_permission: Permission = CanResolveAccountAlias {
-        scope: AccountAliasPermissionScope::Alias(alias.clone()),
-    }
-    .into();
-    if torii_account_has_permission(world, authority, &exact_permission) {
-        return true;
-    }
-    let scope = alias
-        .canonical_name
-        .domain_id()
-        .map(AccountAliasPermissionScope::Domain)
-        .unwrap_or(AccountAliasPermissionScope::Dataspace(alias.dataspace_id));
-    torii_account_has_permission(
-        world,
-        authority,
-        &Permission::from(CanResolveAccountAlias { scope }),
-    )
+) -> Result<bool, Error> {
+    iroha_core::alias::authority_can_resolve_resolved_account_alias(world, authority, alias)
+        .map_err(live_dataspace_resolution_error)
 }
 #[cfg(feature = "app_api")]
 fn torii_alias_lookup_permission_probe_alias(
     app: &AppState,
     dataspace_id: DataSpaceId,
     request: &routing::AliasLookupByAccountRequestDto,
-) -> Option<iroha_data_model::alias_setup::ResolvedAccountAliasV1> {
+) -> Result<Option<iroha_data_model::alias_setup::ResolvedAccountAliasV1>, Error> {
     let state_view = app.state.view();
-    let dataspace = iroha_core::sns::resolve_active_dataspace_alias_by_id(
+    let dataspace = match iroha_core::sns::resolve_active_dataspace_alias_by_id(
         state_view.world(),
         &state_view.nexus().dataspace_catalog,
         dataspace_id,
         routing::asset_alias_observation_time_ms(&app.state),
-    )
-    .ok()?;
-    let domain = request
+    ) {
+        Ok(value) => value,
+        Err(iroha_core::sns::SnsError::NotFound(_)) => return Ok(None),
+        Err(error) => return Err(live_dataspace_resolution_error(error)),
+    };
+    let domain = match request
         .domain
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::parse::<Name>)
         .transpose()
-        .ok()?;
-    let canonical_name = iroha_data_model::alias_setup::AccountAliasName::try_new(
+    {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let Ok(canonical_name) = iroha_data_model::alias_setup::AccountAliasName::try_new(
         "lookup",
         domain.as_ref().map(|name| name.as_ref()),
         dataspace,
-    )
-    .ok()?;
-    Some(iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-        canonical_name,
-        dataspace_id,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(canonical_name, dataspace_id),
     ))
+}
+#[cfg(feature = "app_api")]
+fn torii_exact_alias_permission_matches_route(
+    permission: &Permission,
+    dataspace_id: DataSpaceId,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> Result<bool, Error> {
+    // Inspect only this typed grant; malformed or unrelated grants never authorize a route.
+    if permission.name() != "CanResolveAccountAlias" {
+        return Ok(false);
+    }
+    let permission =
+        match norito::json::from_str::<CanResolveAccountAlias>(permission.payload().as_ref()) {
+            Ok(value) => value,
+            Err(
+                norito::json::Error::DecodeResourceLimit | norito::json::Error::AllocationFailed,
+            ) => {
+                return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+                )));
+            }
+            Err(_) => return Ok(false),
+        };
+    let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
+        return Ok(false);
+    };
+    Ok(alias.dataspace_id == dataspace_id
+        && request.domain.as_deref().is_none_or(|domain| {
+            alias
+                .canonical_name
+                .domain
+                .as_ref()
+                .is_some_and(|candidate| candidate.as_ref() == domain)
+        }))
 }
 #[cfg(feature = "app_api")]
 fn torii_alias_lookup_dataspace_allowed_by_permission(
@@ -16504,45 +16517,34 @@ fn torii_alias_lookup_dataspace_allowed_by_permission(
     dataspace_id: DataSpaceId,
     caller: Option<&AccountId>,
     request: &routing::AliasLookupByAccountRequestDto,
-) -> bool {
+) -> Result<bool, Error> {
     let Some(caller) = caller else {
-        return false;
+        return Ok(false);
     };
     let world_view = app.state.view();
     let world = world_view.world();
-    let exact_alias_in_route = |permission: &Permission| {
-        CanResolveAccountAlias::try_from(permission).is_ok_and(|permission| {
-            let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
-                return false;
-            };
-            if alias.dataspace_id != dataspace_id {
-                return false;
+    if let Ok(permissions) = world.account_permissions_iter(caller) {
+        for permission in permissions {
+            if torii_exact_alias_permission_matches_route(permission, dataspace_id, request)? {
+                return Ok(true);
             }
-            request.domain.as_deref().is_none_or(|domain| {
-                alias
-                    .canonical_name
-                    .domain
-                    .as_ref()
-                    .is_some_and(|candidate| candidate.as_ref() == domain)
-            })
-        })
-    };
-    if world
-        .account_permissions_iter(caller)
-        .is_ok_and(|permissions| permissions.into_iter().any(exact_alias_in_route))
-        || world.account_roles_iter(caller).any(|role_id| {
-            world
-                .roles()
-                .get(role_id)
-                .is_some_and(|role| role.permissions().any(exact_alias_in_route))
-        })
-    {
-        return true;
+        }
     }
-    let Some(alias) = torii_alias_lookup_permission_probe_alias(app, dataspace_id, request) else {
-        return false;
+    for role_id in world.account_roles_iter(caller) {
+        if let Some(role) = world.roles().get(role_id) {
+            for permission in role.permissions() {
+                if torii_exact_alias_permission_matches_route(permission, dataspace_id, request)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    // Drop the original view before the independent probe acquires its own immutable view.
+    drop(world_view);
+    let Some(alias) = torii_alias_lookup_permission_probe_alias(app, dataspace_id, request)? else {
+        return Ok(false);
     };
-    torii_authority_can_resolve_resolved_account_alias(world, caller, &alias)
+    torii_authority_can_resolve_resolved_account_alias(app.state.view().world(), caller, &alias)
 }
 #[cfg(feature = "app_api")]
 fn torii_partition_alias_lookup_routes(
@@ -16550,7 +16552,7 @@ fn torii_partition_alias_lookup_routes(
     routes: Vec<RoutingDecision>,
     visibility: &ToriiAccountReadVisibility,
     request: &routing::AliasLookupByAccountRequestDto,
-) -> (Vec<ToriiAliasLookupRouteAccess>, usize) {
+) -> Result<(Vec<ToriiAliasLookupRouteAccess>, usize), Error> {
     let public_dataspaces = torii_public_dataspace_ids(app.as_ref());
     let mut allowed_routes = Vec::new();
     let mut denied_routes = 0usize;
@@ -16565,7 +16567,7 @@ fn torii_partition_alias_lookup_routes(
             route.dataspace_id,
             visibility.caller(),
             request,
-        ) {
+        )? {
             allowed_routes.push(ToriiAliasLookupRouteAccess {
                 route,
                 // A dataspace grant only opens the route. Each returned domain-qualified alias
@@ -16576,7 +16578,7 @@ fn torii_partition_alias_lookup_routes(
             denied_routes = denied_routes.saturating_add(1);
         }
     }
-    (allowed_routes, denied_routes)
+    Ok((allowed_routes, denied_routes))
 }
 #[cfg(feature = "app_api")]
 fn torii_partition_alias_index_routes_by_permission(
@@ -16603,7 +16605,7 @@ fn torii_partition_alias_index_routes_by_permission(
                     app.state.view().world(),
                     caller,
                     &alias.resolved,
-                )
+                )?
             }
             Ok(None) => {
                 let dataspace = {
@@ -16630,7 +16632,7 @@ fn torii_partition_alias_index_routes_by_permission(
                     app.state.view().world(),
                     caller,
                     &resolved,
-                )
+                )?
             }
             Err(error) => return Err(error),
         };
@@ -17278,7 +17280,9 @@ fn torii_authorize_signed_query_routes(
         }
         SignedQueryScope::TargetAlias(alias) => {
             let state_view = app.state.view();
-            if torii_authority_can_resolve_account_alias(state_view.world(), authority, alias) {
+            if torii_authority_can_resolve_account_alias(state_view.world(), authority, alias)
+                .map_err(IntoResponse::into_response)?
+            {
                 Ok(routes)
             } else {
                 Err(torii_signed_query_permission_denied_response(
@@ -18515,6 +18519,7 @@ fn bounded_signed_query_fanout_json_encode_error_response(
         ),
         norito::json::BoundedJsonError::Unsupported
         | norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::DecodeResource(_)
         | norito::json::BoundedJsonError::LengthMismatch => torii_proxy_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "query_encoding_failed",
@@ -19497,22 +19502,18 @@ fn torii_internal_json_error(message: impl Into<String>) -> Response {
     )
 }
 #[cfg(feature = "app_api")]
-fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Option<DataSpaceId> {
+fn dataspace_id_for_alias_segment(
+    app: &AppState,
+    dataspace_alias: &str,
+) -> Result<Option<DataSpaceId>, Error> {
     let state_view = app.state.view();
-    let catalog = &state_view.nexus().dataspace_catalog;
     iroha_core::sns::active_dataspace_id_by_alias(
         state_view.world(),
-        catalog,
+        &state_view.nexus().dataspace_catalog,
         dataspace_alias,
         torii_state_view_ledger_time_ms(&state_view),
     )
-    .or_else(|| {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            Some(DataSpaceId::UNIVERSAL)
-        } else {
-            catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-        }
-    })
+    .map_err(live_dataspace_resolution_error)
 }
 #[cfg(feature = "app_api")]
 fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>) -> u64 {
@@ -19526,14 +19527,16 @@ fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>
 fn asset_definition_home_dataspace_id(
     app: &AppState,
     definition_id: &AssetDefinitionId,
-) -> Option<DataSpaceId> {
+) -> Result<Option<DataSpaceId>, Error> {
     let (dataspace_alias, is_global) = {
         let state_view = app.state.view();
         let world = state_view.world();
         if let Some(domain) = world.asset_definition_domains().get(definition_id) {
             (Some(domain.dataspace().as_ref().to_owned()), false)
         } else {
-            let definition = world.asset_definition(definition_id).ok()?;
+            let Ok(definition) = world.asset_definition(definition_id) else {
+                return Ok(None);
+            };
             (
                 definition
                     .alias()
@@ -19545,11 +19548,19 @@ fn asset_definition_home_dataspace_id(
     };
     dataspace_alias
         .as_deref()
-        .and_then(|alias| dataspace_id_for_alias_segment(app, alias))
-        .or_else(|| is_global.then_some(DataSpaceId::UNIVERSAL))
+        .map(|alias| dataspace_id_for_alias_segment(app, alias))
+        .transpose()
+        .map(|resolved| {
+            resolved
+                .flatten()
+                .or_else(|| is_global.then_some(DataSpaceId::UNIVERSAL))
+        })
 }
 #[cfg(feature = "app_api")]
-fn contract_alias_dataspace_id(app: &AppState, alias: &ContractAlias) -> Option<DataSpaceId> {
+fn contract_alias_dataspace_id(
+    app: &AppState,
+    alias: &ContractAlias,
+) -> Result<Option<DataSpaceId>, Error> {
     dataspace_id_for_alias_segment(app, alias.dataspace_segment())
 }
 #[cfg(feature = "app_api")]
@@ -19557,11 +19568,15 @@ fn torii_contract_target_read_route(
     app: &AppState,
     address: Option<&ContractAddress>,
     alias: Option<&ContractAlias>,
-) -> Option<RoutingDecision> {
-    let dataspace_id = address
-        .and_then(|address| address.dataspace_id().ok())
-        .or_else(|| alias.and_then(|alias| contract_alias_dataspace_id(app, alias)))?;
-    resolve_torii_route_for_dataspace_id(app, dataspace_id).ok()
+) -> Result<Option<RoutingDecision>, Error> {
+    let dataspace_id = match address.and_then(|address| address.dataspace_id().ok()) {
+        Some(id) => Some(id),
+        None => alias
+            .map(|alias| contract_alias_dataspace_id(app, alias))
+            .transpose()?
+            .flatten(),
+    };
+    Ok(dataspace_id.and_then(|id| resolve_torii_route_for_dataspace_id(app, id).ok()))
 }
 #[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {
@@ -24814,6 +24829,10 @@ fn resolve_active_soradns_gateway_host(
         now_ms,
     )
     .map_err(|error| match error {
+        iroha_core::sns::SnsError::Deferred(_) => soradns_public_gateway_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "local SNS query capacity is unavailable",
+        ),
         error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
             soradns_public_gateway_error(StatusCode::NOT_FOUND, error.to_string())
         }
@@ -26228,7 +26247,7 @@ async fn handler_get_contract_state(
         app.as_ref(),
         contract_address.as_ref(),
         contract_alias.as_ref(),
-    ) {
+    )? {
         let query_string = encode_torii_proxy_query(&q)?;
         return Ok(execute_torii_single_route_read(
             &app,
@@ -26326,7 +26345,7 @@ async fn execute_mint_requests_contract_state_read(
         app.as_ref(),
         contract_address.as_ref(),
         contract_alias.as_ref(),
-    ) {
+    )? {
         let query_string = encode_torii_proxy_query(&query)?;
         return Ok(execute_torii_single_route_read(
             app,
@@ -27406,7 +27425,7 @@ async fn handler_post_contract_view(
         app.as_ref(),
         request.0.contract_address.as_ref(),
         request.0.contract_alias.as_ref(),
-    ) {
+    )? {
         let body = norito::json::to_vec(&request.0).map_err(|error| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
                 "failed to encode routed contract view request: {error}"
@@ -27487,7 +27506,7 @@ async fn handler_post_contract_view_batch(
             app.as_ref(),
             item.contract_address.as_ref(),
             item.contract_alias.as_ref(),
-        );
+        )?;
         match item_route {
             Some(item_route) => match batch_route {
                 Some(existing) if existing != item_route => {
@@ -32555,7 +32574,7 @@ async fn handler_alias_resolve(
             app.state.view().world(),
             caller,
             &alias.resolved,
-        ) {
+        )? {
             return Ok(torii_alias_permission_denied_response(
                 "exact Alias or applicable Domain/Dataspace resolve permission is required for the requested alias scope",
             ));
@@ -32605,14 +32624,9 @@ async fn handler_alias_resolve_index(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let visibility = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "alias_resolve_index",
-    )?;
+    // An index enumerates bindings rather than naming one public mapping.
+    // Authenticate before decoding it or selecting the caller's visible routes.
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveIndexRequestDto = decode_admitted_app_routed_read_json!(
         body.as_ref(),
         norito::json::from_slice(body.as_ref()).map_err(|err| {
@@ -32625,7 +32639,7 @@ async fn handler_alias_resolve_index(
     let (allowed_routes, denied_routes) = torii_partition_alias_index_routes_by_permission(
         &app,
         candidate_routes,
-        visibility.caller(),
+        Some(&caller),
         request.index,
     )?;
     if allowed_routes.len() == 1 && denied_routes == 0 {
@@ -32692,8 +32706,7 @@ async fn handler_alias_resolve_index(
     let diagnostics = collected.diagnostics;
     let budget = collected.budget;
     let payloads =
-        match authorize_alias_resolve_index_payloads(&app, visibility.caller(), collected.payloads)
-        {
+        match authorize_alias_resolve_index_payloads(&app, Some(&caller), collected.payloads) {
             Ok(payloads) => payloads,
             Err(response) => {
                 return Ok(hold_query_fanout_memory_in_response_body(
@@ -32756,7 +32769,7 @@ async fn handler_alias_lookup_by_account(
             dataspace_id,
             Some(caller),
             &request,
-        ) {
+        )? {
             return Ok(torii_alias_permission_denied_response(
                 "exact Alias or applicable Domain/Dataspace resolve permission is required for the requested alias scope",
             ));
@@ -32767,7 +32780,7 @@ async fn handler_alias_lookup_by_account(
         Err(response) => return Ok(response),
     };
     let (allowed_routes, denied_routes) =
-        torii_partition_alias_lookup_routes(&app, candidate_routes, &visibility, &request);
+        torii_partition_alias_lookup_routes(&app, candidate_routes, &visibility, &request)?;
     if allowed_routes.len() == 1 && denied_routes == 0 && !allowed_routes[0].filter_by_permission {
         let route = allowed_routes[0].route;
         return Ok(execute_torii_single_route_read(
@@ -33466,7 +33479,16 @@ pub(crate) fn quote_internal_fee_payment_from_parts(
         Some(route.dataspace_id),
     )
     .map(|quote| quote.recommended_intent)
-    .map_err(|err| rejected(err.code(), err.reason()))
+    .map_err(|err| match err {
+        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        }
+        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(err) => {
+            rejected(err.code(), err.reason())
+        }
+    })
 }
 #[cfg(feature = "app_api")]
 async fn handler_fee_quote(
@@ -33559,7 +33581,12 @@ async fn handler_fee_quote(
     };
     let draft_quote = match quote {
         Ok(quote) => quote,
-        Err(err) => {
+        Err(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_)) => {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+        Err(iroha_core::execution_attempt::ExecutionAttemptError::Rejected(err)) => {
             let code = err.code();
             return Ok(fee_quote_rejection_response(
                 if code == FeeRejectionCode::InvalidProgramConfiguration {
@@ -33951,7 +33978,7 @@ async fn handler_contract_alias_resolve(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    if let Some(route) = torii_contract_target_read_route(app.as_ref(), None, Some(&alias)) {
+    if let Some(route) = torii_contract_target_read_route(app.as_ref(), None, Some(&alias))? {
         return Ok(execute_torii_single_route_read(
             &app,
             route,
@@ -34730,21 +34757,40 @@ enum AuthenticatedOnboardingScope {
 #[derive(Clone, Debug)]
 struct AuthenticatedOnboardingDomain(AuthenticatedOnboardingScope);
 #[cfg(feature = "app_api")]
+/// Build a diagnostic account literal without turning local address admission into a panic.
+fn onboarding_account_literal(account: &AccountId) -> Result<String, Error> {
+    account.canonical_i105().map_err(|error| match error {
+        iroha_data_model::account::address::AccountAddressError::DecodeResourceLimit => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            ))
+        }
+        error => Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "onboarding account diagnostic failed: {error}"
+        ))),
+    })
+}
 fn validate_account_onboarding_readiness(
     state: &CoreState,
     signer: &AccountOnboardingSigner,
-) -> iroha_data_model::alias_setup::AliasSetupReportV1 {
+) -> Result<iroha_data_model::alias_setup::AliasSetupReportV1, Error> {
     use iroha_data_model::alias_setup::{
         AliasSetupDiagnosticV1, AliasSetupReportV1, AliasSetupSeverityV1, AliasSetupStatusV1,
         AliasSetupValidationPhaseV1,
     };
-    let world = state.world_view();
-    let nexus = state.nexus_snapshot();
-    let catalog = nexus.dataspace_catalog.clone();
-    let has_committed_block = state.view().latest_block().is_some();
-    let now_ms = state.view().latest_block().map_or(0, |block| {
+    let state_view = state.view();
+    let world = state_view.world();
+    let nexus = state_view.nexus();
+    let catalog = &nexus.dataspace_catalog;
+    let has_committed_block = state_view.latest_block().is_some();
+    let now_ms = state_view.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     });
+    let account_alias_policy =
+        iroha_core::sns::policy_by_id(world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID);
+    if let Err(error @ iroha_core::sns::SnsError::Deferred(_)) = account_alias_policy {
+        return Err(live_dataspace_resolution_error(error));
+    }
     let mut diagnostics = Vec::new();
     let mut blocked =
         |code: &str, resource: Option<String>, config_path: &str, remediation: &str| {
@@ -34762,13 +34808,11 @@ fn validate_account_onboarding_readiness(
     if world.accounts().get(&signer.authority).is_none() {
         blocked(
             "alias.onboarding.authority_missing",
-            Some(signer.authority.to_string()),
+            Some(onboarding_account_literal(&signer.authority)?),
             "torii.account_onboarding.authority",
             "register and fund the configured onboarding authority before enabling sponsored onboarding",
         );
     }
-    let account_alias_policy =
-        iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID);
     match account_alias_policy.as_ref() {
         Err(error) => blocked(
             "alias.onboarding.policy_invalid",
@@ -34823,11 +34867,14 @@ fn validate_account_onboarding_readiness(
             }
             if let Err(error) =
                 iroha_core::sns::ensure_namespace_policy_payment_asset_matches_configured(
-                    &world,
+                    world,
                     iroha_core::sns::SnsNamespace::AccountAlias,
                     &nexus.fees.fee_asset_id,
                 )
             {
+                if matches!(&error, iroha_core::sns::SnsError::Deferred(_)) {
+                    return Err(live_dataspace_resolution_error(error));
+                }
                 // State initialization seeds SNS policies before a joining node
                 // has replayed the fee asset. The policy is present in this
                 // snapshot, so NotFound means its otherwise-matching configured
@@ -34857,7 +34904,11 @@ fn validate_account_onboarding_readiness(
                 if payer_balance <= Quantity::zero() {
                     blocked(
                         "alias.onboarding.payer_unfunded",
-                        Some(payer_asset.to_string()),
+                        Some(format!(
+                            "{}#{}",
+                            payer_asset.definition(),
+                            onboarding_account_literal(&signer.authority)?
+                        )),
                         "torii.account_onboarding.authority",
                         "fund the onboarding authority with the configured fee asset before accepting sponsored onboarding",
                     );
@@ -34881,7 +34932,7 @@ fn validate_account_onboarding_readiness(
         }
     }
     if signer.allowed_permissions.contains("DpnUser") {
-        let admin = Permission::from(iroha_executor_data_model::permission::dpn::DpnAdmin);
+        let admin = torii_permission_target(iroha_executor_data_model::permission::dpn::DpnAdmin)?;
         // Native DPN grants require the exact direct unit token; role-derived or
         // differently scoped permissions do not authorize this lifecycle.
         if !world.account_contains_inherent_permission(&signer.authority, &admin) {
@@ -34897,18 +34948,26 @@ fn validate_account_onboarding_readiness(
         if world.fee_sponsor_programs().get(program_id).is_none() {
             blocked(
                 "alias.onboarding.sponsor_program_missing",
-                Some(program_id.to_string()),
+                Some(format!(
+                    "{}/{}",
+                    onboarding_account_literal(&program_id.sponsor)?,
+                    program_id.name
+                )),
                 "torii.account_onboarding.fee_sponsor_program_id",
                 "register the configured fee sponsor program or remove it from onboarding configuration",
             );
         }
-        let enrollment_permission = Permission::from(CanEnrollFeeSponsorProgram {
+        let enrollment_permission = torii_permission_target(CanEnrollFeeSponsorProgram {
             program_id: program_id.clone(),
-        });
-        if !torii_account_has_permission(&world, &signer.authority, &enrollment_permission) {
+        })?;
+        if !torii_account_has_permission(world, &signer.authority, &enrollment_permission) {
             blocked(
                 "alias.onboarding.sponsor_permission_missing",
-                Some(program_id.to_string()),
+                Some(format!(
+                    "{}/{}",
+                    onboarding_account_literal(&program_id.sponsor)?,
+                    program_id.name
+                )),
                 "torii.account_onboarding.authority",
                 "grant the configured authority exact CanEnrollFeeSponsorProgram permission",
             );
@@ -34916,12 +34975,15 @@ fn validate_account_onboarding_readiness(
     }
     for domain in signer.api_token_hashes_by_domain.keys() {
         let dataspace = match iroha_core::sns::resolve_active_dataspace_id_by_alias(
-            &world,
-            &catalog,
+            world,
+            catalog,
             domain.dataspace().as_ref(),
             now_ms,
         ) {
             Ok(dataspace) => dataspace,
+            Err(error @ iroha_core::sns::SnsError::Deferred(_)) => {
+                return Err(live_dataspace_resolution_error(error));
+            }
             Err(error) => {
                 let message = error.to_string();
                 blocked(
@@ -34946,8 +35008,8 @@ fn validate_account_onboarding_readiness(
             );
         }
         match iroha_core::sns::get_name_record(
-            &world,
-            &catalog,
+            world,
+            catalog,
             iroha_core::sns::SnsNamespace::Domain,
             &domain.to_string(),
             now_ms,
@@ -34959,6 +35021,9 @@ fn validate_account_onboarding_readiness(
                 "torii.account_onboarding.credentials[].scope.domain",
                 "activate or renew the exact parent-domain SNS lease before accepting onboarding",
             ),
+            Err(error @ iroha_core::sns::SnsError::Deferred(_)) => {
+                return Err(live_dataspace_resolution_error(error));
+            }
             Err(error) => blocked(
                 "alias.onboarding.credential_domain_lease_missing",
                 Some(domain.to_string()),
@@ -34969,11 +35034,13 @@ fn validate_account_onboarding_readiness(
             ),
         }
         if !iroha_core::alias::authority_can_manage_account_alias_scope(
-            &world,
+            world,
             &signer.authority,
             dataspace,
             Some(domain),
-        ) {
+        )
+        .map_err(live_dataspace_resolution_error)?
+        {
             blocked(
                 "alias.onboarding.manage_permission_missing",
                 Some(domain.to_string()),
@@ -34984,12 +35051,15 @@ fn validate_account_onboarding_readiness(
     }
     for dataspace_name in signer.api_token_hashes_by_dataspace.keys() {
         let dataspace = match iroha_core::sns::resolve_active_dataspace_id_by_alias(
-            &world,
-            &catalog,
+            world,
+            catalog,
             dataspace_name.as_ref(),
             now_ms,
         ) {
             Ok(dataspace) => dataspace,
+            Err(error @ iroha_core::sns::SnsError::Deferred(_)) => {
+                return Err(live_dataspace_resolution_error(error));
+            }
             Err(error) => {
                 let message = error.to_string();
                 blocked(
@@ -35006,8 +35076,8 @@ fn validate_account_onboarding_readiness(
             }
         };
         match iroha_core::sns::get_name_record(
-            &world,
-            &catalog,
+            world,
+            catalog,
             iroha_core::sns::SnsNamespace::Dataspace,
             dataspace_name.as_ref(),
             now_ms,
@@ -35019,6 +35089,9 @@ fn validate_account_onboarding_readiness(
                 "torii.account_onboarding.credentials[].scope.dataspace",
                 "activate or renew the exact parent-dataspace SNS lease before accepting onboarding",
             ),
+            Err(error @ iroha_core::sns::SnsError::Deferred(_)) => {
+                return Err(live_dataspace_resolution_error(error));
+            }
             Err(error) => blocked(
                 "alias.onboarding.credential_dataspace_lease_missing",
                 Some(dataspace_name.to_string()),
@@ -35029,11 +35102,13 @@ fn validate_account_onboarding_readiness(
             ),
         }
         if !iroha_core::alias::authority_can_manage_account_alias_scope(
-            &world,
+            world,
             &signer.authority,
             dataspace,
             None,
-        ) {
+        )
+        .map_err(live_dataspace_resolution_error)?
+        {
             blocked(
                 "alias.onboarding.manage_permission_missing",
                 Some(dataspace_name.to_string()),
@@ -35070,7 +35145,7 @@ fn validate_account_onboarding_readiness(
     } else {
         AliasSetupStatusV1::Blocked
     };
-    AliasSetupReportV1::new(status, diagnostics)
+    Ok(AliasSetupReportV1::new(status, diagnostics))
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
@@ -40894,13 +40969,18 @@ impl Torii {
                     }
                 }),
             };
-            let readiness = validate_account_onboarding_readiness(state.as_ref(), &signer);
-            if readiness.status != iroha_data_model::alias_setup::AliasSetupStatusV1::Ready {
-                iroha_logger::warn!(
-                    target: "torii.onboard",
-                    diagnostics = ?readiness.diagnostics,
-                    "account onboarding is configured but blocked by current world state"
-                );
+            match validate_account_onboarding_readiness(state.as_ref(), &signer) {
+                Ok(readiness) if readiness.status != iroha_data_model::alias_setup::AliasSetupStatusV1::Ready => {
+                    iroha_logger::warn!(target: "torii.onboard", diagnostics = ?readiness.diagnostics,
+                        "account onboarding is configured but blocked by current world state");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    // This startup probe is advisory. Do not publish a permanent report for an
+                    // incomplete local read; HTTP readiness retries against the original State.
+                    iroha_logger::warn!(target: "torii.onboard", ?error,
+                        "account onboarding readiness probe did not complete");
+                }
             }
             signer
         });

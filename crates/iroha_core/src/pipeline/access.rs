@@ -160,9 +160,13 @@ where
 {
     let cache = state_ro.prepared_contract_cache();
     // A warm content cache never substitutes for custody in this exact dataspace.
+    // Planning alone may fall back to the global dependency barrier on an incomplete read.
+    // It produces no execution verdict or negative registry entry; the live executor repeats
+    // original scope/authorization admission before any effect or fee can be published.
     code::with_code_bytes(state_ro, &artifact_id, |bytecode| {
         cache.get_or_prepare(artifact_id.code_hash, bytecode)
-    })?
+    })
+    .ok()??
     .ok()
     .map(|contract| contract.as_ref().clone())
 }
@@ -607,7 +611,7 @@ where
         ),
         Executable::ContractCall(call) => {
             if let Some(view) = state_ro
-                && let Some(identity) =
+                && let Ok(Some(identity)) =
                     code::fetch_bound_contract_identity(view, &call.contract_address)
                 && identity.code_hash == call.expected_code_hash
                 && let Ok(artifact_id) =
@@ -1927,7 +1931,7 @@ where
         }
         ExecutableRef::Batch(_) => set.union_with(AccessSet::global()),
         ExecutableRef::ContractCall(invocation) => {
-            if let Some(identity) =
+            if let Ok(Some(identity)) =
                 code::fetch_bound_contract_identity(state_ro, &invocation.contract_address)
                 && identity.code_hash == invocation.expected_code_hash
                 && let Ok(artifact_id) = ContractArtifactId::for_address(

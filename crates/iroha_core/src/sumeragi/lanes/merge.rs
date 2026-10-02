@@ -106,6 +106,9 @@ impl LaneBlockSource for NoLanes {
 /// Why a global block's lane merge cannot be expanded.
 #[derive(Debug, thiserror::Error)]
 pub enum MergeError {
+    /// Original routing State could not be read locally; the certified input remains retryable.
+    #[error("lane routing deferred: {0}")]
+    RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// Local storage failed; this does not prove that a peer's global block is invalid.
     #[error("lane storage failed: {0}")]
     Storage(#[source] std::io::Error),
@@ -264,9 +267,9 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
 ) -> Result<Expansion<'state>, MergeError> {
     let height = proposal.header().height().get();
     let time_ms = u64::try_from(proposal.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-    let policy = lane_policy(view.world());
     let lanes = view.world().sumeragi_lanes();
-    let routing = super::routing::RoutingSnapshot::of(view);
+    let routing = super::routing::RoutingSnapshot::of(view).map_err(MergeError::RoutingDeferred)?;
+    let policy = routing.policy();
     let inputs = routing.inputs(view.world());
     let own = proposal.external_entrypoints_slice();
     let mut step = LaneStepInput {
@@ -279,7 +282,7 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
         for entrypoint in own {
             if let TransactionEntrypoint::External(tx) = entrypoint {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                let lane = inputs.route(&accepted, height).ok_or_else(|| {
+                let lane = inputs.route(&accepted, height)?.ok_or_else(|| {
                     MergeError::Invalid(
                         "concrete dataspace has no active native execution lane".into(),
                     )
@@ -352,7 +355,7 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
     for (lane, tx) in candidates {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let hash = accepted.hash_as_entrypoint();
-        if inputs.route(&accepted, height) != Some(lane)
+        if inputs.route(&accepted, height)? != Some(lane)
             || view.has_entrypoint(hash)
             || !seen.insert(hash)
             || !admission.admits(accepted.as_ref(), proposal)
@@ -395,7 +398,9 @@ pub fn propose<V: StateReadOnly>(
     source: &dyn LaneBlockSource,
     height: u64,
 ) -> std::io::Result<MergeProposal> {
-    let Some(policy) = lane_policy(view.world()) else {
+    let Some(policy) = lane_policy(view.world())
+        .map_err(|reason| std::io::Error::new(std::io::ErrorKind::WouldBlock, reason))?
+    else {
         return Ok(MergeProposal::default());
     };
     let capacity = block_capacity(view.world());

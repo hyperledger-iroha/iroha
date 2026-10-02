@@ -60,13 +60,17 @@ impl CommittedRead {
                     Ok(decoded) => self.phase = Phase::Decoded(decoded),
                     Err((job, error)) => {
                         self.phase = Phase::Certificate(job);
-                        let kind = match &error {
-                            CertificateReadError::Admission(error) if error.is_local_refusal() => {
-                                io::ErrorKind::WouldBlock
-                            }
-                            _ => io::ErrorKind::InvalidData,
-                        };
-                        return Err(io::Error::new(kind, error));
+                        if matches!(&error, CertificateReadError::Admission(error) if error.is_local_refusal())
+                            || (matches!(
+                                &error,
+                                CertificateReadError::Decode(
+                                    norito::Error::AllocationFailed { .. }
+                                )
+                            ) && !cfg!(all(test, sumeragi_core_mutation = "HC25")))
+                        {
+                            return Err(io::ErrorKind::WouldBlock.into());
+                        }
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
                     }
                 },
                 Phase::Decoded(decoded) => {
@@ -95,9 +99,9 @@ impl CommittedRead {
                     Ok(StoredBodyReadPoll::Ready(restoration, qc)) => {
                         self.phase = Phase::Restoring(restoration, qc)
                     }
-                    Ok(StoredBodyReadPoll::Pending(error)) => {
+                    Ok(StoredBodyReadPoll::Pending(_)) => {
                         self.phase = Phase::Projecting(job);
-                        return Err(io::Error::new(io::ErrorKind::WouldBlock, error));
+                        return Err(io::ErrorKind::WouldBlock.into());
                     }
                     Ok(StoredBodyReadPoll::Absent) => {
                         return Err(invalid("retained committed block cannot become absent"));
@@ -116,12 +120,13 @@ impl CommittedRead {
                     Ok(body) => return Ok((body, qc)),
                     Err((job, error)) => {
                         self.phase = Phase::Restoring(job, qc);
-                        let kind = if error.is_local_refusal() {
-                            io::ErrorKind::WouldBlock
-                        } else {
-                            io::ErrorKind::InvalidData
-                        };
-                        return Err(io::Error::new(kind, RestoreFailure(error)));
+                        if error.is_local_refusal() {
+                            return Err(io::ErrorKind::WouldBlock.into());
+                        }
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            RestoreFailure(error),
+                        ));
                     }
                 },
                 Phase::Consumed => return Err(invalid("committed read already consumed")),

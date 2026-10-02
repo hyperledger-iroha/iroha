@@ -158,14 +158,21 @@ fn validate_initial_permission_payload_constraints(
     }
     Ok(())
 }
+fn sns_permission_attempt_error(error: crate::sns::SnsError) -> crate::execution_attempt::ExecutionAttemptError<ValidationFail> {
+    if cfg!(all(test, sumeragi_core_mutation = "HC35")) {
+        return crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::InternalError(error.to_string()));
+    }
+    error.into_attempt_error(|error| ValidationFail::InternalError(error.to_string()))
+}
+
 fn initial_alias_scope_owned_by(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     scope: &executor_permission::account::AccountAliasPermissionScope,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     match scope {
         executor_permission::account::AccountAliasPermissionScope::Domain(domain) => {
-            authority_owns_domain(&state_transaction.world, authority, domain)
+            authority_owns_domain(&state_transaction.world, authority, domain).map_err(Into::into)
         }
         executor_permission::account::AccountAliasPermissionScope::Dataspace(dataspace) => {
             let now_ms = state_transaction.block_unix_timestamp_ms();
@@ -175,7 +182,7 @@ fn initial_alias_scope_owned_by(
                 *dataspace,
                 now_ms,
             )
-            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            .map_err(sns_permission_attempt_error)?
             .as_ref()
                 == Some(authority))
         }
@@ -192,11 +199,11 @@ fn initial_asset_definition_alias_scope_owned_by(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     scope: &executor_permission::asset_definition::AssetDefinitionAliasPermissionScope,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     match scope {
         executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
             domain,
-        ) => authority_owns_domain(&state_transaction.world, authority, domain),
+        ) => authority_owns_domain(&state_transaction.world, authority, domain).map_err(Into::into),
         executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Dataspace(
             dataspace,
         ) => {
@@ -207,7 +214,7 @@ fn initial_asset_definition_alias_scope_owned_by(
                 *dataspace,
                 now_ms,
             )
-            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+            .map_err(sns_permission_attempt_error)?
             .as_ref()
                 == Some(authority))
         }
@@ -242,7 +249,7 @@ fn initial_asset_definition_alias_namespace_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     alias: &ResolvedAssetDefinitionAliasV1,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
         return Ok(false);
     }
@@ -256,7 +263,7 @@ fn initial_asset_definition_alias_namespace_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     alias: &ResolvedAssetDefinitionAliasV1,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
         return Ok(false);
     }
@@ -274,7 +281,7 @@ fn initial_asset_definition_alias_exact_grant_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     alias: &ResolvedAssetDefinitionAliasV1,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if !alias.matches_catalog(state_transaction.world.dataspace_catalog()) {
         return Ok(false);
     }
@@ -344,7 +351,7 @@ fn initial_permission_capability_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-) -> Result<Option<bool>, ValidationFail> {
+) -> Result<Option<bool>, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     validate_initial_permission_payload_constraints(permission)?;
     macro_rules! decode {
         ($permission_ty:path) => {
@@ -713,7 +720,7 @@ fn initial_permission_delegation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
     }
@@ -758,7 +765,7 @@ fn initial_permission_revocation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if permission.name() == "CanManageAssetDefinitionAlias" {
         let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
             permission,
@@ -794,7 +801,7 @@ fn validate_initial_permission_or_role_mutation(
     authority: &AccountId,
     instruction: &InstructionBox,
     is_genesis: bool,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let mutation = extract_permission_or_role_mutation(instruction);
     let Some(mutation) = mutation else {
         return Ok(());
@@ -824,7 +831,7 @@ fn validate_initial_permission_or_role_mutation(
             Err(ValidationFail::NotPermitted(format!(
                 "authority cannot grant or revoke permission `{}`",
                 permission.name()
-            )))
+            )).into())
         }
         PermissionOrRoleMutation::AccountRole {
             role: role_id,
@@ -833,7 +840,7 @@ fn validate_initial_permission_or_role_mutation(
             if !is_genesis && !authority_has_role(&state_transaction.world, authority, role_id) {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot grant or revoke a role it does not hold".to_owned(),
-                ));
+                ).into());
             }
             let role = state_transaction
                 .world
@@ -863,7 +870,7 @@ fn validate_initial_permission_or_role_mutation(
                         return Err(ValidationFail::NotPermitted(format!(
                             "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
                             normalized.name()
-                        )));
+                        )).into());
                     }
                 }
             }
@@ -882,7 +889,7 @@ fn validate_initial_permission_or_role_mutation(
             if !authority_has_role(&state_transaction.world, authority, role) {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot modify a role it does not hold".to_owned(),
-                ));
+                ).into());
             }
             let allowed = if is_revoke {
                 initial_permission_revocation_allowed(state_transaction, authority, &normalized)?
@@ -893,7 +900,7 @@ fn validate_initial_permission_or_role_mutation(
                 return Err(ValidationFail::NotPermitted(format!(
                     "authority cannot grant or revoke role permission `{}`",
                     normalized.name()
-                )));
+                )).into());
             }
             Ok(())
         }
@@ -978,7 +985,7 @@ fn initial_accounts_share_active_lineage(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     target: &AccountId,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if authority == target {
         return Ok(true);
     }
@@ -989,7 +996,7 @@ fn initial_accounts_share_active_lineage(
         authority,
         now_ms,
     )
-    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+    .map_err(sns_permission_attempt_error)?
     else {
         return Ok(false);
     };
@@ -999,7 +1006,7 @@ fn initial_accounts_share_active_lineage(
         target,
         now_ms,
     )
-    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+    .map_err(sns_permission_attempt_error)?
     else {
         return Ok(false);
     };
@@ -1498,10 +1505,10 @@ fn validate_initial_native_instruction_authority(
     authority: &AccountId,
     instruction: &InstructionBox,
     is_genesis: bool,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
     let any = instruction.as_any();
-    let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()));
+    let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()).into());
     if let Some(mutation) =
         any.downcast_ref::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody>()
     {
@@ -2020,7 +2027,7 @@ fn validate_initial_native_instruction_authority(
     ) {
         return Err(ValidationFail::NotPermitted(
             crate::smartcontracts::isi::INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON.to_owned(),
-        ));
+        ).into());
     }
     if !initial_native_instruction_is_explicitly_admitted(instruction)
         && !(is_genesis && initial_genesis_instruction_is_explicitly_admitted(instruction))
@@ -2028,7 +2035,7 @@ fn validate_initial_native_instruction_authority(
         return Err(ValidationFail::NotPermitted(format!(
             "Initial executor does not admit unclassified native instruction `{}`",
             instruction.id()
-        )));
+        )).into());
     }
     Ok(())
 }
@@ -2083,7 +2090,7 @@ pub(crate) fn enforce_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     context: &ContractCallExecutionContext,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let permission = context.entrypoint_permission();
     if permission.is_none() {
         return Ok(());
@@ -2108,12 +2115,16 @@ pub(crate) fn authorize_prepared_contract_selector(
     contract: &ivm::PreparedContract,
     selector: &str,
     identity: &code::BoundContractIdentity,
-) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+) -> Result<
+    ContractEntrypointAuthorizationSnapshot,
+    crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+> {
     let selector = selector.trim();
     if selector.is_empty() {
         return Err(ValidationFail::NotPermitted(
             "contract entrypoint must not be empty".to_owned(),
-        ));
+        )
+        .into());
     }
     let (_, permission, _) = resolve_prepared_contract_entrypoint(contract, selector)?;
     let snapshot = ContractEntrypointAuthorizationSnapshot::new(
@@ -2132,12 +2143,16 @@ pub(crate) fn authorize_prepared_contract_view_selector(
     contract: &ivm::PreparedContract,
     selector: &str,
     identity: &code::BoundContractIdentity,
-) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+) -> Result<
+    ContractEntrypointAuthorizationSnapshot,
+    crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+> {
     let selector = selector.trim();
     if selector.is_empty() {
         return Err(ValidationFail::NotPermitted(
             "contract entrypoint must not be empty".to_owned(),
-        ));
+        )
+        .into());
     }
     let (_, permission, _) = resolve_prepared_contract_view_entrypoint(contract, selector)?;
     let snapshot = ContractEntrypointAuthorizationSnapshot::new(
@@ -2156,12 +2171,16 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
     contract: &ivm::PreparedContract,
     selector: &str,
     identity: &code::BoundContractIdentity,
-) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+) -> Result<
+    ContractEntrypointAuthorizationSnapshot,
+    crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+> {
     let selector = selector.trim();
     if selector.is_empty() {
         return Err(ValidationFail::NotPermitted(
             "contract entrypoint must not be empty".to_owned(),
-        ));
+        )
+        .into());
     }
     let (_, permission, _) = resolve_prepared_raw_contract_entrypoint(contract, selector)?;
     let snapshot = ContractEntrypointAuthorizationSnapshot::new(
@@ -2177,13 +2196,18 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
 ///
 /// Overlay preparation, live overlay application, direct execution, triggers, and nested calls all
 /// use this helper so none of those paths can drift into a weaker authorization policy.
-pub(crate) fn enforce_named_contract_entrypoint_permission(
+///
+/// # Errors
+/// Returns a completed permission rejection or the original local refusal when an existing
+/// permission payload could not be inspected. Read-only transports must expose the latter as
+/// retryable capacity, never as a completed contract denial.
+pub fn enforce_named_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     permission_name: Option<&str>,
-) -> Result<(), ValidationFail> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let Some(permission_name) = permission_name else {
         return Ok(());
     };
@@ -2195,32 +2219,38 @@ pub(crate) fn enforce_named_contract_entrypoint_permission(
     {
         return Err(ValidationFail::NotPermitted(
             "contract entrypoint and permission must use non-empty canonical spellings".to_owned(),
-        ));
+        )
+        .into());
     }
-    let target: Permission = if permission_name == SCOPED_PERMISSION_NAME {
-        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-            contract: contract_address.clone(),
-            entrypoint: entrypoint.to_owned(),
-        }
-        .into()
-    } else {
-        // The artifact carries only a permission name for custom authorization
-        // classes, so its one canonical token is that name with an empty
-        // payload. Matching by name alone would let a differently scoped token
-        // with the same name authorize this entrypoint.
-        Permission::new(permission_name.to_owned(), Json::new(()))
-    };
-    if authority_has_permission(world, authority, &target)? {
+    let granted =
+        authority_has_borrowed_permission(world, authority, permission_name, |permission| {
+            if permission_name != SCOPED_PERMISSION_NAME {
+                // Json owns canonical lexical form; a custom class's sole token is JSON null.
+                return Ok(permission.payload().get() == "null");
+            }
+            #[derive(crate::json_macros::JsonDeserialize)]
+            #[norito(deny_unknown_fields)]
+            struct EntrypointGrant {
+                contract: iroha_data_model::smart_contract::ContractAddress,
+                entrypoint: String,
+            }
+            read_permission_payload::<EntrypointGrant>(permission).map(|grant| {
+                grant.is_some_and(|grant| {
+                    grant.contract == *contract_address && grant.entrypoint == entrypoint
+                })
+            })
+        })?;
+    if granted {
         return Ok(());
     }
     if permission_name == SCOPED_PERMISSION_NAME {
         Err(ValidationFail::NotPermitted(format!(
             "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
-        )))
+        )).into())
     } else {
         Err(ValidationFail::NotPermitted(format!(
             "contract entrypoint `{entrypoint}` requires permission `{permission_name}` with the canonical empty payload"
-        )))
+        )).into())
     }
 }
 fn enforce_transaction_contract_permission_before_proof_verification<R>(
@@ -2230,7 +2260,7 @@ fn enforce_transaction_contract_permission_before_proof_verification<R>(
     ivm_cache: &mut IvmCache,
     execution_height: u64,
     execution_dataspace: DataSpaceId,
-) -> Result<(), ValidationFail>
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>>
 where
     R: StateReadOnly,
 {
@@ -2247,7 +2277,7 @@ where
                 execution_height,
             )
             .map_err(ValidationFail::NotPermitted)?;
-            let identity = code::fetch_bound_contract_identity(state, &call.contract_address)
+            let identity = code::fetch_bound_contract_identity(state, &call.contract_address)?
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract instance `{}` not found in WSV",
@@ -2284,7 +2314,8 @@ where
                 return Err(ValidationFail::NotPermitted(format!(
                     "cached contract bytecode `{}` does not match live WSV",
                     identity.code_hash
-                )));
+                ))
+                .into());
             }
             authorize_prepared_contract_selector(
                 state.world(),
@@ -2320,7 +2351,7 @@ where
                 summary.code_hash,
                 summary.abi_hash,
             )
-            .map_err(ValidationFail::IvmAdmission)
+            .map_err(|error| ValidationFail::IvmAdmission(error).into())
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
@@ -2437,7 +2468,7 @@ fn authority_owns_any_alias_domain(
     authority: &AccountId,
     subject: &AccountId,
     now_ms: u64,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     for alias in world.bound_account_aliases(subject) {
         if crate::sns::resolve_active_account_alias(
             world,
@@ -2445,7 +2476,7 @@ fn authority_owns_any_alias_domain(
             &alias,
             now_ms,
         )
-        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+        .map_err(sns_permission_attempt_error)?
         .as_ref()
             != Some(subject)
         {
@@ -2470,14 +2501,14 @@ fn can_transfer_domain(
     authority: &AccountId,
     transfer: &Transfer<Account, DomainId, Account>,
     now_ms: u64,
-) -> Result<bool, ValidationFail> {
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     if transfer.source() == authority {
         return Ok(true);
     }
     if authority_owns_any_alias_domain(world, authority, transfer.source(), now_ms)? {
         return Ok(true);
     }
-    authority_owns_domain(world, authority, transfer.object())
+    authority_owns_domain(world, authority, transfer.object()).map_err(Into::into)
 }
 fn can_transfer_asset_definition(
     world: &impl WorldReadOnly,

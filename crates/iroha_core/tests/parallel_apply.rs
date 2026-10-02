@@ -3,7 +3,7 @@
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
 use crate::synthetic_state_snapshots as snapshots;
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -44,7 +44,7 @@ fn block_time_source() -> TimeSource {
 #[test]
 fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Build a small world: one domain, two accounts, one numeric asset def, zeroed assets
-    let network_id = test_network_id(b"parallel-apply-log-mint");
+    let _network_id = test_network_id(b"parallel-apply-log-mint");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let build_world = || {

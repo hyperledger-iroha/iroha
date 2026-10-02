@@ -1,9 +1,10 @@
 #[tokio::test]
 async fn alias_resolve_index_rejects_unsigned_request() {
-    let authority = checked_torii_test_account_id(
+    let keypair = checked_torii_test_ed25519_keypair(
         0x0a,
         "derive alias resolve-index unsigned authority fixture key",
     );
+    let authority = AccountId::new(keypair.public_key().clone());
     let alias_label = AccountAlias::new(
         "banking".parse().expect("label"),
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -14,33 +15,89 @@ async fn alias_resolve_index_rejects_unsigned_request() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
         .build(&authority);
-    let account = Account::new(authority.clone())
-        .with_label(Some(alias_label))
-        .build(&authority);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [domain],
+        [authority_account],
+        [],
+    ));
+    bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
+    assert_eq!(
+        alias_label
+            .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
+            .unwrap(),
+        "banking@centralbank.universal"
+    );
     let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
         .expect("encode request");
+    let method = axum::http::Method::POST;
+    let uri: axum::http::Uri = "/v1/aliases/resolve-index".parse().unwrap();
     let error = handler_alias_resolve_index(
-        State(mk_app_state_for_tests_with_world(World::with(
-            [domain],
-            [authority_account, account],
-            [],
-        ))),
-        axum::http::Method::POST,
-        "/v1/aliases/resolve-index"
-            .parse()
-            .expect("alias resolve-index uri"),
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
         HeaderMap::new(),
-        axum::body::Bytes::from(body),
+        axum::body::Bytes::from(body.clone()),
     )
     .await
     .expect_err("unsigned index enumeration must be rejected");
     assert!(matches!(
-        error,
+        &error,
         Error::AppUnauthorized {
             code: "alias_auth_required",
             ..
         }
     ));
+    assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
+
+    let mut partial = HeaderMap::new();
+    partial.insert(
+        HEADER_ACCOUNT,
+        HeaderValue::from_str(&authority.canonical_i105().unwrap()).unwrap(),
+    );
+    let partial_error = handler_alias_resolve_index(
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
+        partial,
+        axum::body::Bytes::from(body.clone()),
+    )
+    .await
+    .expect_err("partial signing must not downgrade to anonymous enumeration");
+    assert!(
+        matches!(&partial_error, Error::Query(ValidationFail::NotPermitted(message)) if message.contains("must be set together"))
+    );
+    assert_eq!(
+        partial_error.into_response().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &keypair,
+        &method,
+        &uri,
+        &body,
+    );
+    // Use a genuine well-formed signature for a different canonical request body.
+    let changed_body =
+        norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 1 }).unwrap();
+    let invalid_error = handler_alias_resolve_index(
+        State(app),
+        method,
+        uri,
+        headers,
+        axum::body::Bytes::from(changed_body),
+    )
+    .await
+    .expect_err("wrong-body signature must fail before alias enumeration");
+    assert!(
+        matches!(&invalid_error, Error::Query(ValidationFail::NotPermitted(message)) if message == "query signature failed verification")
+    );
+    assert_eq!(
+        invalid_error.into_response().status(),
+        StatusCode::FORBIDDEN
+    );
 }
 #[tokio::test]
 async fn alias_resolve_index_rejects_malformed_json_body() {
@@ -669,11 +726,10 @@ async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspac
         "derive alias resolve-index fanout authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
-    configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
     let body = norito::json::to_vec(&request).expect("encode request");
@@ -681,7 +737,14 @@ async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspac
     let uri: axum::http::Uri = "/v1/aliases/resolve-index"
         .parse()
         .expect("alias resolve-index uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve_index(
         State(app),
         method,
@@ -725,11 +788,10 @@ async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bind
         "derive alias resolve-index route-conflict authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
-    configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
@@ -738,7 +800,14 @@ async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bind
     let uri: axum::http::Uri = "/v1/aliases/resolve-index"
         .parse()
         .expect("alias resolve-index uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve_index(
         State(app),
         method,
@@ -812,14 +881,10 @@ async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-index-miss-offline"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(12)),
         crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let (_local_route, _foreign_route) =
-            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
-                &mut app,
-            );
     let candidates = torii_all_dataspace_routes(app.as_ref());
     let (allowed, denied) =
         torii_partition_alias_index_routes_by_permission(&app, candidates, Some(&authority), 0)
@@ -838,7 +903,14 @@ async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_
     let uri: axum::http::Uri = "/v1/aliases/resolve-index"
         .parse()
         .expect("alias resolve-index uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve_index(
         State(app),
         method,

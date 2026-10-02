@@ -394,6 +394,14 @@ impl GoldilocksFp4V1 {
             .all(|coefficient| coefficient.0 < GOLDILOCKS_MODULUS_V1)
             .then_some(Self { coefficients })
     }
+    /// Construct a deliberately malformed fixture for verifier rejection tests.
+    /// This is unavailable to shipping decoders; canonical constructors keep their checks.
+    #[cfg(test)]
+    pub(crate) const fn from_raw_coefficients_for_testing(
+        coefficients: [GoldilocksFieldV1; 4],
+    ) -> Self {
+        Self { coefficients }
+    }
     /// Embed one base-field element.
     pub(crate) fn from_base(value: GoldilocksFieldV1) -> Self {
         debug_assert!(value.0 < GOLDILOCKS_MODULUS_V1);
@@ -2093,6 +2101,18 @@ mod tests {
         );
     fn fp4(coefficients: [u64; 4]) -> GoldilocksFp4V1 {
         GoldilocksFp4V1::canonical(coefficients).expect("small canonical coefficients")
+    }
+    #[test]
+    fn malformed_fp4_fixture_preserves_raw_fields_without_canonical_admission() {
+        for coefficient in 0..GOLDILOCKS_FP4_DEGREE_V1 {
+            let mut raw = [GoldilocksFieldV1::ZERO; GOLDILOCKS_FP4_DEGREE_V1];
+            raw[coefficient] = GoldilocksFieldV1(u64::MAX);
+            assert!(GoldilocksFp4V1::from_coefficients(raw).is_none());
+            let malformed = GoldilocksFp4V1::from_raw_coefficients_for_testing(raw);
+            assert_eq!(malformed.coefficients(), raw);
+            assert!(!malformed.is_canonical());
+            assert!(GoldilocksFp4V1::canonical(raw.map(GoldilocksFieldV1::value)).is_none());
+        }
     }
     fn digest_from_fp4(value: GoldilocksFp4V1) -> PrivacyOuterDigestV1 {
         let mut bytes = [0; 48];

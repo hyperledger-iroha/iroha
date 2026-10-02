@@ -453,7 +453,8 @@ fn app_routed_read_form_encode_response(
             limit.saturating_add(1),
             limit,
         ),
-        norito::json::BoundedJsonError::AllocationFailed => torii_proxy_error_response(
+        norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
             "The admitted query canonicalization destination could not be allocated.",
@@ -545,7 +546,8 @@ fn torii_routed_read_form_encode_response(
                 limit,
             )
         }
-        norito::json::BoundedJsonError::AllocationFailed => torii_proxy_error_response(
+        norito::json::BoundedJsonError::AllocationFailed
+        | norito::json::BoundedJsonError::DecodeResource(_) => torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
             "proxied form query could not reserve its admitted JSON destination",

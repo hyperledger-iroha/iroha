@@ -4,7 +4,7 @@ aliases.auto_renew_plan	POST	/v1/aliases/auto-renew/plan	public	canonical_accoun
 aliases.by_account	POST	/v1/aliases/by-account	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
 aliases.lease_renew_plan	POST	/v1/aliases/lease/renew/plan	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 aliases.resolve	POST	/v1/aliases/resolve	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
-aliases.resolve_index	POST	/v1/aliases/resolve-index	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
+aliases.resolve_index	POST	/v1/aliases/resolve-index	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	true	true
 aliases.setup_plan	POST	/v1/aliases/setup/plan	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	true	true
 application.accounts_by_account_id_aliases_get	GET	/v1/accounts/{account_id}/aliases	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_assets_get	GET	/v1/accounts/{account_id}/assets	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
@@ -426,6 +426,7 @@ kagemusha.operation	GET	/v1/kagemusha/operations/{operation_id}	public	torii_def
 kagemusha.readiness	GET	/v1/kagemusha/readiness	public	torii_default	public	read	http	feature(app_api)	true	true	true	false
 kagemusha.redeem	POST	/v1/kagemusha/redeem	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
 kagemusha.top_up	POST	/v1/kagemusha/top-up	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
+ledger.authority_originals	POST	/v1/ledger/authority-originals	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	false	true	false	true
 ledger.block_proof	GET	/v1/ledger/block/{height}/proof/{entry_hash}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.executed_block_wire	GET	/v1/ledger/block/{height}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.headers	GET	/v1/ledger/headers	public	torii_default	public	read	http	always	true	true	false	false

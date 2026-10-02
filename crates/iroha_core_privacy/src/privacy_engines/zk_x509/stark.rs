@@ -29,15 +29,25 @@ use super::der_stark::{
 use super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::{ZkX509MainIoBaseMaterialV1, ZkX509MainTraceAssemblyV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::p256_aggregate_adapter::{P256MainBaseSourceV1, P256MainBoundSourceV1};
 #[cfg(test)]
 use super::p256_aggregate_adapter::{
-    ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1,
+    P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
+    evaluate_p256_bus_terminal_claim_equalities_v1,
+    evaluate_p256_cross_trace_terminal_claim_equalities_v1,
+};
+#[cfg(test)]
+use super::p256_aggregate_adapter::{
+    P256CrossTraceTerminalRoleV1, ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1,
     ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1, absorb_p256_terminal_claims_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_aggregate_adapter::{P256MainBaseSourceV1, P256MainBoundSourceV1};
+#[cfg(test)]
+use super::p256_cross_trace_bus::P256_CROSS_TRACE_LANES_V1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
+#[cfg(test)]
+use super::rfc5280_stark::ZkX509P256PrivateProductsV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_v1;
 use super::{
@@ -105,15 +115,12 @@ use super::{
         P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1, P256_WINDOW_AGGREGATE_AUX_WIDTH_V1,
         P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1, P256_WINDOW_AGGREGATE_TRACE_LOG2_V1,
         P256_WINDOW_REGISTERED_CONSTRAINT_COUNT_V1, P256AggregateAdapterErrorV1,
-        P256ArithmeticCopyChallengesV1, P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
-        P256CrossTraceTerminalRoleV1, P256MainAdapterV1, P256MainRegistrationV1,
+        P256ArithmeticCopyChallengesV1, P256MainAdapterV1, P256MainRegistrationV1,
         P256MainVerifierFixedSourceV1, P256ValueExecutionAggregateChallengesV1,
-        evaluate_p256_bus_terminal_claim_equalities_v1,
-        evaluate_p256_cross_trace_terminal_claim_equalities_v1,
         validate_p256_main_registration_order_v1,
     },
     p256_air::{P256_ARITHMETIC_BASE_WIDTH_V1, P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1},
-    p256_cross_trace_bus::{P256_CROSS_TRACE_LANES_V1, P256CrossTraceChallengesV1},
+    p256_cross_trace_bus::P256CrossTraceChallengesV1,
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_reduction_air::{P256_LOW_S_BASE_WIDTH_V1, P256_REDUCTION_BASE_WIDTH_V1},
     p256_scalar_bit_bus::{
@@ -154,10 +161,10 @@ use super::{
         ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
         ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
         ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1,
-        ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, ZkX509P256PrivateProductsV1,
-        ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1,
-        ZkX509Rfc5280StarkShapeV1, ZkX509Rfc5280StarkTerminalClaimsV1,
-        ZkX509ShaSegmentTerminalClaimsV1, compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
+        ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, ZkX509Rfc5280OutputRoleV1,
+        ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
+        ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
+        compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
         evaluate_zk_x509_rfc5280_stark_residues_v1,
     },
     sha_call_bus_stark::{
@@ -485,6 +492,7 @@ const P256_LAYOUT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-aggregat
 const P256_REGISTRATION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-registration:v1";
 #[cfg(test)]
 const DER_PROOF_MAGIC_V1: [u8; 4] = *b"X5P1";
+#[cfg(test)]
 const DER_PROOF_CLAIM_COUNT_V1: usize = 2 * ZK_X509_DER_STARK_BUS_LANES_V1;
 #[cfg(test)]
 const DER_PROOF_CLAIM_RECORD_BYTES_V1: usize = 2 + 2 + 8;
@@ -2638,11 +2646,13 @@ fn derive_p256_aggregate_challenges_v1(
 }
 /// Proof-encoded P-256 product terminals in their sole legal role order.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 struct P256TerminalRegistrationV1 {
     buses: P256BusTerminalClaimsV1,
     cross_sources: Vec<P256CrossTraceTerminalClaimV1>,
     sink: [F; P256_CROSS_TRACE_LANES_V1],
 }
+#[cfg(test)]
 impl P256TerminalRegistrationV1 {
     fn validate(&self, role: P256EcdsaRoleV1) -> Result<(), ZkX509StarkErrorV1> {
         let bus_residues = evaluate_p256_bus_terminal_claim_equalities_v1(self.buses)
@@ -2663,6 +2673,7 @@ impl P256TerminalRegistrationV1 {
         Ok(())
     }
 }
+#[cfg(test)]
 impl Drop for P256TerminalRegistrationV1 {
     fn drop(&mut self) {
         zeroize_p256_terminal_registration_v1(self);
@@ -7573,6 +7584,7 @@ impl MainTraceGroupSourceV1 for MainP256Log5TraceGroupSourceV1<'_> {
         Ok(output)
     }
 }
+#[cfg(test)]
 fn zeroize_p256_terminal_registration_v1(registration: &mut P256TerminalRegistrationV1) {
     registration.buses.value_execution.fill(F::ZERO);
     registration.buses.value_sorted.fill(F::ZERO);
@@ -10006,6 +10018,7 @@ fn main_p256_scalar_registration_v1(
     }
     Ok(matched)
 }
+#[cfg(test)]
 fn main_p256_terminal_registration_v1(
     claims: &ZkX509P256PrivateProductsV1,
     signature: usize,
@@ -10041,6 +10054,7 @@ fn main_p256_terminal_registration_v1(
     terminals.validate(role)?;
     Ok(terminals)
 }
+#[cfg(test)]
 fn main_p256_terminal_registrations_v1(
     claims: &ZkX509P256PrivateProductsV1,
 ) -> Result<[P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1], ZkX509StarkErrorV1> {

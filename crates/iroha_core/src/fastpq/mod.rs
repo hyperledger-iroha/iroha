@@ -44,9 +44,10 @@ use iroha_config::parameters::actual::FastpqExecutionMode;
 use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 #[cfg(test)]
+use iroha_data_model::account::AccountId;
+#[cfg(test)]
 use iroha_data_model::fastpq::{FastpqPublicTransferStatementV1, FastpqPublicTransferTranscriptV1};
 use iroha_data_model::{
-    account::AccountId,
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
     fastpq::{

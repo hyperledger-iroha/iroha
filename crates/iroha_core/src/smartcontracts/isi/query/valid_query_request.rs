@@ -32,18 +32,17 @@ impl ValidQueryRequest {
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
         validate_query_request_limits(&request, limits)?;
-        world_ro.executor().validate_query_with_world_parts(
-            world_ro,
-            latest_block,
-            authority,
-            &request,
-        ).map_err(|error| match error {
-            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
-            // API-client queries have no transaction output. Report an operational
-            // internal error here; the IVM path below keeps the typed retry reason.
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) =>
-                ValidationFail::InternalError(format!("query execution unavailable: {reason}")),
-        })?;
+        world_ro
+            .executor()
+            .validate_query_with_world_parts(world_ro, latest_block, authority, &request)
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                // API-client queries have no transaction output. Report an operational
+                // internal error here; the IVM path below keeps the typed retry reason.
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    ValidationFail::InternalError(format!("query execution unavailable: {reason}"))
+                }
+            })?;
         Ok(Self { request, limits })
     }
     /// Validate a query for an IVM program.
@@ -62,7 +61,8 @@ impl ValidQueryRequest {
         if matches!(&query, QueryRequest::Continue(_)) {
             return Err(ValidationFail::NotPermitted(
                 "QueryRequest::Continue is not supported in IVM".to_string(),
-            ).into());
+            )
+            .into());
         }
         validate_query_request_limits(&query, limits)?;
         let authority = state.authority().clone();
@@ -186,7 +186,9 @@ impl ValidQueryRequest {
         let Self { request, limits } = self;
         match request {
             QueryRequest::Singular(singular_query) => {
-                let output = singular_query.execute(state)?;
+                let output = singular_query
+                    .execute(state)
+                    .map_err(query_transport_error)?;
                 Ok(QueryResponse::Singular(output))
             }
             QueryRequest::Start(iter_query) => {
@@ -528,6 +530,7 @@ impl ValidQueryRequest {
     ) -> Result<QueryResponse, Error> {
         self.execute_ephemeral_with_stats(live_query_store, state, authority, None)
             .map(|(response, _)| response)
+            .map_err(query_transport_error)
     }
     pub(crate) fn execute_ephemeral_with_stats(
         self,
@@ -535,7 +538,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         authority: &AccountId,
         budget: Option<QueryExecutionBudget>,
-    ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
+    ) -> Result<(QueryResponse, QueryExecutionStats), QueryAttemptError> {
         let effective_budget = self
             .limits
             .ordinary_execution_limits
@@ -553,7 +556,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         _authority: &AccountId,
         budget: Option<QueryExecutionBudget>,
-    ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
+    ) -> Result<(QueryResponse, QueryExecutionStats), QueryAttemptError> {
         let Self { request, limits } = self;
         if let Some(ordinary_limits) = limits.ordinary_execution_limits {
             ordinary_memory::ensure_request_admitted(
@@ -602,7 +605,7 @@ impl ValidQueryRequest {
                     return Err(Error::Conversion(
                         "canonical fanout rejects opaque canonical starts before nested payload, predicate, or selector decoding"
                             .to_owned(),
-                    ));
+                    ).into());
                 }
                 use iroha_data_model::query::QueryItemKind;
                 let (item, predicate_bytes, selector_bytes, query_payload) = iter_query.parts();
@@ -803,7 +806,8 @@ impl ValidQueryRequest {
                             );
                             return Err(Error::Conversion(
                                 "failed to decode proof query payload".into(),
-                            ));
+                            )
+                            .into());
                         }
                         let concrete = decoder
                             .decode::<iroha_data_model::query::proof::prelude::FindProofRecords>(
@@ -902,7 +906,8 @@ impl ValidQueryRequest {
             }
             QueryRequest::Continue(_cursor) => Err(Error::Conversion(
                 "ephemeral execution does not support continuation".into(),
-            )),
+            )
+            .into()),
         }
     }
 }

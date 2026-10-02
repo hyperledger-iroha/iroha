@@ -1823,6 +1823,7 @@ mod tests {
                         hex::encode(&response)
                     ));
                 } else if ![
+                    "app-attest-ack\t",
                     "incoming-prepare\t",
                     "incoming-complete\t",
                     "incoming-stage\t",
@@ -1840,7 +1841,7 @@ mod tests {
             }
             for (method, name, fields) in mobile_request_cases()
                 .into_iter()
-                .filter(|(m, _, _)| m.code() >= 15)
+                .filter(|(m, _, _)| m.code() == 13 || m.code() >= 15)
             {
                 let response = mobile_response_fields(method, &fields);
                 let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
@@ -2060,7 +2061,14 @@ mod tests {
                     .is_none()
             );
         }
-        assert_eq!(fixtures.len(), 25);
+        assert_eq!(fixtures.len(), 28);
+        assert_eq!(
+            fixtures
+                .values()
+                .map(|(method, _, _)| method.code())
+                .collect::<std::collections::BTreeSet<_>>(),
+            (1..=21).collect(),
+        );
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
                 fixtures.get(name).expect("shared method case");

@@ -73,10 +73,15 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
     };
     let retained = budget.reserved_bytes();
     budget.set_limit_bytes(retained);
-    assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    assert_eq!(budget.reserved_bytes(), retained);
-    assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    assert_eq!(budget.reserved_bytes(), retained);
+    for _ in 0..2 {
+        let error = read.poll().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(
+            error.get_ref().is_none(),
+            "refusal must not allocate a diagnostic"
+        );
+        assert_eq!(budget.reserved_bytes(), retained);
+    }
     budget.set_limit_bytes(1 << 27);
     let (body, qc) = read.poll().unwrap();
     assert_eq!(body.header(), &original_header);
@@ -202,7 +207,7 @@ fn body_only_read_releases_original_qc_witness_before_returning_ready() {
 
 #[test]
 fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
-    use iroha_data_model::sumeragi_finality::{CommitmentError, MAX_RESULT_PREIMAGE_BYTES};
+    use iroha_data_model::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES;
 
     let _epoch = crossbeam_epoch::pin();
     let mut chain = CertifiedTestChain::npos_boundary_fixture();
@@ -286,12 +291,10 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(matches!(
-            error
-                .get_ref()
-                .and_then(|error| error.downcast_ref::<CommitmentError>()),
-            Some(CommitmentError::Resource(_))
-        ));
+        assert!(
+            error.get_ref().is_none(),
+            "resource refusal cannot allocate a replacement boxed diagnostic"
+        );
         assert_eq!(
             store
                 .read
@@ -316,5 +319,78 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
     assert!(original.admitted_to(&budget));
     assert!(store.read.lock().is_none());
     drop((body, qc, store));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
+    use crate::test_allocations::refuse_one_layout_during;
+    use iroha_data_model::{
+        block::decode_versioned_signed_block,
+        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    };
+    let fixture = NativeFinalityFixture::new();
+    let parent = fixture
+        .verifier()
+        .verify_retained_decision(fixture.genesis_proof())
+        .unwrap();
+    let ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
+        panic!("original genesis authenticates successor");
+    };
+    let source = Arc::new(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
+    let crypto = Arc::new(BlsCrypto::new());
+    crypto
+        .admit_committee(
+            scheduled
+                .epoch
+                .committee
+                .iter()
+                .map(|m| (m.validator.public_key(), m.proof_of_possession.as_slice())),
+        )
+        .unwrap();
+    struct OriginalSchedule {
+        instance: Hash32,
+        config: HeightConfig,
+    }
+    impl AvailabilitySchedule for OriginalSchedule {
+        fn instance(&self) -> Hash32 {
+            self.instance
+        }
+        fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>> {
+            assert_eq!(height, 2);
+            Ok(Some(self.config.clone()))
+        }
+    }
+    let budget = AllocationBudget::new(1 << 25);
+    let mut read = CommittedRead::new(
+        Arc::clone(&source),
+        2,
+        budget.clone(),
+        crypto,
+        Arc::new(OriginalSchedule {
+            instance: fixture.verifier().instance(),
+            config: scheduled.height_config().unwrap(),
+        }),
+        Arc::new(NativePastaVerifier::new(
+            fixture.verifier().instance(),
+            fixture.network_id(),
+        )),
+    );
+    let owners = read.retained_certificate_owners_for_test().unwrap();
+    let (result, refused) =
+        refuse_one_layout_during(std::alloc::Layout::array::<u8>(8).unwrap(), || read.poll());
+    assert!(
+        refused,
+        "actual certificate bitmap must reach the fallible allocator"
+    );
+    let error = result.err().expect("physical decoder allocation refuses");
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert!(error.get_ref().is_none());
+    assert_eq!(read.retained_certificate_owners_for_test().unwrap(), owners);
+    assert_eq!(budget.reserved_bytes(), 0);
+    let (body, qc) = read.poll().unwrap();
+    assert_eq!(body.source().height(), 2);
+    assert_eq!(qc.height, 2);
+    drop((body, qc));
     assert_eq!(budget.reserved_bytes(), 0);
 }

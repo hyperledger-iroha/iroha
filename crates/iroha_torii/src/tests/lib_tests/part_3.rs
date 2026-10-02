@@ -5,11 +5,10 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
         "derive unsigned alias lookup filtering authority fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-warning-fanout"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
     let request = routing::AliasLookupByAccountRequestDto {
@@ -226,7 +225,7 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     );
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-permission-filter-fanout"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_target_and_caller_bound_to_dataspace(
             &target,
             &caller,
@@ -235,7 +234,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
         ),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
     bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
     grant_alias_resolve_dataspace_permission(&app, &caller, restricted_dataspace);
@@ -249,7 +247,14 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &caller_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app.clone()),
         method.clone(),
@@ -261,12 +266,12 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     .expect("handler should succeed")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
+    let response_body = http_body_util::BodyExt::collect(response.into_body())
         .await
         .unwrap()
         .to_bytes();
     let dto: routing::AliasLookupByAccountResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
+        norito::json::from_slice(&response_body).expect("json decode");
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items[0].alias, "merchant@restricted");
     let domain_alias = AccountAlias::from_literal(
@@ -275,7 +280,14 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     )
     .expect("domain alias");
     grant_alias_resolve_permissions(&app, &caller, &domain_alias);
-    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &caller_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app),
         method,
@@ -309,14 +321,10 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-offline"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(12)),
         crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
     );
-    let (_local_route, _foreign_route) =
-            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
-                &mut app,
-            );
     bind_account_alias_for_test(&app, &authority, "merchant@foreign-restricted");
     let alias = AccountAlias::from_literal(
         "merchant@foreign-restricted",
@@ -334,17 +342,105 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-    let response = handler_alias_lookup_by_account(
-        State(app),
-        method,
-        uri,
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
+    // All active labels share the authenticated global committee. A signed
+    // handler request must therefore find this alias while transport is healthy.
+    let live = handler_alias_lookup_by_account(
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
         headers,
-        axum::body::Bytes::from(body),
+        axum::body::Bytes::from(body.clone()),
     )
     .await
-    .expect("handler should return a routed response")
+    .expect("signed native handler read")
     .into_response();
+    assert_eq!(live.status(), StatusCode::OK);
+    let live_bytes = axum::body::to_bytes(live.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let live_dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&live_bytes).unwrap();
+    assert_eq!(live_dto.total, 1);
+    assert_eq!(live_dto.items[0].alias, "merchant@foreign-restricted");
+
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &body,
+        "alias_lookup_by_account",
+    )
+    .expect("original signed caller");
+    let routes = torii_target_account_routes(app.as_ref(), &authority).unwrap();
+    let (allowed, denied) =
+        torii_partition_alias_lookup_routes(&app, routes, &visibility, &request).unwrap();
+    let _reservation = try_acquire_query_fanout_memory(&app).unwrap();
+    // Isolate a transient fetch failure at the real collector boundary; do not
+    // manufacture a different committee for one routing label. Other fetches
+    // execute the same original State reader as the production handler.
+    let collected = collect_torii_alias_lookup_json_payloads(
+        &app,
+        &allowed,
+        denied,
+        "unresolved alias routes require permission",
+        visibility.caller(),
+        &request,
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+        |route| {
+            let app = &app;
+            let body = &body;
+            async move {
+                if route.dataspace_id == DataSpaceId::new(12) {
+                    torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        "authoritative transport unavailable",
+                    )
+                } else {
+                    execute_torii_single_route_read_in_fanout(
+                        app,
+                        route,
+                        ToriiReadEndpointV1::AliasLookupByAccount,
+                        Vec::new(),
+                        None,
+                        body,
+                        body.clone(),
+                    )
+                    .await
+                }
+            }
+        },
+    )
+    .await
+    .expect("reachable empty route remains a completed response");
+    let diagnostics = collected.diagnostics;
+    let response = merge_with_torii_fanout_headers(diagnostics, || {
+        merged_alias_lookup_by_account_response(
+            collected.payloads,
+            "proxy",
+            "fanout",
+            diagnostics.denied_routes,
+            collected.budget,
+        )
+    });
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response

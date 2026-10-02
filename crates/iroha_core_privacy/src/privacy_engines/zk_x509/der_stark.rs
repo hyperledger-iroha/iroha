@@ -544,6 +544,7 @@ pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
 /// identities bind them to the committed DER accumulators; byte-memory and RFC 5280 adapters
 /// consume them in the same verifier-fixed role order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
     pub(crate) node: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -1646,7 +1647,7 @@ pub(crate) fn zk_x509_der_stark_terminals_v1(
         input_byte: read_aux_lanes_v1(last, AUX_INPUT_BYTE_AFTER),
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
     trace: &ZkX509DerStarkTraceV1,
 ) -> Result<ZkX509DerStarkTerminalClaimsV1, ZkX509DerStarkErrorV1> {
@@ -1671,6 +1672,7 @@ pub(crate) const fn zk_x509_der_terminal_columns_v1() -> [usize; 8] {
 }
 /// Bind ordered input-byte then node claims to the committed final auxiliary
 /// row. This helper is shared by native and aggregate opened-row evaluation.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1<A: PolynomialAirFieldV1>(
     last_aggregate: A,
     aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -4207,6 +4209,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_into_v1<A: PolynomialAir
 /// Complete standalone DER relation, retaining its own explicit public statement.
 /// MAIN uses the local relation and private joined endpoint quotients instead.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4276,6 +4279,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_local_residues_v1<A: PolynomialAirField
 }
 /// Complete standalone DER constraints including its explicit public endpoints.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],

@@ -112,7 +112,8 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         .push(AccountRekeyTransitionProvenance::AccountIdRekey);
     state_transaction.world.replace_account_rekey_record(cyclic);
     assert!(matches!(
-        initial_accounts_share_active_lineage(&state_transaction, &retired, &active),
+        initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+            .map_err(crate::execution_attempt::expect_completed_rejection),
         Err(ValidationFail::InternalError(message))
             if message == "account rekey lineage contains an active, duplicate, or cyclic predecessor"
     ));

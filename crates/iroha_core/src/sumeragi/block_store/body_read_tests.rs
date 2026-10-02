@@ -181,7 +181,7 @@ fn canonical_but_invalid_author_signature_never_becomes_available_custody() {
 
 #[test]
 fn stored_result_decode_refusal_retains_original_decoded_owners_and_retries() {
-    use iroha_data_model::sumeragi_finality::{CommitmentError, MAX_RESULT_PREIMAGE_BYTES};
+    use iroha_data_model::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES;
 
     let (block, source, crypto) = fixture();
     let budget = AllocationBudget::new(1 << 25);
@@ -202,12 +202,10 @@ fn stored_result_decode_refusal_retains_original_decoded_owners_and_retries() {
             panic!("result decode must refuse locally before projection");
         };
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(matches!(
-            error
-                .get_ref()
-                .and_then(|error| error.downcast_ref::<CommitmentError>()),
-            Some(CommitmentError::Resource(_))
-        ));
+        assert!(
+            error.get_ref().is_none(),
+            "resource refusal cannot allocate a replacement boxed diagnostic"
+        );
         let Stage::Decoded(decoded) = &read.stage else {
             panic!("retain the same original decoded source");
         };
@@ -256,4 +254,49 @@ fn malformed_result_preimage_remains_terminal_storage_corruption() {
             .and_then(|error| error.downcast_ref::<CommitmentError>()),
         Some(CommitmentError::Encoding(_))
     ));
+}
+
+#[test]
+fn stored_certificate_allocator_refusal_keeps_original_read_and_retries() {
+    use crate::test_allocations::refuse_one_layout_during;
+    let (block, source, crypto) = fixture();
+    let budget = AllocationBudget::new(1 << 25);
+    let mut read = StoredBodyRead::new(
+        source.clone(),
+        Some(Arc::clone(&block)),
+        budget.clone(),
+        crypto.clone(),
+    );
+    let (result, refused) =
+        refuse_one_layout_during(std::alloc::Layout::array::<u8>(8).unwrap(), || {
+            read.poll(&budget)
+        });
+    assert!(
+        refused,
+        "the real canonical bitmap decoder must reach the physical allocator"
+    );
+    let BodyReadError::Io(error) = result.err().expect("physical decoder allocation refuses")
+    else {
+        panic!("physical allocation failure must remain an operational refusal");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert!(
+        error.get_ref().is_none(),
+        "local refusal must not allocate a boxed diagnostic"
+    );
+    let Stage::Certificate(job) = &read.stage else {
+        panic!("same original certificate read");
+    };
+    assert!(Arc::ptr_eq(job.source(), &block));
+    assert_eq!(read.source(), &source);
+    assert_eq!(budget.reserved_bytes(), 0);
+    let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {
+        panic!("original read resumes");
+    };
+    let body = restoration
+        .complete(&budget, &*crypto)
+        .unwrap_or_else(|_| panic!("real source, signatures and complete codeword verify"));
+    assert_eq!(body.source(), &source);
+    drop(body);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

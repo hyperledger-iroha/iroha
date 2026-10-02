@@ -376,7 +376,8 @@ fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
         |_| {
             Err(InstructionExecutionError::InvariantViolation(
                 "forced post-install topology failure".into(),
-            ))
+            )
+            .into())
         },
     )
     .expect_err("post-install validation failure must reject lifecycle derivation");
@@ -1055,7 +1056,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     nexus.dataspace_fee_sponsor_program_ids.clear();
     nexus.fees.fee_asset_id = vault_key.asset_definition_id.to_string();
     assert_eq!(
-        crate::block::resolve_network_xor_asset_definition(&stx.world, &nexus.fees.fee_asset_id, 0),
+        crate::block::resolve_network_xor_asset_definition(&stx.world, &nexus.fees.fee_asset_id, 0).expect("completed pin read"),
         Some(vault_key.asset_definition_id.clone()),
         "sponsor funding must use the network's exact XOR asset"
     );
@@ -1103,8 +1104,8 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
             .expect("exact signature-bound quote also passes strict admission");
         } else {
             assert_eq!(
-                result
-                    .expect_err("other absent identity is not enrolled")
+                crate::execution_attempt::expect_completed_rejection(result
+                    .expect_err("other absent identity is not enrolled"))
                     .code(),
                 FeeRejectionCode::BeneficiaryNotEligible
             );
@@ -2583,4 +2584,131 @@ fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_a
     assert!(stx.world.domain(&unrelated_domain).is_err());
     assert!(stx.world.asset_definition(&unrelated).is_err());
     assert!(stx.world.asset(&unrelated_asset).is_err());
+}
+
+#[test]
+fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::state::StateBlockStartError;
+    use iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal;
+    let (mut chain, binding) =
+        crate::validation_fee::tests::signed_payout_lifecycle_registry_fixture();
+    // Every predecessor is a real signed/certified nonempty block. The due-certificate reducer
+    // fixture supplies the original retained governance state, not a height-only root identity.
+    while chain.state().view().height() < 59 {
+        let height = u64::try_from(chain.state().view().height()).unwrap() + 1;
+        chain.commit_at(height * 1_000, Vec::new());
+    }
+    let mut fixture = None;
+    chain.setup_world_at(60_000, |transaction| {
+        crate::validation_fee::tests::register_bound_payout_time_trigger(
+            transaction,
+            &binding,
+            *transaction
+                .world
+                .contract_instances
+                .get(&binding.contract_address)
+                .unwrap(),
+            "original_registry_payout_tick",
+        );
+        let subject_id = [0xE4; 32];
+        let expected = super::parliament_validation_fee_payout_observed_head_v1(
+            subject_id,
+            &binding,
+            transaction,
+        )
+        .expect("the original active runtime is a vacant lifecycle head");
+        assert!(matches!(expected, GovernanceExpectedHeadV1::Absent(_)));
+        let refused = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+            || {
+                super::parliament_validation_fee_payout_observed_head_v1(
+                    subject_id,
+                    &binding,
+                    transaction,
+                )
+            },
+        );
+        assert!(
+            matches!(refused, Err(ExecutionAttemptError::Deferred(ref reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        assert_eq!(
+            super::parliament_validation_fee_payout_observed_head_v1(
+                subject_id,
+                &binding,
+                transaction
+            )
+            .unwrap(),
+            expected
+        );
+        fixture = Some(seed_due_parliament_certificate(
+            transaction,
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                proposal_operator: ALICE_ID.clone(),
+                payout_binding: binding.clone(),
+            }),
+        ));
+    });
+    let fixture = fixture.unwrap();
+    let state = std::sync::Arc::clone(chain.state());
+    let header = BlockHeader::new(
+        60_u64.try_into().unwrap(),
+        state.view().latest_block_hash(),
+        None,
+        60_000,
+        0,
+    );
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+        || state.try_block(header),
+    );
+    assert!(
+        matches!(refused, Err(StateBlockStartError::ExecutionDeferred(ref reason))
+        if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity)
+    );
+    {
+        let view = state.view();
+        assert_eq!(view.height(), 59);
+        assert_eq!(chain.kura().blocks_count(), 59);
+        assert_eq!(
+            view.world
+                .governance_proposals
+                .get(&fixture.proposal_id)
+                .unwrap()
+                .status,
+            crate::state::GovernanceProposalStatus::Proposed
+        );
+        assert_eq!(
+            view.world
+                .parliament_attempts
+                .get(&fixture.governance_attempt_id)
+                .unwrap()
+                .attempt()
+                .status,
+            GovernanceAttemptStatusV1::Certified
+        );
+    }
+    // A fresh attempt over the same original State enacts and publishes once funding returns.
+    chain.commit_at(60_000, Vec::new());
+    let view = state.view();
+    assert_eq!(view.height(), 60);
+    assert_eq!(chain.kura().blocks_count(), 60);
+    assert_eq!(
+        view.world
+            .governance_proposals
+            .get(&fixture.proposal_id)
+            .unwrap()
+            .status,
+        crate::state::GovernanceProposalStatus::Enacted
+    );
+    assert_eq!(
+        view.world
+            .parliament_attempts
+            .get(&fixture.governance_attempt_id)
+            .unwrap()
+            .attempt()
+            .status,
+        GovernanceAttemptStatusV1::Enacted
+    );
 }

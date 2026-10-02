@@ -21,8 +21,13 @@ implementations over the corresponding payload trait and `NoritoSchema`.
 identity without copying it. `schema::identity::nominal_name::<T>()` borrows that
 literal or retains the existing owned generic composition. Derives expose a
 literal only when there are no type, const, or erased lifetime arguments. This
-changes no identity bytes, frame projection, payload layout, or schema hash;
-generic-name and serializer resource admission remain separate obligations.
+changes no identity bytes, frame projection, payload layout, or schema hash.
+Derives also expose `static_frame_name()` for a complete literal root identity:
+the explicit `frame` declaration, or the complete nominal literal when there
+is no projection. Dynamic generic and erased lifetime names remain composed
+unless a fixed root projection is explicitly declared. Frame hashes and bytes
+are unchanged; generic-name and serializer resource admission remain separate
+obligations.
 
 `NoritoSchema` declares one nominal identity and one root-frame projection;
 `schema::identity::frame_hash` computes the fixed digest used by every typed
@@ -274,6 +279,13 @@ avoids routing each emitted byte through a separate writer for every ancestor.
 Overruns remain sticky even when a serializer suppresses an I/O error; short
 successful writes fail the final exact-length check. The arbitrary-writer
 `serialize_to_writer_exact` seam still verifies actual output separately.
+`codec::verify_exact_payload` streams the fixed V1 bare encoding over retained
+source bytes and rejects byte drift, overrun and trailing suffixes. It creates no
+second output buffer and restores the ambient encode context. Custom serializers
+still own their scratch allocations. Native lane batch decoding borrows its
+original payload directly; this removes redundant input/output copies but does
+not establish complete decoded-graph resource funding.
+
 `encoded_len_hint` and `encoded_len_exact` are optional diagnostics; canonical encoding never trusts them for framing,
 admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
@@ -328,6 +340,15 @@ temporary storage and returns typed resource-limit errors on violation.
 Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
+
+An execution boundary that preserves local retry outcomes must inspect the
+original error after inner decoder scopes unwind. The hidden
+`core::decode_error_matches_active_limits` helper requires the recorded field,
+sequence, cumulative element or allocation ceiling to match a surviving scope.
+An unrelated wider scope cannot turn an inner format limit into local pressure;
+the global archive cap and nesting limits remain format rejections. This query
+adds no wire data, allocation owner or release notification, and does not retry
+the decoder.
 
 Rust error adapters retain these refusals through
 `core::Error::decode_resource_error` and the copyable `core::DecodeResourceError`.

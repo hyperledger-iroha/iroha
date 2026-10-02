@@ -28,7 +28,6 @@ fn make_initial_sorafs_state() -> State {
 
 // Exercise the production Initial dispatcher with its actual committed parent.
 fn initial_sorafs_block_header(state: &State) -> iroha_data_model::block::BlockHeader {
-    use crate::state::StateReadOnly as _;
     iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         state.view().latest_block_hash(),
@@ -40,7 +39,6 @@ fn initial_sorafs_block_header(state: &State) -> iroha_data_model::block::BlockH
 
 #[test]
 fn initial_sorafs_fixture_owns_original_genesis_and_retains_component_policy() {
-    use crate::state::StateReadOnly as _;
     let state = make_initial_sorafs_state();
     let parent = state
         .view()
@@ -50,8 +48,8 @@ fn initial_sorafs_fixture_owns_original_genesis_and_retains_component_policy() {
     let header = initial_sorafs_block_header(&state);
     assert_eq!(header.prev_block_hash(), Some(parent));
     let mut block = state.block(header);
-    let transaction = block.transaction();
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+    let mut transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok());
     assert!(transaction.gov.sorafs_telemetry.require_submitter);
     assert_eq!(transaction.gov.sorafs_telemetry.submitters, vec![alice()]);
     assert!(pin_fee_balance(&transaction, &alice()) > Quantity::zero());
@@ -70,8 +68,8 @@ fn initial_sorafs_fixture_owns_original_genesis_and_retains_component_policy() {
     drop(block);
     let component = make_state();
     let mut block = component.block(initial_sorafs_block_header(&component));
-    let transaction = block.transaction();
-    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+    let mut transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&mut transaction).is_err());
 }
 
 fn execute_initial_sorafs(

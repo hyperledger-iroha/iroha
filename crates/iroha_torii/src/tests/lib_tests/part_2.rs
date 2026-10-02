@@ -3,7 +3,8 @@ fn assert_onboarding_readiness_blocked(
     signer: &AccountOnboardingSigner,
     message: &str,
 ) {
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer)
+        .expect("read original onboarding readiness");
     assert_ne!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
@@ -12,7 +13,8 @@ fn assert_onboarding_readiness_blocked(
     assert!(!report.diagnostics.is_empty(), "{message}");
 }
 fn assert_onboarding_readiness_ready(app: &SharedAppState, signer: &AccountOnboardingSigner) {
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
@@ -26,7 +28,8 @@ fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
         checked_torii_test_ed25519_keypair(0xA2, "derive joining onboarding readiness fixture key");
     let app = mk_app_state_for_tests();
     let signer = onboarding_alias_signer_for_test(&key_pair);
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
@@ -38,6 +41,120 @@ fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
             .iter()
             .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_missing" })
     );
+}
+#[test]
+fn onboarding_readiness_defers_original_policy_read_without_publishing_blocked_report() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA2, "derive original readiness refusal fixture key");
+    let app = mk_app_state_for_tests();
+    let signer = onboarding_alias_signer_for_test(&key_pair);
+    let key = iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID);
+    let original = app
+        .state
+        .world_view()
+        .smart_contract_state()
+        .get(&key)
+        .unwrap()
+        .clone();
+    let expected = validate_account_onboarding_readiness(app.state.as_ref(), &signer).unwrap();
+    assert_eq!(
+        expected.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Pending
+    );
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || validate_account_onboarding_readiness(app.state.as_ref(), &signer),
+    );
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.unwrap_err().into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        app.state
+            .world_view()
+            .smart_contract_state()
+            .get(&key)
+            .unwrap(),
+        &original
+    );
+    assert_eq!(
+        validate_account_onboarding_readiness(app.state.as_ref(), &signer).unwrap(),
+        expected
+    );
+}
+#[test]
+fn onboarding_permission_target_matches_canonical_tokens_and_defers_local_construction() {
+    use iroha_executor_data_model::permission::dpn::DpnAdmin;
+    let unit = Permission::from(DpnAdmin);
+    assert_eq!(torii_permission_target(DpnAdmin).unwrap(), unit);
+    // Even the unit token retains a four-byte canonical output before its Arc owner.
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || torii_permission_target(DpnAdmin),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(torii_permission_target(DpnAdmin).unwrap(), unit);
+    let key_pair = checked_torii_test_ed25519_keypair(0x97, "derive onboarding token fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let token = CanEnrollFeeSponsorProgram {
+        program_id: FeeSponsorProgramId::new(authority, "original".parse().unwrap()),
+    };
+    let expected = Permission::from(token.clone());
+    assert_eq!(torii_permission_target(token.clone()).unwrap(), expected);
+    let original = token.clone();
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || torii_permission_target(original),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(torii_permission_target(token).unwrap(), expected);
+}
+#[test]
+fn onboarding_account_diagnostic_preserves_original_address_refusal() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0x98, "derive onboarding diagnostic fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let expected = authority.to_string();
+    assert_eq!(onboarding_account_literal(&authority).unwrap(), expected);
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || onboarding_account_literal(&authority),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(onboarding_account_literal(&authority).unwrap(), expected);
 }
 #[test]
 fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is_empty() {
@@ -82,7 +199,8 @@ fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is
         Err(iroha_core::sns::SnsError::Conflict(_))
     ));
     let signer = onboarding_alias_signer_for_test(&key_pair);
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
@@ -124,7 +242,8 @@ fn onboarding_readiness_rejects_unknown_additional_permission() {
     signer
         .allowed_permissions
         .insert("DefinitelyUnknownPermission".to_owned());
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked
@@ -177,7 +296,8 @@ fn onboarding_readiness_dpn_user_requires_exact_direct_admin() {
         grant_account_permissions_for_test(&app, &authority, permission);
         let mut signer = onboarding_alias_signer_for_test(&key_pair);
         signer.allowed_permissions.insert("DpnUser".to_owned());
-        let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+        let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+            .expect("read original onboarding readiness");
         if ready {
             assert_onboarding_readiness_ready(&app, &signer);
         } else {
@@ -219,7 +339,8 @@ fn onboarding_readiness_dpn_user_rejects_role_derived_admin() {
     );
     let mut signer = onboarding_alias_signer_for_test(&key_pair);
     signer.allowed_permissions.insert("DpnUser".to_owned());
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
@@ -248,7 +369,8 @@ fn onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty() {
     let app = mk_app_state_for_tests();
     let mut signer = onboarding_alias_signer_for_test(&key_pair);
     signer.allowed_permissions.insert("DpnUser".to_owned());
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer)
+        .expect("read original onboarding readiness");
     assert_eq!(
         report.status,
         iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
@@ -451,19 +573,162 @@ fn alias_resolve_domain_permission_is_exact_and_does_not_widen_to_dataspace() {
         .expect("domainless SBP alias should parse");
     let state_view = app.state.view();
     let world = state_view.world();
-    assert!(torii_authority_can_resolve_account_alias(
-        world, &authority, &hbl_alias
-    ));
-    assert!(iroha_core::alias::authority_can_resolve_account_alias(
-        world, &authority, &hbl_alias
-    ));
+    assert!(torii_authority_can_resolve_account_alias(world, &authority, &hbl_alias).unwrap());
+    assert!(
+        iroha_core::alias::authority_can_resolve_account_alias(world, &authority, &hbl_alias)
+            .unwrap()
+    );
     for alias in [&ubl_alias, &domainless_alias] {
-        assert!(!torii_authority_can_resolve_account_alias(
-            world, &authority, alias
-        ));
-        assert!(!iroha_core::alias::authority_can_resolve_account_alias(
-            world, &authority, alias
-        ));
+        assert!(!torii_authority_can_resolve_account_alias(world, &authority, alias).unwrap());
+        assert!(
+            !iroha_core::alias::authority_can_resolve_account_alias(world, &authority, alias)
+                .unwrap()
+        );
+    }
+}
+#[test]
+fn alias_permission_routes_preserve_json_refusal_without_denial_or_partial_output() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0x96, "derive original alias route refusal fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    let hbl = DomainId::try_new("hbl", "sbp").unwrap();
+    let permission = Permission::from(CanResolveAccountAlias {
+        scope: AccountAliasPermissionScope::Domain(hbl),
+    });
+    grant_account_permissions_for_test(&app, &authority, [permission.clone()]);
+    let alias = AccountAlias::from_literal(
+        "payee@hbl.sbp",
+        &app.state.nexus_snapshot().dataspace_catalog,
+    )
+    .unwrap();
+    let view = app.state.view();
+    assert!(torii_authority_can_resolve_account_alias(view.world(), &authority, &alias).unwrap());
+    let result = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || torii_authority_can_resolve_account_alias(view.world(), &authority, &alias),
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            )))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(
+        result.unwrap_err().into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert!(
+        view.world()
+            .account_permissions_iter(&authority)
+            .unwrap()
+            .any(|grant| grant == &permission)
+    );
+    assert!(torii_authority_can_resolve_account_alias(view.world(), &authority, &alias).unwrap());
+}
+#[test]
+fn alias_result_filter_never_publishes_partial_output_after_original_scope_refusal() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0x96, "derive original filtered alias fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    grant_account_permissions_for_test(
+        &app,
+        &authority,
+        [Permission::from(CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(DomainId::try_new("hbl", "sbp").unwrap()),
+        })],
+    );
+    let payload = norito::json!({"items": [{"alias": "payee@hbl.sbp"}], "total": 1});
+    assert_eq!(
+        filter_permission_opened_alias_lookup_payload(&app, &authority, payload.clone()).unwrap(),
+        payload
+    );
+    let attempt = payload.clone();
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || filter_permission_opened_alias_lookup_payload(&app, &authority, attempt),
+    );
+    assert_eq!(
+        refused.unwrap_err().status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "a local refusal cannot publish a successful empty or partially filtered response"
+    );
+    assert_eq!(
+        filter_permission_opened_alias_lookup_payload(&app, &authority, payload.clone()).unwrap(),
+        payload
+    );
+    let malformed = norito::json!({"items": [{"alias": 7}], "total": 1});
+    assert_eq!(
+        filter_permission_opened_alias_lookup_payload(&app, &authority, malformed)
+            .unwrap_err()
+            .status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let denied = norito::json!({"items": [{"alias": "payee@ubl.sbp"}], "total": 1});
+    assert!(
+        filter_permission_opened_alias_lookup_payload(&app, &authority, denied)
+            .unwrap()
+            .get("items")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "actual permission denial still filters"
+    );
+}
+#[test]
+fn exact_alias_route_grant_decoder_defers_original_payload_and_retries() {
+    let dataspace = DataSpaceId::new(42);
+    let alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+        "merchant@paynet".parse().unwrap(),
+        dataspace,
+    );
+    let permission = Permission::from(CanResolveAccountAlias {
+        scope: AccountAliasPermissionScope::Alias(alias),
+    });
+    let bytes = permission.payload().as_ref().to_owned();
+    let request = routing::AliasLookupByAccountRequestDto {
+        account_id: String::new(),
+        dataspace: None,
+        domain: None,
+    };
+    assert!(torii_exact_alias_permission_matches_route(&permission, dataspace, &request).unwrap());
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || torii_exact_alias_permission_matches_route(&permission, dataspace, &request),
+    );
+    assert!(matches!(
+        refused,
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+        )))
+    ));
+    assert_eq!(permission.payload().as_ref(), bytes);
+    assert!(torii_exact_alias_permission_matches_route(&permission, dataspace, &request).unwrap());
+    assert!(
+        !torii_exact_alias_permission_matches_route(&permission, DataSpaceId::new(43), &request)
+            .unwrap()
+    );
+    let wrong_domain = routing::AliasLookupByAccountRequestDto {
+        domain: Some("bank".to_owned()),
+        ..request
+    };
+    assert!(
+        !torii_exact_alias_permission_matches_route(&permission, dataspace, &wrong_domain).unwrap()
+    );
+    for raw in ["null", "false", "{}", r#"{"scope":null}"#] {
+        let malformed = Permission::new(
+            "CanResolveAccountAlias".to_owned(),
+            iroha_primitives::json::Json::from_raw_json(raw.to_owned()).unwrap(),
+        );
+        assert!(
+            !torii_exact_alias_permission_matches_route(&malformed, dataspace, &wrong_domain)
+                .unwrap()
+        );
     }
 }
 #[tokio::test]
@@ -473,7 +738,10 @@ async fn alias_resolve_endpoint_accepts_exact_domain_without_dataspace_permissio
         "derive exact domain endpoint resolution fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let app = onboarding_alias_test_app(&authority, &authority);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        onboarding_alias_test_world(&authority, &authority),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
     let alias = AccountAlias::from_literal(
         "payee@hbl.sbp",
@@ -487,7 +755,14 @@ async fn alias_resolve_endpoint_accepts_exact_domain_without_dataspace_permissio
     let body = norito::json::to_vec(&request).expect("encode alias resolve request");
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve URI");
-    let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &key_pair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve(
         State(app),
         method,
@@ -877,7 +1152,8 @@ async fn retail_recipient_route_is_corridor_scoped_without_granting_general_alia
             app.state.view().world(),
             &caller,
             &corridor_alias,
-        ),
+        )
+        .unwrap(),
         "the FX caller fixture must not hold general alias-resolution permission",
     );
     let body = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
@@ -1700,32 +1976,40 @@ async fn alias_planner_and_recipient_reads_authenticate_before_parsing() {
     .expect_err("malformed unsigned public lookup must fail parsing")
     .into_response();
     assert_eq!(unsigned_resolve.status(), StatusCode::BAD_REQUEST);
-    for response in [
-        handler_alias_resolve_index(
-            State(app.clone()),
-            method.clone(),
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias index uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(b"{"),
-        )
-        .await
-        .expect_err("malformed unsigned index lookup must fail parsing")
-        .into_response(),
-        handler_alias_lookup_by_account(
-            State(app.clone()),
-            method.clone(),
-            "/v1/aliases/by-account".parse().expect("alias account uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(b"{"),
-        )
-        .await
-        .expect_err("malformed unsigned reverse lookup must fail parsing")
-        .into_response(),
-    ] {
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
+    let index_error = handler_alias_resolve_index(
+        State(app.clone()),
+        method.clone(),
+        "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias index uri"),
+        HeaderMap::new(),
+        axum::body::Bytes::from_static(b"{"),
+    )
+    .await
+    .expect_err("unsigned index enumeration must authenticate before parsing");
+
+    assert!(matches!(
+        &index_error,
+        Error::AppUnauthorized {
+            code: "alias_auth_required",
+            ..
+        }
+    ));
+    assert_eq!(
+        index_error.into_response().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let reverse_response = handler_alias_lookup_by_account(
+        State(app.clone()),
+        method.clone(),
+        "/v1/aliases/by-account".parse().expect("alias account uri"),
+        HeaderMap::new(),
+        axum::body::Bytes::from_static(b"{"),
+    )
+    .await
+    .expect_err("malformed unsigned reverse lookup must fail parsing")
+    .into_response();
+    assert_eq!(reverse_response.status(), StatusCode::BAD_REQUEST);
     let route = handler_retail_recipient_route(
         State(app.clone()),
         method.clone(),
@@ -2017,12 +2301,38 @@ fn recipient_lookup_upstream_request_id_forwards_valid_header_or_generates_priva
 async fn alias_resolve_rejects_unsigned_request() {
     let authority =
         checked_torii_test_account_id(0x84, "derive alias resolve unsigned authority fixture key");
-    // Authentication must fail before the request body is parsed or any
-    // alias state is consulted, so the fixture deliberately contains only
-    // the prospective caller account.
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    // Exact public mappings permit unsigned reads; a restricted mapping must
+    // require the signed caller before consulting its original alias state.
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    bind_account_alias_for_test(&app, &authority, "public@universal");
+    let public_body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+        alias: "public@universal".to_owned(),
+    })
+    .unwrap();
+    let public = handler_alias_resolve(
+        State(app.clone()),
+        Method::POST,
+        "/v1/aliases/resolve".parse().unwrap(),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        axum::body::Bytes::from(public_body),
+    )
+    .await
+    .expect("exact public mapping permits unsigned reads")
+    .into_response();
+    assert_eq!(public.status(), StatusCode::OK);
+    let public_bytes = axum::body::to_bytes(public.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let public_dto: routing::AliasResolveResponseDto =
+        norito::json::from_slice(&public_bytes).unwrap();
+    assert_eq!(public_dto.alias, "public@universal");
+    assert_eq!(public_dto.account_id, authority.to_string());
     let request = routing::AliasResolveRequestDto {
-        alias: "banking@centralbank.universal".to_string(),
+        alias: "banking@centralbank.restricted".to_string(),
     };
     let body = norito::json::to_vec(&request).expect("encode request");
     let error = handler_alias_resolve(
@@ -2337,27 +2647,40 @@ async fn alias_resolve_rejects_signed_request_without_exact_permission() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("centralbank", "restricted").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let alias_label = AccountAlias::new(
         "banking".parse().expect("label"),
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
             "centralbank".parse::<Name>().expect("domain"),
         )),
-        DataSpaceId::UNIVERSAL,
+        DataSpaceId::new(10),
     );
-    let account = Account::new(authority.clone())
-        .with_label(Some(alias_label))
-        .build(&authority);
-    let app =
-        mk_app_state_for_tests_with_world(World::with([domain], [authority_account, account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        World::with([domain], [authority_account], []),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    bind_account_alias_for_test(&app, &authority, "banking@centralbank.restricted");
+    assert_eq!(
+        alias_label
+            .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
+            .unwrap(),
+        "banking@centralbank.restricted"
+    );
     let request = routing::AliasResolveRequestDto {
-        alias: "banking@centralbank.universal".to_string(),
+        alias: "banking@centralbank.restricted".to_string(),
     };
     let body = norito::json::to_vec(&request).expect("encode request");
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve(
         State(app),
         method,
@@ -2378,11 +2701,10 @@ async fn alias_resolve_routes_to_matching_dataspace_instead_of_local_default_mis
         "derive alias resolve secondary-dataspace authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account(&authority),
         crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
     );
-    configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let alias_label = AccountAlias::new(
         "merchant".parse().expect("label"),
@@ -2409,6 +2731,8 @@ async fn alias_resolve_routes_to_matching_dataspace_instead_of_local_default_mis
         StatusCode::NOT_FOUND,
         "the default/universal route must not resolve a secondary dataspace alias locally",
     );
+    // The response body owns the original query reservation until consumed or dropped.
+    drop(local_default_response);
     let headers = signed_alias_resolve_headers_for_test(
         &app,
         &authority,
@@ -2452,11 +2776,10 @@ async fn alias_resolve_allows_signed_exact_permission_for_restricted_target_data
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-denied"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
     let alias_label = AccountAlias::new(
         "merchant".parse().expect("label"),
@@ -2509,7 +2832,6 @@ async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
         "derive alias resolve no-lane authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
         NonZeroU32::new(1).expect("nonzero lane count"),
         vec![iroha_data_model::nexus::LaneConfig::default()],
@@ -2526,17 +2848,25 @@ async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
     ])
     .expect("dataspace catalog");
     let nexus = actual::Nexus {
+        lane_config: actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..actual::Nexus::default()
     };
-    {
-        let app_state = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-        state.set_nexus(nexus.clone()).expect("apply nexus config");
-        let state_view = app_state.state.view();
-        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
-    }
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        world_with_account(&authority),
+        nexus,
+    );
+    assert!(
+        matches!(
+            resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::new(10)),
+            Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })
+                if dataspace_id == DataSpaceId::new(10)
+        ),
+        "an unrelated global lane must not be advertised as the target's lane"
+    );
     bind_account_alias_for_test(&app, &authority, "banking@paynet");
     let alias_label = AccountAlias::new(
         "banking".parse().expect("label"),
@@ -2574,7 +2904,7 @@ async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
         norito::json::from_slice(&body).expect("json decode");
     assert_eq!(dto.alias, "banking@paynet");
     assert_eq!(dto.account_id, authority.to_string());
-    assert_eq!(dto.source.as_deref(), Some("rekey_record"));
+    assert_eq!(dto.source.as_deref(), Some("active_sns"));
 }
 #[tokio::test]
 async fn alias_resolve_returns_route_unavailable_when_authoritative_route_is_offline() {
@@ -3168,11 +3498,10 @@ async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_t
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-fanout"));
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
         world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
     let catalog = app.state.nexus_snapshot().dataspace_catalog;
@@ -3191,7 +3520,14 @@ async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_t
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app),
         method,
