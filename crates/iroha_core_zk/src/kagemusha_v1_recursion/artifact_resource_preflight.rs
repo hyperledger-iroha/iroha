@@ -109,12 +109,12 @@ pub(super) enum KeyResourcePredictionV1 {
     /// Conservative configure-only upper bound for the borrowed test guard.
     #[cfg(test)]
     ConfiguredUpperBound,
-    /// Exact synthesized selector strategy and fixed-column mode inventory.
+    /// Exact synthesized selector strategy, fixed modes and directed permutation inventory.
     SynthesizedExact,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FixedColumnPayloadV1 {
+enum KeyColumnPayloadV1 {
     LowerBound,
     #[cfg(test)]
     UpperBound,
@@ -122,6 +122,7 @@ enum FixedColumnPayloadV1 {
         constant: usize,
         binary: usize,
         raw: usize,
+        permutation_bytes: u64,
     },
 }
 
@@ -134,6 +135,8 @@ enum ResourcePredictionErrorV1 {
     ArithmeticOverflow,
     FixedModeCountMismatch,
     PermutationCellsDoNotFitU32,
+    PermutationPayloadUnavailable,
+    PermutationPayloadOutOfBounds,
 }
 
 impl core::fmt::Display for ResourcePredictionErrorV1 {
@@ -153,6 +156,12 @@ impl core::fmt::Display for ResourcePredictionErrorV1 {
             }
             Self::PermutationCellsDoNotFitU32 => {
                 "structured permutation cell count exceeds the u32 codec bound"
+            }
+            Self::PermutationPayloadUnavailable => {
+                "synthesized permutation has no representable structured byte inventory"
+            }
+            Self::PermutationPayloadOutOfBounds => {
+                "synthesized permutation bytes are outside the canonical column bounds"
             }
         })
     }
@@ -205,7 +214,7 @@ fn predict_key_resources_with_selectors_v1(
         materialized_selector_columns,
         permutation_columns,
         compress_selectors,
-        FixedColumnPayloadV1::LowerBound,
+        KeyColumnPayloadV1::LowerBound,
     )
 }
 
@@ -219,7 +228,7 @@ fn predict_key_resources_with_modes_v1(
     materialized_selector_columns: usize,
     permutation_columns: usize,
     compress_selectors: bool,
-    fixed_payload: FixedColumnPayloadV1,
+    column_payload: KeyColumnPayloadV1,
 ) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1> {
     let k = u32::try_from(k).map_err(|_| ResourcePredictionErrorV1::DomainExponentDoesNotFitU32)?;
     let domain_rows = 1_u64
@@ -265,18 +274,27 @@ fn predict_key_resources_with_modes_v1(
     if permutation_cells > u64::from(u32::MAX) {
         return Err(ResourcePredictionErrorV1::PermutationCellsDoNotFitU32);
     }
-    let (fixed_bytes, prediction) = match fixed_payload {
-        FixedColumnPayloadV1::LowerBound => {
+    let permutation_upper_bytes = permutation_cells
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(permutation_columns))
+        .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
+    let (fixed_bytes, permutation_bytes, prediction) = match column_payload {
+        KeyColumnPayloadV1::LowerBound => {
             // At tiny domains a nonconstant binary payload can be smaller than a constant
             // scalar. Constant priority does not justify treating 32 bytes as a lower bound.
             let payload = PASTA_PROCESSED_SCALAR_BYTES.min(domain_rows.div_ceil(8));
             let bytes = serialized_fixed_columns
                 .checked_mul(1 + payload)
                 .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
-            (bytes, KeyResourcePredictionV1::ConfiguredLowerBound)
+            // Every permutation column may be identity, requiring just its mode tag.
+            (
+                bytes,
+                permutation_columns,
+                KeyResourcePredictionV1::ConfiguredLowerBound,
+            )
         }
         #[cfg(test)]
-        FixedColumnPayloadV1::UpperBound => {
+        KeyColumnPayloadV1::UpperBound => {
             let payload = domain_rows
                 .checked_mul(PASTA_PROCESSED_SCALAR_BYTES)
                 .and_then(|bytes| bytes.checked_add(1))
@@ -284,13 +302,21 @@ fn predict_key_resources_with_modes_v1(
             let bytes = serialized_fixed_columns
                 .checked_mul(payload)
                 .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
-            (bytes, KeyResourcePredictionV1::ConfiguredUpperBound)
+            (
+                bytes,
+                permutation_upper_bytes,
+                KeyResourcePredictionV1::ConfiguredUpperBound,
+            )
         }
-        FixedColumnPayloadV1::Exact {
+        KeyColumnPayloadV1::Exact {
             constant,
             binary,
             raw,
+            permutation_bytes,
         } => {
+            if !(permutation_columns..=permutation_upper_bytes).contains(&permutation_bytes) {
+                return Err(ResourcePredictionErrorV1::PermutationPayloadOutOfBounds);
+            }
             let constant = checked_count(constant)?;
             let binary = checked_count(binary)?;
             let raw = checked_count(raw)?;
@@ -317,17 +343,17 @@ fn predict_key_resources_with_modes_v1(
                         .and_then(|raw_bytes| bytes.checked_add(raw_bytes))
                 })
                 .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
-            (bytes, KeyResourcePredictionV1::SynthesizedExact)
+            (
+                bytes,
+                permutation_bytes,
+                KeyResourcePredictionV1::SynthesizedExact,
+            )
         }
     };
     let proving_key_bytes = PROVING_KEY_MASK_POLYNOMIALS
         .checked_mul(polynomial_bytes)
         .and_then(|bytes| bytes.checked_add(fixed_bytes))
-        .and_then(|bytes| {
-            permutation_cells
-                .checked_mul(4)
-                .and_then(|sigma_bytes| bytes.checked_add(sigma_bytes))
-        })
+        .and_then(|bytes| bytes.checked_add(permutation_bytes))
         .and_then(|bytes| {
             PROVING_KEY_POLYNOMIAL_VECTORS
                 .checked_mul(POLYNOMIAL_VECTOR_LENGTH_BYTES)
@@ -387,9 +413,9 @@ where
         constraint_system.permutation().get_columns().len(),
         true,
         if minimum {
-            FixedColumnPayloadV1::LowerBound
+            KeyColumnPayloadV1::LowerBound
         } else {
-            FixedColumnPayloadV1::UpperBound
+            KeyColumnPayloadV1::UpperBound
         },
     )
 }
@@ -467,10 +493,13 @@ fn exact_key_resources_v1<C: CurveAffine>(
         profile.materialized_selector_columns,
         profile.permutation_columns,
         profile.compress_selectors,
-        FixedColumnPayloadV1::Exact {
+        KeyColumnPayloadV1::Exact {
             constant: profile.constant_fixed_columns,
             binary: profile.binary_fixed_columns,
             raw: profile.raw_fixed_columns,
+            permutation_bytes: profile
+                .structured_permutation_bytes
+                .ok_or(ResourcePredictionErrorV1::PermutationPayloadUnavailable)?,
         },
     )
 }
@@ -1028,10 +1057,11 @@ mod tests {
                 0,
                 0,
                 false,
-                FixedColumnPayloadV1::Exact {
+                KeyColumnPayloadV1::Exact {
                     constant: 0,
                     binary: 0,
-                    raw: u32::MAX as usize
+                    raw: u32::MAX as usize,
+                    permutation_bytes: 0,
                 },
             ),
             Err(ResourcePredictionErrorV1::ArithmeticOverflow),
@@ -1116,7 +1146,7 @@ mod tests {
         assert_eq!(profile.serialized_fixed_columns, 2);
         assert_eq!(profile.selector_bitmap_bytes, 3 * (64 / 8));
         assert_eq!(profile.verifying_key_bytes, 162);
-        assert_eq!(profile.proving_key_bytes, 6_912);
+        assert_eq!(profile.proving_key_bytes, 6_402);
     }
 
     #[test]
@@ -1189,7 +1219,7 @@ mod tests {
         assert_eq!(eq.serialized_fixed_columns, 1);
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 7_340_311);
+        assert_eq!(eq.proving_key_bytes, 6_291_739);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
             (KagemushaPastaParityV1::Ep, ep),
@@ -1279,7 +1309,7 @@ mod tests {
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.serialized_fixed_columns, 9);
         assert_eq!(eq.verifying_key_bytes, 490);
-        assert_eq!(eq.proving_key_bytes, 7_865_183);
+        assert_eq!(eq.proving_key_bytes, 6_292_325);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
             (KagemushaPastaParityV1::Ep, ep),
@@ -1329,7 +1359,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 7_340_311);
+        assert_eq!(eq.proving_key_bytes, 6_291_739);
         assert!(eq.verifying_key_bytes <= KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
         for (parity, profile) in [
@@ -1381,7 +1411,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 458);
-        assert_eq!(eq.proving_key_bytes, 7_340_896);
+        assert_eq!(eq.proving_key_bytes, 6_292_324);
         macro_rules! check_preflight {
             ($curve:ty, $field:ty, $circuit:ty, $parity:expr) => {{
                 let mut configured = ConstraintSystem::<$field>::default();
@@ -1459,7 +1489,7 @@ mod tests {
         assert_eq!(eq.materialized_selector_columns, 2);
         assert_eq!(eq.serialized_fixed_columns, 13);
         assert_eq!(eq.permutation_columns, 9);
-        assert_eq!(eq.proving_key_bytes, 8_668_355);
+        assert_eq!(eq.proving_key_bytes, 6_309_068);
         assert_eq!(eq.verifying_key_bytes, 17_098);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
         assert!(eq.verifying_key_bytes <= KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1);
@@ -1478,9 +1508,9 @@ mod tests {
             + 32 * (11 + 9)
             + 3 * (32 * (1 << 16) + 4)
             + 8
-            + 4 * (1 << 16) * 9
+            + 9 // Optimistic identity mode tags; actual copies require synthesized accounting.
             + 11 * (1 + 32);
-        assert_eq!(without_any_selectors, 8_651_841);
+        assert_eq!(without_any_selectors, 6_292_554);
         assert!(without_any_selectors < eq.proving_key_bytes);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
@@ -1538,7 +1568,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 7_340_311);
+        assert_eq!(eq.proving_key_bytes, 6_291_739);
         assert_eq!(KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1, 64 * 1024 * 1024);
         assert_eq!(KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1, 64 * 1024);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
@@ -1554,9 +1584,9 @@ mod tests {
                 .expect("fixed dense auxiliary floor fits the unchanged key envelope");
                 assert_eq!(checked, $profile);
 
-                // Passing the auxiliary floor never authorizes an oversized final Base graph.
-                // This valid Base configuration already needs too many permutation columns,
-                // even before selector materialization; the same release caps must reject it.
+                // The optimistic configure bound cannot know the final copy occupancy.
+                // This wider Base configuration may reach synthesis; its conservative dense
+                // upper bound still exceeds the unchanged cap and cannot qualify a key.
                 let oversized = BaseCircuitParams {
                     k: 16,
                     num_advice_per_phase: vec![256],
@@ -1565,9 +1595,26 @@ mod tests {
                     lookup_bits: Some(15),
                     num_instance_columns: 1,
                 };
+                let optimistic = preflight_helper_key_configuration_v1::<$curve, $circuit>(
+                    16, oversized, $parity, "terminal authorization Base geometry",
+                ).expect("configure-only identity bound permits exact synthesized accounting");
+                assert_eq!(optimistic.prediction, KeyResourcePredictionV1::ConfiguredLowerBound);
+                let conservative = predict_key_resources_with_modes_v1(
+                    16,
+                    optimistic.advice_columns as usize,
+                    optimistic.instance_columns as usize,
+                    optimistic.configured_fixed_columns as usize,
+                    optimistic.selector_columns as usize,
+                    optimistic.selector_columns as usize,
+                    optimistic.permutation_columns as usize,
+                    true,
+                    KeyColumnPayloadV1::UpperBound,
+                ).expect("conservative configured column bound");
                 assert!(matches!(
-                    preflight_helper_key_configuration_v1::<$curve, $circuit>(
-                        16, oversized, $parity, "terminal authorization Base geometry",
+                    enforce_helper_key_limits_v1(
+                        $parity, "terminal authorization conservative Base bound", conservative,
+                        KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
+                        KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
                     ),
                     Err(KagemushaArtifactGenerationErrorV1::PredictedKeyResourceLimit {
                         parity,
@@ -1649,6 +1696,7 @@ mod tests {
                         assert_eq!(synthesized.constant_fixed_columns, 1);
                         assert_eq!(synthesized.binary_fixed_columns, 0);
                         assert_eq!(synthesized.raw_fixed_columns, 1);
+                        assert_eq!(synthesized.structured_permutation_bytes, Some(27));
                         exact_key_resources_v1::<$curve>(synthesized)
                     },
                 )
@@ -1673,7 +1721,7 @@ mod tests {
                 );
                 assert_eq!(
                     (profile.proving_key_bytes, profile.verifying_key_bytes),
-                    (9_256, 186)
+                    (8_515, 186)
                 );
                 assert_eq!(
                     upper_bound.prediction,
@@ -1688,14 +1736,14 @@ mod tests {
                         lower_bound.proving_key_bytes,
                         lower_bound.verifying_key_bytes
                     ),
-                    (7_192, 186)
+                    (6_427, 186)
                 );
                 assert_eq!(
                     (
                         upper_bound.proving_key_bytes,
                         upper_bound.verifying_key_bytes
                     ),
-                    (13_353, 218)
+                    (13_356, 218)
                 );
                 assert_eq!(profile.selector_columns, 2);
                 assert_eq!(profile.materialized_selector_columns, 1);
@@ -2084,10 +2132,11 @@ mod tests {
             16,
             2,
             true,
-            FixedColumnPayloadV1::Exact {
+            KeyColumnPayloadV1::Exact {
                 constant: 17,
                 binary: 0,
                 raw: 0,
+                permutation_bytes: 2 * (1 + 4 * 256),
             },
         )
         .unwrap();
@@ -2100,23 +2149,24 @@ mod tests {
             32,
             2,
             false,
-            FixedColumnPayloadV1::Exact {
+            KeyColumnPayloadV1::Exact {
                 constant: 33,
                 binary: 0,
                 raw: 0,
+                permutation_bytes: 2 * (1 + 4 * 256),
             },
         )
         .unwrap();
         assert_eq!(
             (compressed.proving_key_bytes, compressed.verifying_key_bytes),
-            (28_903, 1_642)
+            (28_905, 1_642)
         );
         assert_eq!(
             (direct.proving_key_bytes, direct.verifying_key_bytes),
-            (28_919, 1_130)
+            (28_921, 1_130)
         );
         let conflicting = KagemushaKeyLimitsV1 {
-            proving_key_maximum: 28_903,
+            proving_key_maximum: 28_905,
             verifying_key_maximum: 1_130,
         };
         assert!(compressed.proving_key_bytes <= conflicting.proving_key_maximum);
@@ -2234,6 +2284,8 @@ mod tests {
                             if $overlap { 2 } else { 1 }
                         );
                         assert_eq!(profiles.direct.materialized_selector_columns, 2);
+                        assert_eq!(profiles.compressed.structured_permutation_bytes, Some(27));
+                        assert_eq!(profiles.direct.structured_permutation_bytes, Some(27));
                         choose_synthesized_helper_key_encoding_v1::<$curve>(
                             profiles,
                             $parity,
@@ -2254,7 +2306,7 @@ mod tests {
                 );
                 assert_eq!(
                     (profile.proving_key_bytes, profile.verifying_key_bytes),
-                    (7_241, 202)
+                    (6_500, 202)
                 );
                 let processed_reference = pk.to_bytes(SerdeFormat::Processed);
                 let mut pk_bytes = Vec::new();
@@ -2543,11 +2595,11 @@ mod tests {
         });
         assert_eq!(
             (lower[0].proving_key_bytes, lower[0].verifying_key_bytes),
-            (42_135_666, 974_890)
+            (7_270_647, 974_890)
         );
         assert_eq!(
             (lower[1].proving_key_bytes, lower[1].verifying_key_bytes),
-            (41_169_010, 8_234)
+            (6_303_991, 8_234)
         );
         let upper = [true, false].map(|compressed| {
             predict_key_resources_with_modes_v1(
@@ -2559,12 +2611,12 @@ mod tests {
                 118,
                 133,
                 compressed,
-                FixedColumnPayloadV1::UpperBound,
+                KeyColumnPayloadV1::UpperBound,
             )
             .unwrap()
         });
-        assert_eq!(upper[0].proving_key_bytes, 302_178_546);
-        assert_eq!(upper[1].proving_key_bytes, 301_211_890);
+        assert_eq!(upper[0].proving_key_bytes, 302_178_679);
+        assert_eq!(upper[1].proving_key_bytes, 301_212_023);
         for index in 0..2 {
             assert_eq!(
                 lower[index].prediction,
@@ -2613,7 +2665,7 @@ mod tests {
                 0,
                 0,
                 false,
-                FixedColumnPayloadV1::LowerBound,
+                KeyColumnPayloadV1::LowerBound,
             )
             .unwrap();
             let constant = predict_key_resources_with_modes_v1(
@@ -2625,10 +2677,11 @@ mod tests {
                 0,
                 0,
                 false,
-                FixedColumnPayloadV1::Exact {
+                KeyColumnPayloadV1::Exact {
                     constant: 1,
                     binary: 0,
                     raw: 0,
+                    permutation_bytes: 0,
                 },
             )
             .unwrap();
@@ -2641,10 +2694,11 @@ mod tests {
                 0,
                 0,
                 false,
-                FixedColumnPayloadV1::Exact {
+                KeyColumnPayloadV1::Exact {
                     constant: 0,
                     binary: 1,
                     raw: 0,
+                    permutation_bytes: 0,
                 },
             )
             .unwrap();
@@ -2657,10 +2711,11 @@ mod tests {
                 0,
                 0,
                 false,
-                FixedColumnPayloadV1::Exact {
+                KeyColumnPayloadV1::Exact {
                     constant: 0,
                     binary: 0,
                     raw: 1,
+                    permutation_bytes: 0,
                 },
             )
             .unwrap();
@@ -2688,7 +2743,7 @@ mod tests {
             0,
             0,
             false,
-            FixedColumnPayloadV1::LowerBound,
+            KeyColumnPayloadV1::LowerBound,
         )
         .unwrap();
         let singleton_constant = predict_key_resources_with_modes_v1(
@@ -2700,10 +2755,11 @@ mod tests {
             0,
             0,
             false,
-            FixedColumnPayloadV1::Exact {
+            KeyColumnPayloadV1::Exact {
                 constant: 1,
                 binary: 0,
                 raw: 0,
+                permutation_bytes: 0,
             },
         )
         .unwrap();
@@ -2714,15 +2770,17 @@ mod tests {
         // Constant priority is supplied by actual synthesized counts, checked in the real k6
         // test above; byte minimization must never relabel constant zero as binary at tiny n.
         for modes in [
-            FixedColumnPayloadV1::Exact {
+            KeyColumnPayloadV1::Exact {
                 constant: 0,
                 binary: 0,
                 raw: 0,
+                permutation_bytes: 0,
             },
-            FixedColumnPayloadV1::Exact {
+            KeyColumnPayloadV1::Exact {
                 constant: 1,
                 binary: 1,
                 raw: 0,
+                permutation_bytes: 0,
             },
         ] {
             assert_eq!(
@@ -2741,10 +2799,11 @@ mod tests {
                     0,
                     0,
                     false,
-                    FixedColumnPayloadV1::Exact {
+                    KeyColumnPayloadV1::Exact {
                         constant: usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit usize"),
                         binary: 0,
-                        raw: 0
+                        raw: 0,
+                        permutation_bytes: 0,
                     }
                 ),
                 Err(ResourcePredictionErrorV1::ColumnCountDoesNotFitU32)
@@ -2765,6 +2824,7 @@ mod tests {
             binary_fixed_columns: 0,
             raw_fixed_columns: 0,
             permutation_columns: 0,
+            structured_permutation_bytes: Some(0),
             compress_selectors: false,
         };
         for n in [0, 3, 63] {
@@ -2806,6 +2866,79 @@ mod tests {
                 ..profile
             }),
             Err(ResourcePredictionErrorV1::FixedModeCountMismatch)
+        );
+    }
+
+    #[test]
+    fn permutation_payload_bounds_require_a_synthesized_inventory() {
+        let exact = |bytes| {
+            predict_key_resources_with_modes_v1(
+                8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                4,
+                false,
+                KeyColumnPayloadV1::Exact {
+                    constant: 0,
+                    binary: 0,
+                    raw: 0,
+                    permutation_bytes: bytes,
+                },
+            )
+        };
+        let lower = predict_key_resources_with_selectors_v1(8, 0, 0, 0, 0, 0, 4, false).unwrap();
+        let upper = predict_key_resources_with_modes_v1(
+            8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4,
+            false,
+            KeyColumnPayloadV1::UpperBound,
+        )
+        .unwrap();
+        let identity = exact(4).unwrap();
+        // One sparse E2, one bitmap E16, one dense E256 and one identity column at n256.
+        let mixed = exact(1144).unwrap();
+        let dense = exact(4 * (1 + 4 * 256)).unwrap();
+        assert_eq!(identity.proving_key_bytes, lower.proving_key_bytes);
+        assert_eq!(dense.proving_key_bytes, upper.proving_key_bytes);
+        assert_eq!(mixed.proving_key_bytes - identity.proving_key_bytes, 1140);
+        assert_eq!(mixed.prediction, KeyResourcePredictionV1::SynthesizedExact);
+        assert!(identity.proving_key_bytes < mixed.proving_key_bytes);
+        assert!(mixed.proving_key_bytes < dense.proving_key_bytes);
+        for bytes in [0, 3, 4 * (1 + 4 * 256) + 1, u64::MAX] {
+            assert_eq!(
+                exact(bytes),
+                Err(ResourcePredictionErrorV1::PermutationPayloadOutOfBounds)
+            );
+        }
+        let unavailable = KeygenCircuitResourceProfile {
+            domain_rows: 256,
+            advice_columns: 0,
+            instance_columns: 0,
+            configured_fixed_columns: 0,
+            selector_columns: 0,
+            materialized_selector_columns: 0,
+            constant_fixed_columns: 0,
+            binary_fixed_columns: 0,
+            raw_fixed_columns: 0,
+            permutation_columns: 4,
+            structured_permutation_bytes: None,
+            compress_selectors: false,
+        };
+        assert_eq!(
+            exact_key_resources_v1::<EqAffine>(unavailable),
+            Err(ResourcePredictionErrorV1::PermutationPayloadUnavailable)
+        );
+        assert_eq!(
+            exact_key_resources_v1::<EpAffine>(unavailable),
+            Err(ResourcePredictionErrorV1::PermutationPayloadUnavailable)
         );
     }
 }

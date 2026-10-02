@@ -79,7 +79,8 @@ public final class KagemushaNativeWalletAccountSelectionOriginalV1: @unchecked S
 
 extension KagemushaCoreCoordinatorBridgeV1 {
   /// Copy W/S data from the installed account session using the fixed method21 phase15.
-  /// Native validates canonical multisig membership. This call reserves and signs nothing.
+  /// Native rechecks the same installed key, selected registry, retirement and originally admitted
+  /// canonical S/W relationship. Fresh membership is separately required for signing/effects.
   public func currentWalletAccountSelection() throws
     -> KagemushaNativeWalletAccountSelectionOriginalV1 {
     try KagemushaNativeWalletAccountSelectionOriginalV1.fromNative(bridge: self)

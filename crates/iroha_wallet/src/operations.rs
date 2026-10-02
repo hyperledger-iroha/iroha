@@ -33,6 +33,8 @@ use std::{
 mod bounded_alias;
 #[path = "operations_private_root.rs"]
 mod private_root;
+#[path = "operations_stream_token_custody.rs"]
+mod stream_token_custody;
 use bounded_alias::AliasFeeBounds;
 use iroha_data_model::private_dataspace::{
     PrivateDataspaceAnchor, PrivateDataspaceAnchorState, PrivateDataspaceRegistration,
@@ -40,6 +42,10 @@ use iroha_data_model::private_dataspace::{
 use private_root::BoundedTerms;
 pub use private_root::{
     BoundedTransactionOptions, PrivateRootAnchorRequest, PrivateRootRegistrationRequest,
+};
+pub use stream_token_custody::{
+    StreamTokenCustodyConfigureRequest, StreamTokenCustodyEnrollRequest,
+    StreamTokenCustodySelection,
 };
 
 /// Canonical XOR asset definition used by Taira's native fee economy.
@@ -137,6 +143,23 @@ pub enum NativeOperationKind {
     PrivateRootRegistration,
     /// Exact next compact private-root certificate against retained parent cursor state.
     PrivateRootAnchor,
+    /// One exact governed StreamToken custody policy configuration.
+    StreamTokenCustodyConfigure,
+    /// One independently attested StreamToken custody enrollment.
+    StreamTokenCustodyEnroll,
+}
+
+enum OperationExpectation<'a> {
+    PrivateRoot(private_root::BoundedOperationExpectation<'a>),
+    Custody(stream_token_custody::CustodyExpectation<'a>),
+}
+impl OperationExpectation<'_> {
+    fn verify(&self, record: &TransactionJournal) -> Result<()> {
+        match self {
+            Self::PrivateRoot(expected) => expected.verify(record),
+            Self::Custody(expected) => expected.verify(record),
+        }
+    }
 }
 
 /// Account-authorized shared native wallet operations.
@@ -359,6 +382,20 @@ impl AccountService {
         submit: bool,
         expectation: Option<private_root::BoundedOperationExpectation<'_>>,
     ) -> Result<OperationReport> {
+        self.run_transaction_with_expectation(
+            path,
+            expected,
+            submit,
+            expectation.map(OperationExpectation::PrivateRoot),
+        )
+    }
+    fn run_transaction_with_expectation(
+        &self,
+        path: &Path,
+        expected: NativeOperationKind,
+        submit: bool,
+        expectation: Option<OperationExpectation<'_>>,
+    ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         let journal = Journal::open(path)?;
         let record: TransactionJournal = journal.read_operation()?;
@@ -468,6 +505,16 @@ impl TransactionJournal {
         let bytes = hex::decode(&self.signed_transaction_hex)?;
         let transaction = SignedTransaction::decode_all_versioned(&bytes)?;
         transaction.verify_signature()?;
+        if matches!(
+            self.operation,
+            NativeOperation::StreamTokenCustodyConfigure { .. }
+                | NativeOperation::StreamTokenCustodyEnroll { .. }
+        ) && (transaction.attachments().is_some() || transaction.multisig_signatures().is_some())
+        {
+            eyre::bail!(
+                "custody operations require the sole account-signature instruction profile"
+            );
+        }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             eyre::bail!("transfer must contain native instructions");
         };
@@ -573,6 +620,14 @@ enum NativeOperation {
         anchor: Box<PrivateDataspaceAnchor>,
         terms: BoundedTerms,
     },
+    StreamTokenCustodyConfigure {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    StreamTokenCustodyEnroll {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
 }
 impl NativeOperation {
     fn bounded_terms(&self) -> Option<&BoundedTerms> {
@@ -580,6 +635,8 @@ impl NativeOperation {
             Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
                 Some(terms)
             }
+            Self::StreamTokenCustodyConfigure { terms, .. }
+            | Self::StreamTokenCustodyEnroll { terms, .. } => Some(terms),
             Self::AliasSetup {
                 bounds: AliasFeeBounds::Bounded(terms),
                 ..
@@ -589,9 +646,10 @@ impl NativeOperation {
     }
     fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
         match self {
-            Self::PrivateRootRegistration { .. } | Self::PrivateRootAnchor { .. } => {
-                Ok(BTreeMap::new())
-            }
+            Self::PrivateRootRegistration { .. }
+            | Self::PrivateRootAnchor { .. }
+            | Self::StreamTokenCustodyConfigure { .. }
+            | Self::StreamTokenCustodyEnroll { .. } => Ok(BTreeMap::new()),
             Self::Transfer { amount, .. } => Ok(BTreeMap::from([(
                 AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone()),
                 amount.clone(),
@@ -615,10 +673,19 @@ impl NativeOperation {
             Self::AliasSetup { .. } => NativeOperationKind::AliasSetup,
             Self::PrivateRootRegistration { .. } => NativeOperationKind::PrivateRootRegistration,
             Self::PrivateRootAnchor { .. } => NativeOperationKind::PrivateRootAnchor,
+            Self::StreamTokenCustodyConfigure { .. } => {
+                NativeOperationKind::StreamTokenCustodyConfigure
+            }
+            Self::StreamTokenCustodyEnroll { .. } => NativeOperationKind::StreamTokenCustodyEnroll,
         }
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
+            Self::StreamTokenCustodyConfigure { plan, terms }
+            | Self::StreamTokenCustodyEnroll { plan, terms } => {
+                terms.validate()?;
+                stream_token_custody::instructions(config, plan, self.kind(), terms.deadline_ms)
+            }
             Self::PrivateRootRegistration {
                 alias,
                 expected_ownership_generation,
@@ -687,6 +754,14 @@ fn transfer_report(
     evidence: Option<&Value>,
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
+        NativeOperation::StreamTokenCustodyConfigure { terms, .. } => (
+            "stream_token_custody_configure",
+            norito::json!({"terms": terms}),
+        ),
+        NativeOperation::StreamTokenCustodyEnroll { terms, .. } => (
+            "stream_token_custody_enroll",
+            norito::json!({"terms": terms}),
+        ),
         NativeOperation::PrivateRootRegistration {
             alias,
             expected_ownership_generation,

@@ -337,3 +337,47 @@ fn name_policy_every_opened_input_has_affine_degree_at_most_four() {
         }
     }
 }
+
+#[test]
+fn shared_fixed_byte_private_inverses_preserve_all_original_source_pairs() {
+    for trace in [canonical_trace_v1(), spki_maximum_release_trace_v1()] {
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let semantic = build_zk_x509_rfc5280_semantic_witness_v1(&trace).unwrap();
+        let family = ZkX509Rfc5280StarkFamilyV1::FixedByte as usize;
+        assert_eq!(
+            material.family_rows[family].len(),
+            semantic.fixed_bytes.len()
+        );
+        let mut zero_boundaries = [0_usize; 2];
+        let mut names = 0;
+        let mut other_purposes = 0;
+        for (ordinal, source) in semantic.fixed_bytes.iter().enumerate() {
+            let row = material
+                .base_row(material.schedule.starts[family] + ordinal)
+                .unwrap();
+            let remaining = source
+                .length
+                .checked_sub(source.offset)
+                .unwrap()
+                .checked_sub(1)
+                .unwrap();
+            assert_eq!(
+                row[BASE_INVERSE],
+                F(u64::from(source.offset)).inv().unwrap_or(F::ZERO)
+            );
+            assert_eq!(
+                row[BASE_G],
+                F(u64::from(remaining)).inv().unwrap_or(F::ZERO)
+            );
+            zero_boundaries[0] += usize::from(source.offset == 0);
+            zero_boundaries[1] += usize::from(remaining == 0);
+            if source.purpose == 9 {
+                names += 1;
+            } else {
+                other_purposes += 1;
+            }
+        }
+        assert!(zero_boundaries.into_iter().all(|count| count > 0));
+        assert!(names > 0 && other_purposes > 0);
+    }
+}

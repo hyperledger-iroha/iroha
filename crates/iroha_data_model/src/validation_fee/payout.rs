@@ -137,6 +137,10 @@ pub struct ValidationFeePayoutPolicyRegistryV1 {
 }
 impl ValidationFeePayoutPolicyRegistryV1 {
     /// Check authority, revision order and permanent custody identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty registry, invalid authority, inconsistent revisions, changed custody, or duplicate proposals.
     pub fn validate(&self) -> Result<(), String> {
         let first = self
             .entries

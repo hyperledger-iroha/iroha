@@ -239,6 +239,10 @@ pub struct FeeEvidenceSnapshotV1 {
 }
 impl FeeEvidenceSnapshotV1 {
     /// Derive a complete canonical commitment, rejecting omitted-order duplicates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero height, excess records, invalid record contents, or duplicate or unordered keys.
     pub fn from_records(height: u64, records: &[FeeEvidenceRecordV1]) -> Result<Self, String> {
         let count = u32::try_from(records.len()).map_err(|_| "fee record count overflow")?;
         if height == 0
@@ -253,8 +257,7 @@ impl FeeEvidenceSnapshotV1 {
         let root = MerkleTree::<FeeEvidenceRecordV1>::root_from_typed_leaves(
             records.iter().map(HashOf::new),
         )
-        .map(Hash::from)
-        .unwrap_or_else(|| Hash::new(b"iroha.fee_evidence.empty.v1"));
+        .map_or_else(|| Hash::new(b"iroha.fee_evidence.empty.v1"), Hash::from);
         Ok(Self {
             version: 1,
             evaluated_height: height,
@@ -327,6 +330,10 @@ impl FeeEvidenceWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid or noncanonical encoding or an incoherent snapshot commitment.
     pub fn commitment(&self) -> Result<FeeEvidenceSnapshotV1, String> {
         let commitment: FeeEvidenceSnapshotV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -392,8 +399,7 @@ impl FeeEvidenceBlockProofV1 {
     /// Produce a compact requested-record proof from the complete verified corpus.
     pub fn record_proof(&self, key: &StatePath) -> Option<FeeEvidenceRecordProofV1> {
         let index = self.records.binary_search_by(|r| r.key.cmp(key)).ok()?;
-        let tree =
-            MerkleTree::<FeeEvidenceRecordV1>::from_iter(self.records.iter().map(HashOf::new));
+        let tree: MerkleTree<FeeEvidenceRecordV1> = self.records.iter().map(HashOf::new).collect();
         Some(FeeEvidenceRecordProofV1 {
             snapshot_witness: self.snapshot_witness.clone(),
             record: self.records[index].clone(),
@@ -525,6 +531,10 @@ impl FeeEvidenceWindowProofV1 {
     /// Authenticate a complete window against an independently supplied checkpoint.
     /// Trust propagates forward from the pinned opening checkpoint through each
     /// contiguous native certificate; the closing block must match its independent pin.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported version, invalid finality, incomplete evidence, policy mismatch, or failed conservation checks.
     pub fn verify(&self, anchor: &FeeEvidenceTrustAnchorV1) -> Result<(), String> {
         use crate::validation_fee::ValidationFeePolicySnapshotCommitmentV1;
         if self.version != 1 {
@@ -686,15 +696,15 @@ impl FeeEvidenceWindowProofV1 {
                 }
             }
             for record in &block.evidence.records {
-                if let FeeEvidencePayloadV1::RetailReceipt(receipt) = &record.payload {
-                    if !block.registry.as_ref().is_some_and(|registry| {
+                if let FeeEvidencePayloadV1::RetailReceipt(receipt) = &record.payload
+                    && !block.registry.as_ref().is_some_and(|registry| {
                         registry.registered_policies.iter().any(|entry| {
                             entry.policy_hash == receipt.policy_hash
                                 && entry.policy.policy_version == receipt.policy_revision
                         })
-                    }) {
-                        return Err("native fee receipt policy provenance is absent".into());
-                    }
+                    })
+                {
+                    return Err("native fee receipt policy provenance is absent".into());
                 }
             }
         }
@@ -832,7 +842,7 @@ where
         records
             .iter()
             .find_map(|r| match &r.payload {
-                FeeEvidencePayloadV1::RewardCustody(c) => Some(c.state.clone()),
+                FeeEvidencePayloadV1::RewardCustody(c) => Some(c.state),
                 _ => None,
             })
             .unwrap_or_default()

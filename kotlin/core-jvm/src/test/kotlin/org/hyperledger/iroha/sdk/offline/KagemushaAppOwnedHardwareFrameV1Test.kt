@@ -65,4 +65,26 @@ class KagemushaAppOwnedHardwareFrameV1Test {
         fun bytes(marker: Int) = ByteArray(32) { marker.toByte() }
         val publication = listOf(ticket) + (1..8).map(::bytes)
     }
+    @Test fun completeStartChunksKeepMethod20DistinctAndRefuseBoundsAndSubstitution() {
+        val method = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION
+        val q = listOf(KagemushaCoreCoordinatorFrameV1.u32(15), ByteArray(8) { 1 }, KagemushaCoreCoordinatorFrameV1.u32(0))
+        val r = listOf(q[2], ByteArray(65536) { 2 }, ByteArray(32) { 3 },
+            KagemushaCoreCoordinatorFrameV1.u32(65537), ByteArray(32) { 4 }, ByteArray(32) { 5 })
+        KagemushaAppOwnedHardwareFrameV1.requireRequest(method, q)
+        KagemushaAppOwnedHardwareFrameV1.requireResponse(method, q, r)
+        assertFailsWith<IllegalArgumentException> { KagemushaAppOwnedHardwareFrameV1.requireRequest(method,
+            q.dropLast(1) + KagemushaCoreCoordinatorFrameV1.u32(4)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaAppOwnedHardwareFrameV1.requireResponse(method, q,
+            r.toMutableList().also { it[0] = KagemushaCoreCoordinatorFrameV1.u32(1) }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaAppOwnedHardwareFrameV1.requireResponse(method, q,
+            r.toMutableList().also { it[1] = ByteArray(65535) }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaAppOwnedHardwareFrameV1.requireResponse(method, q,
+            r.toMutableList().also { it[3] = KagemushaCoreCoordinatorFrameV1.u32(262145) }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaAppOwnedHardwareFrameV1.requireRequest(
+            KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL, q) }
+        val last = listOf(KagemushaCoreCoordinatorFrameV1.u32(15), q[1], KagemushaCoreCoordinatorFrameV1.u32(1))
+        KagemushaAppOwnedHardwareFrameV1.requireResponse(method, last,
+            r.toMutableList().also { it[0] = last[2]; it[1] = byteArrayOf(2) })
+    }
+
 }

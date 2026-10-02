@@ -1,4 +1,4 @@
-//! Durable authenticated history for Core-owned Unix wallet lanes.
+//! Durable authenticated history for Core-owned native wallet lanes.
 //!
 //! The journal is host recovery material, never the latest hardware authority. Every committed
 //! root selection retains and reauthenticates its original device certificate. Opening a journal
@@ -622,7 +622,7 @@ fn journal_error(error: PrivateJournalError) -> KagemushaHistoryStoreErrorV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "disk_history_store_tests.rs"]
 mod tests;
 

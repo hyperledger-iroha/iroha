@@ -17,6 +17,7 @@ use iroha_data_model::kagemusha::{
 mod commit_admission;
 pub(in crate::kagemusha_v1_recursion) use commit_admission::terminal_public;
 pub use commit_admission::{
+    KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1,
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
     KagemushaVerifiedOrdinaryLineageCommitProofV1,
     KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1, verify_ordinary_lineage_commit_v1,

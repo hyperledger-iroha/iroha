@@ -91,7 +91,7 @@ def test_original_relation_derives_canonical_child_bytes_and_retains_real_descri
         assert hashlib.sha256(raw).hexdigest()==owner.sha256
         value=json.loads(raw)
         assert raw==(json.dumps(value,sort_keys=True,ensure_ascii=True,separators=(',',':'))+'\n').encode('ascii')
-        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==228
+        assert len(value['source'])==191 and len(value['tools'])==8 and len(value['installed'])==229
         assert value['native']['sha256']==hashlib.sha256(NATIVE).hexdigest()
         assert value['native']['workspaceSourceTreeSha256']==WORKSPACE
         assert value['native']['nativeSourceTreeSha256']==NATIVE_SOURCE
@@ -268,3 +268,24 @@ def test_private_directory_policy_change_at_last_lineage_observation_is_refused(
         assert count==4
         with pytest.raises(ArchiveError):instance.recheck()
     finally:instance.close()
+
+
+@pytest.mark.parametrize("tool_name", (
+    "sorafs_javascript_child.mjs", "sorafs_javascript_child_entry.mjs",
+    "sorafs_javascript_child_files.mjs", "sorafs_javascript_child_input.mjs",
+    "sorafs_javascript_child_loads.mjs", "sorafs_javascript_child_session.mjs",
+    "sorafs_javascript_native_cache.mjs", "sorafs_javascript_test_events.mjs",
+))
+def test_every_fixed_child_original_refuses_resealed_copy_substitution(setup, tool_name):
+    """Matching forged originals and copies cannot replace any selected tool."""
+    original = setup["tools_source_root"] / tool_name
+    copied = setup["environment_root"] / "qualification/tools" / tool_name
+    assert original.read_bytes() == copied.read_bytes()
+    changed = original.read_bytes() + b"\n// unreviewed matched tool substitution\n"
+    original.write_bytes(changed)
+    copied.write_bytes(changed)
+    assert original.read_bytes() == copied.read_bytes() == changed
+    with pytest.raises(ArchiveError, match="fixed reviewed"):
+        with parent.OriginalJavascriptChildInput(**setup):
+            raise AssertionError("unreviewed matched child tools were admitted")
+    assert not setup["input_path"].exists()

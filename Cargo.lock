@@ -1801,6 +1801,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
@@ -5076,6 +5077,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
  "iroha_panic_hook",
  "iroha_primitives",
@@ -5095,6 +5097,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "url",
  "zeroize",
 ]
 
@@ -6113,6 +6116,7 @@ dependencies = [
  "reqwest",
  "scrypt",
  "sha2",
+ "sorafs_manifest",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "url",

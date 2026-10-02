@@ -367,11 +367,27 @@ private class NativeAppPreparedStateV1(
         val (selected, policy) = certificateInputs(reservation, identity)
         val credential = checkNotNull(credentialOriginal) { "Native has not admitted the original ordinary credential" }.copyOf()
         val digest = checkNotNull(credentialDigest).copyOf()
-        val body = KagemushaOrdinaryIdentityHttpCodecV1.retailStartBody(selected[0], credential)
+        val body = retainedRetailStartBody(selected[0], credential, digest)
         return KagemushaOrdinaryIdentityHttpOriginalV1.retail(originalId, "start", body) {
             recheckCertificateInputs(reservation, identity, selected, policy)
             recheckRetailCredential(credential, digest)
+            same(retainedRetailStartBody(selected[0], credential, digest), body)
         }
+    }
+
+    @Synchronized private fun retainedRetailStartBody(signedC: ByteArray, credential: ByteArray,
+        digest: ByteArray): ByteArray {
+        recheck()
+        val first = invoke(15, KagemushaCoreCoordinatorFrameV1.u32(0))
+        same(first[4], scope); same(first[5], digest)
+        val total = ByteBuffer.wrap(first[3]).order(ByteOrder.LITTLE_ENDIAN).int
+        val chunks = arrayListOf(first)
+        for (index in 1 until (total + 65535) / 65536) chunks.add(invoke(15, KagemushaCoreCoordinatorFrameV1.u32(index)))
+        val body = KagemushaOrdinaryIdentityHttpCodecV1.retailStartOriginalChunks(chunks, signedC, credential, scope, digest, ticket)
+        val after = invoke(15, KagemushaCoreCoordinatorFrameV1.u32(0))
+        first.indices.forEach { same(first[it], after[it]) }
+        recheck()
+        return body
     }
 
     @Synchronized fun acceptRetailStart(reservation: KagemushaNativeReservedOrdinaryAppIdentityV1,

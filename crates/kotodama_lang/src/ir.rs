@@ -16,6 +16,9 @@ use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
 use iroha_model_base::state_path::StatePath;
 use kotodama_surface::builtins::{Builtin, BuiltinLowering, PointerConstructor};
 use std::collections::{BTreeSet, HashMap, HashSet};
+
+mod sum;
+use sum::{emit_sum_value, load_sum_payload, load_sum_tag, sum_layout_for_type};
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     if let semantic::ExprKind::Ident(name) = expr.kind() {
         Some(name.clone())
@@ -1600,116 +1603,6 @@ fn rebuild_function_value_from_words(
             Some(word)
         }
     }
-}
-fn sum_layout_for_type(ty: &Type) -> Option<ivm_abi::sum::SumLayoutV1> {
-    let word_count = |payload: &Type| u64::try_from(runtime_value_word_types(payload).len()).ok();
-    match semantic::resolve_struct_type(ty) {
-        Type::Option(payload) => ivm_abi::sum::SumLayoutV1::option(word_count(&payload)?).ok(),
-        // The canonical tag is zero for `err` and one for `ok`.
-        Type::Result(ok, err) => {
-            ivm_abi::sum::SumLayoutV1::try_new(word_count(&err)?, word_count(&ok)?).ok()
-        }
-        _ => None,
-    }
-}
-fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
-    match (semantic::resolve_struct_type(ty), tag) {
-        (Type::Option(_), 0) => Some(None),
-        (Type::Option(payload), 1) => Some(Some(*payload)),
-        (Type::Result(_, err), 0) => Some(Some(*err)),
-        (Type::Result(ok, _), 1) => Some(Some(*ok)),
-        _ => None,
-    }
-}
-/// Allocate one canonical active-only sum value.
-///
-/// The allocation reserves the larger branch once, writes the discriminant, and writes only the
-/// selected branch. In particular, this helper never evaluates or constructs an inactive payload.
-fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<Temp>) -> Temp {
-    let Some(layout) = sum_layout_for_type(sum_ty) else {
-        ctx.record_error("internal error: invalid sum layout".into());
-        let invalid = emit_i64_const(ctx, 0);
-        return invalid;
-    };
-    let Some(payload_ty) = sum_active_payload_type(sum_ty, tag) else {
-        ctx.record_error("internal error: invalid sum tag".into());
-        let invalid = emit_i64_const(ctx, 0);
-        return invalid;
-    };
-    let mut payload_words = Vec::new();
-    match (payload, payload_ty.as_ref()) {
-        (Some(value), Some(payload_ty)) => {
-            collect_function_value_words(ctx, value, payload_ty, &mut payload_words);
-        }
-        (None, None) => {}
-        _ => ctx.record_error("internal error: sum active payload mismatch".into()),
-    }
-    let actual_words = u64::try_from(payload_words.len()).unwrap_or(u64::MAX);
-    if layout.validate_active_width(tag, actual_words).is_err() {
-        ctx.record_error("internal error: sum active payload width mismatch".into());
-    }
-    let bytes = layout
-        .allocation_bytes()
-        .ok()
-        .and_then(|bytes| i64::try_from(bytes).ok())
-        .unwrap_or_else(|| {
-            ctx.record_error("internal error: sum allocation exceeds V1 limits".into());
-            8
-        });
-    let byte_count = emit_i64_const(ctx, bytes);
-    let value = emit_alloc(ctx, byte_count);
-    let tag_temp = emit_i64_const(ctx, i64::try_from(tag).expect("canonical sum tag fits int"));
-    emit_store64_imm(ctx, value, 0, tag_temp);
-    for (index, word) in payload_words.into_iter().enumerate() {
-        let offset = index
-            .checked_add(1)
-            .and_then(|word_index| word_index.checked_mul(8))
-            .and_then(|offset| i16::try_from(offset).ok());
-        let Some(imm) = offset else {
-            ctx.record_error("internal error: sum payload offset exceeds V1 limits".into());
-            break;
-        };
-        ctx.current_instr(Instr::Store64Imm {
-            base: value,
-            imm,
-            value: word,
-        });
-    }
-    value
-}
-fn load_sum_tag(ctx: &mut LowerCtx, value: Temp) -> Temp {
-    emit_load64_imm(ctx, value, 0)
-}
-fn load_sum_payload(ctx: &mut LowerCtx, value: Temp, payload_ty: &Type) -> Temp {
-    let word_types = runtime_value_word_types(payload_ty);
-    let mut words = Vec::with_capacity(word_types.len());
-    for index in 0..word_types.len() {
-        let imm = index
-            .checked_add(1)
-            .and_then(|word_index| word_index.checked_mul(8))
-            .and_then(|offset| i16::try_from(offset).ok())
-            .unwrap_or_else(|| {
-                ctx.record_error("internal error: sum payload offset exceeds V1 limits".into());
-                0
-            });
-        let word = ctx.new_temp();
-        ctx.current_instr(Instr::Load64Imm {
-            dest: word,
-            base: value,
-            imm,
-        });
-        words.push(word);
-    }
-    let mut index = 0;
-    let payload = rebuild_function_value_from_words(ctx, payload_ty, &words, &mut index)
-        .unwrap_or_else(|| {
-            ctx.record_error("internal error: cannot rebuild sum payload".into());
-            value
-        });
-    if index != words.len() {
-        ctx.record_error("internal error: sum payload word count mismatch".into());
-    }
-    payload
 }
 fn list_layout_for_type(ty: &Type) -> Option<(Type, ivm_abi::list::ListLayoutV1)> {
     let Type::List(element, capacity) = semantic::resolve_struct_type(ty) else {

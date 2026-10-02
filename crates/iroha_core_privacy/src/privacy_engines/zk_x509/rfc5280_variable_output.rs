@@ -1,7 +1,8 @@
 //! Original DER provenance for padded TBS, CRL and signature output pairs.
 //!
-//! TODO: bind the remaining disclosed-attribute projection source bytes;
-//! this incremental source repair does not activate the credential profile.
+//! Disclosed-attribute source bytes are bound by the separate projection and
+//! Name-policy owners. TODO: complete native credential and parser-equivalence
+//! qualification before activating the profile.
 
 use super::*;
 

@@ -59,7 +59,7 @@ impl Input<'_> {
     }
 }
 
-fn stage(input: Input<'_>, geometry: launch::Geometry) -> Option<launch::Output> {
+fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output, CudaFailure> {
     let result = crate::cuda_dispatch::with_selected(input.kernel(), ARTIFACT, |device| {
         match input {
             Input::Two(_) => {
@@ -92,11 +92,11 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Option<launch::Output>
                 }
             }
         }
-    })?;
+    });
     match result {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if !matches!(
@@ -105,7 +105,7 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Option<launch::Output>
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
@@ -128,7 +128,7 @@ fn valid_output(output: &launch::Output, input: Input<'_>) -> bool {
 pub(super) fn admit(kernel: Kernel) -> bool {
     crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         let two = [(0, 0), (7, 11), (u64::MAX, 1), (u64::MAX, u64::MAX)];
         let six = [
@@ -140,19 +140,17 @@ pub(super) fn admit(kernel: Kernel) -> bool {
         let input = match kernel {
             Kernel::Poseidon2 => Input::Two(&two),
             Kernel::Poseidon6 => Input::Six(&six),
-            _ => return false,
+            _ => return Ok(false),
         };
-        let Some(output) = stage(
+        let output = stage(
             input,
             launch::Geometry::canonical(input.width(), input.len()),
-        ) else {
-            return false;
-        };
+        )?;
         if !valid_output(&output, input) {
-            return false;
+            return Ok(false);
         }
         let state = output.state.as_ref().expect("valid output contains state");
-        state
+        Ok(state
             .chunks_exact(input.width() * 4)
             .enumerate()
             .all(|(index, words)| {
@@ -163,7 +161,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
                         }
                         Input::Six(values) => crate::poseidon::poseidon6_simd(values[index]),
                     }
-            })
+            }))
     })
 }
 
@@ -186,7 +184,7 @@ fn into(input: Input<'_>, destination: &mut [u64]) -> bool {
         if !super::imp::ensure_cuda_kernel(input.kernel()) {
             return false;
         }
-        let Some(output) = stage(
+        let Ok(output) = stage(
             input,
             launch::Geometry::canonical(input.width(), input.len()),
         ) else {
@@ -241,7 +239,7 @@ pub(super) fn fault_probe(short_stride: bool) -> Option<[u32; 2]> {
             geometry.partial_rounds = 0;
         }
         // These exact invalid parameters return before state/constant accesses.
-        stage(input, geometry).map(|output| output.status)
+        stage(input, geometry).ok().map(|output| output.status)
     })
 }
 

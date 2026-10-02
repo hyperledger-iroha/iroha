@@ -3,14 +3,13 @@
 //! This layer owns durable bytes, not monetary authority. Record owners supply their own exact
 //! Norito schema and authenticate recovered state against current hardware before using it.
 
-use rustix::fs::{Mode, OFlags};
+use iroha_fs::{FileIdentity, FileSnapshot, OwnerDirectory, PrivateDirectory};
 use sha2::{Digest as _, Sha256};
-use std::os::unix::fs::FileExt as _;
+
 use std::{
     cell::Cell,
-    fs::{File, Metadata, TryLockError},
+    fs::{File, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::MetadataExt as _,
     path::{Component, Path, PathBuf},
 };
 use zeroize::Zeroizing;
@@ -42,9 +41,9 @@ pub(crate) enum PrivateJournalError {
 pub(crate) struct PrivateJournal {
     format: PrivateJournalFormat,
     directory_path: PathBuf,
-    directory: File,
+    directory: PrivateDirectory,
     journal: File,
-    file_identity: (u64, u64),
+    file_identity: FileIdentity,
     observed_version: JournalFileVersion,
     acknowledged_bytes: u64,
     read_bytes: u64,
@@ -63,7 +62,7 @@ pub(crate) struct PrivateJournal {
 /// Its fields and constructor are private; it grants byte custody, never financial authority.
 pub(crate) struct PrivateJournalReplayCursor {
     prefix: super::KagemushaRecoveryJournalPrefixV1,
-    file_identity: (u64, u64),
+    file_identity: FileIdentity,
     offset: u64,
     sequence: u64,
     previous: DigestV1,
@@ -83,7 +82,7 @@ impl PrivateJournalReplayCursor {
 
 impl PrivateJournal {
     /// Start bounded semantic replay only after every physical frame has been authenticated.
-    /// Positional reads preserve the actual append cursor and retain one payload at a time.
+    /// Exact offset reads retain one payload at a time; each write reanchors the acknowledged tail.
     pub(crate) fn replay_cursor(&self) -> Result<PrivateJournalReplayCursor, PrivateJournalError> {
         let prefix = self.recovery_prefix()?;
         Ok(PrivateJournalReplayCursor {
@@ -123,8 +122,7 @@ impl PrivateJournal {
                 return Err(PrivateJournalError::Corrupt);
             }
             let mut header = [0; FRAME_HEADER_BYTES];
-            self.journal
-                .read_exact_at(&mut header, cursor.offset)
+            iroha_fs::read_exact_at(&self.journal, &mut header, cursor.offset)
                 .map_err(storage_error)?;
             let parsed =
                 validate_frame_header(&header, self.format, cursor.sequence, cursor.previous)?;
@@ -142,8 +140,7 @@ impl PrivateJournal {
                 .try_reserve_exact(length)
                 .map_err(|_| PrivateJournalError::StorageUnavailable)?;
             payload.resize(length, 0);
-            self.journal
-                .read_exact_at(&mut payload, payload_offset)
+            iroha_fs::read_exact_at(&self.journal, &mut payload, payload_offset)
                 .map_err(storage_error)?;
             let actual = self.frame_hash(&header[..56], &payload);
             if actual != parsed.hash || self.recovery_prefix()? != cursor.prefix {
@@ -177,43 +174,26 @@ impl PrivateJournal {
         validate_format(format)?;
         let parent_path = path.parent().ok_or(PrivateJournalError::Corrupt)?;
         let name = path.file_name().ok_or(PrivateJournalError::Corrupt)?;
-        let parent = open_directory(parent_path)?;
-        validate_directory(&parent.metadata().map_err(storage_error)?, false)?;
-        rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))
-            .map_err(|_| PrivateJournalError::StorageUnavailable)?;
-        let directory = File::from(
-            rustix::fs::openat(
-                &parent,
-                name,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| PrivateJournalError::StorageUnavailable)?,
-        );
-        validate_directory(&directory.metadata().map_err(storage_error)?, true)?;
-        let journal = File::from(
-            rustix::fs::openat(
-                &directory,
-                format.filename,
-                OFlags::RDWR
-                    | OFlags::APPEND
-                    | OFlags::CREATE
-                    | OFlags::EXCL
-                    | OFlags::NOFOLLOW
-                    | OFlags::NONBLOCK
-                    | OFlags::CLOEXEC,
-                Mode::from_raw_mode(0o600),
-            )
-            .map_err(|_| PrivateJournalError::StorageUnavailable)?,
-        );
+        if !parent_path.is_absolute() {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        #[cfg(unix)]
+        if parent_path.canonicalize().map_err(storage_error)? != parent_path {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        let parent = OwnerDirectory::open(parent_path).map_err(storage_error)?;
+        let directory = parent.create_private_child(name).map_err(storage_error)?;
+        let journal = directory
+            .create_lock(format.filename)
+            .map_err(storage_error)?;
         let store = Self::locked(path, directory, journal, format)?;
         // Make the empty inode and directory durable before the owner appends Initialize.
         // A crash here leaves an invalid empty store, never an implicitly fresh wallet.
         if store
             .journal
             .sync_all()
-            .and_then(|()| store.directory.sync_all())
-            .and_then(|()| parent.sync_all())
+            .and_then(|()| store.directory.sync())
+            .and_then(|()| parent.sync())
             .is_err()
         {
             return Err(PrivateJournalError::Uncertain);
@@ -227,31 +207,27 @@ impl PrivateJournal {
         format: PrivateJournalFormat,
     ) -> Result<Self, PrivateJournalError> {
         validate_format(format)?;
-        let parent = open_directory(path.parent().ok_or(PrivateJournalError::Corrupt)?)?;
-        validate_directory(&parent.metadata().map_err(storage_error)?, false)?;
-        let directory = open_directory(path)?;
-        validate_directory(&directory.metadata().map_err(storage_error)?, true)?;
-        let journal = File::from(
-            rustix::fs::openat(
-                &directory,
-                format.filename,
-                OFlags::RDWR
-                    | OFlags::APPEND
-                    | OFlags::NOFOLLOW
-                    | OFlags::NONBLOCK
-                    | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| PrivateJournalError::StorageUnavailable)?,
-        );
+        if !path.is_absolute() {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        #[cfg(unix)]
+        if path.canonicalize().map_err(storage_error)? != path {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        let parent = OwnerDirectory::open(path.parent().ok_or(PrivateJournalError::Corrupt)?)
+            .map_err(storage_error)?;
+        let directory = PrivateDirectory::open(path).map_err(storage_error)?;
+        let journal = directory
+            .open_existing_lock(format.filename)
+            .map_err(storage_error)?;
         let store = Self::locked(path, directory, journal, format)?;
         // Adopt surviving complete frames durably before replay may expose a recovery prefix.
         // A previous writer may have exited after a write but before its fsync acknowledgement.
         if store
             .journal
             .sync_all()
-            .and_then(|()| store.directory.sync_all())
-            .and_then(|()| parent.sync_all())
+            .and_then(|()| store.directory.sync())
+            .and_then(|()| parent.sync())
             .is_err()
         {
             return Err(PrivateJournalError::Uncertain);
@@ -262,25 +238,27 @@ impl PrivateJournal {
 
     fn locked(
         path: &Path,
-        directory: File,
+        directory: PrivateDirectory,
         mut journal: File,
         format: PrivateJournalFormat,
     ) -> Result<Self, PrivateJournalError> {
         let metadata = journal.metadata().map_err(storage_error)?;
-        validate_journal(&metadata)?;
+        FileSnapshot::private_journal(&journal).map_err(storage_error)?;
         match journal.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Err(PrivateJournalError::AlreadyOpen),
             Err(TryLockError::Error(_)) => return Err(PrivateJournalError::StorageUnavailable),
         }
         journal.seek(SeekFrom::Start(0)).map_err(storage_error)?;
+        let file_identity = FileIdentity::of(&journal).map_err(storage_error)?;
+        let observed_version = JournalFileVersion::from_file(&journal).map_err(storage_error)?;
         let store = Self {
             format,
             directory_path: path.to_path_buf(),
             directory,
             journal,
-            file_identity: identity(&metadata),
-            observed_version: JournalFileVersion::from_metadata(&metadata),
+            file_identity,
+            observed_version,
             acknowledged_bytes: metadata.len(),
             read_bytes: 0,
             next_sequence: 0,
@@ -314,6 +292,11 @@ impl PrivateJournal {
             }
             return Ok(None);
         }
+        // Other genuine exact-offset reads may move Windows' physical cursor. Replay is
+        // selected only by this owner's acknowledged logical offset, never that cursor.
+        self.journal
+            .seek(SeekFrom::Start(self.read_bytes))
+            .map_err(|_| PrivateJournalError::Corrupt)?;
         let mut header = [0_u8; FRAME_HEADER_BYTES];
         self.journal
             .read_exact(&mut header)
@@ -382,7 +365,7 @@ impl PrivateJournal {
 
     /// Require the selected frame boundary to occur in this actual owned, fully replayed WAL.
     /// A validated append-only suffix is permitted; this does not authenticate hardware selection.
-    /// Positional reads leave the replay/append cursor untouched. At most one verified prefix is
+    /// Exact-offset reads leave the logical replay/append selection unchanged. At most one verified prefix is
     /// retained, and even a cached match requires the existing descriptor/generation checks.
     pub(crate) fn contains_recovery_prefix(
         &self,
@@ -429,9 +412,7 @@ impl PrivateJournal {
                 return Ok(false);
             }
             let mut header = [0_u8; FRAME_HEADER_BYTES];
-            self.journal
-                .read_exact_at(&mut header, offset)
-                .map_err(storage_error)?;
+            iroha_fs::read_exact_at(&self.journal, &mut header, offset).map_err(storage_error)?;
             let parsed = validate_frame_header(&header, self.format, sequence, previous)?;
             let length = parsed.length;
             offset = offset
@@ -446,8 +427,7 @@ impl PrivateJournal {
             let mut remaining = length;
             while remaining != 0 {
                 let count = remaining.min(buffer.len() as u64) as usize;
-                self.journal
-                    .read_exact_at(&mut buffer[..count], offset)
+                iroha_fs::read_exact_at(&self.journal, &mut buffer[..count], offset)
                     .map_err(storage_error)?;
                 hash.update(&buffer[..count]);
                 offset = offset
@@ -477,9 +457,7 @@ impl PrivateJournal {
                 return Err(PrivateJournalError::Corrupt);
             }
             let mut header = [0_u8; FRAME_HEADER_BYTES];
-            self.journal
-                .read_exact_at(&mut header, 0)
-                .map_err(storage_error)?;
+            iroha_fs::read_exact_at(&self.journal, &mut header, 0).map_err(storage_error)?;
             let parsed = validate_frame_header(&header, self.format, 0, [0; 32])?;
             if parsed.length != expected.len() as u64 || parsed.hash != prefix.head {
                 return Err(PrivateJournalError::Corrupt);
@@ -491,12 +469,12 @@ impl PrivateJournal {
             let mut offset = 0_usize;
             while offset < expected.len() {
                 let count = buffer.len().min(expected.len() - offset);
-                self.journal
-                    .read_exact_at(
-                        &mut buffer[..count],
-                        FRAME_HEADER_BYTES as u64 + offset as u64,
-                    )
-                    .map_err(storage_error)?;
+                iroha_fs::read_exact_at(
+                    &self.journal,
+                    &mut buffer[..count],
+                    FRAME_HEADER_BYTES as u64 + offset as u64,
+                )
+                .map_err(storage_error)?;
                 if buffer[..count] != expected[offset..offset + count] {
                     return Err(PrivateJournalError::Corrupt);
                 }
@@ -558,9 +536,7 @@ impl PrivateJournal {
                 return Err(PrivateJournalError::Corrupt);
             }
             let mut header = [0_u8; FRAME_HEADER_BYTES];
-            self.journal
-                .read_exact_at(&mut header, offset)
-                .map_err(storage_error)?;
+            iroha_fs::read_exact_at(&self.journal, &mut header, offset).map_err(storage_error)?;
             let parsed = validate_frame_header(&header, self.format, sequence, previous)?;
             let payload_offset = offset
                 .checked_add(FRAME_HEADER_BYTES as u64)
@@ -577,8 +553,7 @@ impl PrivateJournal {
                 .try_reserve_exact(length)
                 .map_err(|_| PrivateJournalError::StorageUnavailable)?;
             payload.resize(length, 0);
-            self.journal
-                .read_exact_at(&mut payload, payload_offset)
+            iroha_fs::read_exact_at(&self.journal, &mut payload, payload_offset)
                 .map_err(storage_error)?;
             let actual = self.frame_hash(&header[..56], &payload);
             if actual != parsed.hash {
@@ -625,33 +600,27 @@ impl PrivateJournal {
         expected_bytes: u64,
         expected_version: JournalFileVersion,
     ) -> Result<(), PrivateJournalError> {
-        let directory = open_directory(&self.directory_path)?;
-        let current_directory = directory.metadata().map_err(storage_error)?;
-        validate_directory(&current_directory, true)?;
-        if identity(&current_directory)
-            != identity(&self.directory.metadata().map_err(storage_error)?)
+        self.directory.revalidate().map_err(storage_error)?;
+        let current_directory =
+            PrivateDirectory::open(&self.directory_path).map_err(storage_error)?;
+        if current_directory.identity().map_err(storage_error)?
+            != self.directory.identity().map_err(storage_error)?
         {
             return Err(PrivateJournalError::Corrupt);
         }
-        let named = File::from(
-            rustix::fs::openat(
-                &self.directory,
-                self.format.filename,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| PrivateJournalError::Corrupt)?,
-        );
+        let named = self
+            .directory
+            .open_read(self.format.filename)
+            .map_err(storage_error)?;
         let metadata = self.journal.metadata().map_err(storage_error)?;
         let named_metadata = named.metadata().map_err(storage_error)?;
-        validate_journal(&metadata)?;
-        validate_journal(&named_metadata)?;
-        if identity(&metadata) != self.file_identity
-            || identity(&named_metadata) != self.file_identity
+        if FileIdentity::of(&self.journal).map_err(storage_error)? != self.file_identity
+            || FileIdentity::of(&named).map_err(storage_error)? != self.file_identity
             || metadata.len() != expected_bytes
             || named_metadata.len() != expected_bytes
-            || JournalFileVersion::from_metadata(&metadata) != expected_version
-            || JournalFileVersion::from_metadata(&named_metadata) != expected_version
+            || JournalFileVersion::from_file(&self.journal).map_err(storage_error)?
+                != expected_version
+            || JournalFileVersion::from_file(&named).map_err(storage_error)? != expected_version
         {
             return Err(PrivateJournalError::Corrupt);
         }
@@ -709,6 +678,13 @@ impl PrivateJournal {
         header: &[u8],
         payload: &[u8],
     ) -> std::io::Result<JournalFileVersion> {
+        // The exact locked original cursor is positioned at the acknowledged tail. Portable
+        // read/write handles cannot overwrite an earlier record or accept a foreign suffix.
+        if self.journal.seek(SeekFrom::End(0))? != self.acknowledged_bytes {
+            return Err(std::io::Error::other(
+                "private journal tail changed before append",
+            ));
+        }
         #[cfg(test)]
         if self.failure.get() == Some(TestPersistenceFailure::PartialWrite) {
             self.journal.write_all(&header[..11])?;
@@ -720,7 +696,7 @@ impl PrivateJournal {
         if self.failure.get() == Some(TestPersistenceFailure::BeforeSync) {
             return Err(std::io::Error::other("injected journal sync failure"));
         }
-        let written_version = JournalFileVersion::from_metadata(&self.journal.metadata()?);
+        let written_version = JournalFileVersion::from_file(&self.journal)?;
         self.journal.sync_all()?;
         #[cfg(test)]
         if self.failure.get() == Some(TestPersistenceFailure::AfterSync) {
@@ -809,90 +785,15 @@ fn validate_format(format: PrivateJournalFormat) -> Result<(), PrivateJournalErr
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct JournalFileVersion {
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
+pub(crate) struct JournalFileVersion(FileSnapshot);
 impl JournalFileVersion {
-    pub(crate) fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
-        }
+    pub(crate) fn from_file(file: &File) -> std::io::Result<Self> {
+        FileSnapshot::private_journal(file).map(Self)
     }
 }
 
 fn storage_error(_: std::io::Error) -> PrivateJournalError {
     PrivateJournalError::StorageUnavailable
-}
-
-fn identity(metadata: &Metadata) -> (u64, u64) {
-    (metadata.dev(), metadata.ino())
-}
-
-pub(super) fn validate_directory(
-    metadata: &Metadata,
-    private: bool,
-) -> Result<(), PrivateJournalError> {
-    if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || (if private {
-            metadata.mode() & 0o777 != 0o700
-        } else {
-            metadata.mode() & 0o022 != 0
-        })
-    {
-        return Err(PrivateJournalError::Corrupt);
-    }
-    Ok(())
-}
-
-fn validate_journal(metadata: &Metadata) -> Result<(), PrivateJournalError> {
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o777 != 0o600
-        || metadata.nlink() != 1
-    {
-        return Err(PrivateJournalError::Corrupt);
-    }
-    Ok(())
-}
-
-pub(super) fn open_directory(path: &Path) -> Result<File, PrivateJournalError> {
-    if !path.is_absolute() {
-        return Err(PrivateJournalError::Corrupt);
-    }
-    let mut directory = File::from(
-        rustix::fs::open(
-            "/",
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|_| PrivateJournalError::StorageUnavailable)?,
-    );
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => {
-                directory = File::from(
-                    rustix::fs::openat(
-                        &directory,
-                        name,
-                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                        Mode::empty(),
-                    )
-                    .map_err(|_| PrivateJournalError::Corrupt)?,
-                );
-            }
-            _ => return Err(PrivateJournalError::Corrupt),
-        }
-    }
-    Ok(directory)
 }
 
 #[cfg(test)]
@@ -905,9 +806,11 @@ pub(crate) enum TestPersistenceFailure {
     TruncateAfterSync,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use rustix::fs::Mode;
+    use std::os::unix::fs::MetadataExt as _;
     const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
         filename: "test.wal",
         magic: b"IKGTEST1",
@@ -941,8 +844,8 @@ mod tests {
         }
         #[cfg(not(target_vendor = "apple"))]
         rustix::fs::mkfifoat(
-            &journal.directory,
-            FORMAT.filename,
+            rustix::fs::CWD,
+            path.join(FORMAT.filename),
             Mode::from_raw_mode(0o600),
         )
         .expect("create an actual FIFO without inheriting other journals");
@@ -1192,10 +1095,96 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "private_journal_held_scan_tests.rs"]
 mod held_scan_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "private_journal_single_record_tests.rs"]
 mod single_record_tests;
+
+#[cfg(test)]
+mod portable_custody_tests {
+    use super::*;
+    const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
+        filename: "portable.wal",
+        magic: b"IKGTEST1",
+        hash_domain: b"test-only:portable-journal\0",
+        maximum_payload_bytes: 1024,
+    };
+    #[test]
+    fn portable_journal_replays_same_durable_original_and_excludes_second_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("original");
+        let mut owner = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        owner.append(b"original initialization").unwrap();
+        assert!(matches!(
+            PrivateJournal::open_existing(&path, FORMAT),
+            Err(PrivateJournalError::AlreadyOpen)
+        ));
+        let prefix = owner.recovery_prefix().unwrap();
+        drop(owner);
+        let mut recovered = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert_eq!(
+            recovered.replay_next().unwrap(),
+            Some((0, b"original initialization".to_vec()))
+        );
+        assert_eq!(recovered.replay_next().unwrap(), None);
+        assert_eq!(recovered.recovery_prefix().unwrap(), prefix);
+        recovered.append(b"same original successor").unwrap();
+        assert_eq!(recovered.recovery_prefix().unwrap().sequence, 2);
+    }
+    #[test]
+    fn portable_recovery_never_creates_missing_original_or_resets_existing_store() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("original");
+        assert!(PrivateJournal::open_existing(&path, FORMAT).is_err());
+        assert!(!path.exists());
+        let mut owner = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        owner.append(b"unchanged original").unwrap();
+        let prefix = owner.recovery_prefix().unwrap();
+        assert!(PrivateJournal::create_new(&path, FORMAT).is_err());
+        assert_eq!(owner.recovery_prefix().unwrap(), prefix);
+    }
+    #[test]
+    fn portable_replay_reanchors_after_other_exact_offset_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("original");
+        let mut owner = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        owner.append(b"first").unwrap();
+        owner.append(b"second").unwrap();
+        drop(owner);
+        let mut recovered = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert_eq!(recovered.replay_next().unwrap().unwrap().1, b"first");
+        let logical = recovered.read_bytes;
+        let mut header = [0; FRAME_HEADER_BYTES];
+        iroha_fs::read_exact_at(&recovered.journal, &mut header, 0).unwrap();
+        assert_eq!(recovered.read_bytes, logical);
+        assert_eq!(recovered.replay_next().unwrap().unwrap().1, b"second");
+        assert_eq!(recovered.replay_next().unwrap(), None);
+    }
+
+    #[test]
+    fn portable_positioned_scan_does_not_overwrite_original_tail() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("original");
+        let mut owner = PrivateJournal::create_new(&path, FORMAT).unwrap();
+        owner.append(b"first").unwrap();
+        let mut cursor = owner.replay_cursor().unwrap();
+        assert_eq!(
+            owner
+                .read_cursor_next(&mut cursor)
+                .unwrap()
+                .unwrap()
+                .1
+                .as_slice(),
+            b"first"
+        );
+        owner.append(b"second").unwrap();
+        drop(owner);
+        let mut recovered = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert_eq!(recovered.replay_next().unwrap().unwrap().1, b"first");
+        assert_eq!(recovered.replay_next().unwrap().unwrap().1, b"second");
+        assert_eq!(recovered.replay_next().unwrap(), None);
+    }
+}

@@ -2490,6 +2490,207 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
 }
 
 #[tokio::test]
+async fn transaction_details_http_preserves_original_receipt_after_cold_body_read() {
+    use iroha_core::smartcontracts::isi::tx::{
+        TransactionHistoryWorkLimits, committed_transactions_indexed_snapshot,
+        transaction_history_byte_limit,
+    };
+    use iroha_data_model::query::{
+        CommittedTransaction, CommittedTxFilters, dsl::CompoundPredicate,
+    };
+    use tower::ServiceExt as _;
+
+    let sender_key = checked_torii_test_ed25519_keypair(0x24, "cold receipt sender");
+    let reader_key = checked_torii_test_ed25519_keypair(0x45, "cold receipt unrelated reader");
+    let unknown_key = checked_torii_test_ed25519_keypair(0x46, "cold receipt unknown signer");
+    for applied in [true, false] {
+        let instruction: iroha_data_model::isi::InstructionBox = if applied {
+            Log::new(Level::INFO, "cold receipt original execution".into()).into()
+        } else {
+            iroha_data_model::isi::Unregister::domain(
+                DomainId::try_new("missing_cold_receipt_domain", "universal").unwrap(),
+            )
+            .into()
+        };
+        let (app, signed_hash, chain) = executed_history_test_fixture(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(
+                transaction_details_test_world(&[
+                    AccountId::new(sender_key.public_key().clone()),
+                    AccountId::new(reader_key.public_key().clone()),
+                ]),
+                1_000,
+            ),
+            &sender_key,
+            vec![instruction],
+            applied,
+        );
+        let height = NonZeroUsize::new(2).unwrap();
+        let entrypoint_hash =
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash);
+        let original = chain.committed(2);
+        let original_wire = original.block().encode_wire().unwrap();
+        let original_result = original
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .clone();
+        let indexed_before = app
+            .kura
+            .get_block_heights_by_entrypoint_hash(entrypoint_hash);
+        assert_eq!(indexed_before, Some([height].into_iter().collect()));
+        assert_eq!(
+            app.state.committed_entrypoint_height(&entrypoint_hash),
+            Some(height)
+        );
+
+        let router = axum::Router::new()
+            .route(
+                route_catalog::pipeline::TRANSACTION_DETAILS.path(),
+                axum::routing::post(super::handler_pipeline_transaction_details),
+            )
+            .with_state(app.clone());
+        let request = |key: &KeyPair, hash| {
+            let signed = signed_transaction_details_query(&app, key, hash);
+            axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(route_catalog::pipeline::TRANSACTION_DETAILS.path())
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    crate::utils::NORITO_MIME_TYPE,
+                )
+                .header(axum::http::header::ACCEPT, crate::utils::NORITO_MIME_TYPE)
+                .extension(crate::loopback_connect_info())
+                .body(Body::from(
+                    iroha_version::codec::EncodeVersioned::encode_versioned(&signed),
+                ))
+                .unwrap()
+        };
+        let warm = router
+            .clone()
+            .oneshot(request(&sender_key, entrypoint_hash))
+            .await
+            .unwrap();
+        assert_eq!(warm.status(), StatusCode::OK);
+        let warm_bytes = torii_body_bytes(warm, "warm original receipt").await;
+
+        assert!(
+            app.kura
+                .forget_cached_block_for_testing(NonZeroUsize::new(3).unwrap())
+                .is_err(),
+            "the test hook must reject an absent durable frame"
+        );
+        app.kura.forget_cached_block_for_testing(height).unwrap();
+        assert_eq!(
+            app.kura
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash),
+            indexed_before,
+            "forgetting a body must not modify secondary-index authority"
+        );
+        assert!(
+            app.kura.forget_cached_block_for_testing(height).is_err(),
+            "the hook must require an actual cached body"
+        );
+        let cold = app
+            .kura
+            .get_block(height)
+            .expect("read original durable frame");
+        assert_eq!(cold.encode_wire().unwrap(), original_wire);
+        assert_eq!(
+            app.kura
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash),
+            None,
+            "an ordinary cold read must not authenticate the transaction index"
+        );
+        let work = routing::app_query_limits().max_fetch_size;
+        let bytes = transaction_history_byte_limit(work);
+        let previous_selector_error = committed_transactions_indexed_snapshot(
+            &app.state.view(),
+            CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
+                entry_eq: Some(entrypoint_hash),
+                ..CommittedTxFilters::default()
+            }),
+            TransactionHistoryWorkLimits {
+                max_carrier_work: work,
+                max_total_work: work,
+                max_bytes: bytes,
+            },
+            1,
+            bytes,
+        )
+        .expect_err("the retired entry-only receipt selector cannot use a partial index");
+        assert!(
+            previous_selector_error
+                .to_string()
+                .contains("require a positive indexed filter")
+        );
+
+        let response = router
+            .clone()
+            .oneshot(request(&sender_key, entrypoint_hash))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            crate::utils::NORITO_MIME_TYPE
+        );
+        let cold_bytes = torii_body_bytes(response, "cold original receipt").await;
+        assert_eq!(
+            cold_bytes, warm_bytes,
+            "cold reads preserve the complete original receipt bytes"
+        );
+        let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
+            norito::decode_canonical_with_limits(
+                &cold_bytes,
+                norito::canonical_decode_limits(cold_bytes.len()),
+            )
+            .unwrap();
+        assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
+        assert_eq!(details.transaction.result(), &original_result);
+        assert_eq!(details.transaction.result().is_ok(), applied);
+
+        let missing = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"cold receipt absent identity",
+        ));
+        assert!(
+            canonical_transaction_details_for_indexed_identity(app.as_ref(), height, &missing)
+                .is_err()
+        );
+        assert!(
+            canonical_transaction_details_for_indexed_identity(
+                app.as_ref(),
+                NonZeroUsize::new(1).unwrap(),
+                &entrypoint_hash
+            )
+            .is_err()
+        );
+        for (key, hash, expected) in [
+            (&sender_key, missing, StatusCode::NOT_FOUND),
+            (&reader_key, entrypoint_hash, StatusCode::FORBIDDEN),
+            (&unknown_key, entrypoint_hash, StatusCode::FORBIDDEN),
+        ] {
+            let response = router.clone().oneshot(request(key, hash)).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert_eq!(
+            app.state.committed_entrypoint_height(&entrypoint_hash),
+            Some(height)
+        );
+        assert_eq!(
+            app.kura
+                .get_block_heights_by_entrypoint_hash(entrypoint_hash),
+            None
+        );
+        assert_eq!(
+            app.kura.get_block(height).unwrap().encode_wire().unwrap(),
+            original_wire
+        );
+    }
+}
+
+#[tokio::test]
 async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts() {
     use iroha_data_model::events::data::prelude::{
         AssetBatchTransferLegStatus, AssetBatchTransferOutcome,

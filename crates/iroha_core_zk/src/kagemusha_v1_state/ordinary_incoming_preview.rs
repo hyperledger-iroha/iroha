@@ -327,21 +327,18 @@ fn derive_math_preview(
     let lifecycle = if facts.lifecycle_binding != [0; 32] {
         facts.lifecycle_binding
     } else {
-        canonical_sha256_digest(
-            TRANSITION_LIFECYCLE_DOMAIN,
-            &(
-                facts.kind,
-                before.protocol_version,
-                before.suite_id,
-                before.vk_digest,
-                before.release_id,
-                before.asset_incarnation,
-                before.liability_pool_id,
-                before.hardware_profile_id,
-                before.policy_epoch,
-                envelope,
-            ),
-        )?
+        incoming_receive_lifecycle_tuple_v1(&(
+            facts.kind,
+            before.protocol_version,
+            before.suite_id,
+            before.vk_digest,
+            before.release_id,
+            before.asset_incarnation,
+            before.liability_pool_id,
+            before.hardware_profile_id,
+            before.policy_epoch,
+            envelope,
+        ))?
     };
     let statement = TransitionProofStatementV1 {
         version: 1,
@@ -432,6 +429,88 @@ fn derive_math_preview(
         transport_semantic_digest,
     })
 }
+/// Recreate the existing Receive lifecycle transcript from the same whole transition fields.
+/// This pure data hash creates no source, financial, clock, replay or proof capability.
+pub(crate) fn ordinary_incoming_receive_lifecycle_binding_v1(
+    statement: &TransitionProofStatementV1,
+    envelope: DigestV1,
+) -> Result<DigestV1, KagemushaStateErrorV1> {
+    incoming_receive_lifecycle_tuple_v1(&(
+        statement.kind,
+        statement.protocol_version,
+        statement.predecessor_suite_id,
+        statement.predecessor_vk_digest,
+        statement.release_id,
+        statement.asset_incarnation,
+        statement.liability_pool_id,
+        statement.hardware_profile_id,
+        statement.policy_epoch,
+        envelope,
+    ))
+}
+type IncomingReceiveLifecycleTupleV1 = (
+    KagemushaTransitionKindV1,
+    u16,
+    DigestV1,
+    DigestV1,
+    DigestV1,
+    AxtAssetIncarnationV1,
+    DigestV1,
+    DigestV1,
+    u64,
+    DigestV1,
+);
+fn incoming_receive_lifecycle_tuple_v1(
+    fields: &IncomingReceiveLifecycleTupleV1,
+) -> Result<DigestV1, KagemushaStateErrorV1> {
+    if fields.0 != KagemushaTransitionKindV1::ReceiveFold {
+        return Err(KagemushaStateErrorV1::InvalidPeerCredit);
+    }
+    canonical_sha256_digest(TRANSITION_LIFECYCLE_DOMAIN, fields)
+}
+#[cfg(test)]
+mod received_lifecycle_tests {
+    use super::*;
+    #[test]
+    fn received_lifecycle_uses_same_whole_transition_and_exact_reservation_value() {
+        // Pure known-public mathematical vectors, never a ledger incarnation/source owner.
+        let incarnation =
+            AxtAssetIncarnationV1::try_from_bytes(*iroha_crypto::Hash::prehashed([6; 32]).as_ref())
+                .unwrap();
+        let fields = (
+            KagemushaTransitionKindV1::ReceiveFold,
+            1,
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            incarnation,
+            [7; 32],
+            [8; 32],
+            9,
+            [10; 32],
+        );
+        let expected = canonical_sha256_digest(TRANSITION_LIFECYCLE_DOMAIN, &fields).unwrap();
+        assert_eq!(
+            incoming_receive_lifecycle_tuple_v1(&fields).unwrap(),
+            expected
+        );
+        let mut changed = fields;
+        changed.9[17] ^= 1;
+        assert_ne!(
+            incoming_receive_lifecycle_tuple_v1(&changed).unwrap(),
+            expected
+        );
+        let mut changed = fields;
+        changed.3[17] ^= 1;
+        assert_ne!(
+            incoming_receive_lifecycle_tuple_v1(&changed).unwrap(),
+            expected
+        );
+        let mut changed = fields;
+        changed.0 = KagemushaTransitionKindV1::MintFold;
+        assert!(incoming_receive_lifecycle_tuple_v1(&changed).is_err());
+    }
+}
 fn material(error: impl core::fmt::Display) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::ProofRejected(error.to_string())
 }
@@ -439,3 +518,93 @@ fn material(error: impl core::fmt::Display) -> KagemushaStateErrorV1 {
 #[cfg(test)]
 #[path = "ordinary_incoming_preview_tests.rs"]
 mod tests;
+
+/// Data-only whole-State qualification preview. It invokes the exact production arithmetic,
+/// replay insertion and normalized context derivation with plain mathematical operands.
+/// There is no financial/clock/source/approval owner, accepting verifier or effect constructor.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ordinary_incoming_preview_for_qualification_v1(
+    before: &KagemushaStateV1,
+    reservation: &KagemushaOrdinaryIncomingReservationV1,
+    kind: KagemushaTransitionKindV1,
+    mint_proof_binding: DigestV1,
+    lifecycle_binding: DigestV1,
+    replay: &ConsumedCreditInsertWitnessV1,
+    nonce: DigestV1,
+    journal_revision: u64,
+    fresh_fi: DigestV1,
+    fresh_clock: &KagemushaOrdinaryCashClockContextV1,
+    approval_nonce: DigestV1,
+    artifacts: KagemushaRecursionArtifactsV1,
+) -> Result<OrdinaryIncomingPreviewV1, KagemushaStateErrorV1> {
+    before.validate()?;
+    reservation.validate_shape().map_err(material)?;
+    if !matches!(
+        kind,
+        KagemushaTransitionKindV1::MintFold | KagemushaTransitionKindV1::ReceiveFold
+    ) || reservation.selection.source.operation()
+        != KagemushaOperationKindV1::from(
+            crate::kagemusha_v1_recursion::KagemushaOperationV1::from(kind),
+        )
+        || (kind == KagemushaTransitionKindV1::MintFold
+            && (mint_proof_binding == [0; 32] || lifecycle_binding == [0; 32]))
+        || (kind == KagemushaTransitionKindV1::ReceiveFold
+            && (mint_proof_binding != [0; 32] || lifecycle_binding != [0; 32]))
+    {
+        return Err(KagemushaStateErrorV1::StateInvariant);
+    }
+    let facts = SourceFacts {
+        kind,
+        credit_id: reservation.selection.credit_id,
+        amount: reservation.selection.amount,
+        semantic_digest: reservation.source_semantic_digest,
+        mint_proof_binding,
+        lifecycle_binding,
+    };
+    derive_math_preview(
+        before,
+        reservation,
+        &facts,
+        replay,
+        nonce,
+        journal_revision,
+        fresh_fi,
+        fresh_clock,
+        approval_nonce,
+        artifacts,
+    )
+}
+
+/// Test-only mathematical replay index. It lends no financial, Native or DATA capability.
+#[cfg(all(test, unix))]
+pub(crate) struct OrdinaryConsumedCreditsForQualificationV1(
+    super::sparse_merkle::ExactConsumedCreditIndex,
+);
+#[cfg(all(test, unix))]
+impl OrdinaryConsumedCreditsForQualificationV1 {
+    /// Empty mathematical history under the maintained paired replay tree.
+    pub(crate) fn empty() -> Self {
+        Self(super::sparse_merkle::ExactConsumedCreditIndex::empty())
+    }
+    /// Exact paired root, used only as a State mathematical operand.
+    pub(crate) fn root(&self) -> iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
+        self.0.root()
+    }
+    /// Use the maintained exact nonmembership/insertion path, never a fabricated sibling array.
+    pub(crate) fn preview(
+        &self,
+        credit: CreditIdV1,
+        envelope: DigestV1,
+    ) -> Result<ConsumedCreditInsertWitnessV1, KagemushaStateErrorV1> {
+        self.0.preview_insert_witness(credit, envelope)
+    }
+    /// Install only that same verified mathematical path. This is not a wallet effect.
+    pub(crate) fn install(
+        &mut self,
+        witness: &ConsumedCreditInsertWitnessV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.0
+            .insert_with_witness(witness.credit_id, witness.envelope_digest, witness)
+    }
+}

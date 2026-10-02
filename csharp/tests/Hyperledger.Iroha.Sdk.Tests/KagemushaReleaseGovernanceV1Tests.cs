@@ -27,7 +27,8 @@ public sealed class KagemushaReleaseGovernanceV1Tests
         Assert.Equal("KagemushaVerifierPolicyInstall", kinds[10]);
         Assert.Equal("KagemushaVerifierReleaseInstall", kinds[11]);
         Assert.Equal("KagemushaVerifierReleaseActivate", kinds[12]);
-        Assert.Equal(13, kinds.Length);
+        Assert.Equal("KagemushaVerifierReleaseRetire", kinds[13]);
+        Assert.Equal(14, kinds.Length);
     }
 
     [Fact]
@@ -138,6 +139,66 @@ public sealed class KagemushaReleaseGovernanceV1Tests
         var copy = proposal.SuccessorReleaseId;
         copy[0] ^= 0xff;
         Assert.NotEqual(copy[0], proposal.SuccessorReleaseId[0]);
+    }
+
+    [Fact]
+    public void RustGeneratedRetirementFixtureOwnsOnlyTheUnusedStandby()
+    {
+        var proposal = Assert.IsType<KagemushaReleaseRetireProposalV1>(
+            KagemushaReleaseProposalV1.Parse(Fixture("kagemusha_verifier_release_retire_v1.json")));
+        var statuses = proposal.ExpectedPredecessor.GetProperty("releases").EnumerateArray()
+            .Select(static row => row.GetProperty("status").GetInt32()).Order().ToArray();
+        Assert.Equal(new[] { 1, 2, 3 }, statuses);
+        var selected = proposal.StandbyReleaseId;
+        selected[0] ^= 1;
+        Assert.NotEqual(selected[0], proposal.StandbyReleaseId[0]);
+    }
+
+    [Fact]
+    public void RetirementRejectsNonstandbyAndMalformedCompletePredecessors()
+    {
+        Action<JsonObject>[] mutations =
+        [
+            p => p.Remove("standby_release_id"),
+            p => p["retired_alias"] = true,
+            p => p["standby_release_id"] = new JsonArray(Enumerable.Repeat(1, 31).Select(static b => (JsonNode?)JsonValue.Create(b)).ToArray()),
+            p => p["standby_release_id"] = new JsonArray(Enumerable.Repeat(0, 32).Select(static b => (JsonNode?)JsonValue.Create(b)).ToArray()),
+            p => p["standby_release_id"] = p["expected_predecessor"]!["releases"]!.AsArray().Single(row => row!["status"]!.GetValue<int>() == 1)!["release_id"]!.DeepClone(),
+            p => p["standby_release_id"] = p["expected_predecessor"]!["releases"]!.AsArray().Single(row => row!["status"]!.GetValue<int>() == 3)!["release_id"]!.DeepClone(),
+            p => p["expected_predecessor"]!["authority_policy"] = null,
+            p => p["expected_predecessor"]!["active_release_id"] = null,
+            p => p["expected_predecessor"]!["releases"] = new JsonArray(p["expected_predecessor"]!["releases"]!.AsArray().Reverse().Select(static row => row!.DeepClone()).ToArray()),
+            p => p["expected_predecessor"]!["releases"]!.AsArray().Add(p["expected_predecessor"]!["releases"]!.AsArray().Last()!.DeepClone()),
+            p => p["expected_predecessor"]!["releases"]![0]!["profile_digest"] = new JsonArray(Enumerable.Repeat(0, 32).Select(static b => (JsonNode?)JsonValue.Create(b)).ToArray()),
+            p => p["expected_predecessor"]!["releases"] = new JsonArray(p["expected_predecessor"]!["releases"]!.AsArray().Where(row => row!["status"]!.GetValue<int>() != 2).Select(static row => row!.DeepClone()).ToArray()),
+        ];
+        foreach (var mutate in mutations)
+        {
+            var proposal = MutableFixture("kagemusha_verifier_release_retire_v1.json");
+            mutate(proposal["payload"]!.AsObject());
+            Reject(proposal);
+        }
+    }
+
+    [Fact]
+    public void RetirementRejectsMalformedThresholdAndNoncanonicalSignerOrderOrKeys()
+    {
+        Action<JsonObject>[] mutations =
+        [
+            policy => policy["threshold"] = 32,
+            policy => policy["authorized_signers"]![0] = "not-a-public-key",
+            policy => policy["authorized_signers"]![0] = policy["authorized_signers"]![0]!.GetValue<string>().ToUpperInvariant(),
+            policy => policy["authorized_signers"] = new JsonArray(policy["authorized_signers"]!.AsArray().Reverse().Select(static key => key!.DeepClone()).ToArray()),
+            policy => policy["authorized_signers"]![1] = policy["authorized_signers"]![0]!.DeepClone(),
+            policy => policy["authorized_signers"]![0] = "ed0120" + new string('0', 64),
+            policy => policy["authorized_signers"]![0] = "ed810020" + policy["authorized_signers"]![0]!.GetValue<string>()[6..],
+        ];
+        foreach (var mutate in mutations)
+        {
+            var proposal = MutableFixture("kagemusha_verifier_release_retire_v1.json");
+            mutate(proposal["payload"]!["expected_predecessor"]!["authority_policy"]!.AsObject());
+            Reject(proposal);
+        }
     }
 
     [Fact]

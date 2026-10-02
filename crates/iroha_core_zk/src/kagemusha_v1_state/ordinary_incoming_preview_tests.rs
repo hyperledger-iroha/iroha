@@ -316,3 +316,65 @@ fn ordinary_incoming_mathematical_preview_rejects_wrong_leaf_scope_nonce_and_ove
         .is_err()
     );
 }
+
+#[test]
+fn qualification_preview_shares_actual_arithmetic_and_rejects_source_operation_substitution() {
+    let (before, reservation, facts, tree, clock) = data();
+    let replay = tree
+        .preview_insert_witness(CreditIdV1(facts.credit_id), reservation.digest().unwrap())
+        .unwrap();
+    let a = artifacts(&before);
+    let direct = derive_math_preview(
+        &before,
+        &reservation,
+        &facts,
+        &replay,
+        [91; 32],
+        17,
+        [92; 32],
+        &clock,
+        [93; 32],
+        a,
+    )
+    .unwrap();
+    let qualification = ordinary_incoming_preview_for_qualification_v1(
+        &before,
+        &reservation,
+        facts.kind,
+        facts.mint_proof_binding,
+        facts.lifecycle_binding,
+        &replay,
+        [91; 32],
+        17,
+        [92; 32],
+        &clock,
+        [93; 32],
+        a,
+    )
+    .unwrap();
+    assert_eq!(qualification.successor, direct.successor);
+    assert_eq!(qualification.statement, direct.statement);
+    assert_eq!(qualification.preparation, direct.preparation);
+    assert_eq!(qualification.normalized, direct.normalized);
+    assert_eq!(
+        qualification.transport_semantic_digest,
+        direct.transport_semantic_digest
+    );
+    assert!(
+        ordinary_incoming_preview_for_qualification_v1(
+            &before,
+            &reservation,
+            KagemushaTransitionKindV1::ReceiveFold,
+            [0; 32],
+            [0; 32],
+            &replay,
+            [91; 32],
+            17,
+            [92; 32],
+            &clock,
+            [93; 32],
+            a
+        )
+        .is_err()
+    );
+}

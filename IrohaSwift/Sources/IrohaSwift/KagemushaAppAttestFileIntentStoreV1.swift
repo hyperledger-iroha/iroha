@@ -12,7 +12,8 @@ private func kagemushaFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 /// or interrupted journal files are never interpreted as an unused key. This journal is not a
 /// hardware counter, an App Attest verifier, or monetary authority.
 public final class KagemushaAppAttestFileIntentStoreV1:
-  KagemushaAppAttestAssertionIntentStoringV1, @unchecked Sendable {
+  KagemushaAppAttestOrdinaryTerminalIntentStoringV1, KagemushaAppAttestOrdinaryIncomingIntentStoringV1,
+  @unchecked Sendable {
   private static let lockName = "intent.lock"
   private static let recordName = "intent.bin"
   private static let temporaryName = "intent.pending-write"
@@ -142,6 +143,50 @@ public final class KagemushaAppAttestFileIntentStoreV1:
   /// This identity counter advancement does not acknowledge a monetary commit.
   public func advanceAfterNativeAppApproval(keyID: String, counter: UInt32,
     signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeAppApprovalReceiptV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(signingDigest)
+    guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,
+      receipt.signingDigest == signingDigest,
+      receipt.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == signingDigest, storedRaw == rawAssertion else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
+    }
+  }
+
+  /// Release only the distinct W1 original consumed by Native's actual terminal journal.
+  /// This local counter update does not acknowledge Commit, StateAdvance or FI Ack.
+  public func advanceAfterNativeTerminalApproval(keyID: String, counter: UInt32,
+    signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeOrdinaryTerminalApprovalReceiptV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(signingDigest)
+    guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,
+      receipt.signingDigest == signingDigest,
+      receipt.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == signingDigest, storedRaw == rawAssertion else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
+    }
+  }
+
+  /// Release only the exact incoming W2/W1 original consumed by its actual Native journal.
+  /// This local counter update does not acknowledge Commit, StateAdvance or FI Ack.
+  public func advanceAfterNativeIncomingApproval(keyID: String, counter: UInt32,
+    signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeOrdinaryIncomingApprovalReceiptV1) throws {
     let key = try Self.keyBytes(keyID)
     try Self.validateDigest(signingDigest)
     guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,

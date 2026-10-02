@@ -129,8 +129,8 @@ fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quaran
     ));
     assert_eq!(
         block.committed_fragment_count(),
-        fragments + 2,
-        "Network and quarantine only"
+        fragments + 3,
+        "Network, quarantine and original Time reward maintenance"
     );
     assert!(block.gas_used_in_block > 0);
     assert!(block.batch_transfer_outcomes.is_empty());
@@ -266,7 +266,8 @@ fn oversized_real_pipeline_rejection_omits_diagnostic_but_quarantines_and_keeps_
             account.metadata().get("healthy_sibling_effect"),
             Some(&Json::new(1))
         );
-        assert_eq!(block.committed_fragment_count(), fragments + 3);
+        // Network, quarantine, healthy sibling and original Time maintenance.
+        assert_eq!(block.committed_fragment_count(), fragments + 4);
         assert!(block.gas_used_in_block > 0);
         assert!(matches!(
             block.commit().unwrap_err(),

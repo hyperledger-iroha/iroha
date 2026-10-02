@@ -48,3 +48,22 @@ fn current_release_identities_match_native_capture() {
         case.check();
     }
 }
+
+// TODO: Add ordinary assertions over the separately captured retirement identity fixture
+// after the genuine paired maintenance capture below is retained and its exact digest reviewed.
+// Existing historical identities and their original report must remain byte-for-byte intact.
+#[cfg(feature = "governance")]
+mod retirement_capture {
+    use super::Case;
+
+    const CASES: &[Case] = &[
+        Case::bidirectional::<crate::governance::types::KagemushaVerifierReleaseRetireProposalV1>(
+            "iroha_data_model::parliament_types::KagemushaVerifierReleaseRetireProposalV1",
+        ),
+        Case::bidirectional::<crate::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>(
+            "iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1",
+        ),
+    ];
+
+    crate::captured_schema_tests::native_capture::owner_printer!(CASES);
+}

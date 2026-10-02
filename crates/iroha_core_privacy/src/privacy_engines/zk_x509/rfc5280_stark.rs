@@ -108,8 +108,8 @@ pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x98, 0xdd, 0xa8, 0xf2, 0x5c, 0x41, 0xb6, 0x51, 0xa1, 0x0e, 0x8b, 0x28, 0x07, 0x01, 0x76, 0xee,
-    0x4b, 0x71, 0x43, 0xa1, 0xc5, 0x32, 0x86, 0x56, 0xc7, 0xef, 0x59, 0x1f, 0xf2, 0xe9, 0xb3, 0x24,
+    0xb7, 0x36, 0x18, 0x2a, 0x4b, 0x94, 0xbc, 0x8d, 0xd6, 0x8c, 0xf8, 0x08, 0xba, 0xec, 0x58, 0x57,
+    0xd3, 0xbf, 0xce, 0x62, 0xc0, 0x41, 0x8d, 0x56, 0x1f, 0xbc, 0x26, 0x59, 0xcb, 0xc1, 0x80, 0x77,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub(crate) const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -5073,8 +5073,9 @@ fn assert_residue_section_v1(
 /// This authenticates event metadata. The five key and five SPKI producers and
 /// nine variable TBS/CRL/signature byte-and-length pairs are separately bound to
 /// DER below, as are the canonical leaf serial magnitude and selected original
-/// Subject/OID/value bytes. TODO: complete Name OID uniqueness and string-policy
-/// constraints before claiming full parser equivalence.
+/// Subject/OID/value bytes. The NamePolicy and NameValue families separately bind
+/// the complete original OID/value census, OID uniqueness and closed string policy.
+/// TODO: finish end-to-end adversarial qualification of full parser equivalence.
 /// The family selectors and activity remain field-valued at OOD points, so the
 /// full expression has degree three including fixed-column polynomials.
 fn output_metadata_residues_v1<A: PolynomialAirFieldV1>(
@@ -6541,25 +6542,17 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         row[BASE_ENDPOINT_INSTANCE] = F(u64::from(matches!(source.purpose, 3..=9)));
         row[BASE_IS_WRITE] = F(u64::from(source.offset == 0));
         row[BASE_STRICT] = F(u64::from(source.offset + 1 == source.length));
-        row[BASE_INVERSE] = if source.offset == 0 {
-            F::ZERO
-        } else {
-            F(u64::from(source.offset))
-                .inv()
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?
-        };
+        // Original offsets are u16, so the fixed inverse-or-zero chain has
+        // the same value as the old checked inverse with its zero special case.
+        row[BASE_INVERSE] = F(u64::from(source.offset)).inverse_or_zero_canonical_v1();
         let remaining = source
             .length
             .checked_sub(source.offset)
             .and_then(|remaining| remaining.checked_sub(1))
             .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-        row[BASE_G] = if remaining == 0 {
-            F::ZERO
-        } else {
-            F(u64::from(remaining))
-                .inv()
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?
-        };
+        // Keep the original checked length/offset arithmetic above; every
+        // admitted remaining count is also a canonical u16 field value.
+        row[BASE_G] = F(u64::from(remaining)).inverse_or_zero_canonical_v1();
         name_policy::populate_fixed_byte(&mut row, &mut previous_name_key)?;
         push_family_row_v1(&mut family_rows[fixed_family], row)?;
     }
@@ -7202,19 +7195,26 @@ pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1<A: PolynomialA
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zero_safe_inverse_v1(gate: F, denominator: F) -> (F, F) {
-    if gate == F::ZERO {
-        (F::ZERO, F::ZERO)
-    } else if denominator == F::ZERO {
-        (F::ONE, F::ZERO)
-    } else {
-        (
-            F::ZERO,
-            denominator
-                .inv()
-                .expect("nonzero canonical Goldilocks value is invertible"),
-        )
-    }
+    // Admitted factors are canonical tuple compressions. Preserve the prior
+    // active malformed-input panic and inactive malformed-input tolerance.
+    let active = u64::from(gate != F::ZERO);
+    let zero = F(active & u64::from(denominator == F::ZERO));
+    // Mask before validation: the canonicality check has the same successful
+    // outcome for all admitted inputs, including inactive malformed words.
+    // Checking a gate OR canonicality expression first can compile to a private
+    // gate branch even when the source uses non-short-circuit Boolean operators.
+    let selected = F(denominator.0 & 0_u64.wrapping_sub(active));
+    assert!(
+        selected.0 < crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1,
+        "nonzero canonical Goldilocks value is invertible"
+    );
+    (zero, selected.inverse_or_zero_canonical_v1())
 }
+
+#[cfg(test)]
+#[path = "rfc5280_zero_safe_inverse_tests.rs"]
+mod zero_safe_inverse_tests;
+
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn product_aux_column_descriptor_v1(column: usize) -> Option<(usize, usize, bool)> {
     let starts = [
@@ -10830,14 +10830,11 @@ mod tests {
                 .filter(|actual| **actual == degree)
                 .count()
         });
-        // The key-source layer adds 21 cubic and two quartic equations.
-        // Its node-query remap raises four denominator*zero equations from
-        // quadratic to cubic; all other existing degree buckets are unchanged.
-        // The private SHA bridge removes eight quartic aggregate recurrences;
-        // its sixteen quadratic constancy constraints replace sixteen quadratic
-        // initialization/continuity constraints. Removing sixteen public SHA
-        // endpoint equalities then leaves the complete 1,654-residue inventory.
-        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 795, 301, 557];
+        // Native finite differences vary every opened base, auxiliary and fixed
+        // input at nine points for each of the three seeds above. This pin records
+        // the complete 1,945-residue inventory after DER output provenance and
+        // complete certificate/CRL Name uniqueness and string-policy constraints.
+        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 903, 391, 650];
         assert_eq!(
             inventory, EXPECTED_AFFINE_DEGREE_INVENTORY_V1,
             "the full-input interpolation is a proof-shape pin, independent of evaluator sections"

@@ -1103,7 +1103,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:1e0f10c934909c220af8595c646855962969cb35fd1ed5d936292a7984c33f03",
+    "manifest_fingerprint": "sha256:b48315907ceef7a34ab3223115c34b7b687381410560458e1d940b2c384f2b39",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -1130,18 +1130,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1005,
-        "declared_external_dependency_edges": 617,
+        "declared_dependency_edges": 1009,
+        "declared_external_dependency_edges": 618,
         "declared_external_packages": 178,
-        "declared_local_packages": 75,
+        "declared_local_packages": 76,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 71,
-        "required_dependency_edges": 856,
-        "required_external_dependency_edges": 495,
+        "declared_workspace_packages": 72,
+        "required_dependency_edges": 860,
+        "required_external_dependency_edges": 496,
         "required_external_packages": 129,
-        "required_local_packages": 72,
+        "required_local_packages": 73,
         "required_path_packages": 4,
-        "required_workspace_packages": 68
+        "required_workspace_packages": 69
       },
       "roots": [
         "iroha_cli"
@@ -1190,14 +1190,14 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 449,
-        "declared_external_dependency_edges": 318,
+        "declared_dependency_edges": 451,
+        "declared_external_dependency_edges": 319,
         "declared_external_packages": 127,
         "declared_local_packages": 43,
         "declared_path_packages": 4,
         "declared_workspace_packages": 39,
-        "required_dependency_edges": 338,
-        "required_external_dependency_edges": 228,
+        "required_dependency_edges": 340,
+        "required_external_dependency_edges": 229,
         "required_external_packages": 90,
         "required_local_packages": 39,
         "required_path_packages": 4,
@@ -1210,14 +1210,14 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1043,
-        "declared_external_dependency_edges": 643,
+        "declared_dependency_edges": 1045,
+        "declared_external_dependency_edges": 644,
         "declared_external_packages": 185,
         "declared_local_packages": 75,
         "declared_path_packages": 4,
         "declared_workspace_packages": 71,
-        "required_dependency_edges": 867,
-        "required_external_dependency_edges": 516,
+        "required_dependency_edges": 869,
+        "required_external_dependency_edges": 517,
         "required_external_packages": 136,
         "required_local_packages": 70,
         "required_path_packages": 4,
@@ -1230,18 +1230,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2018,
-        "declared_external_dependency_edges": 1126,
+        "declared_dependency_edges": 2027,
+        "declared_external_dependency_edges": 1129,
         "declared_external_packages": 230,
-        "declared_local_packages": 117,
+        "declared_local_packages": 118,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 113,
-        "required_dependency_edges": 1850,
-        "required_external_dependency_edges": 995,
+        "declared_workspace_packages": 114,
+        "required_dependency_edges": 1859,
+        "required_external_dependency_edges": 998,
         "required_external_packages": 183,
-        "required_local_packages": 117,
+        "required_local_packages": 118,
         "required_path_packages": 4,
-        "required_workspace_packages": 113
+        "required_workspace_packages": 114
       },
       "roots": [
         "*"

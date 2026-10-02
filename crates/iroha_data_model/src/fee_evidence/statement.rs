@@ -14,6 +14,10 @@ pub const MAX_RETAIL_FEE_RECEIPT_PAGE_COUNT_V1: usize = 100;
 pub const MAX_RETAIL_FEE_RECEIPT_PAGE_BYTES_V1: usize = 1024 * 1024;
 
 /// Canonical execution-witness-compatible leaf for an authenticated current head.
+///
+/// # Errors
+///
+/// Returns an error if the wallet state path or canonical head encoding fails.
 pub fn retail_fee_head_leaf_hash_v1(head: &RetailFeeReceiptHeadV1) -> Result<Hash, String> {
     let key = retail_fee_receipt_head_state_key_v1(&head.wallet_id)?;
     let mut bytes = vec![0];
@@ -24,6 +28,10 @@ pub fn retail_fee_head_leaf_hash_v1(head: &RetailFeeReceiptHeadV1) -> Result<Has
     Ok(Hash::new(bytes))
 }
 /// Canonical sparse key path of the original wallet identity.
+///
+/// # Errors
+///
+/// Returns an error if the wallet state path cannot be represented.
 pub fn retail_fee_head_path_v1(wallet: &AccountId) -> Result<[u8; 32], String> {
     Ok(Hash::new(
         retail_fee_receipt_head_state_key_v1(wallet)?
@@ -83,6 +91,10 @@ pub struct RetailFeeCurrentHeadProofV1 {
 }
 impl RetailFeeCurrentHeadProofV1 {
     /// Verify against independent native finality and obtain the first history cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid snapshot encoding, identity or checkpoint mismatch, or an invalid sparse proof.
     pub fn verify(
         &self,
         ordinary_root: Hash,
@@ -145,6 +157,10 @@ pub struct RetailFeeReceiptPageV1 {
 impl RetailFeeReceiptPageV1 {
     /// Verify every receipt against a cursor derived from a verified head or page.
     /// Never trust a cursor supplied solely by an unverified history response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an incoherent cursor, an empty or oversized page, failed encoding, or a broken receipt chain.
     pub fn verify(
         &self,
         cursor: &RetailFeeReceiptCursorV1,
@@ -161,8 +177,9 @@ impl RetailFeeReceiptPageV1 {
         }
         let mut next = cursor.clone();
         for receipt in &self.receipts {
+            let expected_sequence = next.next_sequence;
             if receipt.wallet_id != next.wallet_id
-                || receipt.sequence != next.next_sequence
+                || receipt.sequence != expected_sequence
                 || receipt.sequence == 0
                 || Some(retail_fee_receipt_chain_hash_v1(receipt)?) != next.next_receipt_hash
                 || receipt.collected_minor.checked_add(receipt.waived_minor)
@@ -218,18 +235,18 @@ pub(super) fn verify_finality_window(
     let mut roots = Vec::with_capacity(proofs.len());
     let mut closing_hash = None;
     for (index, proof) in proofs.into_iter().enumerate() {
-        let verified = if index == 0 {
+        let decision = if index == 0 {
             verifier.verify_same_decision(checkpoint.tip(), proof)
         } else {
             verifier.verify(proof)
         }
         .map_err(|e| format!("native finality certificate: {e}"))?;
-        if verified.height() != opening_height + index as u64
-            || verified.header() != proof.block_header
+        if decision.height() != opening_height + index as u64
+            || decision.header() != proof.block_header
         {
             return Err("native finality network or height mismatch".into());
         }
-        roots.push(verified.execution().ordinary_writes_root);
+        roots.push(decision.execution().ordinary_writes_root);
         closing_hash = Some(proof.block_header.hash());
     }
     if closing_hash != Some(anchor.closing_block_hash) {

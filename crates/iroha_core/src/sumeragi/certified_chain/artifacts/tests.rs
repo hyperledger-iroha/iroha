@@ -17,6 +17,14 @@ fn chain() -> CertifiedTestChain {
     chain.commit(Vec::new());
     chain
 }
+// Keep authenticated genesis setup outside the later certificate temporary frame.
+// All plain-prefix assertions borrow the same original heap-owned chain; default
+// native stack size and production verification/allocation limits stay unchanged.
+#[inline(never)]
+fn with_prefix_chain(assert_original: fn(&CertifiedTestChain)) {
+    let chain = Box::new(chain());
+    assert_original(&chain);
+}
 fn frame(chain: &CertifiedTestChain, height: usize) -> Arc<SignedBlock> {
     chain
         .kura()
@@ -46,8 +54,16 @@ fn changed_qc(source: &SignedBlock, mutate: impl FnOnce(&mut Qc)) -> Arc<SignedB
 
 #[test]
 fn prefix_artifacts_keep_exact_source_and_all_bulk_owners_in_original_pool() {
-    let chain = chain();
-    let source = frame(&chain, 2);
+    with_prefix_chain(
+        assert_prefix_artifacts_keep_exact_source_and_all_bulk_owners_in_original_pool,
+    );
+}
+
+#[inline(never)]
+fn assert_prefix_artifacts_keep_exact_source_and_all_bulk_owners_in_original_pool(
+    chain: &CertifiedTestChain,
+) {
+    let source = frame(chain, 2);
     let budget = AllocationBudget::new(1 << 26);
     let owner = read(Arc::clone(&source), &budget);
     assert!(Arc::ptr_eq(owner.source(), &source));
@@ -70,9 +86,15 @@ fn prefix_artifacts_keep_exact_source_and_all_bulk_owners_in_original_pool() {
 
 #[test]
 fn prefix_artifacts_refusal_keeps_table_witness_and_completed_projection() {
-    let chain = chain();
+    with_prefix_chain(assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection);
+}
+
+#[inline(never)]
+fn assert_prefix_artifacts_refusal_keeps_table_witness_and_completed_projection(
+    chain: &CertifiedTestChain,
+) {
     // Parser-only candidate; independent prefix verification must still reject this invented witness.
-    let source = changed_qc(&frame(&chain, 2), |qc| {
+    let source = changed_qc(&frame(chain, 2), |qc| {
         qc.attestation_witness = Some(ResultWitness::from_untrusted(vec![7; 4096]).unwrap());
     });
     let measure = AllocationBudget::new(1 << 26);
@@ -167,8 +189,14 @@ fn prefix_artifacts_refusal_keeps_table_witness_and_completed_projection() {
 
 #[test]
 fn prefix_artifacts_reject_foreign_pool_and_drop_partial_owners_once() {
-    let chain = chain();
-    let source = frame(&chain, 2);
+    with_prefix_chain(assert_prefix_artifacts_reject_foreign_pool_and_drop_partial_owners_once);
+}
+
+#[inline(never)]
+fn assert_prefix_artifacts_reject_foreign_pool_and_drop_partial_owners_once(
+    chain: &CertifiedTestChain,
+) {
+    let source = frame(chain, 2);
     let measure = AllocationBudget::new(1 << 26);
     let owner = read(Arc::clone(&source), &measure);
     let table_len = owner.decoded.availability.as_slice().len();
@@ -194,8 +222,16 @@ fn prefix_artifacts_reject_foreign_pool_and_drop_partial_owners_once() {
 
 #[test]
 fn prefix_artifacts_cannot_be_rebound_to_equal_hash_carrier_or_changed_header() {
-    let chain = chain();
-    let source = frame(&chain, 2);
+    with_prefix_chain(
+        assert_prefix_artifacts_cannot_be_rebound_to_equal_hash_carrier_or_changed_header,
+    );
+}
+
+#[inline(never)]
+fn assert_prefix_artifacts_cannot_be_rebound_to_equal_hash_carrier_or_changed_header(
+    chain: &CertifiedTestChain,
+) {
+    let source = frame(chain, 2);
     let budget = AllocationBudget::new(1 << 26);
     let owner = read(Arc::clone(&source), &budget);
     let replacement = Arc::new(source.as_ref().clone());
@@ -217,12 +253,18 @@ fn prefix_artifacts_cannot_be_rebound_to_equal_hash_carrier_or_changed_header() 
 
 #[test]
 fn funded_prefix_keeps_quorum_checks_and_matches_portable_prefix() {
-    let chain = chain();
+    with_prefix_chain(assert_funded_prefix_keeps_quorum_checks_and_matches_portable_prefix);
+}
+
+#[inline(never)]
+fn assert_funded_prefix_keeps_quorum_checks_and_matches_portable_prefix(
+    chain: &CertifiedTestChain,
+) {
     let id = chain.state().chain_id_ref();
-    let mut funded = CertifiedPrefix::new(id, chain.network_id(), frame(&chain, 1)).unwrap();
-    let mut portable = CertifiedPrefix::new(id, chain.network_id(), frame(&chain, 1)).unwrap();
+    let mut funded = CertifiedPrefix::new(id, chain.network_id(), frame(chain, 1)).unwrap();
+    let mut portable = CertifiedPrefix::new(id, chain.network_id(), frame(chain, 1)).unwrap();
     let budget = AllocationBudget::new(1 << 26);
-    let bad = changed_qc(&frame(&chain, 2), |qc| qc.agg_sig.0[0] ^= 1);
+    let bad = changed_qc(&frame(chain, 2), |qc| qc.agg_sig.0[0] ^= 1);
     assert!(funded.push_prepared(read(bad, &budget)).is_err());
     assert_eq!(
         funded.prefix.tip.height(),
@@ -230,7 +272,7 @@ fn funded_prefix_keeps_quorum_checks_and_matches_portable_prefix() {
         "invalid signature cannot advance cursor"
     );
     assert_eq!(budget.reserved_bytes(), 0);
-    let original = frame(&chain, 2);
+    let original = frame(chain, 2);
     let certificate = original.commit_certificate().unwrap();
     let mut table: AvailabilityFrame =
         norito::decode_canonical(certificate.availability()).unwrap();
@@ -253,11 +295,10 @@ fn funded_prefix_keeps_quorum_checks_and_matches_portable_prefix() {
     assert_eq!(budget.reserved_bytes(), 0);
     for height in 2..=3 {
         let (actual, anchor) = funded
-            .push_prepared(read(frame(&chain, height), &budget))
+            .push_prepared(read(frame(chain, height), &budget))
             .unwrap()
             .into_parts();
-        let (expected, expected_anchor) =
-            portable.push(frame(&chain, height)).unwrap().into_parts();
+        let (expected, expected_anchor) = portable.push(frame(chain, height)).unwrap().into_parts();
         assert_eq!(actual.verification(), QcVerification::Verified);
         assert_eq!(actual.core_hash(), expected.core_hash());
         assert_eq!(actual.result(), expected.result());
@@ -271,26 +312,43 @@ fn funded_prefix_keeps_quorum_checks_and_matches_portable_prefix() {
     }
 }
 
-#[test]
-fn funded_boundary_keeps_genuine_result_witness_until_receipt_drop() {
+// Keep the authentic genesis/boundary constructor out of later certificate temporary
+// frames. The chain remains one heap owner; each assertion gets only its original borrow.
+// Default native test stack and every production allocation/verification path are unchanged.
+#[inline(never)]
+fn with_funded_original_boundary(assert_original: fn(&CertifiedTestChain)) {
     // A global epoch pin cannot postpone release of the reader's actual witness owner.
     let _epoch = crossbeam_epoch::pin();
-    let mut chain = CertifiedTestChain::npos_boundary_fixture();
+    let mut chain = Box::new(CertifiedTestChain::npos_boundary_fixture());
     chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    assert_original(&chain);
+}
+
+#[test]
+fn funded_boundary_keeps_genuine_result_witness_until_receipt_drop() {
+    with_funded_original_boundary(
+        assert_funded_boundary_keeps_genuine_result_witness_until_receipt_drop,
+    );
+}
+
+#[inline(never)]
+fn assert_funded_boundary_keeps_genuine_result_witness_until_receipt_drop(
+    chain: &CertifiedTestChain,
+) {
     let mut prefix = CertifiedPrefix::new(
         &ChainId::from("sumeragi-certified-test-chain"),
         chain.network_id(),
-        frame(&chain, 1),
+        frame(chain, 1),
     )
     .unwrap();
     let budget = AllocationBudget::new(1 << 26);
     for height in 2..10 {
         prefix
-            .push_prepared(read(frame(&chain, height), &budget))
+            .push_prepared(read(frame(chain, height), &budget))
             .unwrap();
     }
     assert_eq!(budget.reserved_bytes(), 0);
-    let original = frame(&chain, 10);
+    let original = frame(chain, 10);
     let tampered = changed_qc(&original, |qc| qc.attestation_witness = None);
     assert!(matches!(
         prefix.push_prepared(read(tampered, &budget)),
@@ -343,17 +401,23 @@ fn physical_metadata_refusal_is_retryable_but_format_limits_are_not() {
 
 #[test]
 fn funded_original_result_witness_is_borrowed_without_redecoding() {
+    with_funded_original_boundary(
+        assert_funded_original_result_witness_is_borrowed_without_redecoding,
+    );
+}
+
+#[inline(never)]
+fn assert_funded_original_result_witness_is_borrowed_without_redecoding(
+    chain: &CertifiedTestChain,
+) {
     use crate::sumeragi::{
         certified_chain::{CertifiedChain, VerifiedAuthority, read_frame},
         schedule,
     };
 
-    let _epoch = crossbeam_epoch::pin();
-    let mut chain = CertifiedTestChain::npos_boundary_fixture();
-    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).unwrap();
-    let original = frame(&chain, 10);
+    let original = frame(chain, 10);
     let preimage = original.commit_certificate().unwrap().result_preimage();
     let original_preimage = preimage.as_ptr();
     let current = read_frame(Arc::clone(&original), 10).unwrap();
@@ -426,16 +490,22 @@ fn funded_original_result_witness_is_borrowed_without_redecoding() {
 
 #[test]
 fn original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph() {
+    with_funded_original_boundary(
+        assert_original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph,
+    );
+}
+
+#[inline(never)]
+fn assert_original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph(
+    chain: &CertifiedTestChain,
+) {
     use crate::sumeragi::certified_chain::{CertifiedChain, VerifiedAuthority, read_frame};
     use crate::sumeragi::schedule;
 
-    let _epoch = crossbeam_epoch::pin();
-    let mut chain = CertifiedTestChain::npos_boundary_fixture();
-    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
     let view = chain.state().view();
     let reader = CertifiedChain::new(&view).unwrap();
-    let original = frame(&chain, 10);
-    let older = frame(&chain, 9);
+    let original = frame(chain, 10);
+    let older = frame(chain, 9);
     let foreign_bytes = older.commit_certificate().unwrap().result_preimage();
     // Genuine canonical bytes from another original execution, not an invented graph.
     crate::sumeragi::commitment::ExecutionResultCommitment::decode(foreign_bytes).unwrap();

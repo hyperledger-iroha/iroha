@@ -38,9 +38,13 @@ History:
   evidence about each paying phone's operating system into the proof's
   relation, and puts a device evidence gate first. One automated consistency
   check of the assembled text found 202 defects, 20 of them serious, mostly
-  places where sections written in parallel disagreed. They are fixed. The
-  result has not been checked, and more disagreements of the same kind should
-  be expected.
+  places where sections written in parallel disagreed. They are fixed. A
+  second automated check, on 2026-10-03, found 238 more of the same kind, 4
+  of them serious, and about 400 corrections were applied. A check of those
+  corrections found 39 problems that they had introduced or left, 1 of them
+  serious. Those are corrected, and that last set of corrections has not
+  been checked. Each check so far has found more than the one before, so
+  more disagreements of the same kind should be expected.
 
 ## 0. Summary for the owner
 
@@ -64,15 +68,17 @@ underwriting is part of that argument.
 
 **The mechanism against paying twice.** The wallet keeps a marker in the
 phone's key store, outside every backup, and replaces it at every signed
-object. The marker carries the wallet's current state. A wallet whose files
-are restored, reinstalled or damaged resumes at its current balance and cannot
-go back to an older one (§5.10). This is the "unique counter/commitment" of
-the owner's mechanism. It rests on key-store behaviour that has not been
-tested on any phone.
+object. The marker carries the wallet's current state. A wallet whose files are
+restored, lost or damaged resumes at its current balance and cannot go back to
+an older one (§5.10). This document offers the marker as the "unique
+counter/commitment" of the owner's mechanism. It works only against an ordinary
+user with the unmodified app (§4.1). It rests on key-store behaviour that has
+not been tested on any phone.
 
-**The proof and the operating system.** Following the owner's instruction, a
+**The proof and the operating system.** This document reads the owner's
+instruction as follows (§2; §12 item 16 asks the owner to confirm it): a
 payment carries a proof, and the proof's relation includes a statement about
-the operating system of every phone the value passed through (§2, §2.1). The
+the operating system of every phone the value passed through (§2.1). The
 statement is made from what the phone's secure hardware signs at enrollment
 and, where expiry is on, at each renewal. What it shows, as of enrollment or
 the last renewal: the phone's secure hardware was told at boot that a
@@ -86,21 +92,40 @@ app". Three things therefore stay assumptions: no run-time takeover of the
 paying phone, no leaked attestation key, no broken secure hardware.
 
 **Where the criterion is not met today** (§3.1). None of these is an accepted
-exception; each says what would be needed.
+exception; each says what would be needed. §3.1 lists nineteen points in three
+groups: five not met on stock phones by any rule found, eight not shown, and
+six met or not depending on a reading that is the owner's. The points below are
+a selection, and §3.1 is the full list.
 
 - P2 against a phone whose operating system is taken over at run time. No
   mechanism reachable by a store app prevents it. Meeting it needs hardware
   that runs wallet logic, which is set aside for now.
 - Time. With a proof on every payment, the payer's and the receiver's proving
   both fall inside the payment. Nothing is measured; the repo's own gate is
-  10 s for one proof. "1-2 s should be good ux" is not met unless proving
-  takes a fraction of a second. No prover exists yet.
+  10 s for one proof. "1-2 s should be good ux" is not met unless proving takes
+  a fraction of a second. It also needs a carrier that moves the Payment in
+  well under a second, which the repository's QR framing does not at 4 to 10 s
+  per pass, or a smaller proof (§5.6). No prover exists yet.
 - iPhone. Removing or resetting the passcode discards the marker. And Apple's
   published key-store source suggests a write may not survive a forced restart,
   which would let an ordinary user pay twice; only a device test can settle
   it.
-- A lost or erased phone loses its value. A payment that never completed can
-  leave the payer out of the amount.
+- A lost or erased phone loses its value. On Android, uninstalling the app
+  without keeping its data, or clearing its storage, does the same. A payment
+  that never completed can leave the payer out of the amount.
+- Android vendor builds. No vendor documents what its backup, clone or transfer
+  tool does to key-store entries. A tool that puts older entries back breaks P2
+  for every user of that build, and one that clears them destroys the balance.
+  The gate decides per phone.
+- The proof. No prover exists, so no property that depends on proving is shown.
+  A phone on which proving does not finish cannot pay, receive or unload. Two
+  mechanisms are not designed: paying after the wallet's files are lost, and a
+  proof that a wallet which has not updated its app can verify after a new
+  circuit release.
+- Readings that are the owner's. Six points are met or not depending on a
+  reading, among them whether P1, P3, P5 and PC may rest on assumptions at all,
+  whether "durably" means that the value outlives the phone, and whether P1 and
+  P3 reach redemption (§3.1, group C).
 
 **What comes first.** A device evidence gate (§10.4): tests on each target
 phone of restore paths, crashes and power cuts, key-store behaviour, what
@@ -118,10 +143,12 @@ them.
 2. What follows if a proof-carrying payment cannot be made in an acceptable
    time.
 3. Which phones and platform classes may hold value, given that iPhone and
-   HarmonyOS NEXT carry a weaker statement about the operating system.
-4. Which regulatory controls are on by default. With expiry on, the lease
-   (the period after which a wallet must sync before it can send again) is
-   also the age limit of the evidence about each phone's system.
+   HarmonyOS NEXT evidence says nothing about the operating system, and that
+   factory-provisioned Android attestation keys have leaked.
+4. Which regulatory controls are on by default. With expiry on, the lease (the
+   period after which a wallet must sync before it can send again), with its
+   grace, is also the age limit of the evidence about each Android phone's
+   system. On iPhone a renewal shows nothing about the system.
 5. If an assumption fails on some phone, value exists with no load behind it,
    and under P4 it stays good in honest wallets. Who supplies the difference
    is not decided here.
@@ -255,12 +282,15 @@ reading, not the owner's words. The owner confirms or corrects each (§12).
   root-signed notice or in the block list. "Require connectivity" is read as:
   stop a working wallet paying or requesting until it reaches the issuer, the
   ledger or an app store. The owner named a blacklist, limits and attestation
-  expiry. Six things under those names are this document's additions and count
+  expiry. Nine things under those names are this document's additions and count
   only if the owner confirms them: receive freshness (§5.5), the `send_blocked`
   flag (§5.5), the per-counterparty cap (§5.4), the reboot policy
   `require_anchor` (§5.4), a tier-row notice that switches a control on for
-  certificates already issued (§5.11), and a block at the holder's own request
-  (§7.2). What a renewal under R8 may check is in §4 and §3.2.
+  certificates already issued (§5.11), a block at the holder's own request
+  (§7.2), a clock that R7 or R8 can no longer use, which needs a re-anchor
+  (§5.4), the block-list version a wallet must hold again after a resume, with
+  R6 on (§5.5, §5.10), and a critical extension that the wallet's app does not
+  know (§5.11). What a renewal under R8 may check is in §4 and §3.2.
 - PC, "complete". §5.2 fixes it. The receiving wallet reports complete after
   its checks, after any proof its own onward spending needs, after the durable
   commit of the ReceiveFold and the `Credited` Outcome, and after the marker
@@ -392,14 +422,14 @@ target phones, in any time, is not known. Nothing in §2 has been built or
 timed. §2.3 is the plan that decides it, and it starts only after the evidence
 gate.
 
-**Decision B.** The name stands for the question whether a payment carries a
-proof. The owner's instruction answers the question of the target: it does,
-and the proof carries the constraint about the operating system. What remains
-under that name is the owner's ruling at the end of §2.3: whether the
-proof-carrying design is qualified on the supported phones, in a time the owner
-accepts. The signature-only form is described in §2.4 so that the reader can
-see what a receiver checks without a proof and what is then missing. It is not
-offered as an equal option.
+**Whether a payment carries a proof.** This document reads the owner's
+instruction as settling the target: a payment carries a proof, and the proof
+carries the constraint about the operating system. §12 item 16 asks the owner
+to confirm that reading. What remains is the owner's ruling at the end of
+§2.3: whether the proof-carrying design is qualified on the supported phones,
+in a time the owner accepts. The signature-only form is described in §2.4 so
+that the reader can see what a receiver checks without a proof and what is
+then missing. It is not offered as an equal option.
 
 **What a receiver learns from one payment.** The receiver is offline. The
 table says what it learns from the bytes it receives and its own state, with
@@ -431,16 +461,20 @@ marker and cannot. Both branches of a fork made on a compromised phone satisfy
 every clause of the relation (§2.1). While T1 to T6 hold on every phone, P1 to
 P5 hold with or without a proof. What the relation changes is how much a
 receiver must take on assumption about phones it never sees. With it, every
-earlier hop was signed by a key whose phone met the enrollment statement, the
-arithmetic is right, and the value began as a sealed load.
+earlier hop was signed by a key whose enrollment evidence met a policy entry,
+the arithmetic is right, and, if the mint stays quorum-sealed in the relation
+(§2.3), the value began as a sealed load.
 
 **Why a proof and not the history.** A payment could instead carry the signed
-record of every earlier hop. One earlier hop costs about 0.85 KB (certificate,
-receipt, signed transition; an estimate). Such a payment passes 10 KB after
-about eleven earlier hops, or at once when the payer's balance merges about
-eleven received payments, because each one brings its own history. R4
-(unbounded hops) and R9 (about 10 KB) together exclude it. The proof makes
-the same check at constant size.
+record of every earlier hop. One earlier hop costs about 1.0 KB (certificate
+0.53 KB, receipt 0.15 KB, signed transition 0.315 KB; estimates of §5.1). A
+payment of 1.14 KB that carries its history passes 10 KB after about nine
+earlier hops, or at once when the payer's balance merges about nine received
+payments, because each one brings its own history. R4 (unbounded hops) and R9
+(about 10 KB) together exclude it. The proof makes the same check at constant
+size. It does not give the receiver what a carried history would: the signed
+transitions of the earlier hops. Under the proof those are private inputs, so
+a conflicting signature at an earlier hop reaches no receiver (§2.1).
 
 **What "complete" means, and what it does to time.** PC (§1) says that any
 processing needed to establish P1 to P5 finishes before the wallet reports the
@@ -466,10 +500,11 @@ work on both phones.
   committed, the Payment is answered `Refused` once the Request has closed
   (§5.2). A refusal is a signed Outcome and needs no proof. The payer refunds
   when it holds that Outcome and has proven its RefundFold.
-- The proof of the new state, and what is needed to extend it, are written to
-  the key store with the marker (§5.10). A wallet that resumes after its
-  files were lost or put back must still be able to pay, and a payment needs
-  the latest proof.
+- The proof of the new state, and what is needed to extend it, must be
+  written to the key store with the marker (§5.10). A wallet that resumes
+  after its files were lost or put back must still be able to pay, and a
+  payment needs the latest proof. That entry is not designed: its size has no
+  bound until Q0 fixes the relation (§5.10; §3.1, group B, item 6).
 - No wallet holds received value that it has not proven, and no unload waits
   for a proof that was put off.
 
@@ -487,7 +522,7 @@ What this does to time, stated without softening.
   stock-phone path is far outside every phone gate (§2.2).
 - The owner said: "1-2 s should be good ux". A proof-carrying payment does not
   meet that unless each proof takes a fraction of a second on the slowest
-  supported phone and the carrier moves about 7.5 KB in under a second. No
+  supported phone and the carrier moves about 7.7 KB in under a second. No
   measurement supports either.
 - The payer needs the Outcome, and the receiver cannot release it before its
   own proof is done. So the two phones have to stay together for the whole of
@@ -517,8 +552,9 @@ text names it.
   Without it a wallet that has not updated cannot check a payment from one
   that has (§2.1, "Policy inputs").
 - A wallet that resumes without its files. It can pay only if the latest
-  proof is in the key store beside the marker. Key-store entries of that size
-  are not tested (§2.3).
+  proof and what is needed to extend it are in the key store beside the
+  marker. That entry is not designed, and key-store entries of that size are
+  not tested (§5.10, §2.3).
 
 **Position.**
 
@@ -573,8 +609,8 @@ for the payer only.
 | Revocation | A commitment to the serial numbers of the certificates in the vendor chain | The same commitment, over Apple's certificates in the evidence (§5.1). Nothing is tested against it: Apple publishes no revocation list for App Attest keys |
 | Enrollment epoch | The ledger height at which the validators sealed E | The same |
 
-The fields of E that a receiver sees are about 50 to 100 bytes (estimate). The
-device certificate of §5.1 already carries some of them.
+E is about 0.14 KB on Android and 0.13 KB on iPhone (estimate). It travels in
+full in the device certificate (§5.1).
 
 **The enrollment relation, Android.** The evidence is the vendor's certificate
 chain down to the certificate of the app attestation key, and one leaf
@@ -599,15 +635,17 @@ E is valid for a policy entry when all of these hold.
   first occurrence in a chain can be trusted. The second occurrence, in the
   device key's leaf, is trusted because of EA4.
 - EA4. The app attestation key. In the hardware-enforced list: the purpose is
-  attest-key and nothing else; the origin is "generated"; both security-level
-  fields are equal and are TEE or StrongBox; the root of trust says locked and
-  Verified. A key with that purpose alone cannot sign arbitrary data, so
-  every certificate it signs was composed by the secure hardware.
+  attest-key and nothing else; algorithm EC; curve P-256; the origin is
+  "generated"; both security-level fields are equal and are TEE or StrongBox;
+  the root of trust says locked and Verified. A key with that purpose alone
+  cannot sign arbitrary data, so every certificate it signs was composed by
+  the secure hardware.
 - EA5. The device key. In the hardware-enforced list of its leaf: purpose
   sign only; algorithm EC; curve P-256; origin "generated"; the digest that Q0
-  fixes (§2.3); no use limit and no user-authentication requirement (§5.9);
-  both security-level fields equal to those of EA4; `deviceLocked` true;
-  `verifiedBootState` Verified; the same verified-boot key as in EA4.
+  fixes (§2.3); no use limit, no user-authentication requirement and no
+  unlocked-device requirement (§5.9); both security-level fields equal to
+  those of EA4; `deviceLocked` true; `verifiedBootState` Verified; the same
+  verified-boot key as in EA4.
 - EA6. Patch levels. `osPatchLevel`, `vendorPatchLevel` and `bootPatchLevel`
   in the hardware-enforced list are each at or above the floor in the policy
   entry. E records them.
@@ -753,7 +791,9 @@ fields and their encoding. For a transition t that takes S to S′:
   plus what t credits. It is not negative.
 - H6. E is carried. The digest of E in S′ is that in S, unless t adopts a
   renewal. The policy entry that E names is a member of the governed table
-  whose head is a public input of the proof.
+  whose head is a public input of the proof. The policy head in S′ is the
+  head in S or a later entry of that table, and the chain of entries between
+  the two shows it.
 - H7. Rules by kind.
   - Bootstrap. Balance and counters are zero. E is established as above.
     Bootstrap holds no value, so a server can make this proof too.
@@ -769,7 +809,7 @@ fields and their encoding. For a transition t that takes S to S′:
     the last hop (L5); for earlier hops no clause checks it. S′ records the
     payment as unresolved.
   - ReceiveFold. The payer's proof verifies for the payer's state after its
-    SendSplit. The policy head of that proof is this wallet's policy head or
+    SendSplit. The policy head of that proof is the policy head in S′ or
     precedes it in the governed table. The SendSplit names this wallet's
     device id as counterparty. The credit is the SendSplit's amount. The
     payment id is not among the credits S records, and S′ records it. The
@@ -780,16 +820,24 @@ fields and their encoding. For a transition t that takes S to S′:
     P-256 signature that verifies under the key whose device id the SendSplit
     names as counterparty. S′ no longer records the payment as unresolved.
     This is the one kind with a second non-native signature check.
+    The SendSplit does not name the wallet's own device id, the hash of K,
+    as counterparty: a wallet cannot refund a payment to its own key.
+    Without this bar K could sign the `Refused` Outcome for its own payment,
+    and the RefundFold would return the amount and the fee while
+    `cum_out_after` kept the amount.
     A `Refused` Outcome signed by the successor of a Migrate (§5.2, §7.2)
-    does not meet this clause as written. Q0 fixes the clause that admits
-    it; until then such a refusal cannot be folded under a proof. Where
-    the counterparty has migrated, the Outcome is its successor's (§5.2,
-    §7.2): the clause then checks the old key's signature on the Migrate
-    that lists the Request, and the successor's signature on the Outcome.
-    That is one more non-native check; Q0 fixes its form (§2.3).
+    does not meet this clause as written. The clause that admits it is not
+    written: Q0 fixes it (§2.3), and until then such a refusal cannot be
+    folded under a proof. It has to check the old key's signature on the
+    Migrate that lists the Request, the issuer's countersignature on that
+    Migrate and the successor's signature on the Outcome (§5.2), which is
+    more than one further signature check.
   - RedeemSplit. It debits the amount.
-  - Recertify. No value moves. Where it adopts a renewal, E is replaced
-    (below).
+  - Recertify. No value moves. Where it adopts a renewal, E′ replaces E
+    (below). The relation opens the pair (device id, digest of E′) under a
+    sealed registry root, as it does for E at Bootstrap; the device id is
+    the hash of K (H2). No clause requires the enrollment epoch of E′ to be
+    above that of E.
   - Migrate and MigrateFold. A Migrate debits the whole balance, names the
     successor's device id and is the last transition of its key. A
     MigrateFold verifies the old key's proof ending in that Migrate, credits
@@ -800,7 +848,9 @@ fields and their encoding. For a transition t that takes S to S′:
 The rule H4 is what makes a hidden transition useless as padding: a wallet
 cannot choose its counters. The self-payment rule in ReceiveFold is what
 stops one compromised key from paying itself on a hidden branch and folding
-that credit into its visible chain.
+that credit into its visible chain. The same bar in RefundFold stops a key
+from paying itself, refusing and refunding, which would raise
+`cum_out_after` and leave the balance as it was.
 
 A relation that proved only arithmetic and mint authorization, and left the
 device signature to the receiver's check of the last hop, would not carry E
@@ -837,23 +887,32 @@ scheme has switched R8 on, a renewal refreshes E.
   payment key's signature over the renewal transcript (§7.1). E′ is E with
   the policy entry and the epoch replaced and, from iOS 27, with the launch
   category and bundle version the assertion reports (§5.11). It shows that
-  the key Apple certified still signs for this
-  App ID. It shows nothing about the operating system. A new attestation is
-  not an alternative: Apple refuses to attest a key that is already attested.
+  the key Apple certified still signs for this App ID. It shows nothing
+  about the operating system. A renewal carries no new attestation. Apple
+  does not attest a key twice, so a new attestation needs a new App Attest
+  key; Apple's guidance is to generate new keys only when necessary, so that
+  the number of attested keys stays low; and a new attestation says nothing
+  more about the operating system.
 - E′ is established as E is. The validators check the request natively when
   the new certificate serial is anchored (§6) and seal the registry. The
-  Android leaf needs only P-256 and SHA-256, for which the repository has
-  gadgets, so a proof of the renewal relation does not wait for the missing
-  ones. It is not built or measured.
+  Android leaf needs P-256, SHA-256 and the structure walk of EA3. The
+  repository has gadgets for the first two and none for the walk (§2.3), so
+  a proof of the renewal relation waits for the walk and not for P-384, RSA
+  or SHA-384. It is not built or measured.
 - The wallet adopts E′ with its Recertify transition (H7).
 - A renewal is refused only for an enabled regulatory control or because the
-  device's own key signed two successors. A leaf below the patch floor, and a
-  serial number that has entered the revocation set, are refusals under R8
-  itself: R8 is the control the scheme switched on, and this is its content.
-  The holder then cannot send after the lease ends. Receiving and unloading
-  continue (§5.4).
+  device's own key, or the key whose balance its row took over by Migrate,
+  signed two successors. This document reads a leaf below the patch floor,
+  and a serial number that has entered the revocation set, as refusals under
+  R8 itself: R8 is the control the scheme switched on, and this is read as
+  its content. That reading is subject to the owner's confirmation (§3.1,
+  group C, item 5; §12 item 11). The holder then cannot send after the lease
+  ends. Receiving and unloading continue (§5.4).
 - With R8 off there is no renewal. E stays as it was at enrollment for the
-  life of the wallet.
+  life of the wallet, with one exception. An iPhone re-attestation after the
+  App Attest key dies (§7.2) replaces the App Attest facts in E, with R8 on
+  or off. The Recertify that adopts it has no clause in the relation yet and
+  is fixed in Q0 (§2.3).
 
 **The receiver's native checks on the last hop.** The receiver makes them
 before it signs anything, from the Payment, its own state and its own clock.
@@ -949,8 +1008,8 @@ cannot turn any of them into something a receiver can check.
 A fourth limit is not an assumption but a fact about dates. The patch level in
 E is the level at enrollment or at the last renewal. A phone that enrolled
 above the floor and never renews keeps a valid E while public exploits for its
-patch level appear. With R8 on, the lease is the age limit of that evidence.
-With R8 off it has none.
+patch level appear. With R8 on, the lease, with its grace (§5.4), is the age
+limit of that evidence. With R8 off it has none.
 
 **What the relation excludes from every hop of a proven history.** None of
 these depends on the issuer's certificate key. The first two are stated by
@@ -983,8 +1042,8 @@ for value already accepted, is §3.2.
 |---|---|---|
 | An honest wallet with an arithmetic defect | The wallet signs transitions with a wrong balance. No receiver can tell. The issuer's replay at a sync finds it only if the replaying core lacks the defect and the wallet syncs | The wallet cannot prove the wrong transition, so it commits and releases nothing. A soundness defect in the circuit itself is not contained |
 | An ordinary user with the unmodified app | Cannot pay twice if the marker of §5.10 holds on that phone; the evidence gate decides that per tuple | The same. A proof does not check the marker |
-| A key that is not held by a genuine, locked phone running the genuine app | Refused on the last hop from E, unless the certificate key and the witness quorum are stolen (§8.1). Not looked for on earlier hops | An Android key cannot appear at any hop, unless its chain was signed with a leaked attestation key of a class the policy admits and the revocation set does not yet hold it, or the key was taken out of broken secure hardware after enrollment. An iPhone payment key is named, not attested, so the relation does not exclude one held in software (EI6) |
-| A compromised phone with one enrolled key and no accomplice | It signs payments for any amount. It needs no load. Its chain is self-consistent and no evidence need exist | It must load real value once. It cannot fold its own payments. To pay out more than its proven balance it must sign two successors of one state, and the two receivers then hold a pair that is evidence, if both records reach the chain |
+| A key that is not held by a genuine, locked phone running the genuine app | Refused on the last hop from E, unless the certificate key and the witness quorum are stolen (§8.1). Not looked for on earlier hops | An Android key cannot appear at any hop, unless its chain was signed with a leaked attestation key of a class the policy admits and the revocation set does not yet hold it, or the key was taken out of broken secure hardware after enrollment, or the operating system of a locked phone was taken over and code that is not the genuine app uses the key: the app identity in E is the operating system's own report (last row). An iPhone payment key is named, not attested, so the relation does not exclude one held in software (EI6) |
+| A compromised phone with one enrolled key and no accomplice | It signs payments for any amount. It needs no load. Its chain is self-consistent and no evidence need exist | It must load real value once. It cannot fold its own payments. To pay out more than its proven balance it must sign two successors of one state, and the two receivers then hold a pair that is evidence, if both records reach the chain. As H7 is written the pair need not be evidence: the phone can pad one branch with a payment to itself that it refuses and refunds, and the clause that bars this is not written (H7, RefundFold) |
 | A compromised phone with a second enrolled key, or a receiver who colludes | As the row above | One real load, and a second enrollment that meets every clause of E. One branch is paid to the other key, which folds it. The conflicting signature is then only a private input of that key's next proof. No evidence |
 | Theft of the voucher key | Value with no load behind it is minted onto genuine phones | Nothing a proof accepts, if the mint stays quorum-sealed in the relation (§2.3) |
 | A leaked vendor attestation key not yet revoked, or broken secure hardware | Passes every check | Passes every clause |
@@ -1004,9 +1063,11 @@ What a fork leaves behind under this relation, and when.
   number they are two digests. At adjacent numbers the link is broken.
   Further apart, the later one fails the cumulative-outflow rule of §5.3,
   because a branch can raise its proven `cum_out_after` only by a proven
-  outflow, and that outflow debits the same branch. This argument is this
-  document's own. It has not been checked by a second pass or written as a
-  test.
+  outflow, and that outflow debits the same branch. That step rests on the
+  bar in RefundFold (H7): without it, a payment a key sends to itself,
+  refuses and refunds would raise `cum_out_after` and debit nothing. This
+  argument is this document's own. It has not been checked by a second pass
+  or written as a test.
 - The pair is evidence only when both transitions reach the chain. Each sits
   in one receiver's files, and no holder has to sync. A receiver whose files
   are lost resumes without them (§5.10). So the evidence may never appear.
@@ -1028,16 +1089,20 @@ passes. They change in different ways, and no change sends a phone online.
    compare with; EA8; EI1 to EI6 apart from the App ID. Changing one is a new
    circuit release. A phone gets a new release with an app update.
 2. The governed table. One entry per policy version, and the enrollment
-   relation names the entry it used. An entry holds: the vendor root public
-   keys (Google's RSA-4096 key, Google's ECDSA P-384 key, Apple's App
-   Attestation root key or CA 1 key); the app identity (Android package name
-   and signing-certificate digest, Apple App ID hash); the patch floor per
-   platform; the root of the revocation set; the chain classes and platform
-   classes admitted; the lowest attestation version; the digests of the
-   circuit releases that are accepted. The table is append-only. Each entry
-   commits to the one before it, so a proof can show in a few hashes that
-   the entry an earlier hop used precedes the entry it uses, and the proof
-   that travels names one policy head.
+   relation names the entry it used. §5.1 lists the fields of an entry. Among
+   them: the vendor root public keys (Google's RSA-4096 key, Google's ECDSA
+   P-384 key, Apple's App Attestation root key or CA 1 key); the app identity
+   (Android package name and signing-certificate digest, Apple App ID hash);
+   the patch floor per platform; the root of the revocation set; the chain
+   classes and platform classes admitted; the lowest attestation version;
+   the digests of the circuit releases that are accepted. No clause above
+   compares the attestation version, or the lowest security level that §5.1
+   also lists, with the entry: those clauses are not written. The boot-key
+   list that an entry may hold (above) is not among the fields of §5.1;
+   whether one is usable is a question for the evidence gate. The table is
+   append-only. Each entry commits to the one before it, so a proof can show
+   in a few hashes that the entry an earlier hop used precedes the entry it
+   uses, and the proof that travels names one policy head.
    Governance installs an entry on the ledger, and the scheme root signs it
    as a notice (§5.1), so that it travels peer to peer like every other
    notice (§5.11).
@@ -1072,9 +1137,9 @@ What a change does to proofs already made.
   phone itself the rule is the one §5.1 gives for a certificate under a
   revoked issuer key: its statement stands for as long as its certificate
   does. Where R8 is on, the renewal is refused and the phone stops sending
-  when its lease ends. Where R8 is off, the statement stands without limit,
-  and what that means after a vendor key has leaked is one of the
-  residual-risk decisions of §3.2. The reason for this rule is the
+  when its lease ends. Where R8 is off, the statement stands without limit.
+  What that means after a vendor key has leaked is residual risk (§3.2, T1
+  row), and the decision on it is §12 item 24. The reason for this rule is the
   factory-provisioned class. Such an attestation key is shared by a batch of
   phones; one way the Android compatibility rules describe is one key per
   100,000 units (read from a search summary, not from the rules themselves).
@@ -1086,7 +1151,9 @@ What a change does to proofs already made.
   the owner's decision.
 - A class is no longer admitted, for example the factory-provisioned class.
   The same rule: statements already sealed stand for as long as their
-  certificates do, and the class is refused at enrollment and at renewal.
+  certificates do, and the class is refused at enrollment. Whether a class
+  no longer admitted is also refused at renewal for phones already enrolled
+  is the owner's decision (§5.11, §12 item 53).
 - A rule fixed in the circuit changes. Value in circulation was proven under
   the earlier release, and its holders may be offline for years. Every
   release that was ever accepted therefore stays accepted inside proofs, and
@@ -1153,12 +1220,16 @@ the receiver checks them itself.
 
 ### 2.2 State of the Pasta implementation
 
-As read from source and repo records on 2026-10-02. Line numbers are those of
-commit `b2a3cd05bc`. The working tree holds staged, uncommitted edits to
-several cited files (`composite.rs`, `guard_bundle.rs`, `pasta_sha256.rs`,
-`isi/kagemusha.rs`, the bridge's `Cargo.toml`, `status.md`). There the lines
-have moved, and two statements below are marked as true of the commit only.
-Not confirmed by build, test or device.
+As read from source and repo records on 2026-10-02. This section describes the
+repository at commit `b2a3cd05bc`, and line numbers are those of that commit.
+Eight later commits on the branch, up to `752590f825`, were not read in
+full, and the inventory is not refreshed for them. Where a bullet below names
+one of them, only the change it names was read. They change several cited files
+(`composite.rs`, `guard_bundle.rs`, `pasta_sha256.rs`, `isi/kagemusha.rs`,
+the bridge's `Cargo.toml`, `crates/iroha_core/Cargo.toml`, `status.md`).
+There the lines have moved, so the line citations into those files, here and
+in §2.1, §4 and §8.5, are not current. Two statements below are marked as true of
+the commit only. Not confirmed by build, test or device.
 
 - **Node verifier.** Code that verifies paired-Pasta proofs and decides
   accumulators exists and is called from block execution
@@ -1186,13 +1257,12 @@ Not confirmed by build, test or device.
   contains its consumer, but the production construction refuses it
   (`.../composite.rs:1961-1968`), ordinary ReceiveFold is refused in every
   construction at commit `b2a3cd05bc` (`.../composite.rs:1003-1008`), and the
-  only proof test is ignored. A staged, uncommitted edit in the working tree
-  replaces that refusal and adds `ordinary_state_receive_consumer.rs`. It was
-  not read for this document. App Attest and KeyMint classes are rejected at
-  the three monetary folds. The repo records key generation for this path as
-  blocked at 8,584 advice columns against a 1,024 ceiling (`status.md:168-171`
-  at commit `b2a3cd05bc`; the file is being edited in the working tree and the
-  lines have moved).
+  only proof test is ignored. A later commit replaces that refusal and adds
+  `ordinary_state_receive_consumer.rs`. It was not read for this document.
+  App Attest and KeyMint classes are rejected at the three monetary folds.
+  The repo records key generation for this path as blocked at 8,584 advice
+  columns against a 1,024 ceiling (`status.md:168-171` at commit
+  `b2a3cd05bc`; later commits change the file and the lines have moved).
 - **Four P-256 equations per transition.** As built, that Guard runs four
   full-width P-256 equations for each transition: the issuer's signature over
   the credential admission message (`.../ordinary_guard_composition.rs:207`),
@@ -1224,8 +1294,9 @@ Not confirmed by build, test or device.
     264 and 234 advice columns in total, and neither produced a State proof
     (`specs/kagemusha_v1_production_readiness.md:756-765, 781-789`). 8,584 is
     32 to 37 times those.
-  - What is not known. The repo does not say which circuit of the ordinary
-    path the figure belongs to, or which part of it produces the width. By
+  - What is not known. Beyond naming the Eq circuit of credential
+    generation, the repo does not say which circuit of the ordinary path the
+    figure belongs to, or which part of it produces the width. By
     the published halo2-lib profile, four P-256 equations would be on the
     order of 40 columns at k = 16, so the P-256 equations do not account for
     8,584; one automated estimate is that the width comes from the carrier or
@@ -1235,10 +1306,14 @@ Not confirmed by build, test or device.
     regression, or the size of the relation. The ordinary path is also bound
     to the online profile's objects, and Q1 re-specifies it (§2.3).
   - What follows. The figure sizes a refused build of unknown composition.
-    It shows that one circuit on the stock-phone path, as built, is two
-    orders of magnitude wider than the phone gate allows, by the repo's own
-    conversion. It is not a measured memory requirement of the relation of
-    §2.1, and no such measurement exists.
+    The record names the Eq circuit of ordinary credential generation. At
+    k = 16, which is assumed, that circuit as built is two orders of
+    magnitude wider than the phone gate allows, by the repo's own
+    conversion. Whether a phone would be the prover of that circuit is not
+    established: in the code a credential proof is made by the provider
+    (`.../guard_bundle.rs:3-8, 256-258`). The figure is not a measured
+    memory requirement of the relation of §2.1, and no such measurement
+    exists.
 - **P-256 cost.** Unmeasured. The gadget is a bit-serial ladder with complete
   additions on three 87-bit limbs
   (`crates/iroha_core_zk/src/kagemusha_p256_curve_gadget.rs:42-43`). The
@@ -1286,15 +1361,17 @@ Not confirmed by build, test or device.
   state, so the counter stops neither a fork nor a rollback.
 - **Phones.** No on-device harness runs this prover. At commit `b2a3cd05bc`
   the mobile bridge enables the prover feature unconditionally
-  (`crates/connect_norito_bridge/Cargo.toml:42, 49`). A staged, uncommitted
-  edit in the working tree removes `proofs-halo2` and
+  (`crates/connect_norito_bridge/Cargo.toml:42, 49`). Commit `92562ad371`
+  removed `kagemusha-ordinary-native`, `proofs-halo2` and
   `kagemusha-production-prover` from those lines.
 
 **What the repository does today about evidence of the operating system.** No
 circuit checks anything about it.
 
 - Where it is checked. Verified-boot state, lock state, patch level and app
-  identity are checked only in the issuer's Python.
+  identity are checked outside the node and outside any circuit: in the
+  issuer's Python, a profile script and the Kotlin attestation verifier
+  (§8.5, §10.3).
   `python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061`
   verifies an Android chain to a pinned root, takes the key description from
   the certificate nearest the root, and requires a hardware key, the pinned
@@ -1383,9 +1460,10 @@ is behind any of them.
   k = 16 if the gadgets are as compact as halo2-lib's, which is 100 to
   300 MiB for one advice bank and several times that for the process. The
   repository's own P-256 ladder is unmeasured and may be several times wider.
-  That is the size of circuit the repository builds on a host. It is one to
-  two orders of magnitude over the 128 MiB phone gate. It has never been
-  built.
+  That is the size of circuit the repository builds on a host. By these
+  figures the process is several times to about ten times the 128 MiB phone
+  gate, and more if the repository's own P-256 ladder is wider. It has never
+  been built.
 
 What follows from the figures. Checking a vendor chain on a phone is not
 practical. Checking it once on a server is plausible by size and is
@@ -1410,16 +1488,17 @@ after that ruling, and only for the tuples it supports. No stage of Q0 to Q3
 can repair a failure of the evidence gate, because a proof does not check the
 marker (§2).
 
-The plan has to end in a decision. So it fixes five things before any
-measurement: the pass conditions of the evidence gate, the targets, a budget
-and a date for each stage, a limit on how often the relation may be
-reconsidered, and what each outcome leads to. Each stage has a named person
-responsible for it (§12).
+The plan has to end in a decision. So it fixes five things, each before the
+measurements it governs: the pass conditions of the evidence gate, the
+targets, a budget and a date for each stage, a limit on how often the
+relation may be reconsidered, and what each outcome leads to. Each stage has
+a named person responsible for it (§12).
 
 **Evidence gate.** The owner first fixes the list of phone models, the time
-target and whether it is a gate, and whether P2 must hold against a
-compromised operating system. The tests then run. For the proof, three of its
-results matter most.
+target and whether it is a gate, whether P2 must hold against a compromised
+operating system, the budget table below, which has a row for the gate, and
+the other inputs that 10.4.4 lists. The tests then run. For the proof, three
+of its results matter most.
 
 - The attestation fields of an enrollment chain on each tuple: the root, the
   chain class, the algorithms and sizes at each level, the root-of-trust and
@@ -1439,9 +1518,10 @@ owner has ruled on it. It has no effort estimate.
 
 **Q0 — targets and relation.** Three steps, in this order.
 
-Targets. The owner fixes the targets and the budget table below before any
-measurement, so that no result can move them silently. A target changed later
-is an owner decision, recorded with the measurement that prompted it.
+Targets. The owner fixes the targets below before any measurement of Q0 to
+Q3, so that no result can move them silently. The budget table was fixed
+before the evidence gate. A target changed later is an owner decision,
+recorded with the measurement that prompted it.
 
 | Target | Current repo gate | To be fixed by the owner |
 |---|---|---|
@@ -1449,7 +1529,7 @@ is an owner decision, recorded with the measurement that prompted it.
 | Whole payment, to the payer showing complete: the same, plus the Outcome crossing back | None defined | ____ |
 | The payer's proof (SendSplit), p95 | 10 s proving | ____ |
 | The receiver's proof (ReceiveFold), p95 | 10 s proving | ____ |
-| Proof of a RefundFold, a RedeemSplit, a Recertify and a MigrateFold, p95 | 10 s proving | ____ |
+| Proof of a MintFold, a RefundFold, a RedeemSplit, a Recertify, a Migrate and a MigrateFold, and of a Bootstrap where the phone makes it, p95 | 10 s proving | ____ |
 | Verification of an incoming payment, p95 | 1 s | ____ |
 | Complete handoff: send, payment and the receiver's fold across two phones, p95 | 30 s | ____ |
 | Peak process memory | 128 MiB (repo-defined, not a platform limit) | ____ |
@@ -1464,10 +1544,14 @@ is an owner decision, recorded with the measurement that prompted it.
 | Phones | Pixel 6 is the repo's mandatory profile | The tuples the evidence gate's ruling supports |
 
 The repo gates in the table are from
-`specs/kagemusha_v1_production_readiness.md:119-122`. The memory target has to
-be settled here: it is raised, the SHA-256 claim chain is removed from the
-relation, or the Claim is split as the phone-algorithm spec sketches (slice
-arithmetic test-only, the rest unimplemented; memory unmeasured).
+`specs/kagemusha_v1_production_readiness.md:119-122`, except three: the
+7,552 B payment limit (`specs/peer_transport_v1.md:65-71`), the key limits
+(line 788 of the readiness record) and the energy measurement
+(`crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs:775-776`).
+The memory target has to be settled here: it is raised, the SHA-256 claim
+chain is removed from the relation, or the Claim is split as the
+phone-algorithm spec sketches (slice arithmetic test-only, the rest
+unimplemented; memory unmeasured).
 
 There is no target for "how often a proof fails". A wallet whose prover is
 stopped by the platform retries, and nothing was committed. A transition that
@@ -1480,7 +1564,7 @@ Measurements that need no prover. They run beside the relation work, on the
 supported tuples, over at least 100 operations each, recorded as median and
 p95.
 
-- Carrier throughput for a Payment of 7.5 KB, in each direction, on each pair
+- Carrier throughput for a Payment of 7.7 KB, in each direction, on each pair
   of phones, on each carrier of §5.6: the repo's QR framing at 5 and 12
   frames per second, a denser QR framing, NFC where the pair allows it, and
   each radio carrier §5.6 keeps. Time from the first frame or tap to a
@@ -1511,7 +1595,7 @@ column says what is known.
 |---|---|---|---|
 | Evidence gate | Not estimated. The work is listed in §10.4 | ____ | ____ |
 | Q0, targets and relation | Not estimated. It includes the relation choices below and the measurements that need no prover | ____ | ____ |
-| Q1, host proofs | An automated estimate gave 8 to 14 engineer-weeks for the proofs of a per-hop relation shaped like Recursive V1. It did not cover the enrollment relation and its three missing gadgets, the renewal relation, the refund path or Migrate. An automated estimate for the optional stack check was 1.5 to 4 engineer-weeks | ____ | ____ |
+| Q1, host proofs | An automated estimate gave 8 to 14 engineer-weeks for the proofs of a per-hop relation shaped like Recursive V1. The estimate says that the unresolved 8,584-column blocker (§2.2) could dominate it. It did not cover the enrollment relation and its three missing gadgets, the renewal relation, the refund path or Migrate. An automated estimate for the optional stack check was 1.5 to 4 engineer-weeks | ____ | ____ |
 | Q2, phone proofs | An automated estimate gave 3 to 5 engineer-weeks, once Q1 delivers keys and a witness. It did not cover two-phone timing with a real carrier | ____ | ____ |
 | Q3, soundness and ruling | Not estimated. It includes an independent review | ____ | ____ |
 | Total, all stages and one reconsideration | The stages that have an estimate sum to about 12 to 23 engineer-weeks, for one engineer who knows this stack. That sum leaves out every stage and item marked not estimated | ____ | ____ |
@@ -1531,9 +1615,10 @@ separately for the P-256 verification and for the rest. This needs: the
 production refusal lifted; an ordinary ReceiveFold consumer; key generation
 under the column ceiling; and a Guard specified again against Layer A's
 objects, because the existing one is bound to the online profile's approval
-objects. Passing the column ceiling is not passing the memory target (§2.2).
-A relation that misses the host budget uses the one reconsideration, or goes
-to the ruling.
+objects. This list is as of commit `b2a3cd05bc`. A later commit adds a
+consumer for ordinary ReceiveFold, which was not read (§2.2). Passing the
+column ceiling is not passing the memory target (§2.2). A relation that
+misses the host budget uses the one reconsideration, or goes to the ruling.
 
 Three items belong to Q1 beside the lineage.
 
@@ -1553,9 +1638,10 @@ Three items belong to Q1 beside the lineage.
   one enrollment proof of a real Android chain and one of a real Apple
   attestation, wrapped into the form the recursion consumes, with server time
   and memory recorded, and the time a phone takes to verify the result once.
-  If it cannot be built within the host budget, the recursion keeps consuming
-  the quorum-sealed E. The proof then rests on the validator quorum for E,
-  and the owner is told so in writing. That outcome does not stop the plan.
+  If it cannot be built within the host budget, the recursion can consume
+  only the quorum-sealed E, and the proof then rests on the validator quorum
+  for E. The owner rules in writing whether qualification continues on the
+  quorum-sealed E (§12 item 21).
 - A stack check, optional and time-boxed, before the lineage. Run the
   existing ignored lineage tests for the secure-hardware relation under an
   optimized profile. This shows whether the stack can produce a proof at
@@ -1574,8 +1660,9 @@ sustained run to thermal steady state:
   the share of each part: the payer's proof, the transfer, the receiver's
   verification, the receiver's proof, the marker steps with the proof store,
   the commits, the Outcome;
-- each proof alone, with peak memory: SendSplit, ReceiveFold, RefundFold,
-  RedeemSplit, Recertify, MigrateFold, and the largest case of each kind;
+- each proof alone, with peak memory: SendSplit, ReceiveFold, MintFold,
+  RefundFold, RedeemSplit, Recertify, Migrate, MigrateFold, Bootstrap where
+  the phone makes it, and the largest case of each kind;
 - a receive followed at once by a payment onward from the same phone;
 - energy, from the fuel gauge or a power monitor;
 - the app killed at each point of a proof, and the phone locked while a
@@ -1591,7 +1678,13 @@ the tuple.
 
 **Q3 — soundness and ruling.** A relation that met the targets enters soundness
 qualification: a mutation test per constraint, the 1,024-handoff run,
-independent review. The mutations for the enrollment relation include: a
+independent review. The 1,024-handoff run is the Recursive V1 qualification
+item "1,024 real recursive handoffs"
+(`specs/kagemusha_v1_production_readiness.md:111, 294`): a chain of 1,024
+handoffs with real proofs, each a send, a receive and a release. Its test is
+ignored and has no recorded run. What it chains for the relation of §2.1,
+whether it runs on a host or on phones, and what counts as a pass are not
+defined. The mutations for the enrollment relation include: a
 key description placed inside the challenge bytes; an extension in a
 certificate below the first one that has it; an unlocked phone; a `SelfSigned`
 boot; a wrong package or signer; a patch level below the floor; a serial in
@@ -1608,23 +1701,24 @@ or when its budget is spent, whichever comes first. No stage extends itself.
 |---|---|---|
 | Evidence gate | Every tuple on the list is unsupported | No Q stage starts. The owner chooses among the options §10.4 names |
 | Evidence gate | Some tuples are supported with a stated assumption and none is supported without one | The owner rules in writing whether the stated assumption is accepted. If it is, Q0 starts for those tuples and the residual-risk question of §3.2 is put. If it is not, as the row above |
-| Evidence gate | The exchange without a proof misses the time target on a carrier the owner requires | The owner changes the target or the carrier before any prover work |
-| Q0 | No required carrier moves a 7.5 KB Payment in the time the exchange without a proof leaves | A smaller proof, another carrier, or a longer target for a proof-carrying payment. The owner picks one in writing before Q1, or the ruling |
+| Evidence gate | The exchange without a proof misses the time target on a carrier the owner requires | Where the owner made the target a gate, a tuple that misses it is unsupported (10.4.6). The owner may instead change the target or the carrier before any prover work, recorded with the result that prompted it (10.4.4) |
+| Q0 | No required carrier moves a 7.7 KB Payment in the time the exchange without a proof leaves | A smaller proof, another carrier, or a longer target for a proof-carrying payment. The owner picks one in writing before Q1, or the ruling |
 | Q0 | The relation has no predicted fit to the memory, key or proof-store target | The one reconsideration. If it is already used, the ruling |
 | Q1 | The lineage completes within the host budget | The relation goes to Q2 |
 | Q1 | The lineage does not complete | The one reconsideration, within the remaining budget and date. If it is already used, the ruling |
-| Q1 | The lineage completes and the enrollment proof does not | The relation goes to Q2 with the quorum-sealed E. The owner is told in writing what the proof then rests on |
+| Q1 | The lineage completes and the enrollment proof does not | The owner rules in writing whether qualification continues on the quorum-sealed E (§12 item 21). If it does, the relation goes to Q2 with the quorum-sealed E, and the proof rests on the validator quorum for E. If it does not, the ruling |
 | Q2 | Every target is met on every supported tuple | The relation goes to Q3 |
 | Q2 | Memory and every per-proof target are met, and the whole payment misses the owner's time target | The candidate shapes below are evaluated, within the remaining budget and the one reconsideration. A shape is taken up only if it shows what its entry requires. If none does, the ruling |
 | Q2 | Some supported tuples meet every target and others do not | The owner rules: a pool of the tuples that passed, or the ruling below |
 | Q3 | The relation passes | The owner rules in writing that the proof-carrying design is qualified for those tuples, with the measured figures beside the tables of §2 |
 | Q3 | The relation fails | The defect is fixed within the remaining budget, or the ruling |
-| Any stage | Its date passes or its budget is spent without the exit result | Work on the stage stops. The ruling |
+| Q0 to Q3 | Its date passes or its budget is spent without the exit result | Work on the stage stops. The ruling. What follows when the evidence gate passes its date or spends its budget is not defined |
 
 **The ruling when no shape meets PC in a time the owner accepts.** The owner
-chooses, in writing, among the options that §10.4 names (10.4.6)
-for a criterion that cannot be met on the phones tested. This document chooses
-none. Read for the proof, those options are:
+chooses, in writing, among the six options below. 10.4.6 repeats them under
+"The owner's options if the proof qualification fails". This document
+chooses none. The first four are the options that 10.4.6 names for a
+criterion that cannot be met on the phones tested, read for the proof:
 
 - Hardware that runs wallet logic. With it, one successor per state rests on
   the hardware, and what the proof must show changes. The owner said of
@@ -1664,14 +1758,17 @@ part of the design until it has shown what its entry requires.
    signature check for each tail transition. A proof of the payer's state
    made before the payment, with the signed SendSplit checked natively, is
    the same shape with a tail of one. The shape gives up the rule that no
-   wallet commits a transition it has not proven. What would have to be
-   shown for it to satisfy P1 and PC:
+   wallet commits a transition it has not proven. With it a wallet commits a
+   transition before its proof exists, which is the first rule §3.1 lists as
+   one the design does not have and as breaking PC and P1. Taking the shape
+   up changes §3 and §3.1, and it needs the owner's reading of P1 first (§12
+   item 29). What would have to be shown for it to satisfy P1 and PC:
    - Onward spending at once. When the receiver shows the credit it must be
      able to pay that value onward with nothing more computed. Its Payment
      then carries its own proof, its tail and, for a ReceiveFold in the tail,
      the whole Payment that was received, proof included. With the repo's
      6,528 B proof ceiling that is about 15 KB after one receive (computed),
-     and it grows by about 7.5 KB for each further phone that passes the
+     and it grows by about 7.7 KB for each further phone that passes the
      value on before anyone folds. R9 says about 10 KB. So the proof must be
      much smaller, or R9 relaxed, or the number of unfolded receives bounded.
      If that number is zero, a receiver proves its fold before it shows the
@@ -1695,7 +1792,7 @@ part of the design until it has shown what its entry requires.
    - Durable before the credit is shown. The tail and the received Payments
      in it must be in the key store (§5.10) before the wallet shows the
      credit. A wallet that resumes without them has its balance and can
-     neither pay nor fold. That is up to about 7.5 KB per unfolded receive in
+     neither pay nor fold. That is up to about 7.7 KB per unfolded receive in
      the marker step; key-store entries of that size are not tested.
    - The fold completes. Each platform must let the wallet finish a fold in
      the background (the Q0 measurement). Where it does not, the fold runs in
@@ -1703,7 +1800,7 @@ part of the design until it has shown what its entry requires.
    - The receiver's verification of the largest allowed Payment fits the
      time target.
 2. A faster path for the bytes. NFC where the pair allows it, a Bluetooth
-   connection, or a denser QR framing for the 7.5 KB Payment (§5.6); or the
+   connection, or a denser QR framing for the 7.7 KB Payment (§5.6); or the
    payer's proof crossing while the payer is still confirming. The second
    shortens the measured interval and not the time the two phones are held
    together. Neither changes the proving time.
@@ -1732,11 +1829,12 @@ scheme id. Its encodings, vectors and enrolled keys are discarded when the
 relation is fixed. This rule is what keeps early work from fixing the relation
 by accident.
 
-Built now without rework, because they do not depend on any signed byte
-format:
+A gate finding may still change the marker's storage form, the release rule
+on iPhone and the fields of E (§11). Built now without rework from the
+relation, because they do not depend on any signed byte format:
 
 - the evidence gate's tests and the Q0 measurements that need no prover;
-- the carriers of §5.6, which move opaque bytes and must be sized for 7.5 KB
+- the carriers of §5.6, which move opaque bytes and must be sized for 7.7 KB
   as well as 1 KB;
 - the attestation verifiers of §10.3, written so that the validators and the
   issuer run the same checks, EA1 to EA10 and EI1 to EI8, except the one
@@ -1797,7 +1895,11 @@ Relation choices to decide in Q0:
   voucher key then mints value every proof accepts. E is sealed by the same
   quorum, so the seal stays in the relation in any case. The choice is
   whether to confine it to the steps that need it: Bootstrap, MintFold,
-  Recertify and MigrateFold.
+  Recertify and MigrateFold. The void form is fixed with this choice: the
+  MintFold of amount zero whose subject is the issuer's void statement
+  (§5.1, §7.1). The relation of §2.1 has no clause for it. Q0 also fixes the
+  clause for the Recertify that adopts E after an iPhone re-attestation
+  (§7.2), which the relation of §2.1 lacks as well.
 - **The record of folded credits.** The current depth-256 path costs 3,084
   Poseidon permutations per field per step (counted from source). A
   replacement must keep non-membership-then-insert in one step and the full
@@ -1810,7 +1912,11 @@ Relation choices to decide in Q0:
   transition, so that a receiver that cannot prove can still refuse. The
   payer's RefundFold proves the check of H7. Q0 fixes how the state records
   unresolved SendSplits within a size bound, and what the wallet does with a
-  refusal for a payment beyond that bound. A receiver whose phone is
+  refusal for a payment beyond that bound. Q0 also fixes the clause of H7
+  that admits a `Refused` Outcome signed by the successor of a Migrate (§5.2,
+  §7.2), the clause that bars the refund of a payment whose SendSplit names
+  the wallet's own device id as counterparty, and what shows in a MigrateFold
+  that the issuer accepted the Migrate (§2.1). A receiver whose phone is
   compromised can fold a payment and also sign a refusal; the two objects are
   evidence against it under §5.3 if both reach the chain, and the relation
   does not prevent it.
@@ -1826,7 +1932,8 @@ Relation choices to decide in Q0:
   Migrate), a server could make the proof from the wallet's proof store and
   the signed transition. That would keep an unload open to a phone whose
   prover no longer runs. It shows the server the wallet's state. Not
-  designed.
+  designed. Q0 also fixes whether the chain requires the proof of a
+  RedeemSplit (§8.2).
 
 Published reference points for one P-256 verification. For size: about 40,000
 constraints in Kimchi on Pasta, with no time given, and about 0.5 million
@@ -1940,13 +2047,13 @@ This section states what the design claims. Three statements give the position.
 Terms. A is the payer, B the receiver, and C whoever B pays next. A tuple is
 one phone model, one operating-system major version, one vendor build family
 and one key-store security level; the evidence gate gives each tuple one
-finding: unsupported, supported with a stated assumption, or supported (§2.3).
-The gate's test groups are named by letter: a, restore and rollback paths; b,
-crashes and power cuts at every step; c, key-store writes across power loss; d,
-what the key store returns when locked or failing, and settings changes; e, the
-Android one-use key; f, the iPhone assertion counter; g, time; h, attestation;
-i, onward spending with no network; j, later misconduct by the payer. None has
-been run.
+finding: unsupported, supported with a stated assumption, or supported
+(§10.4.6). The gate's test groups are named by letter: a, restore and rollback
+paths; b, crashes and power cuts at every step; c, key-store writes across
+power loss; d, what the key store returns when locked or failing, and settings
+changes; e, the Android one-use key; f, the iPhone assertion counter; g, time;
+h, attestation; i, onward spending with no network; j, later misconduct by the
+payer. None has been run.
 
 **P1. B owns the transferred value durably and can spend it onward offline.**
 
@@ -1955,7 +2062,8 @@ been run.
   It is still there after a restart, a power cut, a locked phone, an app
   update, an operating-system update, and the loss, damage or restore of the
   wallet's files. Nothing stops B spending it except a regulatory control
-  switched on for B's own certificate (P5).
+  switched on for B's own certificate (P5) or, where B's tier requires a
+  screen lock, a missing lock that the holder sets on the phone (§5.9).
 - Mechanism. B makes the proof that its next payment needs before it commits,
   so nothing remains to be proven (§5.2, §9). The ReceiveFold and the
   `Credited` Outcome are one commit. The marker for that commit carries B's new
@@ -2005,7 +2113,9 @@ assumptions.**
   B's own open Request; and the proof. B cannot check A's marker. B cannot
   check that A signed no other successor of the same state. B cannot check that
   A's app and operating system are genuine now.
-- Assumptions. T1, T2 and T3 on A's phone; T4; T5.
+- Assumptions. T1, T2 and T3 on A's phone; T4; T5. For the refund path, also T1
+  to T3 on B's phone: a compromised receiver can fold a Payment and also sign a
+  refusal of it, and the payer then refunds (§5.3).
 - Evidence missing. The rollback script on each tuple and with each vendor tool
   (group a). The crash table of §5.10 on real phones (group b). Key-store
   durability under a forced restart and a true power cut (group c); the first
@@ -2019,7 +2129,7 @@ not break T2 c to k. It cannot show that a phone will not be taken over. From
 reading, no tuple is expected to reach the finding "supported", which would
 mean that P2 holds against a compromised operating system. The best finding
 expected is "supported with a stated assumption", and the assumption is T1 to
-T3 on that phone (§2.3).
+T3 on that phone (§10.4.6).
 
 **P3. B's payment does not depend on later reconciliation, approval, or
 settlement.**
@@ -2033,7 +2143,8 @@ settlement.**
   names no party that has to be asked. Inside a proof, a key, a policy entry or
   a circuit release that was valid when a hop was proven stays accepted (§2.1).
   A renewal is refused only for an enabled regulatory control, or because B's
-  own device key signed two successors (§7.1).
+  own device key, or the key whose balance B's row took over by Migrate, signed
+  two successors (§7.1).
 - Checked by. B's wallet and C's wallet, as under P1. At an unload, the ledger,
   from B's registry row and B's signature on the RedeemSplit (§8.2).
 - Assumptions. T2 and T3 on B's phone, so that B's wallet follows its own
@@ -2081,6 +2192,9 @@ on A's phone.
   - Receive freshness, `receive_not_after` (R6).
   - A block entry on the holder's own device (R6). It is lifted by a renewal
     after the ledger unblocks the account.
+  - Where the scheme has switched on holder-requested blocking, a block entry
+    made at the account's own request (R6). It is lifted by a renewal after the
+    account clears the request (§7.2).
   - A tier-row notice that brings in or shortens a lease (R8 with new values,
     §5.11).
   - A clock that R7 or R8 can no longer use, where the wallet's floor is ahead
@@ -2142,9 +2256,11 @@ prover exists that can make a State or payment proof (§2.2), so nothing is
 measured. The owner's "1-2 s should be good ux" is not met by a proof-carrying
 payment unless each proof takes a fraction of a second on the slowest supported
 phone. No measurement supports that, and the one recorded figure for the
-stock-phone circuit points the other way (§2.2). §2.3 lists shapes that could
-shorten the wait as choices to evaluate. None is designed and none is checked.
-The exchange without a proof is not measured either.
+stock-phone circuit points the other way (§2.2). It also needs a carrier that
+moves the Payment in well under a second, which the repository's QR framing
+does not at 4 to 10 s per pass, or a smaller proof (§5.6). §2.3 lists shapes
+that could shorten the wait as choices to evaluate. None is designed and none
+is checked. The exchange without a proof is not measured either.
 
 **Conservation.** If T1 to T5 hold for every enrolled phone and every key,
 every unit in every wallet came from a load, and no unit is in two wallets.
@@ -2159,7 +2275,7 @@ from the pool (§7.3). No loss rule and no backstop is part of the argument.
 | Property | Needs |
 |---|---|
 | P1 | T1, T2, T3 and T6 on B's phone; T4; T5 |
-| P2 | T1, T2 and T3 on A's phone; T4; T5 |
+| P2 | T1, T2 and T3 on A's phone; T4; T5. For the refund path: T1 to T3 on B's phone |
 | P3 | T2 and T3 on B's phone; T4 |
 | P4 | Nothing on any phone; T4 |
 | P5 | T2 and T3 on the phone in question; T4 |
@@ -2190,7 +2306,7 @@ what it has in their place.
 | A device key bound to user authentication | P1: a settings change destroys the key and the balance | The device key carries no authentication requirement. The app shows the platform prompt (§5.9) |
 | Recovery insurance paid from the pool | Conservation while every assumption holds: an ordinary user who claims and keeps spending leaves the pool short for honest holders | Where an operator enables it, it is paid from a separate account funded in advance and never from the pool. It is off by default and is no part of the argument for any property (§7.3) |
 | Retiring a device id by its account key blocks the phone offline | P1 | Retirement has no offline effect, unless the scheme switches on blocking at the holder's request as part of R6 (§7.2, §5.5) |
-| A hold placed on the issuer's judgment, on evidence of an issuer-key fault, or accepted as the price of a platform fault | P1, P3, P4 | A hold needs two conflicting signatures by one device key, verified on-chain. It acts on that key's row, or on the row that took over its balance by Migrate. Evidence of an issuer-key fault places no hold on the phone that holds the object. A tuple that fails the forced power-off tests is unsupported (§5.3, §8.2, §2.3) |
+| A hold placed on the issuer's judgment, on evidence of an issuer-key fault, or accepted as the price of a platform fault | P1, P3, P4 | A hold needs two conflicting signatures by one device key, verified on-chain. It acts on that key's row, or on the row that took over its balance by Migrate. Evidence of an issuer-key fault places no hold on the phone that holds the object. A tuple that fails the forced power-off tests is unsupported (§5.3, §8.2, §10.4.6) |
 | A renewal refused for a reason of the issuer's choosing | P3, P4 | A renewal is refused only for an enabled regulatory control, or because the device's own key, or the key whose balance its row took over by Migrate, signed two successors (§7.1) |
 | A Migrate that leaves the old wallet's open Requests unanswered | An honest payer's refund for a payment that did not complete | A Migrate carries only the Requests the old wallet can show are undecided. The successor answers `Refused` for those only (§7.2) |
 | A fixed release rate for unloads above a row's own loads | It slows an honest net receiver while every assumption holds. Whether P1 and P3 reach redemption is the owner's reading | `unload_limit` is a scheme parameter. Its value, "no limit" included, is the owner's choice (§3.2, §8.2) |
@@ -2243,15 +2359,17 @@ Group A. Not met on stock phones by any rule found.
    needed: an iPhone store that is outside every backup and survives passcode
    removal. None is documented. One candidate was examined: a second anchor,
    the App Attest assertion counter used inside the wallet. It would let a
-   wallet resume from intact files once a passcode is set again, if the counter
-   steps by exactly one, cannot be set back by any path an ordinary user has,
-   and survives passcode removal. None of the three is documented or tested,
-   and Apple engineers have said they intend to change what a restore does to
-   App Attest keys. It is not switched on. The gate's passcode tests and group
-   f record the facts. Until one of the two exists, P1 on iPhone holds only
-   while a passcode stays set. Enrollment requires a passcode, and the wallet
-   says before the first load that removing or resetting it puts the balance
-   out of reach (§5.9).
+   wallet resume from intact files once a passcode is set again, if four things
+   hold: the counter steps by exactly one; no path an ordinary user can run
+   leaves the key working with a lower or repeated counter; the anchor key, the
+   payment key and the files survive passcode removal; and a call that fails
+   uses no count, or the wallet can tell (§5.10). None of the four is
+   documented or tested, and Apple engineers have said they intend to change
+   what a restore does to App Attest keys. It is not switched on. The gate's
+   passcode tests and group f record the facts. Until one of the two exists, P1
+   on iPhone holds only while a passcode stays set. Enrollment requires a
+   passcode, and the wallet says before the first load that removing or
+   resetting it puts the balance out of reach (§5.9).
 4. **A payment that never completed.** The payer is debited at its commit. If
    the Payment never reaches the receiver, or a `Refused` Outcome never reaches
    the payer, the amount is in neither wallet until the two phones meet again.
@@ -2264,17 +2382,25 @@ Group A. Not met on stock phones by any rule found.
    side. A receiver that lost its files keeps, in its marker, its open Requests
    and its last four decisions; for any other Request it signs no answer
    (§5.10). A payer that lost its files can present again only the newest two
-   of its unresolved SendSplits. What would be needed: a third party that both
-   phones reach. An issuer relay when both happen to sync is possible; it is
-   online, optional, and no property depends on it. Larger caps reduce the
-   second case at the price of a larger key-store write for every signed
-   object.
+   of its unresolved SendSplits. It can present one of them with its proof only
+   while that SendSplit is still the wallet's last transition, because the
+   proof entry holds only the proof of the current state (§5.10). Presented
+   without its proof, a Payment can only fetch a stored Outcome or, where the
+   receiver's rule gives a signed answer, draw a `Refused`, which the payer
+   folds as a refund (§5.2). Keeping the proof of each listed Payment in the
+   key store, about 6.5 KB each, would remove the limit and is not designed.
+   What would be needed: a third party that both phones reach. An issuer relay
+   when both happen to sync is possible; it is online, optional, and no
+   property depends on it. Larger caps reduce the second case at the price of a
+   larger key-store write for every signed object.
 5. **PC against the timing wish.** A proof-carrying payment that meets PC has
    both proofs inside the interval the owner called good at "1-2 s" (§3, PC).
    What would be needed: proofs that each take a fraction of a second on every
    supported phone, or a payment shape in which less is proven while the two
    people wait and PC still holds. §2.3 lists candidate shapes. None is
-   designed.
+   designed. Also needed: a carrier that moves the Payment in well under a
+   second, which the repository's QR framing does not at 4 to 10 s per pass, or
+   a smaller proof (§5.6).
 
 Group B. Not shown. A mechanism exists and the evidence does not, except in
 item 6, where two mechanisms are not yet designed.
@@ -2292,11 +2418,12 @@ item 6, where two mechanisms are not yet designed.
    question. This sequence is the first iPhone test of the gate, at several
    delays after release. The candidate barrier is a wait before release, with a
    sync call; it is charged to the time budget and is not tested. Until the
-   test passes, P2 against an ordinary user is not shown on any iPhone. A
-   failed test makes every iPhone tuple unsupported under the gate's rule
-   (§2.3). If no barrier works, the choice is between this exposure and a
-   wallet that stops when its files are absent, which gives up P1 for an honest
-   holder who reinstalls.
+   test passes, P2 against an ordinary user is not shown on any iPhone. A test
+   that fails at the wait the design uses makes its tuple unsupported under the
+   gate's rule (§10.4.6). If no barrier works, two further courses remain:
+   accepting this exposure, and a wallet that stops when its files are absent,
+   which gives up P1 for an honest holder who reinstalls. Neither course
+   changes the finding: the first leaves P2 unmet, the second P1.
 2. **P1 and P2 on every Android vendor build.** No vendor documents what its
    backup, clone or transfer tool does to Keystore entries. A tool that puts
    older entries back breaks P2 for every user of that build. A tool that
@@ -2326,9 +2453,12 @@ item 6, where two mechanisms are not yet designed.
    - A phone on which the prover does not finish cannot pay and cannot receive.
      Its balance cannot leave by an unload either: a RedeemSplit is a
      transition, and a wallet commits it only with its proof (§5.2). §8.2 and
-     §2.3 name ways out, and none is designed. Qualification must show that
-     proving completes on every supported tuple, every time; a count of rare
-     failures is not enough (§2.3, Q2).
+     §2.3 name ways out, and none is designed. Qualification must show that on
+     every supported tuple the largest transition of each kind can be proven.
+     An attempt that the platform stops is retried, and nothing is committed
+     (§2.3). A tuple on which some transition cannot be proven at all is not
+     supported, and a low rate of failures is not a substitute for that (§2.3,
+     Q2).
    - A wallet that lost its files has its balance in the marker. It can pay
      offline only if the latest proof and the private witness needed to extend
      it are in the key store as well. Their size has no bound until the
@@ -2364,14 +2494,20 @@ Group C. Met or not, depending on a reading that is the owner's.
    item 2 of group A stands against P1 and the design does not meet it.
 3. **Redemption.** If P1 and P3 govern how fast the ledger pays a redemption,
    any release rate on unloads breaks them for an honest net receiver. If they
-   do not, the rate is a scheme parameter (§3.2).
+   do not, the rate is a scheme parameter (§3.2). The same reading decides
+   whether a claim that waits, or is never paid, while the pool is short (§8.4)
+   fails P1 or P4 for that holder.
 4. **P5 after an issuer key is stolen.** If P5 holds whatever happens to issuer
    keys, a certificate that never expires stays acceptable without limit of
    time after a theft. If P5 holds only under T4, a deadline to sync after a
    theft is allowed (§3.2).
-5. **What counts as an explicitly enabled regulatory control.** The six
-   additions of §1, and what a renewal under R8 may check: a fresh attestation,
-   a patch floor, an app-build floor.
+5. **What counts as an explicitly enabled regulatory control.** The nine
+   additions of §1, among them a clock that R7 or R8 can no longer use, the
+   block-list version a wallet must hold again after a resume, and a critical
+   extension that the wallet's app does not know. And what a renewal under R8
+   may check: a fresh attestation, a patch floor, an app-build floor, the
+   revocation of a certificate in the vendor chain, and whether the phone's
+   class is still admitted.
 6. **A hold on the successor of a Migrate.** The hold falls on the row that
    took over the balance of the key that signed twice. If the old phone was
    sold or repaired before its key was deleted, and was then taken over, the
@@ -2390,16 +2526,17 @@ duplication.
 
 | Assumption that fails | Who can break it | What becomes possible | Which properties fail, and for whom | What bounds it |
 |---|---|---|---|---|
-| T1 on a payer's phone: the key is copied out, or a software key is attested with a leaked or extracted attestation key | Someone with an exploit of the TEE or Secure Enclave firmware, or with an attestation key that is not yet revoked. The payer has the motive. An ordinary user cannot | The key signs any number of successors of one state, on any machine. Each passes every check, the proof included | P2 for every payment that key signs. Value exists with no load behind it, so conservation fails. P1, P3 and P4 still hold for each honest receiver | R6, R7 and R8 as described below. A policy that refuses factory-provisioned attestation roots removes leaked factory keys. Revocation of the attestation key, applied at the next renewal where R8 is on |
-| T2 a or b on a payer's phone: the operating system is taken over after boot | Someone with a privilege-escalation exploit for the release on the phone. That is the payer on the payer's own phone | The same, with the key still in the hardware: copy the files and the key-store entries, pay, put them back, pay again. Fresh attested leaves and assertions read as honest | As above | As above. With R8 on, the lease is the age limit of the Android evidence about the operating system, and a patch floor at renewal narrows the exploits that work. Neither says anything about an iPhone's operating system. Evidence where two records meet |
+| T1 on a payer's phone: the key is copied out, or a software key is attested with a leaked or extracted attestation key | Someone with an exploit of the TEE or Secure Enclave firmware, or with an attestation key that is not yet revoked. The payer has the motive. An ordinary user cannot | The key signs any number of successors of one state, on any machine. Each passes every check, the proof included | P2 for every payment that key signs. Value exists with no load behind it, so conservation fails. P1, P3 and P4 still hold for each honest receiver | R6, R7 and R8 as described below. A policy that refuses the factory-provisioned chain class removes leaked factory keys. Revocation of the attestation key, applied at the next renewal where R8 is on |
+| T2 a or b on a payer's phone: the operating system is taken over after boot | Someone with a privilege-escalation exploit for the release on the phone. That is the payer on the payer's own phone | The same, with the key still in the hardware: copy the files and the key-store entries, pay, put them back, pay again. Fresh attested leaves and assertions read as honest | As above | As above. With R8 on, the lease, with its grace, is the age limit of the Android evidence about the operating system, and a patch floor at renewal narrows the exploits that work. Neither says anything about an iPhone's operating system. Evidence where two records meet |
 | T2 a or b on an honest holder's phone, by someone else's malware | The author of the malware | The malware pays the balance away. Or it makes the holder's key sign two successors and pays the attacker's wallets from both | P1 for that holder. If the key was forked, value is created, and where the two records meet the hold falls on the honest holder's row | As the row above |
+| T1, or T2 a or b, on a receiver's phone | The receiver, by the means named in the first two rows | The receiver folds a Payment and also signs a `Refused` Outcome for it. The honest payer folds the refund and spends the amount again, and the receiver keeps it | P2 for that payment. Value exists with no load behind it, so conservation fails. P1, P3 and P4 still hold for each honest receiver | R6, R7 and R8 as described below. The ReceiveFold and the `Refused` Outcome are evidence against the receiver if both reach the chain (§5.3) |
 | T2 on a phone that was migrated from: the old key signs above its Migrate | Whoever controls the old phone, if it left the holder's hands before its key was deleted and was then taken over | Two successors by the old key | P1 for the honest holder: the hold falls on the new row, whose key signed nothing wrong | The old wallet deletes its key once the retirement is final (§7.2). Without the succession rule a phone that forked would escape a hold by migrating before the evidence arrives |
 | T2 c to k on a tuple: a vendor tool copies key-store entries, a confirmed write is lost, a failed update rolls back, a marker is removed | Nobody has to break anything. The tuple behaves this way or it does not | Every ordinary user of that tuple can restore an older balance. An honest holder can lose a committed payment, sign twice after a power cut, or find the wallet stopped | P2 for payments from that tuple, at scale and with no skill. P1 for an honest holder of that tuple. A hold may follow | The gate: the tuple is unsupported and is not enrolled. After launch, when an update changes the behaviour: on Android the issuer refuses the tuple at enrollment, from the attested release. At renewal it is refused only where R8 is on and the owner has made a list of covered releases part of what R8 checks (§7.1); otherwise nothing reaches an enrolled phone. On iPhone the attestation names no model and no release |
 | T3: a defect in the released core, or a build under the operator's signing key that is not a released wallet app | The operator's staff, or someone who steals the app-signing key. A defect needs nobody | Every phone on that build may create value, or accept what it should refuse | P2 and conservation, possibly for every phone at once | The proof keeps an arithmetic defect on the phone: a wallet cannot prove a wrong transition. It does not contain a defect in the circuit, or in the marker order. No floor acts offline, so a defective rules version stays acceptable offline; it ends at renewal only if an app-build floor is part of R8, and never under a `Never` certificate |
-| T4, certificate key with the witness quorum | Operator staff, or an outsider who reaches the keys | The certificate key alone makes nothing a peer accepts, because no receipt names its certificates (§5.1). With the witness quorum, for a registered device whose holder cooperates: a certificate that evades a refused renewal, restarts the limit counters, outlives a lease, or carries a serial above a block entry. Under the proof-carrying design no new device, because the validators seal the enrollment statement | R6, R7 and R8 weaken for those devices. Under the proof-carrying design these keys create no value | The tier row caps the terms. After the revocation reaches a receiver: one lease, where R8 is on. §5.5 says why a block entry is not widened to every serial under a revoked key, and how far R6 then holds |
+| T4, certificate key with the witness quorum | Operator staff, or an outsider who reaches the keys | The certificate key alone makes nothing a peer accepts, because no receipt names its certificates (§5.1). With the witness quorum, for a registered device whose holder cooperates: a certificate that evades a refused renewal, restarts the limit counters, outlives a lease, or carries a serial above a block entry. Under the proof-carrying design no new device, because the validators seal the enrollment statement | R6, R7 and R8 weaken for those devices. Under the proof-carrying design these keys create no value | The tier row caps the terms. After the revocation reaches a receiver: one lease and its grace, where R8 is on. §5.5 says why a block entry is not widened to every serial under a revoked key, and how far R6 then holds |
 | T4, the keys that seal the enrollment statement and sign receipts, with the certificate key (§8.1) | As above, for more keys | Software keys that every receiver and every proof accepts | P2 and conservation, without bound until the revocation spreads. Where R8 is off, without limit of time under the first reading of P5 below | R8. The server-made enrollment proof, once it exists, also demands a vendor chain that verifies (§4) |
 | T4, voucher key | As above | Value minted onto genuine phones with no load. Whether a proof accepts it depends on the mint authorization fixed in Q0 (§2.3) | Conservation | A mint that stays sealed by the validator quorum inside the relation |
-| T4, list key | As above | Forged block entries against honest devices | P1 for those devices among holders of the forged list, until a root-signed epoch bump reaches those holders from a peer or at a sync. No value is created or lost | The epoch bump travels peer to peer (§5.5) |
+| T4, list key | As above | Forged block entries against honest devices. A segment dated far ahead, which raises the floor without bound and puts each wallet that merges it into the clock-reset state until a Recertify at a sync or until real time reaches that date (§5.5) | P1 for those devices among holders of the forged list, until a root-signed epoch bump reaches those holders from a peer or at a sync. No value is created or lost | The epoch bump travels peer to peer, except that the correcting first segment of a long list fits no peer message and arrives only at a sync (§5.5) |
 | T4, root key | As above | Notices and issuer key certificates that peers accept offline. Nothing revokes the root; peers stop accepting it for later epochs when they hold the succession to the committed next key, which the thief cannot forge (§5.11) | Whatever the keys it certifies allow: the four rows above | The succession. What a root compromise voids is not decided (§12) |
 | T4, the issuer service or the ledger does not follow its rules | The operator; a fault in the ledger | A renewal refused out of rule, a voucher for a load that is not final, a registry or a pool that does not follow §8 | P3 and P5 for the holder who is refused. Conservation | Nothing in this design. An unload needs the ledger and not the issuer (§8.2) |
 | T5 | Nobody is known to be able to | Everything | All | None |
@@ -2418,11 +2555,12 @@ an input that party can check.
   tally (§5.4). The tally restarts when the receiver's files are lost or put
   back (§5.10). Nothing bounds the number of receivers a compromised phone
   reaches, so the total is not bounded.
-- R8, the lease. A certificate that is not renewed ends at its lease. The
-  receiver applies it from the certificate and its own clock, so it holds among
-  receivers whose clocks are right (§5.4). The lease is also the age limit of
-  the evidence about the operating system: an Android enrollment statement is
-  no older than one lease.
+- R8, the lease. A certificate that is not renewed ends at its lease, with its
+  grace (`expiry_grace`). The receiver applies it from the certificate and its
+  own clock, so it holds among receivers whose clocks are right (§5.4). The
+  lease, with its grace, is also the age limit of the evidence about the
+  operating system: an Android enrollment statement is no older than one lease
+  and its grace.
 - R8, the renewal. On Android a renewal presents a fresh attested leaf (§7.1):
   the boot state and the patch levels of that day. The vendor certificate
   serials are tested against the revocation list of that day. A patch floor
@@ -2435,11 +2573,13 @@ an input that party can check.
 - Evidence. Under the relation of §2.1 a phone with one enrolled instance and
   no accomplice that pays out more than its proven balance must sign two
   successors of one state. The two receivers then hold a pair that is evidence,
-  if both records reach the issuer or the chain (§5.3). That argument has not
-  been checked by a second reading or by a test. No holder has to sync, so the
-  pair may never meet. It does not exist at all where one branch is paid to a
-  second enrolled instance or to a receiver who colludes. Evidence leads to a
-  block entry and a hold. It undoes nothing.
+  if both records reach the issuer or the chain (§5.3). The argument rests on
+  the relation barring a refund of a payment that a key sent to itself (§2.1,
+  H7). It has not been checked by a second reading or by a test. No holder
+  has to sync, so the pair may never
+  meet. It does not exist at all where one branch is paid to a second enrolled
+  instance or to a receiver who colludes. Evidence leads to a block entry and
+  a hold. It undoes nothing.
 - Two requirements on Android vendors that would bound a compromised phone and
   cannot be tested here. The KeyMint interface requires a key to stop working
   when the bootloader is unlocked or the verified-boot key changes, and when
@@ -2483,8 +2623,8 @@ is short. It names no funder.
    below remain.
 2. **Which phones may hold value.** Every phone that passes enrollment. Or only
    tuples the gate supports, with terms per tuple; on Android the issuer can
-   enforce a list from attested fields, and on iPhone it cannot (§2.3). Or no
-   stock phone above a small amount until hardware that runs wallet logic is
+   enforce a list from attested fields, and on iPhone it cannot (§10.4.6). Or
+   no stock phone above a small amount until hardware that runs wallet logic is
    available. Two open points of §3.1 bear on iPhones in particular: the
    passcode, and key-store durability.
 3. **Which platform classes a pool admits when it claims the operating-system
@@ -2519,10 +2659,10 @@ is short. It names no funder.
    may set a period within which holders of such certificates sync once. The
    rule sections describe the first reading (§5.1, §5.11).
 8. **An app-build floor at renewal.** If it is part of R8, a renewal is refused
-   to an app below the floor, and a build with a defect ends within one lease.
-   If it is not, a renewal is never refused for the build, and a defective
-   build lives as long as its holders keep it. Under either answer a renewed
-   wallet keeps accepting every rules version the scheme ever allowed.
+   to an app below the floor, and a build with a defect ends within one lease
+   and its grace. If it is not, a renewal is never refused for the build, and a
+   defective build lives as long as its holders keep it. Under either answer a
+   renewed wallet keeps accepting every rules version the scheme ever allowed.
 9. **The patch floor at renewal.** Its value, and whether a phone past its
    vendor's update commitment stays under it.
 10. **What a held phone's holder gets back, and who may order it,** where the
@@ -2630,7 +2770,10 @@ design relies on the behaviours below and on no others.
   change or removal of the screen lock: the device key because it is generated
   without an authentication requirement (§5.9), the marker because §5.10
   chooses, for each Android release, a form of entry that survives it. On
-  iPhone the marker needs a passcode (T6).
+  iPhone they survive a change of the passcode and a change of the enrolled
+  Face ID or Touch ID. No source read says that a passcode change keeps the
+  items (§5.10), and none was read for a biometric change; gate tests a18 and
+  d6 decide. On iPhone the marker needs a passcode (T6).
 - i. No selective removal. No platform or vendor path removes a marker, or
   another key-store entry of the wallet, while the device key
   stays usable. The one known path, removing or resetting the iPhone
@@ -2667,9 +2810,14 @@ behaves.
   exploited. The evidence is what the enrollment statement records, and the
   vendor's update record.
 - What the sources say today. For e, the AOSP key-store service syncs each
-  transaction before it returns; vendor builds were not read. Apple's published
-  keychain source sets no sync option, so e is open on iPhone and the reading
-  is unfavourable (§3.1).
+  transaction before it returns; vendor builds were not read. A sync reaches
+  the medium only if the file system then flushes the storage cache. The
+  Pixel 6 mounts its data partition, which holds the key-store database, with
+  `fsync_mode=nobarrier` (AOSP `device/google/gs101`, `conf/fstab.gs101.in`;
+  read 2026-10-03), and the f2fs documentation says that this mode issues no
+  flush on a sync. So on the Pixel 6 e and f are open for a true power cut,
+  and group c decides. Apple's published keychain source sets no sync option,
+  so e is open on iPhone and the reading is unfavourable (§3.1).
 - What a receiver can check offline. Android: the enrollment statement of each
   paying phone, as sealed or proven. It says how that phone booted, at which
   patch levels, and which app the system named, at enrollment or at the last
@@ -2691,10 +2839,10 @@ proof, its commit and its marker step in the order §5.2 and §5.10 give.
   defect needs nobody: every phone on that build has it.
 - Evidence. The gate gives none directly: its app is a test wallet, and its
   crash and restore groups run again on the wallet core when that exists
-  (§2.3). Other evidence: the crash-table tests of the core in test mode (§9).
-  Conformance vectors. A finite-state model of the commit and marker rules. An
-  independent review. Reproducible builds and a custody record for the
-  app-signing key. The app identity checked at enrollment: on Android the
+  (§10.4.6). Other evidence: the crash-table tests of the core in test mode
+  (§9). Conformance vectors. A finite-state model of the commit and marker
+  rules. An independent review. Reproducible builds and a custody record for
+  the app-signing key. The app identity checked at enrollment: on Android the
   package name and signing-certificate digest as the system reported them; on
   iPhone the App ID hash and, from iOS 27, the launch category and bundle
   version. None of this exists yet.
@@ -2758,8 +2906,10 @@ key in one phone.
 - Evidence the gate gives. What each such action does to the device key, the
   marker and the files on each tuple: the "destroyed" results of group a,
   the settings changes of group d, and the passcode cases. Developers report
-  that a Secure Enclave key no longer signs after an erase and restore. Whether
-  it signs after a restore without an erase has no source. Not tested.
+  that a Secure Enclave key is gone or no longer signs after an erase and
+  restore. Whether it signs after a restore without an erase is not
+  established: one developer report from 2018 says such a key was gone
+  (§5.10). Not tested.
 - What a receiver can check offline. Nothing, and nothing is needed. T6
   concerns the receiver's own phone after the payment.
 
@@ -2806,7 +2956,8 @@ Whether P1 may rest on a condition on the holder is the owner's to say.
   it cannot replay inside a gap.
 - The ledger, at an unload, from the RedeemSplit and the registry row: the
   device signature and the increase in the cumulative total, with whatever the
-  relation fixed in Q0 adds (§8.2). It verifies no balance.
+  relation fixed in Q0 adds. It verifies no balance unless Q0 makes the
+  RedeemSplit's proof a requirement of the unload (§8.2).
 
 **What the proof adds to the receiver's knowledge of the payer's phone.** The
 owner asked that the proof include that the operating system is real (§1). The
@@ -2874,34 +3025,42 @@ reading and a false one.
   key outside the revocation set (T1); no broken secure hardware (T1).
 
 What the constraint excludes from the history behind a payment, and what no
-receiver could exclude without it: emulators and software keys; unlocked or
-re-keyed phones; repackaged apps on a healthy operating system; keys certified
-by a stolen issuer key; and leaked factory attestation keys, where policy
-refuses factory roots. With it, a payer who wants to pay twice needs one of
-three things: a working exploit against a locked phone at or above the patch
-floor, an attestation key that is not yet revoked, or broken secure hardware.
-The constraint excludes none of the three.
+receiver could exclude without it: on Android, emulators and software keys,
+and unlocked or re-keyed phones; repackaged apps on a healthy operating
+system; keys certified by a stolen issuer key; and leaked factory attestation
+keys, where policy refuses the factory-provisioned chain class. An iPhone
+statement has no boot or lock field, and the iPhone payment key is named, not
+attested (§2.1). With the constraint, on a tuple for which the gate has shown
+T2 c to k and while T3 and T4 hold, a payer who wants to pay twice needs one
+of three things: a working exploit against a locked phone at or above the
+patch floor, an attestation key that is not yet revoked, or broken secure
+hardware. The constraint excludes none of the three.
 
 A pool's claim is that of the weakest platform class it admits, because value
 moves between phones. Whether iPhones, phones with factory-provisioned
 attestation keys, and HarmonyOS NEXT are admitted to a pool that claims the
-operating-system constraint is the owner's decision (§3.2). Refusing factory
-roots would exclude the one chain recorded in the repository, a Pixel 6
-StrongBox chain under Google's first root
+operating-system constraint is the owner's decision (§3.2). Refusing the
+factory-provisioned chain class would exclude the one chain recorded in the
+repository, a Pixel 6 StrongBox chain under Google's first root
 (`specs/kagemusha_v1_production_readiness.md:416-421`).
 
-Optional, and not in the base design: on Android a fresh attested leaf per boot
-or per payment; on iPhone an App Attest assertion on every hop. Neither shows a
-run-time compromise. Both cost bytes and time, and on iPhone a lost assertion
-or a key that Apple invalidates strands a balance.
+Optional, and not in the base design: on Android a fresh attested leaf per
+payment or per stated number of transitions; on iPhone an App Attest assertion
+on every hop. Neither shows a run-time compromise. Both cost bytes and time,
+and on iPhone a lost assertion or a key that Apple invalidates strands a
+balance.
 
 State of the code. No circuit in the repository checks anything about the
 operating system today. Boot state, lock state and app identity are checked
-only by the issuer's verifier
+outside the node and outside any circuit: in the issuer's Python
 (`python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061`),
-and with the default patch floor of zero the patch levels are not checked
-(`.../attested_enrollment.py:178-217`). They reach a proof as a platform class
-tag, a fixed guarantee mask and a digest that no circuit opens
+a profile script (`scripts/android_attestation_certificate_profile.py:643-760`)
+and the Kotlin attestation verifier
+(`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/KagemushaKeyMintOneUseAttestationVerifierV1.kt:339, 369-371, 487-498`).
+In the issuer's Python, with the default patch floor of zero, the patch levels
+are not checked (`.../attested_enrollment.py:178-217`). They reach a proof as
+a platform class tag, a fixed guarantee mask and a digest that no circuit
+opens
 (`crates/iroha_core_zk/src/kagemusha_v1_recursion/guard_bundle.rs:261-315,
 867-897`). The circuits that would accept an App Attest or KeyMint key are
 built for tests only (`.../composite.rs:10-28`), and the verifier refuses both
@@ -2929,7 +3088,7 @@ entry in the phone's key store that no backup carries, and it holds the
 wallet's current state. An object is released only after the marker for the
 state that includes it is confirmed and every earlier marker is deleted. Files
 that are older, missing or damaged then change nothing: the wallet resumes at
-the state in the marker. Under T2 a, c, e and i, U has no path back to an
+the state in the marker. Under T2 a and c to k, U has no path back to an
 earlier balance. The rules, the crash table and the once-only guard are in
 §5.10.
 
@@ -2955,8 +3114,10 @@ The results that bear on trust are these.
 - The marker holds only if the key store keeps a write it confirmed (T2 e). If
   it does not, one path remains: pay, force the power off at once, and delete
   or replace the files before the wallet starts. On iPhone deleting the app is
-  enough. Reading the sources, the Android reference does not have that window
-  and the iPhone may (§3.1).
+  enough. Reading the sources, the iPhone may have that window (§3.1). The
+  Android reference syncs each key-store write, but on the Pixel 6 a sync
+  issues no flush to storage, so a true power cut may open it there as well
+  (§4, T2).
 - The marker is the paying app policing itself. A receiver cannot check it. It
   does nothing against M.
 
@@ -3033,7 +3194,7 @@ The results that bear on trust are these.
   gaps and cannot show that a state had one successor.
 
 **Items for the evidence gate.** Two candidates could overturn the finding, and
-the gate tests both on spare units (§2.3).
+the gate tests both, partly on spare units (§10.4, groups e and f).
 
 - Group e, the Android one-use key, on the TEE and on StrongBox, per vendor:
   where the attestation lists the limit, and whether two begun operations, a
@@ -3150,15 +3311,17 @@ every object in that table that a wallet signs and commits.
     category and the bundle version. Apple's attestation carries no OS
     version, patch level, boot state or jailbreak state, so E has none.
 
-  The attested key itself is the device key in the certificate that carries E.
+  The attested key is a field of E, as §2.1, §4 and §8.1 list it. It is the
+  device key, which the certificate that carries E holds once; on iPhone E
+  also names the App Attest key by its identifier.
   E is a fixed function of the evidence, the policy entry and the height, so
   the issuer, the validators and a server-made enrollment proof arrive at the
-  same bytes. `e_digest = H(tag ‖ scheme id ‖ device public key ‖ E)`. On
-  Android the digest also covers the public key of the app attestation key.
-  The certificate carries that key beside E, and §2.1, §7.1 and §8.1 count
-  it as a field of E: a renewal's leaf is checked under it, so a proof of
-  the renewal relation needs it bound in the proven state. About 0.14 KB on
-  Android and about 0.13 KB on iPhone.
+  same bytes. `e_digest = H(tag ‖ scheme id ‖ device public key ‖ E)`; §2.1
+  calls it the digest of E. On Android the digest also covers the public key
+  of the app attestation key: a renewal's leaf is checked under it, so a
+  proof of the renewal relation needs it bound in the proven state. That key
+  is not a field of E. The certificate and the registry row hold it beside E
+  (§2.1, §8.1). E is about 0.14 KB on Android and about 0.13 KB on iPhone.
 
   E states what the evidence showed on the day it was verified. It says
   nothing about the phone since then (§4). §2.1 says how a proof uses E. §8.1
@@ -3225,9 +3388,13 @@ every object in that table that a wallet signs and commits.
   - The certificate key alone: nothing a peer accepts. A certificate is
     accepted only with a receipt that names it, and a witness signs a receipt
     only for a certificate the ledger has recorded (below).
-  - The certificate key and the witness quorum: certificates and receipts for
-    keys that no phone holds. A holder of the notice accepts them for at most
-    one lease after `revoked_at_ms`. §8.1 lists the other combinations.
+  - The certificate key and the witness quorum: for a registered device
+    whose holder cooperates, a certificate with any terms the tier row
+    allows, with its receipt. A holder of the notice accepts it for at most
+    one lease and its grace after `revoked_at_ms`. A certificate for a key
+    that no phone holds is accepted only by a receiver that checks no proof.
+    Under the proof-carrying design it gains nothing, because the validators
+    seal the enrollment statement (§3.2). §8.1 lists the other combinations.
   - The voucher key. A wallet folds a voucher only under a voucher key it
     holds unrevoked. A voucher reaches a wallet online, in an exchange in
     which the wallet also receives the notices, so no offline wallet is
@@ -3239,12 +3406,12 @@ every object in that table that a wallet signs and commits.
   certificate key and the witness quorum, a receiver cannot tell an honest
   `Never` certificate from one the thief signed. Either such certificates
   stand without limit of time, or they stand for a root-signed period after
-  `revoked_at_ms` and their holders must then sync once. The first has no
-  bound on what the thief's objects create. The second is a sync that no
-  regulatory control asked for. Which it is depends on how the owner reads
-  P5, and §3.2 puts that decision. The notice carries the outcome as
-  `never_stand`: no limit, or a duration. Nothing else in §5 depends on the
-  value.
+  `revoked_at_ms` and their holders must then sync once. Under the first,
+  what the thief signed for such a tier stays acceptable without limit of
+  time (§3.2). The second is a sync that no regulatory control asked for.
+  Which it is depends on how the owner reads P5, and §3.2 puts that
+  decision. The notice carries the outcome as `never_stand`: no limit, or a
+  duration. Nothing else in §5 depends on the value.
 
   Like every expiry, these bounds are only as good as the receiver's clock
   (§5.4). §2.1 states which keys a proof's history accepts.
@@ -3351,6 +3518,10 @@ every object in that table that a wallet signs and commits.
   - For a Migrate, the counterparty is the new device id. The transition also
     carries the old journal's day and month counters and the digests of the
     Requests the old wallet can show are undecided (§7.2).
+  - For a ReceiveFold and a RefundFold, the subject is the payment id (§5.2).
+    For a Recertify, the certificate digest is that of the new certificate,
+    so the Recertify is the first transition under it (§5.3, §5.4). Where
+    this list names no subject or counterparty for a kind, none is defined.
   - `device_time_ms` is the signer's own time, or for a SendSplit under a
     time-dependent control the effective time (§5.4). Day and month are the
     UTC day and UTC calendar month of that value, so the counters need no
@@ -3376,11 +3547,15 @@ every object in that table that a wallet signs and commits.
 - **Outcome** (receiver to payer; about 0.2 KB): payment id, verdict
   (`Credited` or `Refused`), a reason code, the receiver's device id,
   optional notices and an optional list segment outside the signed part. The
-  receiver's device key signs it. The reason code tells the payer's app what
-  to show: time, limit, expiry, block, version, stale Request, fee, policy,
-  proof. "Policy" is a certificate whose E does not satisfy the entry it
-  names. "Proof" covers a proof that does not verify and a receiver that
-  could not make its own (§5.2).
+  receiver's device key signs it. A `Refused` Outcome signed by the Migrate
+  successor of the receiver also carries, outside the signed part, the
+  countersigned Migrate and the successor's certificate, and the device id
+  in it is the successor's (§5.2). The size of that form is not estimated.
+  The reason code tells the payer's app what to show: time, limit, expiry,
+  block, version, stale Request, fee, policy, proof, conflict. "Policy" is a
+  certificate whose E does not satisfy the entry it names. "Proof" covers a
+  proof that does not verify and a receiver that could not make its own
+  (§5.2). "Conflict" is the receiver's check of §5.3.
 - **Signatures per payment.** The receiver's device key signs the Request, the
   ReceiveFold and the Outcome; the payer's signs the SendSplit, and the
   RefundFold after a refusal. Received value exists only as a signed
@@ -3398,8 +3573,8 @@ every object in that table that a wallet signs and commits.
   Each carries issuer time and covers a nonce the device made in this boot,
   which is what an anchor needs (§5.4). A wallet folds a countersigned
   Migrate once; its marker holds a flag for that (§5.10).
-- **Resume record** (wallet to issuer; about 0.55 KB with nothing pending, up
-  to about 3 KB): what a wallet presents at its first sync after a resume
+- **Resume record** (wallet to issuer; about 0.6 KB with nothing pending, up
+  to about 3.3 KB): what a wallet presents at its first sync after a resume
   (§5.10). It is the checkpoint the wallet resumed at, with the commit
   counters of the two ends of the gap. It holds the wallet's last transition,
   complete with its device signature, the balance, the redeemed total, the
@@ -3429,7 +3604,7 @@ every object in that table that a wallet signs and commits.
 | Payment | the SendSplit inside it, by the payer's device key | 1.14 KB; 7.7 KB with a proof | payer to receiver |
 | Outcome | receiver's device key | 0.2 KB | receiver to payer |
 | Block-list segment | list key | 0.1 KB plus 40 B per entry | issuer to wallet; peer to peer |
-| Resume record | the last transition in it, by the device key | 0.55 to 3 KB | wallet to issuer |
+| Resume record | the last transition in it, by the device key | 0.6 to 3.3 KB | wallet to issuer |
 
 **Totals against the 10 KB bound.** The owner said: "we really cannot have
 payment data exceed around 10k or so". The figures are for an Android payer
@@ -3511,7 +3686,7 @@ Durable means SQLite `synchronous=FULL`, and on Apple platforms `fullfsync`
 and `checkpoint_fullfsync`. The existing Swift suite sets these options
 (`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedDatabase.swift:53-54`).
 No forced power-off test of them is recorded; the evidence gate runs one
-(§2.3). The wallet cannot force a key-store write to storage. §5.10 says what
+(§10.4). The wallet cannot force a key-store write to storage. §5.10 says what
 it relies on there and what is open.
 
 A signature that changes no wallet state takes none of these steps, for
@@ -3601,9 +3776,16 @@ judgment.
      not under the revocation rule (§5.1, §5.11). The device id recomputes,
      the certificate is within its tier row, and the Request's signature
      verifies under the receiver's device key.
+   - From what the Request says the receiver holds, the receiver can verify
+     the payer's certificate and receipt, or the Payment carries the notices
+     the receiver lacks within its size bound (§5.11). This check is there
+     because a receiver signs nothing for a Payment that is not authentic
+     for it, and the payer would then be debited with no refund.
    - The rules version the payer would sign under lies between the Request's
      `rules_lo` and `rules_hi` (§5.11). This check is there so that a payer
      is never debited by a transition the receiver cannot judge.
+   - No object in the Request carries a critical extension that the payer's
+     app does not know (§5.11).
    - If the Request carries the clock-reset mark and the payer's certificate
      carries a lease or a limit, the payer refuses. A payer whose certificate
      carries neither pays.
@@ -3630,7 +3812,10 @@ judgment.
    - If the certificate carries limits: the day and month indices are those
      of `t_eff`, and the counters for those indices stay within the limits.
    - The receiver is not `receive_blocked` in the payer's list. The
-     receiver's `receive_not_after`, if set, is not earlier than `t_eff`.
+     receiver's `receive_not_after`, if set, is not earlier than `t_eff`. A
+     payer whose certificate carries no time-dependent control compares it
+     with the later of its own time and the Request's `created_at_ms`
+     (§5.4).
    - The amount matches the Request and is within `max_payment`. The fee is
      the one §5.8 requires, under the certificate's `fee_policy_id`. The
      balance covers the amount plus the fee.
@@ -3662,21 +3847,28 @@ judgment.
      itself, and no Payment carries it (§8.1);
    - a rules version that the Request listed; itself as counterparty; the
      Request open; the amount;
+   - no object in the Payment carries a critical extension that the
+     receiver's app does not know (§5.11); where one does, the answer is
+     `Refused` with the reason version;
    - the time checks of §5.4 on the SendSplit's `device_time_ms`, which the
      receiver makes only where the payer's certificate carries a
      time-dependent control; expiry; limits and its own tally;
    - the block list; the fee (§5.8);
-   - no conflict with the last transition seen from this payer (§5.3);
+   - no conflict with an earlier transition from this payer that the
+     receiver's files hold (§5.3);
    - the proof in the Payment verifies.
 
    If everything holds, the receiver signs the ReceiveFold, proves its state
    after it, then signs the `Credited` Outcome, and commits both objects and
    the verdict together in one commit. The Outcome is signed only after the
    proof exists, so that a failed proof does not leave a signed `Credited`
-   Outcome behind. If a judgment fails, or the receiver cannot make its
-   proof, it signs a `Refused` Outcome and commits it with the verdict. That
-   commit decides the Request. A refusal is not a transition and takes no
-   proof.
+   Outcome behind. If a judgment fails, it signs a `Refused` Outcome and
+   commits it with the verdict. If the receiver cannot make its proof, it
+   commits nothing for the credit and may try the proof again while the
+   Request is open and undecided. Once the Request has closed with no credit
+   committed, it signs a `Refused` Outcome with the reason proof and commits
+   it with the verdict. The commit of a refusal decides the Request. A
+   refusal is not a transition and takes no proof.
 
    Either commit runs steps 4 to 7, and the Outcome is released only after
    the marker step is confirmed. A `Refused` Outcome takes the marker step
@@ -3688,27 +3880,25 @@ judgment.
 6. **RefundFold** (payer): only for a `Refused` Outcome that verifies under
    the counterparty key named in the payer's own SendSplit, or for the
    `Refused` Outcome of that counterparty's Migrate successor (§7.2). A
-   successor's Outcome carries the old key's signed Migrate and the
-   successor's certificate. The payer verifies the Migrate under the
-   counterparty key named in its SendSplit, finds the digest of its Request
-   among those the Migrate lists, and verifies the Outcome under the device
-   key of the device id the Migrate names. Either way it folds once per
-   payment id, and only for a payment id that the payer's checkpoint lists, or
-   covers by its digest, as unresolved (§5.10). Never on a timeout. One other
-   signer is accepted: the successor of a Migrate (§7.2). Its `Refused`
-   Outcome carries, outside the signed part, the countersigned Migrate and
-   the successor's device public key. The payer checks that the Migrate
-   verifies under the counterparty key named in its own SendSplit, that it
-   lists the Request which that SendSplit names as subject, that the key
-   shown hashes to the device id the Migrate names, and that the Outcome
-   verifies under that key. A payment that the checkpoint holds only in
-   short form cannot be checked this way, because that form does not hold
-   the Request's digest (§5.10). The relation of §2.1 has no clause for a
-   RefundFold on such an Outcome; Q0 fixes one (§2.3). The
-   RefundFold is a transition: the payer proves its state after it before
-   step 4. The payer acts on the first valid Outcome it stores for a payment
-   id. A second, different Outcome for the same id changes nothing in the
-   payer's wallet; it is evidence against the receiver (§5.3).
+   successor's Outcome carries, outside the signed part, the countersigned
+   Migrate and the successor's certificate. The payer checks all of these:
+   the Migrate's signature verifies under the counterparty key named in its
+   own SendSplit; the issuer's countersignature on the Migrate verifies; the
+   Migrate lists the digest of the Request that the SendSplit names as
+   subject; the device key in the certificate hashes to the device id the
+   Migrate names as successor; and the Outcome verifies under that key.
+   Which issuer key role makes the countersignature, and so which key the
+   payer checks it under, is not yet assigned (§6). A payment that the
+   checkpoint holds only in short form cannot be checked this way, because
+   that form does not hold the Request's digest (§5.10). The relation of
+   §2.1 has no clause for a RefundFold on a successor's Outcome; Q0 fixes
+   one (§2.3). The payer folds either Outcome once per payment id, and only for
+   a payment id that its checkpoint lists, or covers by its digest, as
+   unresolved (§5.10). Never on a timeout. The RefundFold is a transition:
+   the payer proves its state after it before step 4. The payer acts on the
+   first valid Outcome it stores for a payment id. A second, different
+   Outcome for the same id changes nothing in the payer's wallet; it is
+   evidence against the receiver (§5.3).
 
 **Which Payments get a signed answer.** A receiver signs an Outcome only where
 it can show what it did with the Request. The receiver's own app applies this
@@ -3732,43 +3922,37 @@ and the amount stays in neither wallet. The receiver gains nothing by it.
 
 After a Migrate, the successor answers `Refused` for the Requests that the
 Migrate lists as undecided, and for those only (§7.2). The old wallet lists a
-Request there only if it can show it undecided under the table above. Such an
-Outcome is signed by the successor's device key, which is not the counterparty
-key that the payer's SendSplit names. It therefore carries the countersigned
-Migrate and the successor's device public key. The payer folds a refund on it
-only if all of these hold: the Migrate's signature verifies under the
-counterparty key named in the payer's own SendSplit; the issuer's
-countersignature on the Migrate verifies under an issuer key the payer holds;
-the Migrate names, as successor, the device id of the key that signed the
-Outcome; and the Migrate lists the digest of the Request that the SendSplit
-names. Item 6 above and the RefundFold rule of §2.1 (H7) accept this form
-beside an Outcome under the counterparty key itself. The added size is not
-estimated, and Q0 fixes how the relation checks it (§2.3). The
+Request there only if it can show it undecided under the table above. The
 successor signs such an Outcome with its own device key, which is not the
-counterparty key the payer's SendSplit names. The payer therefore folds a
-refund on it only if the Outcome comes with the countersigned Migrate and
-these hold: the Migrate is signed by the counterparty key its SendSplit
-names and countersigned under an issuer key the payer holds; the Migrate
-names the successor's device id, which the payer recomputes from the key
-that signed the Outcome; and the Migrate lists the digest of the Request
-its SendSplit names.
+counterparty key that the payer's SendSplit names. Item 6 says what the
+Outcome carries and what the payer checks before it folds a refund on it.
 
-A receiver signs nothing for a Payment it cannot parse. An unmodified payer
-never sends one, because of the version check in item 2.
+A receiver signs nothing for a Payment whose subject it cannot read. Where it
+can read the subject, and that subject is one of its own Requests for which
+the table above gives a signed answer, it answers a SendSplit under a rules
+version outside the Request's range with `Refused`, reason version (§5.11).
+An unmodified payer sends neither, because of the version check in item 2.
 
 **Presenting again.** A payer shows the same Payment as often as needed. It
 never signs a second SendSplit for a Request while its records show an
 unresolved SendSplit for it. A receiver shows the same Request and the same
 stored Outcome as often as needed. Nothing in this section makes an
-unmodified wallet sign two different objects for one sequence number or two
-different Outcomes for one payment id. After a resume the payer can present
-again the two newest unresolved Payments, which its checkpoint holds in full;
-for older ones it can still fold a refund and cannot present the Payment
-again (§5.10). A payer that lost its files and pays the same Request a second
-time signs a second SendSplit at a new sequence number. The receiver credits
-at most one of the two. It answers the other `Refused`, and the payer refunds
-it, unless the receiver has lost its own record of that Request too; then
-the table above gives no answer.
+unmodified wallet release two different objects for one sequence number or
+two different Outcomes for one payment id. After a resume the payer can
+present again the two newest unresolved Payments, which its checkpoint holds
+in full; for older ones it can still fold a refund and cannot present the
+Payment again (§5.10). It can present one of the two with its proof only
+while that SendSplit is still the wallet's last transition, because the proof
+entry holds only the proof of the current state (§5.10). Presented without
+its proof, a Payment can only fetch a stored Outcome or, where the table
+above gives a signed answer, draw a `Refused`, on which the payer folds a
+refund. Keeping the proof of each listed Payment in the key store, about
+6.5 KB each, would remove this limit and is not designed. A payer that lost
+its files and pays the same Request a second time signs a second SendSplit
+at a new sequence number. The receiver credits at most one of the two. It
+answers the other `Refused`, and the payer refunds it, unless the receiver
+has lost its own record of that Request too; then the table above gives no
+answer.
 
 **Under the proof.** The design carries a proof on every payment. Its relation
 is in §2.1: for every transition in the value's history, one P-256 device
@@ -3786,11 +3970,12 @@ under a policy entry. No vendor certificate chain is checked on a phone.
   holds for MintFold, RedeemSplit, Recertify, Migrate and MigrateFold.
 - No transition is committed unproven. A SendSplit that cannot be proven is
   never signed into the wallet's state and never released; the balance is
-  unchanged. A receiver that cannot prove its fold refuses, and the payer
-  refunds when it holds the Outcome. The receiver may try the proof again
-  while the Request is open and undecided. A payer that cannot prove its
-  RefundFold does not commit it; its wallet shows "refused, not yet
-  returned", and the amount is back only when the proof succeeds.
+  unchanged. A receiver that cannot prove its fold may try the proof again
+  while the Request is open and undecided. It refuses once the Request has
+  closed with no credit committed, and the payer refunds when it holds the
+  Outcome. A payer that cannot prove its RefundFold does not commit it; its
+  wallet shows "refused, not yet returned", and the amount is back only when
+  the proof succeeds.
 - What the receiver checks without the proof, on the last hop only: the
   payer's certificate, receipt and E as sealed by the validators, the device
   signature, that the SendSplit answers its own Request, and the enabled
@@ -3854,8 +4039,9 @@ that phone.
   step is also lost, or the files are removed or replaced before the next
   start. The wallet then continues one state back, and its next object
   conflicts with the released one. §5.10 calls this the one exposure. On
-  Android the reference source syncs each key-store write. On iPhone the
-  source reading is unfavourable and nothing is tested.
+  Android the reference source syncs each key-store write, but on the Pixel 6
+  a sync issues no flush to storage (§4, T2). On iPhone the source reading is
+  unfavourable and nothing is tested.
 - A restored key-store entry. A platform or vendor tool puts an older marker
   back while the device key still works. No such tool is known and none has
   been tested.
@@ -3863,7 +4049,7 @@ that phone.
   operating system can make the holder's key sign two successors of one
   state.
 
-The evidence gate decides the first two per tuple (§2.3). A tuple on which
+The evidence gate decides the first two per tuple (§10.4). A tuple on which
 either occurs is unsupported. Nothing decides the third in advance.
 
 | Evidence | Signatures it rests on | Path on an unmodified phone |
@@ -3885,6 +4071,11 @@ either occurs is unsupported. Nothing decides the third in advance.
 A ReceiveFold after an outflow of 100 carries `cum_out = 100` and Δ = 0, so it
 is not evidence. Conformance vectors cover every kind in both positions.
 
+Two lines of the table compare certificate serials. A transition carries a
+certificate digest and no serial, and the ledger does not record certificate
+digests (§5.1). What this evidence carries so that the chain can read the two
+serials is not defined.
+
 **Fork evidence under the per-hop relation.** The relation proves, for every
 transition in a history, the sequence number, the previous-digest link and
 the cumulative counters, and it rejects a ReceiveFold whose credit was signed
@@ -3896,9 +4087,11 @@ by the folding device's own key (§2.1). What follows, and its limits:
   branches. At one sequence number they are two digests. At adjacent numbers
   the link is broken. Further apart, the later one fails the
   cumulative-outflow line above, because a branch raises its proven
-  `cum_out_after` only by a proven outflow that debits the same branch. This
-  argument is this document's own. It has not been checked by a second pass
-  or written as a test.
+  `cum_out_after` only by a proven outflow that debits the same branch. That
+  step rests on the bar in RefundFold (§2.1, H7): without it, a payment a key
+  sends to itself, refuses and refunds would raise `cum_out_after` and debit
+  nothing. This argument is this document's own. It has not been checked by
+  a second pass or written as a test.
 - The pair is evidence only when both transitions reach the chain. Each sits
   in one receiver's journal, and no holder has to sync. With R8 off the pair
   may never meet.
@@ -3914,6 +4107,12 @@ by the folding device's own key (§2.1). What follows, and its limits:
 - Evidence identifies a phone on which an assumption failed, in some cases.
   It does not prevent the second branch and it does not bound what that
   phone creates. It is not part of the argument for P2.
+
+A receiver tests a Payment against its own files when it judges it (§5.2). If
+the files hold an earlier transition from the same payer device id that,
+together with the presented SendSplit, shows two successors of one state, the
+receiver answers `Refused` with the reason code `conflict` (§5.1). The
+earlier transitions are kept in the wallet's files and are lost at a resume.
 
 **What evidence does.**
 
@@ -3933,11 +4132,11 @@ by the folding device's own key (§2.1). What follows, and its limits:
   the end of the succession chain (§7.2, §8.2). It acts on no other row.
 - While the hold stands the row takes no Load and records no new unload
   claim, and its recorded claims are not paid (§8.2). The issuer refuses the
-  device a renewal; a device's own key having signed two successors is the
-  one reason for refusing a renewal that is not an enabled regulatory
-  control (§7.1). Where the scheme runs the block list (R6), consensus emits
-  an entry for the device id, and holders of the entry refuse the device
-  (§5.5).
+  device a renewal; the device's own key, or the key whose balance its row
+  took over by Migrate, having signed two successors is the one reason for
+  refusing a renewal that is not an enabled regulatory control (§7.1). Where
+  the scheme runs the block list (R6), consensus emits an entry for the
+  device id, and holders of the entry refuse the device (§5.5).
 - Evidence of an issuer-side fault, the last two lines of the table, places
   no hold on the phone that holds the object, changes nothing in its wallet
   and refuses it nothing. It is recorded against the issuer-side key. What
@@ -3967,8 +4166,11 @@ A certificate carries a time-dependent control if its effective terms (§5.1)
 have a `Lease`, a day or month `Limit`, or a per-counterparty `Cap`. Counting
 the per-counterparty cap as a limit in the sense of R7 is this document's
 reading. A scheme that switches none of these on issues certificates with
-none. For a wallet under such a certificate no rule in this section stops a
-payment.
+none. For a wallet under such a certificate that also sets no
+`receive_not_after`, no rule in this section stops it paying or requesting
+on account of its own certificate. While it is in the clock-reset state, a
+payer whose certificate carries a time-dependent control does not pay it
+(below).
 
 **Clock, floor and own time**
 
@@ -4129,6 +4331,9 @@ control, the receiver makes no time check.
   the amounts it credited in each day and each month of the signed time. It
   refuses a payment that would take a sum above the payer's limit for that
   window, or above the per-counterparty cap where that limit is `Unlimited`.
+  The cap is one certificate value. Its window, its effect beside a `Limit`
+  and whether the payer checks it before it signs are not defined. They are
+  defined only if the owner confirms this addition (§12 item 7).
   Input: the receiver's own journal, and the signed time it has checked
   against its own Request. This is the only limit check that holds against a
   compromised payer, and it holds per receiver. One receiver accepts at most
@@ -4139,8 +4344,12 @@ control, the receiver makes no time check.
   it from the credits its files still hold for the current day and month.
   Credits inside the gap are not counted. One payer can then pass its limit
   at this receiver once more in that window.
-  - Nobody is affected while the payer's app is unmodified: that app keeps
-    its own counters, and they are in its own marker.
+  - Under a day or month limit nobody is affected while the payer's app is
+    unmodified: that app keeps its own counters, and they are in its own
+    marker.
+  - The per-counterparty cap is enforced by this tally alone: no payer rule
+    above checks it. An unmodified payer and an ordinary receiver therefore
+    pass the cap once more for each resume of that receiver.
   - Against a compromised payer the bound per receiver becomes one limit per
     window, plus one more for each resume of that receiver in the window. An
     ordinary receiver can cause a resume by putting older files back.
@@ -4180,7 +4389,7 @@ control, the receiver makes no time check.
 - **Opening counters.** A certificate's `opening_day` and `opening_month` are
   where the wallet's counters start for the day and the month that contain
   `not_before`. Other windows start at what the journal already holds for
-  them: zero, unless the wallet signed ahead into that window (§7.2). The
+  them: zero, unless the wallet signed ahead into that window (above). The
   issuer sets the opening counters:
   - at a renewal or a Recertify, from the journal the wallet uploads: the net
     amount sent under every signed time in or after the current day, and the
@@ -4206,8 +4415,9 @@ control, the receiver makes no time check.
   re-enroll to get a second allowance in the same window. The cost falls on an
   honest user who loses a phone: the new phone cannot send the lost phone's
   share until that phone's lease and grace have ended. It delays sending and
-  forces no sync. It is not a bound against a compromised phone, whose
-  counters are its own statement.
+  forces no sync. It is not a bound against a compromised phone. Under the
+  proof the counters on each branch add up (§2.1, H4), and such a phone
+  signs a fresh branch of an earlier state for each receiver.
 
 **Expiry (R8) and receive freshness**
 
@@ -4264,9 +4474,12 @@ while the date was ahead and the date was then corrected.
 
 So the clock-reset state costs something only where a regulatory control
 needs time: on the wallet's own sending if its certificate carries one, and
-on receiving from payers whose certificates carry one. The mark is
-self-declared; a modified receiver can leave it off, and then rules 2 and 3
-judge its date like any other.
+on receiving from payers whose certificates carry one. The stop on a clock
+that R7 or R8 can no longer use, and the re-anchor it then needs, are this
+document's addition. It counts as an explicitly enabled regulatory control
+only if the owner confirms it (§12 item 7). The mark is self-declared; a
+modified receiver can leave it off, and then rules 2 and 3 judge its date
+like any other.
 
 A floor that is ahead of real time by more than `W` and less than
 `clock_regress_tolerance` does not put the wallet in the clock-reset state.
@@ -4299,7 +4512,7 @@ are right unless the row says otherwise.
 | 12 | P was not rebooted since its last sync | P is anchored. Its date setting is not used | L |
 | 13 | P's battery died and the clock came back years in the past | Clock-reset state. The user sets the correct date and the state ends. No sync | L, once the date is right |
 | 14 | The receiver is in the clock-reset state | Its Request is marked. P does not pay it (rule 1). A payer with no time-dependent control does | nothing to this receiver |
-| 15 | P runs a modified app | It signs the receiver's time and whatever counters it likes. The receiver's checks pass. The receiver's own tally holds it to L per window at that receiver. Expiry is still judged at the receiver's time | no bound across receivers |
+| 15 | P runs a modified app | It signs the receiver's time. Under the proof it cannot choose its counters: on each branch they add up (§2.1, H4). It signs a fresh branch of an earlier state for each receiver, and on each branch the counters are within the limit. No clause checks the time it signs; whether the relation makes signed time monotone is a Q0 choice (§2.3). The receiver's checks pass. The receiver's own tally holds it to L per window at that receiver. Expiry is still judged at the receiver's time | no bound across receivers |
 | 16 | P's files are put back to a copy from 30 September, before it spent L | P resumes at its marker (§5.10). Its counters and its floor are those of 1 October | L, as if nothing had been restored |
 
 Month windows behave the same way with the month of the signed time.
@@ -4310,7 +4523,7 @@ Month windows behave the same way with the month of the signed time.
 |---|---|---|---|
 | The signed time is at or after the receiver's time, and at most `W` after it | the receiver | the SendSplit and the receiver's own Request | any payer |
 | The lease, with its grace, has not ended at the signed time | the receiver | the SendSplit and the issuer-signed certificate | any payer, where the receiver's clock is right |
-| The payer's counters are within the limits | the payer's unmodified app; the receiver reads the declared counters | the payer's marker and journal; the SendSplit | an ordinary user. Not a compromised payer, whose counters are its own statement |
+| The payer's counters are within the limits | the payer's unmodified app; the receiver reads the declared counters | the payer's marker and journal; the SendSplit | an ordinary user. Not a compromised payer: under the proof the counters of each branch add up (§2.1, H4), and it signs a fresh branch for each receiver |
 | One payer does not exceed its limit at one receiver | the receiver | the receiver's own journal | any payer, per receiver, and between two resumes of that receiver |
 | The receiver's time is not far ahead of the payer's | the payer's unmodified app | the Request and the payer's own clock | protects the payer; it is not a check on the payer |
 | A wallet does not sign below its floor | the wallet's unmodified app; the issuer at sync; anyone holding two transitions (§5.3) | the marker and the journal | an ordinary user; a compromised phone only where both transitions are seen |
@@ -4331,15 +4544,20 @@ of them off, nothing in this section requires connectivity at any time.
 | A tier-row notice that brings in or shortens a lease (§5.11) | R8 with new values | Sending, once the new lease has ended | A renewal |
 
 The owner named a blacklist, daily or monthly limits and an expiry for
-attestation. `require_anchor`, receive freshness and the per-counterparty cap
-are this document's additions under those names. Each counts as an explicitly
-enabled regulatory control only if the owner confirms it (§12).
+attestation. `require_anchor`, receive freshness, the per-counterparty cap
+and the stop on a clock that R7 or R8 can no longer use are this document's
+additions under those names. Each counts as an explicitly enabled regulatory
+control only if the owner confirms it (§12 item 7).
 
 Limits (R7) delay sending to the next window and never require a sync. A
 failed tolerance check requires none; it is cleared by setting the date. A
-wallet under a certificate with no time-dependent control is never sent
-online by anything in this section. Outside this section, a key revocation
-(§5.1) and a new rules version (§5.11) stop no wallet and require no sync.
+wallet under a certificate with no time-dependent control and no
+`receive_not_after` is never sent online by anything in this section for
+its own paying or requesting. In the clock-reset state with its floor ahead
+of real time it is not paid by payers whose certificates carry a
+time-dependent control, until real time comes within the tolerance of the
+floor or it syncs. Outside this section, a key revocation (§5.1) and a new
+rules version (§5.11) stop no wallet and require no sync.
 
 **Stated limit.** A phone's clock is expected to keep running while it is
 powered off, so that an ordinary reboot leaves it as accurate as its setting;
@@ -4351,8 +4569,8 @@ both read behind real time, above their own floors and within `W` of each
 other, accept each other's expired certificates with no one having changed a
 clock. The error is real time minus the receiver's own time, and it has no
 upper limit. Certificate expiry therefore bounds sending only among receivers
-whose clocks are right. The same holds for the lease as the age limit of the
-evidence in E (§5.11).
+whose clocks are right. The same holds for the lease, with its grace, as the
+age limit of the evidence in E (§5.11).
 
 Not enforceable offline, and against whom:
 
@@ -4408,11 +4626,12 @@ clock-reset state. For the effective time and the resume:
 ### 5.5 Block list (R6)
 
 The owner asked for "a blacklist of accounts that users that have the
-blacklist won't send to". That is the flag `receive_blocked`. Three things in
+blacklist won't send to". That is the flag `receive_blocked`. Four things in
 this section go beyond those words and are this document's additions: the
 second flag `send_blocked`, under which holders of the list refuse payments
-from a device; receive freshness; and holder-requested blocking. Each counts
-as part of R6 only if the owner confirms it (§12). R6 as a whole applies only
+from a device; receive freshness; holder-requested blocking; and the list
+version a wallet must hold again after a resume. Each counts as part of R6
+only if the owner confirms it (§12). R6 as a whole applies only
 where the scheme has switched it on. With R6 off no list is distributed and
 nothing in this section acts on any wallet.
 
@@ -4509,16 +4728,16 @@ nothing in this section acts on any wallet.
   ledger has no effect offline until both are cleared. An entry from a hold
   uses the highest serial and is final for that device id; what the holder of
   a held row gets back, and on which device id, is in §8.2 and §3.2.
-- **Freshness.** A payer is never sent online to refresh its list. Freshness
-  comes from the receiver's side: with `receive_not_after` set in the tier, a
-  blocked account cannot renew, its certificate's `receive_not_after` passes,
-  and payers refuse it by their own time (§5.4). The longest a block can go
-  unenforced among unmodified payers whose clocks are right is then the
-  length of the receive lease. The price is that every receiver must renew
-  within that period to keep requesting; this is the sync that receive
-  freshness brings, and it exists only where the tier sets
-  `receive_not_after`. With it unset, R6 holds only as of each payer's last
-  list, and nothing sends anyone online.
+- **Freshness.** A payer is never sent online to refresh its list, except
+  after a resume (below). Freshness comes from the receiver's side: with
+  `receive_not_after` set in the tier, a blocked account cannot renew, its
+  certificate's `receive_not_after` passes, and payers refuse it by their
+  own time (§5.4). The longest a block can go unenforced among unmodified
+  payers whose clocks are right is then the length of the receive lease. The
+  price is that every receiver must renew within that period to keep
+  requesting; this is the sync that receive freshness brings, and it exists
+  only where the tier sets `receive_not_after`. With it unset, R6 holds only
+  as of each payer's last list, and freshness sends nobody online.
 - **Holder-requested blocking.** Off unless the scheme switches it on in the
   descriptor.
   - Where it is off, the retirement of a device id by its bound account
@@ -4546,11 +4765,14 @@ nothing in this section acts on any wallet.
   neither pays nor creates a Request until it holds that version or a later
   one again, from a peer or from the issuer. The rule is there because the
   alternative lets an ordinary user shed block entries by deleting the
-  wallet's files. It is R6 that stops the wallet, and only where R6 is on. A
-  peer message has room for at most about 200 entries, so a wallet catches up
-  on a long list only at a sync. Keeping the list in the key store beside the
-  marker removes this stop, at about 0.1 KB plus 40 B per entry of key-store
-  data per segment. Owner decision (§12).
+  wallet's files. The rule stops the wallet only where R6 is on. It is this
+  document's addition, and it counts as an explicitly enabled regulatory
+  control only if the owner confirms it (§12 item 7). A peer message has
+  room for at most about 200 entries, so a wallet catches up on a long list
+  only at a sync. No rule says which peer message brings the list to a
+  wallet that neither pays nor creates a Request. Keeping the list in the
+  key store beside the marker removes this stop, at about 0.1 KB plus 40 B
+  per entry of key-store data per segment. Owner decision (§12).
 - **Distribution.** A separate list-signing key signs the list in segments.
   Each segment carries the scheme id, `list_epoch`, a counter, the issuer
   time at which it was made, and its entries. Lists are ordered by
@@ -4567,7 +4789,13 @@ nothing in this section acts on any wallet.
   the first segment of the new epoch carries every entry still in force. A
   wallet keeps applying the old epoch's entries until it holds that first
   segment and then drops them. Merge-only entries stop a forged segment
-  lifting a block.
+  lifting a block. Two consequences have no bound here. The issuer time in a
+  segment raises the floor with no upper limit (§5.4). A forged or wrong
+  issuer time far ahead puts each wallet that merges the segment into the
+  clock-reset state, until a Recertify at a sync or until real time reaches
+  that date. And the first segment of a new epoch carries every entry still
+  in force, so where the list is too long for one peer message the
+  correction does not travel peer to peer and arrives only at a sync.
 
 **What in this section can require connectivity.** Each is R6, and none
 exists where R6 is off.
@@ -4610,12 +4838,19 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
   confirms its marker step before it releases the Payment (§5.2). If the
   carrier then fails, the payer is debited and the receiver holds nothing.
   That payment is not complete, and neither wallet shows it as complete. The
-  payer's wallet presents the same Payment again: from its files while they
-  are current, and after a resume for the newest payments, which its marker
-  holds in full (§5.10 states the cap and what is lost beyond it). Presenting
-  a Payment twice is safe: the receiver stores one Outcome per payment id and
-  returns it unchanged (§5.2). No carrier makes the exchange atomic. §5.2
-  says what an honest payer can lose and when.
+  payer's wallet presents the same Payment again from its files while they
+  are current. After a resume its marker holds the two newest unresolved
+  SendSplits in full (§5.10 states the cap and what is lost beyond it). The
+  proof entry holds only the proof of the wallet's current state. So after a
+  resume a listed Payment can be presented again with its proof only while
+  its SendSplit is still the wallet's last transition. Otherwise presenting
+  it can only fetch an Outcome the receiver has stored or draw a `Refused`
+  (§5.2), which the payer folds as a refund. Keeping the proof of each
+  listed Payment in the key store, about 6.5 KB each, would remove this
+  limit and is not designed. Presenting a Payment twice is safe: the
+  receiver stores one Outcome per payment id and returns it unchanged
+  (§5.2). No carrier makes the exchange atomic. §5.2 says what an honest
+  payer can lose and when.
 - **What crosses.** Every Request and every Payment carries its sender's
   certificate, receipt and enrollment statement E (§5.1). The Payment also
   carries the signed SendSplit and the proof (§2.1). This section takes E as
@@ -4629,22 +4864,25 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
   | Whole exchange | 1.96 KB | about 8.8 KB | 9,211 B |
 
   The limits are those of `specs/peer_transport_v1.md:65-71`. The estimate for
-  the Payment is at or just above that profile's limit. It also assumes that
+  the Payment is 7.66 KB (§5.1). That is above the repo's existing 7,552 B
+  payment cap by about 0.1 KB. It also assumes that
   per-hop verification does not enlarge the proof that travels, which is not
   established (§2.2). The limits of the new profile are among the targets Q0
   fixes (§2.3). All figures are for one witness and nothing optional attached.
-- **QR is the baseline.** Of the carriers the repo implements, QR is the only
-  one that works between every pair of target phones. It needs a screen and a
-  camera on each phone and no entitlement from the platform. An exchange is
-  three scans: the payer scans the Request, the receiver scans the Payment,
-  the payer scans the Outcome. Aiming the camera selects the peer.
+- **QR is the baseline.** Of the carriers the repo implements, only the two
+  optical ones are open to every pair of target phones: QR and Petal Stream
+  (Existing code, below). Each needs a screen and a camera on each phone and
+  no entitlement from the platform. This section takes QR as the baseline
+  and computes its figures for QR. An exchange is three scans: the payer
+  scans the Request, the receiver scans the Payment, the payer scans the
+  Outcome. Aiming the camera selects the peer.
 - **Size on QR.** One QR symbol holds at most 2,953 bytes (version 40, lowest
   error correction). The repo's existing framing shows a still code only up to
   about 0.34 KB of payload. Above that it animates 256-byte frames with one
   parity frame per two, and a header frame at the start and after every twelve
   others
   (`IrohaSwift/Sources/IrohaSwift/IrohaPeerQRV1.swift:198-199, 267-293`). Under
-  that framing a 0.85 KB Request is about 7 frames, a 7.6 KB Payment about 49
+  that framing a 0.90 KB Request is about 7 frames, a 7.7 KB Payment about 49
   to 51, and a 0.2 KB Outcome is one still code. The repo's widget defaults to
   5 frames per second
   (`IrohaSwift/Sources/IrohaSwiftTransferUI/KagemushaWidgets.swift:281`). These
@@ -4653,9 +4891,16 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
   code a phone reads from another phone's screen are not measured.
 - **Time on QR.** The owner said: "1-2 s should be good ux". At 12 to 5 frames
   per second one pass of the Request takes 0.6 to 1.4 s, and one pass of the
-  Payment takes 4 to 10 s. So on the repo's QR framing the transfer of a
-  proof-carrying Payment alone is outside one to two seconds, before any
-  signature, marker step or proof. A proof-carrying payment can come near that
+  Payment takes 4 to 10 s. Five is the widget's default. Twelve is the rate
+  `specs/qr_stream.md:153-159` recommends for the Rust framing; no source
+  gives it for the Swift framing. The Rust framing at its documented profile
+  (336-byte chunks, one parity frame per three, 12 frames per second) needs
+  about 32 frames for the Payment, about 2.7 s for one pass. That figure is
+  computed from the profile and is not measured. Petal Stream's
+  specification gives 8.6 s, from a simulator (Existing code, below). So on
+  each optical framing the repo has, the transfer of a proof-carrying
+  Payment alone is outside one to two seconds, before any signature, marker
+  step or proof. A proof-carrying payment can come near that
   figure only on a faster carrier (NFC where the pair allows it, or a radio
   connection), with a denser QR framing that is untested, or with a smaller
   proof. Group g of §10.4 measures the carriers. §2.3 has the proving times,
@@ -4693,8 +4938,8 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
   an iPhone, iPhone to iPhone among them, and on a pair of Android phones
   where at least one supports LE advertising. Three limits apply.
   - It is not implemented. The repo has no Bluetooth carrier.
-  - It is not measured. Connection setup time and transfer time for 0.85 KB
-    and 7.6 KB are unknown on every pair. That an iPhone and an Android phone
+  - It is not measured. Connection setup time and transfer time for 0.90 KB
+    and 7.7 KB are unknown on every pair. That an iPhone and an Android phone
     interoperate follows from the two platforms' documentation and was not
     tested. Which Android target phones support LE advertising was not
     checked. HarmonyOS NEXT was not examined.
@@ -4720,9 +4965,18 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
 - **Existing code.** The repo has one envelope and three carriers in Swift and
   Kotlin (animated QR, NFC over ISO 7816 commands, Nearby), a second QR framing
   in Rust (`specs/qr_stream.md`), and a short description in
-  `specs/peer_transport_v1.md:83-96` that matches neither byte layout. This
-  design reuses one envelope and one QR framing under a new profile code; the
-  normative spec says which. The envelope registers one profile today, so a
+  `specs/peer_transport_v1.md:83-96` that matches neither byte layout. The
+  repo also has a fourth carrier, Petal Stream (`specs/petal_stream.md`,
+  `crates/iroha_petal`, with Swift and Kotlin ports). It is an animated
+  optical code of its own, not a QR code, and carries the same messages
+  under its own framing and error correction. Its specification gives, for
+  a payment of 7,552 B at 8 frames per second, 8.6 s with a modern or
+  legacy camera, 12 s on average with a soft 720p camera, and 34 to 38 s
+  at 480p (`specs/petal_stream.md:347-350`). Those figures come from a
+  camera simulator and are not device measurements. Whether this design
+  uses Petal Stream is not decided here. This design reuses one envelope
+  and one QR framing under a new profile code; the normative spec says
+  which. The envelope registers one profile today, so a
   message of this design is refused until its profile is added. No carrier has
   a recorded device measurement.
 - **Bystanders.** QR and NFC are in the clear, and so is a Bluetooth LE
@@ -4738,12 +4992,12 @@ Every size is computed from the estimates of §5.1, and no encoder exists.
   before framing. The owner confirms the unit (§12). Two consequences of the
   proof's size follow.
   - A notice or list segment carried in a peer message counts against that
-    message's bound. A Payment of about 7.6 KB leaves about 2.4 KB: room for
+    message's bound. A Payment of about 7.7 KB leaves about 2.3 KB: room for
     about 55 block-list entries at 40 B each, where a Payment with no proof
     would have room for about 200. A Request or an Outcome has more room.
   - If the owner means the text form that a code shows, the Payment is already
     at the bound. The repo's text form of a 7,552 B payment is 10,075 bytes
-    (`specs/peer_transport_v1.md:65-71`); 7.6 KB becomes about 10.2 KB.
+    (`specs/peer_transport_v1.md:65-71`); 7.66 KB becomes about 10.2 KB.
 
   No carrier above has a hard limit near these sizes. The bound is a budget
   for the time two phones are held together.
@@ -4973,8 +5227,8 @@ the pool and the beneficiary.
   The cost of a gap is the beneficiary's: a fee it never receives. No holder
   pays twice, loses anything, or waits.
 - **Order and rate of payout.** A fee is never paid ahead of an amount a
-  holder is waiting for: while any payout to a holder is waiting (§8.2,
-  §8.4), the ledger pays no fee. Fee payouts for one payer row are capped per
+  holder is waiting for: while the payout queue is not empty (§8.4), the
+  ledger pays no fee. Fee payouts for one payer row are capped per
   unload window by a scheme parameter, `fee_limit`. It bounds what a
   compromised phone can route to a beneficiary that colludes with it, and it
   delays only the beneficiary. Its value, including no limit, is the owner's
@@ -5059,8 +5313,8 @@ design does not use one, for the device key or for the marker.
 | Thief who knows the PIN | Can pay |
 | Double spend by the holder | No effect. The holder authenticates willingly, and authentication does not bind what is signed |
 | What the issuer or a receiver can verify | Nothing. The prompt is the app's own rule, like every rule that rests on T3 |
-| Screen lock removed or reset; a biometric enrolled or removed | The device key is unaffected. On Android the marker is unaffected, where the form of entry §5.10 chooses holds on that phone. On iPhone removing or resetting the passcode discards the marker (last rule below) |
-| Signing with the user absent (a renewal in the background, an unattended receiver) | Possible. On iPhone only while the phone is unlocked, because the marker and the payment key cannot be read on a locked phone (§5.10) |
+| Screen lock removed or reset; a biometric enrolled or removed | A biometric change leaves the device key unaffected. On Android removing or resetting the screen lock leaves it unaffected too, and the marker is unaffected where the form of entry §5.10 chooses holds on that phone. On iPhone removing or resetting the passcode discards the marker (last rule below); whether the payment key survives it is not known and not tested (§5.10) |
+| Signing with the user absent (a renewal in the background, an unattended receiver) | Possible. On iPhone only while the phone is unlocked, because the marker cannot be read on a locked phone (§5.10) |
 | Receiver prompted during a payment | No |
 | Changing the mode | A tier field. The app reads the new value at renewal |
 
@@ -5140,15 +5394,22 @@ behaviours of T2, by name:
 - No selective removal. No platform path removes a marker, or another
   key-store entry of the wallet, while the device key stays usable. Removal
   or reset of the iPhone passcode is the stated exception (T6).
+- Removal with the app. Whatever removes the wallet's key-store entries
+  removes all of them together with the device key, and leaves no older
+  entry behind.
 - Durable key-store writes. A creation or deletion that returned and was
-  confirmed by a read survives a power cut. A key store that loses writes
-  loses its latest ones and never keeps a later write while losing an
-  earlier one.
+  confirmed by a read survives a power cut and a forced restart. A key store
+  that loses writes loses its latest ones and never keeps a later write
+  while losing an earlier one.
 - Durable file writes. A journal commit that returned survives a power cut.
 - Distinct answers. The calls named below tell "absent" from "cannot be read
   now".
 - No rollback by a failed update. A failed OS update does not roll the key
   store or the files back after the wallet has run.
+- Survival. The device key and the marker survive a reboot, an
+  operating-system update and an app update; on Android a change or removal
+  of the screen lock; and on iPhone a change of the passcode or of the
+  enrolled Face ID or Touch ID. On iPhone the marker needs a passcode (T6).
 - The key store answers again after an unlock or a restart.
 
 Every platform statement in this section is a reading of source code or
@@ -5202,7 +5463,7 @@ not go in.
 | Head commit digest; previous commit digest | 64 | Compare with the journal; link two checkpoints |
 | Balance | 16 | No signed object carries it (§5.7) |
 | Redeemed total | 16 | The next RedeemSplit needs it |
-| Last transition, complete, with its signature | 315 | It holds the sequence number, the previous digest, the cumulative out, refund and fee totals, the day and month counters, the last signed time and the certificate digest. The next transition is built on it. It is also what the issuer verifies after a gap |
+| Last transition, complete, with its signature | 315; 380 for a SendSplit under a fee policy (§5.1); a Migrate has 32 more for each Request it carries | It holds the sequence number, the previous digest, the cumulative out, refund and fee totals, the day and month counters, the last signed time and the certificate digest. The next transition is built on it. It is also what the issuer verifies after a gap |
 | Voucher number of the last voucher folded | 8 | The issuer numbers the vouchers of a device id (§5.1, §7.1). The wallet folds only the next number. A repeated request returns the same voucher, so the files must not be what remembers the fold |
 | Versions held: descriptor epoch, highest notice epoch, list epoch and counter, root succession number, rules version | 30 | The wallet never uses an older set |
 | Time records of §5.4 as of this commit: last known time, boot reference, anchor state | 25 | A restore of older files must not open an earlier limit window |
@@ -5210,18 +5471,25 @@ not go in.
 | Digest over the payment ids of unresolved SendSplits beyond the two lists below, and their count | 34 | Permission to refund them stays in the key store while the members stay in the files |
 | Counts of the lists below | 4 | |
 | Checksum, SHA-256 cut to 16 bytes | 16 | Tells damaged data from valid data |
-| **Fixed part** | **about 582** | |
+| **Fixed part** | **about 582**; about 647 where the last transition is a SendSplit under a fee policy | |
 | The proof-carrying design adds: the public commitment of the proven state, and the digest of the proof entry | 64 | Ties the checkpoint to its proof |
 | Requests that can still be decided, at most 4: digest, nonce, amount and maximum, `created_at_ms`, the monotonic deadline and boot reference, `rules_lo` and `rules_hi`, flags, signature | 174 each | Only a Request in this list can be paid. With the terms entry it can be shown again and its Payment judged |
-| Unresolved SendSplits, the newest 2, complete with signature, plus the receiver's device public key | 348 each | The Payment can be presented again, and a `Refused` Outcome verified and refunded |
+| Unresolved SendSplits, the newest 2, complete with signature, plus the receiver's device public key | 348 each; 413 each under a fee policy | The Payment can be presented again, and a `Refused` Outcome verified and refunded. After a resume the proof entry holds only the proof of the current state. Under the proof-carrying design a listed Payment can then be presented again with its proof only while its SendSplit is still the wallet's last transition. Otherwise presenting it can only fetch a stored Outcome or draw a `Refused`, because the proof is one of the receiver's judgments (§5.2), and the payer folds that `Refused` as a refund. Keeping each listed Payment's proof in the key store, about 6.5 KB each, would remove the limit and is not designed |
 | Unresolved SendSplits, the next 6, short form: payment id, amount, fee, `device_time_ms`, receiver's device public key | 105 each | A `Refused` Outcome can be verified and refunded, and the refund is counted in the window the SendSplit was signed in (§5.4). The Payment cannot be presented again from this form |
 | Latest RedeemSplit with no ledger receipt, complete, if it is not the last transition | 315 | It can be sent to the ledger again. The total is cumulative, so only the latest matters |
 | Last 4 decisions: payment id, verdict, reason | 34 each | The Outcome can be signed again over the same bytes and shown again |
 
-Sizes: about 0.58 KB with nothing pending, about 0.76 KB with one Request
-listed, about 3.0 KB with every list at its cap; 64 B more under the
+Sizes, where no SendSplit is under a fee policy: about 0.58 KB with nothing
+pending, about 0.76 KB with one Request listed, about 3.05 KB with every
+list at its cap. Where the last transition and the listed SendSplits are
+under a fee policy, a SendSplit is about 380 B (§5.1) and the same three
+cases are about 0.65 KB, 0.82 KB and 3.25 KB. Each is 64 B more under the
 proof-carrying design. The wrapper of the Android forms below adds about
-0.3 KB. The caps are this document's choice (§12).
+0.3 KB. A marker whose last transition is a Migrate grows by 32 B for each
+Request the Migrate carries (§5.1, §7.2). The number of Requests carried has
+no cap, so such a marker has no fixed bound. The gate writes entries of 7 KB
+and 14 KB, and on iPhone 16 KB, that stand for it (§10.4); no larger size is
+tested. The caps are this document's choice (§12).
 
 "Unresolved" means a SendSplit for which no RefundFold is committed and no
 `Credited` Outcome was stored when the checkpoint was made. A `Credited`
@@ -5264,11 +5532,14 @@ that they are not rewritten at every signed object.
   witness and four tiers. §5.1 gives no size for a tier row, so the figure is
   rough. Other policy entries stay in the files. A wallet that lacks the
   entry a payer's E names takes it from the payer as a notice (§5.1).
-- The checkpoint names the terms entry by digest. A Recertify, or the
-  adoption of a notice, first writes the new terms entry under a new name;
-  the next commit's checkpoint names it; recovery deletes a terms entry that
-  the current checkpoint does not name. A notice adopted and not yet named
-  by a checkpoint is, after a loss of files, a notice not received (§5.11).
+- The checkpoint names the terms entry by digest. A Recertify and the
+  adoption of a notice are each a commit that changes the terms entry. The
+  adoption of a notice is a commit whose object is the root-signed notice;
+  it is not a transition, and it takes the marker step (§5.11). In step 4 of
+  either commit the new terms entry is written first, under a new name, and
+  confirmed by a read, as the proof entry is, and that commit's checkpoint
+  names it. Recovery deletes a terms entry that the current checkpoint does
+  not name.
 - If the terms entry is missing or damaged while the checkpoint is valid,
   the wallet uses the copy in its files if that copy's digest matches.
   Otherwise it keeps its balance, can still unload, and can pay or request
@@ -5282,8 +5553,10 @@ its current state and what the prover needs to extend that proof. Files that
 were restored are not current, and a proof cannot be rebuilt across a gap. So
 the proof and that material must sit in the key store as well. The proof
 entry is written in step 4 of each transition, before the marker. The
-checkpoint names it by digest, and the previous one is deleted with the
-previous marker.
+checkpoint names it by digest. The previous proof entry is deleted after
+step 6, and only where the new checkpoint names a different one. A commit
+that is not a transition names the proof entry already there, and that
+entry stays.
 
 - It needs durability and not protection against an older copy. An older
   proof does not match the checkpoint and is useless.
@@ -5423,11 +5696,15 @@ the same class.
   backed up (Apple Platform Security, keychain data protection). An item of
   the device-only classes that survive passcode removal is included in
   backups and returns when a backup is restored onto the same phone. The
-  payment key is itself kept as such an item, as a blob only this phone's
-  Secure Enclave can open, and nothing documented stops it working after a
-  restore without erase. An older checkpoint in such a class could therefore
-  return together with a working key: back up, pay, restore. So no copy of
-  the checkpoint is kept in another class.
+  payment key is itself kept as such an item, of class
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` with no user-presence
+  flag, as the existing suite creates it
+  (`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift:85,136`).
+  It is a blob only this phone's Secure Enclave can open, it cannot be read
+  or used while the phone is locked, and nothing documented stops it
+  working after a restore without erase. An older checkpoint in such a class
+  could therefore return together with a working key: back up, pay, restore.
+  So no copy of the checkpoint is kept in another class.
 - Passcode. Apple's API page says that no item can be stored in this class
   on a phone without a passcode and that disabling the passcode deletes
   every item in it. Apple's Platform Security guide says the items become
@@ -5438,8 +5715,8 @@ the same class.
 - Lock state. Items of this class can be read only while the phone is
   unlocked.
 - Size. Apple states no maximum for an item's data and describes the keychain
-  as a store for small pieces of data. A checkpoint of 0.6 to 3 KB is inside
-  every figure seen. A proof entry of 7 KB or more is not tested.
+  as a store for small pieces of data. A checkpoint of 0.6 to 3.3 KB is
+  inside every figure seen. A proof entry of 7 KB or more is not tested.
 
 What each path does, as far as sources say.
 
@@ -5449,10 +5726,10 @@ What each path does, as far as sources say.
 | Offload and reinstall | Kept | Kept | Kept | Nothing lost. The App Attest key may die |
 | One app's data restored by a desktop tool | Older | Untouched, by the tool vendor's guide | Untouched, by the same guide | Resume at the checkpoint |
 | Whole-phone backup restored onto the same phone, no erase | From the backup: older, or absent if excluded | Not established. The item returns from the backup; one developer report from 2018 says such a key was gone | Not in the backup. Whether the existing items are left in place or removed is not documented | Not known. Items kept and key alive: resume. Items removed and key alive: stopped. Key dead: the balance is gone |
-| Erase, then restore; iCloud restore, which needs an erase | From the backup | Dead. Apple documents that an erase discards what the Secure Enclave needs to rebuild it | Gone | The balance is gone |
+| Erase, then restore; iCloud restore, which needs an erase | From the backup | Reported dead. Developers report that such a key is gone or no longer signs after an erase and restore. Not documented; not tested | Gone | The balance is gone |
 | Transfer to a new iPhone | Maybe copied | Does not move | Do not move | The new phone has no wallet. The old phone is unaffected |
 | Passcode changed | Kept | Kept | Not known; not tested | Not known |
-| Passcode removed | Kept | Not known (§5.9) | Deleted | Stopped. The balance is out of reach |
+| Passcode removed | Kept | Not known; not tested | Deleted | Stopped. The balance is out of reach |
 | Passcode cleared by an administrator; reset after a forgotten passcode; Reset All Settings | Kept | Not known | Not known; not tested | Not known |
 | iOS update | Kept | Kept | Kept | Nothing lost |
 
@@ -5489,9 +5766,11 @@ checkpoint of commit k.
 4. Create the marker `new` for commit k+1. It carries the checkpoint of
    commit k+1, which includes the signed object where the table above lists
    it. For a transition the proof entry is written first and confirmed by a
-   read. `new` is done when the call returns success and a read of `new`
-   returns the same bytes. In the key-with-certificate form the creation is
-   two calls, and `new` is done only when the read returns the checkpoint.
+   read. For a Recertify or the adoption of a notice the new terms entry is
+   written first and confirmed the same way. `new` is done when the call
+   returns success and a read of `new` returns the same bytes. In the
+   key-with-certificate form the creation is two calls, and `new` is done
+   only when the read returns the checkpoint.
 5. Commit k+1 to the journal. Done, and durable, when the transaction
    returns.
 6. Delete `old`. Done when the call returns success and `old` is definitely
@@ -5576,14 +5855,22 @@ interruption.
   unreadable, and V4 handles it.
 - V4. Sort the markers into valid, damaged and unreadable, and find the
   current marker.
-  - Two valid markers with one commit counter. The journal decides: the one
-    whose commit the journal holds at that counter is kept. If the journal
-    holds neither, the one with the higher start number is kept. The other
-    was created by a process that was killed before its creation call
-    returned, so nothing was released from it; it is deleted in V7. Two
-    valid markers that agree in counter and in start number cannot be
-    produced by the steps. If the journal does not decide between them, the
-    wallet stops; the key store has then not behaved as T2 says.
+  - Two valid markers with one commit counter whose checkpoints name the
+    same head commit digest. They carry one state. The steps produce such a
+    pair in two ways: the alias-form rewrite of a marker whose first form
+    reads again later, and the fresh marker that this step creates for a
+    current journal's head when the marker it replaces reads again later.
+    The one with the higher start number is kept, or either one if the start
+    numbers agree, and the other is deleted in V7.
+  - Two valid markers with one commit counter that name different commits.
+    The journal decides: the one whose commit the journal holds at that
+    counter is kept. If the journal holds neither, the one with the higher
+    start number is kept. The other was created by a process that was killed
+    before its creation call returned, so nothing was released from it; it
+    is deleted in V7. Two valid markers that name different commits and
+    agree in counter and in start number cannot be produced by the steps. If
+    the journal does not decide between them, the wallet stops; the key
+    store has then not behaved as T2 says.
   - The marker with the highest counter is damaged or unreadable, and the
     journal's head has that counter and a digest that begins with the
     digest prefix in the marker's name. The files are then current: that
@@ -5604,12 +5891,13 @@ interruption.
   - Same head. Nothing to do.
   - The journal is ahead: it contains the checkpoint's head commit and
     commits after it. Every later commit must chain by digest, carry a valid
-    device signature over its object, and hold the state digest the core
-    computes by applying that object. If all do, create a marker for the
-    journal's head, with its proof entry taken from the commit record, and
-    confirm it; that marker is now current. If one does not, the commits
-    after the checkpoint's head are set aside and not used. This case arises
-    only when the key store lost a confirmed write.
+    device signature over its object, or the root's signature where the
+    object is an adopted notice, and hold the state digest the core computes
+    by applying that object. If all do, create a marker for the journal's
+    head, with its proof entry taken from the commit record, and confirm it;
+    that marker is now current. If one does not, the commits after the
+    checkpoint's head are set aside and not used. This case arises only when
+    the key store lost a confirmed write.
   - The journal is one commit behind: its head is the commit the checkpoint
     names as previous. The core rebuilds commit k+1 from the checkpoint and
     writes it. This is the ordinary interruption between steps 4 and 5. The
@@ -5617,7 +5905,9 @@ interruption.
     not hold what another party supplied and the checkpoint does not carry:
     the received Payment of a ReceiveFold, the voucher of a MintFold, the
     countersigned Migrate, the `Refused` Outcome of a RefundFold. It is
-    marked as rebuilt, and the issuer treats it as a gap of one commit.
+    marked as rebuilt. At the next sync the wallet covers it with a resume
+    record whose gap is that one commit, and the issuer accepts that record
+    on the three checks of N8.
   - Anything else: the journal is definitely absent, fails its own checks,
     ends earlier, or does not contain the checkpoint's previous commit. The
     wallet resumes. It sets the old file aside, unchanged. It starts a new
@@ -5648,11 +5938,19 @@ because an enrollment interrupted before its Bootstrap could otherwise not
 be told from a wallet whose marker is gone. Continuing it would let an
 ordinary iPhone user remove the passcode, delete the app, install it again,
 finish the enrollment of the same key and fold every voucher of that device
-id a second time (§7.1). Markers of
-another device id are never this wallet's extra markers. While an earlier
-wallet's key and a valid marker are on the phone, the app offers to resume
-that wallet and enrolls a new one only after a declared loss (§7.1); the
-earlier wallet's entries are deleted only where §7.2 deletes its key.
+id a second time (§7.1). A kill between the generation of the key and the
+confirmation of the first marker leaves a key with no marker, or with a
+marker that is not valid, and recovery stops there as well. No value exists
+at that point: nothing about the key has left the phone, so no row and no
+load exist for it. What follows is not designed: which alias recovery reads
+as the device key, in V1 and in the listing rule, when an abandoned key, an
+earlier wallet's key or the other key of a Migrate on the same phone sits
+beside the new one; and how a key that was never registered and has no
+marker is cleared (§12). Markers of another device id are never this
+wallet's extra markers. While an earlier wallet's key and a valid marker are
+on the phone, the app offers to resume that wallet and enrolls a new one
+only after a declared loss (§7.1); the earlier wallet's entries are deleted
+only where §7.2 deletes its key.
 
 **Rules after a resume.** The core applies them. They need no network. They
 are labelled N1 to N8.
@@ -5676,13 +5974,13 @@ are labelled N1 to N8.
   set that N2 finds in the old file hashes to the checkpoint's digest. If
   that set does not match, the payments beyond the lists can no longer be
   refunded; the wallet shows their count and starts an empty set.
-- N5. No inbound credit is folded twice. A Payment is credited only for a
-  Request in the list. A voucher is folded only if its number is the
-  checkpoint's voucher number plus one; the issuer returns, on a request
-  signed by the device key, every voucher of that device id above a stated
-  number (§7.1), so a load that was pending when the files were lost is
-  still folded. A countersigned Migrate is folded only while the flag is
-  clear.
+- N5. The once-only guard. No inbound credit is folded twice. A Payment is
+  credited only for a Request in the list. A `Refused` Outcome is folded
+  once, under N4. A voucher is folded only if its number is the checkpoint's
+  voucher number plus one; the issuer returns, on a request signed by the
+  device key, every voucher of that device id above a stated number (§7.1),
+  so a load that was pending when the files were lost is still folded. A
+  countersigned Migrate is folded only while the flag is clear.
 - N6. The per-payer tally restarts from the receives N2 finds in the current
   day and month.
 - N7. The wallet uses the block list only if its files hold the version the
@@ -5720,7 +6018,7 @@ What is lost with the files, and what that costs.
 | Requests that are no longer in the list, and Outcomes older than the last 4 decisions | A Payment presented again for one of them gets no signed answer. If that Payment had been refused and the payer never received the Outcome, or if it arrives late for a Request that had closed, the payer cannot refund | The other party, the payer. The amount stays in neither wallet |
 | Unresolved SendSplits beyond the two lists, where N4 finds no matching set | A `Refused` Outcome for one of them can no longer be refunded | The holder |
 | The complete form of unresolved SendSplits older than the newest two | Those Payments cannot be presented again; a refund is still possible | The holder, if the receiver never saw the Payment |
-| The per-payer tally for the current day and month (R7) | The tally restarts. One payer can then pass its limit at this receiver once more in that window. An ordinary receiver can cause it by restoring older files | Nobody while the payer is unmodified: it keeps its own limit. It weakens the per-receiver bound on a compromised payer (§3.2) |
+| The per-payer tally for the current day and month (R7) | The tally restarts. One payer can then pass its limit at this receiver once more in that window. An ordinary receiver can cause it by restoring older files | Nobody under a day or month limit while the payer is unmodified: it keeps its own limit. Under the per-counterparty cap an unmodified payer passes it as well, because only the tally enforces the cap (§5.4). It weakens the per-receiver bound on a compromised payer (§3.2) |
 | The block list (R6) | N7 | The holder, until the list returns. The cause is R6, an enabled control |
 | SendSplits inside the gap, for fee settlement (§5.8) | A fee is settled per payment from the SendSplit and the receiver's credit. For a payment inside the gap it is settled when the receiver syncs, or not at all | The fee beneficiary |
 | Stored copies of Outcomes received from others | The wallet asks again by presenting the Payment | Nobody |
@@ -5839,7 +6137,10 @@ unfavourable.
   committed transaction on power loss. The iOS build was not read. Nothing
   was tested. On Android the reference key-store service sets no such
   option, and Android's SQLite build flags set no other default, so each
-  transaction is synced before it returns; vendor builds were not read.
+  transaction is synced before it returns; vendor builds were not read. The
+  Pixel 6 mounts its data partition with `fsync_mode=nobarrier`, under which
+  a sync issues no flush to storage, so a true power cut is open there too
+  (§4, T2).
 - The exact sequence, for an ordinary user with no computer. Pay a first
   receiver; the wallet creates `new`, commits the journal with full sync,
   deletes `old` and releases. Within seconds, force a restart with the
@@ -5858,17 +6159,20 @@ unfavourable.
   Pass: the wallet resumes at k+1 every time. One failure is a fail.
 - The candidate barrier is a wait before release. If the gate shows that a
   keychain write survives a forced restart once a certain time has passed,
-  the wallet holds step 7 for that time after step 6. The wait is charged to
-  the payment time (§5.2). A second candidate is tested beside it: after
-  step 6, call `sync()` and then `F_FULLFSYNC` on the journal file, and then
-  release. Neither is tested. `sync()` may return before the data is
-  written.
+  the wallet holds step 7 for that time after step 6. On a tuple that uses
+  the wait, a credit is shown and the wallet reports complete only after the
+  wait as well. The wait is charged to the payment time (§5.2). A second
+  candidate is tested beside it: after step 6, call `sync()` and then
+  `F_FULLFSYNC` on the journal file, and then release. Neither is tested.
+  `sync()` may return before the data is written.
 - Until that test passes, with or without a barrier, P2 against an ordinary
-  user is not shown on iPhone. If no barrier works, the choices are: accept
-  this exposure; have an iPhone wallet stop when its files are absent, which
-  costs an honest holder the balance after an app deletion or a one-app
-  restore; or treat the tuple as unsupported. The choice is the owner's
-  (§12).
+  user is not shown on iPhone. If no barrier works, the tuple is unsupported
+  and is not enrolled (§3.2, §10.4.6). Two further courses are put to the
+  owner (§12). One is to accept this exposure, which leaves P2 unmet against
+  an ordinary user on iPhone. The other is to have an iPhone wallet stop when
+  its files are absent, which leaves P1 unmet: it costs an honest holder the
+  balance after an app deletion or a one-app restore. Neither changes the
+  finding.
 
 **What an ordinary user can still do**, with the unmodified app.
 
@@ -5881,7 +6185,8 @@ unfavourable.
   gains nothing by it.
 - Use the one exposure on a tuple whose key store loses a confirmed write in
   a power cut. Whether any target phone has that window is not tested.
-  Reading the sources, the Android reference does not and the iPhone may.
+  Reading the sources, the iPhone may, and so may the Pixel 6 at a true
+  power cut (§4, T2).
 - Use any tool that restores key-store entries. None is known. None has been
   tested.
 
@@ -5974,11 +6279,12 @@ entry created and one deleted, which in the two key forms is one more key
 generation; two listings; one read per marker; and a check of the stored state
 against the head's state digest. None of this is timed. The effect of many
 thousands of creations and deletions on a key store is not tested. The evidence
-gate times each part and runs the endurance test (§2.3).
+gate times each part and runs the endurance test (§10.4).
 
 **What the gate must show for this section**, per tuple, none of it run:
-entries of 0.6 KB, 3 KB and the proof-entry size written, read back
-identical, listed and deleted, after a reboot and after an OS update; the
+entries of 0.6 KB, 3 KB, 4 KB, the proof-entry size and the sizes that
+stand for a Migrate marker written, read back identical, listed and deleted,
+after a reboot and after an OS update; the
 read mapping of the table above with the phone locked, before first unlock,
 and with the key-store service failing; the screen-lock test above; every
 restore path of the two path tables, with the pass condition that the wallet
@@ -6020,8 +6326,8 @@ Nothing in this section is implemented or tested.
   updated from paying or being paid, and an update needs a connection that no
   regulatory control asked for.
 - **Choosing the version for a payment.** The Request states `rules_lo` and
-  `rules_hi`: the versions the receiver's app can judge and its descriptor
-  allows. Under the release rule `rules_lo` is 1; the field is carried so
+  `rules_hi`: the lowest and highest rules version the receiver's app can
+  judge. Under the release rule `rules_lo` is 1; the field is carried so
   that a faulty build shows itself. The payer signs the SendSplit under the
   highest version in that range that its own app supports and its own
   descriptor allows. If there is none, the payer signs nothing and nothing is
@@ -6031,22 +6337,35 @@ Nothing in this section is implemented or tested.
 - The receiver refuses a SendSplit whose version is outside the range its own
   Request stated. The signed preimage is `tag ‖ scheme id ‖ rules version ‖
   payload` under every version, so the receiver can verify the device
-  signature over a payload it cannot read and answer with a signed `Refused`.
-  The payer then refunds. Only a modified or faulty payer sends such a
-  SendSplit.
+  signature over a payload it cannot read. It answers with a signed
+  `Refused`, reason version, only where it can read the Payment's subject
+  and that subject is one of its own Requests; the payer then refunds.
+  Where it cannot read the subject it signs nothing (§5.2). Only a modified
+  or faulty payer sends such a SendSplit.
 - A wallet signs its own other transitions (ReceiveFold, RefundFold,
   RedeemSplit and the rest) under the highest version it supports that is not
   above `rules_max`. A journal therefore mixes versions. Each transition is
   judged under its own version, and each new version states how it follows a
-  state left by an earlier one.
+  state left by an earlier one. The payment rule above also lets a SendSplit
+  under a lower version follow a state left under a higher one. How a
+  transition under an earlier version follows a state left by a later
+  version is not defined.
 - The Request, the Payment envelope, the Outcome, the certificate, the
   receipt, the notices and the list segments each have one layout for the life
   of the scheme, with an extension area. A reader ignores an extension it does
   not know, unless the extension is marked critical; then it treats the object
   as one it cannot judge, and no payment is made. A critical extension is used
   only for a regulatory control the scheme has switched on. Otherwise a new
-  build could shut out old ones by that route. About 2 to 4 B per object
-  (estimate).
+  build could shut out old ones by that route. A critical extension that a
+  wallet's app does not know stops payments between that wallet and the
+  wallets that carry it until the app is updated. That is this document's
+  addition, and it counts as an explicitly enabled regulatory control only
+  if the owner confirms it (§12 item 7). Where the object is a Payment, the
+  payer was debited before the receiver saw it (§5.2). The receiver then
+  answers `Refused`, reason version, where §5.2 gives a signed answer, and
+  the payer refunds. The Request does not state which critical extensions
+  the receiver's app knows, so the payer's pre-check cannot catch the
+  case. About 2 to 4 B per object (estimate).
 - The issuer's replay and the ledger keep the checks of every version that
   was ever allowed, without time limit. A RedeemSplit, a fee settlement or
   evidence signed under an old version is judged under that version.
@@ -6056,24 +6375,14 @@ Nothing in this section is implemented or tested.
   under an earlier relation is accepted is fixed in Q0 (§2.3). The reverse
   case is not designed. A release holds no verifier for a relation switched
   on after it was built, so a wallet that has not updated cannot verify
-  value whose history holds a hop under the newer relation. It answers
-  `Refused`, the payer refunds, and it cannot be paid such value until it
-  updates the app, which no regulatory control asks for. Until Q0 fixes a
-  form of proof that every earlier release verifies, the rule that no
-  change stops a working wallet until it goes online is not met under the
-  proof for such a wallet (§3.1). The other
-  direction is not designed. A wallet that has not updated cannot verify a
-  proof whose history holds a transition under a relation newer than its
-  app, unless the proof that travels verifies under a key that does not
-  change between releases (§2.1, "Policy inputs"). Until that exists, a new
-  relation stops such a wallet being paid that value until it updates its
-  app, and no regulatory control asks for that (§3.1). The other
-  direction is open. A release cannot carry a verifier for a relation that
-  is allowed after it was built. A wallet that has not updated can then be
-  paid value proven under the newer relation only if the proof that travels
-  verifies under a key that does not change between releases. That is not
-  designed (§2.1, §2.3). Until it is, the rule that no change stops a
-  working wallet is not met for such a wallet (§3.1).
+  value whose history holds a hop under the newer relation, unless the
+  proof that travels verifies under a key that does not change between
+  releases (§2.1, "Policy inputs"). No such proof is designed (§2.3).
+  Without it the wallet answers `Refused`, the payer refunds, and the
+  wallet cannot be paid such value until it updates the app, which no
+  regulatory control asks for. Until Q0 fixes a form of proof that every
+  earlier release verifies, the rule that no change stops a working wallet
+  until it goes online is not met under the proof for such a wallet (§3.1).
 - **What this gives up.** A version with a defect that lets value be created
   cannot be shut out offline. Every receiver keeps accepting it, because the
   receiver cannot tell an old honest build from a wallet that exploits the
@@ -6084,14 +6393,14 @@ Nothing in this section is implemented or tested.
   it at enrollment and at renewal, from the app identity in the evidence: a
   wallet on an older build must update the app before its certificate is
   renewed. With R8 on, no build below the floor holds a live certificate one
-  lease after the entry takes effect, among receivers whose clocks are right.
-  With `Never` certificates an old build lives as long as its holder stays
-  offline. A renewed wallet keeps accepting every version ever allowed, so
-  the floor shuts out no wallet offline. Whether the floor is part of what R8
-  checks is an owner decision (§12). If it is, it is one of the reasons §7.1
-  lists for refusing a renewal. If it is not, no renewal is refused for the
-  app's build or version, and a defective build is retired only by its users
-  updating.
+  lease and its grace after the entry takes effect, among receivers whose
+  clocks are right. With `Never` certificates an old build lives as long as its
+  holder stays offline. A renewed wallet keeps accepting every version ever
+  allowed, so the floor shuts out no wallet offline. Whether the floor is part
+  of what R8 checks is an owner decision (§12). If it is, it is one of the
+  reasons §7.1 lists for refusing a renewal. If it is not, no renewal is
+  refused for the app's build or version, and a defective build is retired only
+  by its users updating.
 - A build floor acts on what a wallet runs when it renews. Nothing offline
   shows which build a wallet runs: the rules version in a SendSplit is the
   payer's own statement, and E shows the build of the last renewal.
@@ -6119,9 +6428,11 @@ Nothing in this section is implemented or tested.
   otherwise: the counterparty that does hold the notice applies it.
 - Adopting a notice takes a marker step (§5.10). The notices a wallet holds
   are in its key store, and the marker names them. Putting older files back
-  therefore does not return a wallet to looser terms. The block list is the
-  one exception: it is kept in the files, and §5.5 says what a wallet does
-  when it has lost it.
+  therefore does not return a wallet to looser terms. Two things are kept
+  in the files instead. One is the block list; §5.5 says what a wallet does
+  when it has lost it. The other is every policy entry except the one the
+  wallet's own E names; a wallet that lacks the entry a payer's E names
+  takes it from the payer as a notice (§5.10).
 
 **Tier-row notices**
 
@@ -6185,14 +6496,17 @@ The owner asked for "some optional expiry for attestation so users will have
 to sync online before they can send offline again, optionally". This document
 reads R8 as that. Where a tier has a lease, the certificate ends, and the
 renewal that follows carries fresh evidence and returns a refreshed E. Where a
-tier has no lease, there is no renewal, and E stays what it was on the day of
-enrollment for the life of the wallet.
+tier has no lease, there is no renewal of evidence, and E stays what it was on
+the day of enrollment for the life of the wallet, except after the iPhone
+re-attestation of §7.2. A new certificate without evidence is still issued
+for receive freshness, to lift a block and to move a limit share (§5.5,
+§7.1).
 
 What the phone presents, and what that shows:
 
 | | Android | iPhone |
 |---|---|---|
-| What the phone presents | A key generated for this renewal, with the issuer's nonce as challenge, certified by the app attestation key. One certificate, about 0.6 to 0.8 KB (estimate from Google's vectors for leaves under a system key; a leaf under an app's key has not been captured) | An assertion by the App Attest key that was certified at enrollment, over the renewal request. About 140 B on iOS 26, about 185 B on iOS 27 (estimates) |
+| What the phone presents | A key generated for this renewal, with the hash of the renewal request (device id, new serial, recent block hash) as challenge, certified by the app attestation key. One certificate, about 0.6 to 0.8 KB (estimate from Google's vectors for leaves under a system key; a leaf under an app's key has not been captured) | An assertion by the App Attest key that was certified at enrollment, over the renewal request. About 140 B on iOS 26, about 185 B on iOS 27 (estimates) |
 | Network the phone needs for it | None for the leaf itself, by source reading: the app attestation key signs it and the vendor's provisioning service is not called. Not tested | None for the assertion itself, by statements of Apple's engineers. Not tested in airplane mode |
 | What it shows | The boot state the secure hardware was told at the current boot (bootloader locked, boot verified, the verified-boot key), the OS, vendor and boot patch levels of the current boot, and the app identity as the operating system reports it. By inference from how the key store binds key blobs, it comes from the secure hardware that holds the app attestation key; not tested | That something holding the certified key signed the request. From iOS 27, a launch category and a bundle version, which are collected on the device |
 | What it does not show | That the running system has not been taken over since it booted. That the released app asked for it. Whether the state had one successor | Anything about the operating system: no version, patch level, boot state or jailbreak state. That the payment key is in the Secure Enclave |
@@ -6210,7 +6524,10 @@ What the phone presents, and what that shows:
 - **What a renewal depends on.** The issuer, one ledger write being final,
   and k of the n witnesses. With R8 on, an outage of any of the three that
   lasts longer than what is left of a lease plus `expiry_grace` stops that
-  phone sending until it ends. With R8 off no wallet renews and such an
+  phone sending until it ends. With R8 off no lease forces a renewal. Where
+  the tier sets `receive_not_after` (R6, §5.5), an outage that lasts longer
+  than what is left of it stops that phone requesting until it ends, and a
+  cleared block is not lifted while it lasts. With R6 and R8 off such an
   outage stops nothing offline. §7.1 has the flow.
 - **Why a renewal is refused.** For three kinds of reason and no other
   (§7.1). A regulatory control that is on: the bound account is blocked (R6).
@@ -6226,10 +6543,10 @@ What the phone presents, and what that shows:
   published and patched before the floor's date. It does not exclude a hole
   that is not yet patched, and it shows nothing about a system taken over
   while running (§2.1, §4).
-  - Between renewals it does nothing. A phone that met the floor on its
-    renewal day and has not been updated since still pays until its lease
-    ends. The lease is therefore the longest age of the evidence behind any
-    payment that a receiver with a right clock accepts.
+  - Between renewals it does nothing. A phone that met the floor on its renewal
+    day and has not been updated since still pays until its lease, with its
+    grace, ends. The lease with its grace is therefore the longest age of the
+    evidence behind any payment that a receiver with a right clock accepts.
   - A floor raised by a new entry reaches a phone at its next renewal. The
     holder must first install a system update at or above the floor, which
     needs the vendor and not the issuer.
@@ -6302,7 +6619,13 @@ What the phone presents, and what that shows:
   succession (estimate). This construction has not been reviewed.
 - A wallet takes the first root key of a scheme from the descriptor it
   receives at enrollment, checked against a digest in the app build. Every
-  later root key reaches it only through a succession notice.
+  later root key reaches it only through a succession notice. How a wallet
+  that enrolls after a succession comes to hold the earlier root keys and
+  the succession notices between them is not defined. Without them it
+  cannot verify a certificate issued under an earlier root, and it has no
+  notice to hand to a wallet that holds only that root. Until that is
+  defined, the statement that a planned rotation sends nobody online is not
+  shown for those two wallets.
 - **A phone that has been offline for years.** It holds an old root and old
   issuer keys. Until it learns the new ones it can do everything it could
   before: pay and be paid by wallets whose certificates it can verify, under
@@ -6339,7 +6662,9 @@ more.
 - **Moving to a new phone after closure.** A device that is registered as the
   successor of a Migrate, for an account that already has a live row, is
   still registered after closure. Otherwise a holder whose phone is failing
-  could no longer keep the balance spendable.
+  could no longer keep the balance spendable. The Migrate is signed only
+  after the new device has enrolled (§7.2), so at registration the ledger
+  checks only that the account already has a live row (§6).
 - **Bringing value home.** The operator can wait. It may also want sending
   to stop, so that holders unload. Two tools exist, and each is the owner's
   to allow (§12). A tier-row notice can bring in a lease for every tier; that
@@ -6348,10 +6673,11 @@ more.
   That is a renewal refused for a reason §7.1 does not list. It is in the
   design only if the owner adds it to those reasons. Either tool stops
   sending. Neither stops receiving, and neither stops unloading.
-- **What never ends.** An unload pays at face value whenever it is presented.
-  The ledger keeps the registry, the pooled reserve, the unload instruction,
-  fee settlement, evidence, the checks of every rules version, every policy
-  entry and every fee policy record.
+- **What never ends.** An unload is recorded at face value whenever it is
+  presented, and it is paid as §8.2 and §8.4 say. The ledger keeps the
+  registry, the pooled reserve, the unload instruction, fee settlement,
+  evidence, the checks of every rules version, every policy entry and every
+  fee policy record.
 - **The cost.** Value that will never be presented cannot be told from value
   still held (§8.3), so the reserve behind unredeemed offline value can never
   be released on the scheme's own evidence. If the chain itself is to be
@@ -6371,7 +6697,7 @@ No role below takes part in an offline payment except the two wallets (R1).
 | Role | Keys it holds | What it does | What it learns |
 |---|---|---|---|
 | Ledger (validators, and anyone who can read the chain) | Consensus keys, and the validators' seal keys that the mint path uses today (§8.1) | Holds the pool, the device registry, the scheme cell, the policy table with its set of revoked vendor serials, the fee policy table, the block index and, where recovery is enabled, the recovery account. Verifies the vendor evidence of every registration and renewal, writes the enrollment statement E into the registry row and seals it (§8.1). Executes the instructions below | The raw vendor evidence of each registration and renewal, and E: device key, platform class, security level, on Android the boot state, patch levels and app identity. Each row's tier, bound account, status, totals and counters. Each load and unload with amount and time. The time of each renewal and each sync, with the sequence number. Successions. Every pair of transitions submitted as evidence. With fees, every payment whose fee is settled (§5.8). Not wallet balances, and no other offline payment |
-| Scheme root | Root key, kept offline | Signs the scheme descriptor, issuer key certificates and revocations, fee policy records and policy entries | Nothing from operation |
+| Scheme root | Root key, kept offline | Signs the scheme descriptor, issuer key certificates and revocations, fee policy records, policy entries and the other root-signed notices of §5.1: tier rows, the rules version, the scheme status and, together with the next root key, a root succession. A new `list_epoch` is stated in the new list key's certificate (§5.5) | Nothing from operation |
 | Ledger governance | The ledger's existing governance procedure | Installs the scheme cell, policy entries and fee policy records after checking the root signature | What the ledger learns |
 | Block authority | Whatever §12 names | Sets and clears account blocks (R6) | What the ledger learns |
 | Issuer service (off-chain) | Certificate key, voucher key, list key, registry authority key. Four separate governed roles | Checks vendor evidence before it authorizes a registration; signs certificates, vouchers, lists, registration authorizations and countersigned Migrates; accepts sync, including a resume record (§7.1); submits renewals, head anchors, retirements, fee settlements and newly revoked vendor serials; keeps every countersigned Migrate with no time limit | Each device's vendor evidence and bound account. Every transition of a wallet that syncs, apart from those lost in a gap (§5.10), so both sides of each such payment and its balance. When and from where each wallet connects |
@@ -6385,6 +6711,15 @@ No role below takes part in an offline payment except the two wallets (R1).
 No role is named as the party that adds cash to the pool. `FundKagemushaPool`
 takes cash from any account (§8.4). Who does so, if anyone, is one of the
 choices of §3.2.
+
+No key role is assigned for four signatures the issuer makes: the
+countersignature on a Migrate, the sync acknowledgement that creates a time
+anchor, the answer before a Migrate (§7.2) and the recovery amount (§7.3).
+The root certifies only certificate, voucher, list and witness keys (§5.1).
+The per-key list of §8.1 therefore does not cover these four signatures, and
+§5.3 has no evidence line for a MigrateFold on a countersigned Migrate whose
+succession the registry does not record. Which key signs each is the owner's
+decision (§12 item 98).
 
 Vendor revocation data. A policy entry names the root of the set of vendor
 certificate serials that were revoked when the entry was made (§5.1), and that
@@ -6410,16 +6745,16 @@ succession to its live end. None iterates over rows or claims.
 
 | Instruction | Submitted by | The chain checks | Effect |
 |---|---|---|---|
-| `SetKagemushaScheme` | Ledger governance | Root signature over (epoch, digest); epoch above the cell's | Installs or replaces the scheme cell: role keys, tier table, ledger parameters (the unload window, `unload_limit`, the registration caps, whether Load is open, whether Load stays open while the pool is short), recovery parameters. A key revocation is a new epoch |
+| `SetKagemushaScheme` | Ledger governance | Root signature over (epoch, digest); epoch above the cell's. Which root key the chain checks it under once a cell names a new root key is not defined: §5.11 gives the succession rule for wallets only | Installs or replaces the scheme cell: role keys, tier table, ledger parameters (the unload window, `unload_limit`, the registration caps, the scheme status, which says whether Load is open (§5.11), whether Load stays open while the pool is short), recovery parameters. A key revocation is a new epoch |
 | `AddKagemushaPolicyEntry` | Ledger governance | Root signature; the entry holds the digest of the entry before it | Appends one entry to the policy table (§5.1, §8.1) and replaces the set of revoked vendor serials with the set the entry names. Entries are never changed or removed |
 | `AddKagemushaRevokedSerials` | Registry authority | That authority | Adds vendor certificate serials to the revoked set that registrations and renewals are checked against. It removes none; only a new policy entry replaces the set |
 | `AddKagemushaFeePolicy` | Ledger governance | Root signature; id not yet present | Adds a fee policy record. A second form replaces only a record's payout account (§5.8) |
 | `SetKagemushaAccountBlock` | Block authority | That authority | Sets or clears `send_blocked` and `receive_blocked` for an account; consensus derives the device entries. Not needed if §12 names an existing ledger fact |
 | `RequestKagemushaDeviceBlock` | The bound account | That the scheme has switched on holder-requested blocking as part of R6 (§7.2) | Sets or clears a block on one of the account's own device ids; consensus derives the entry. The instruction is refused in a scheme that has not switched it on |
-| `RegisterKagemushaDevice` | The account being bound | Authorization signed by the registry authority key; submitter equals the account in it; account not blocked; device id is new and is the hash of the key; registration caps; the vendor evidence, by the checks of §8.1, under the newest policy entry in force | Creates the registry row with E, its digest and the first certificate serial. The validator quorum seals the registry root (§8.1) |
+| `RegisterKagemushaDevice` | The account being bound | Authorization signed by the registry authority key; submitter equals the account in it; account not blocked; the scheme is open, or the account already has a live row (§5.11); device id is new and is the hash of the key; registration caps; the vendor evidence, by the checks of §8.1, under the newest policy entry in force | Creates the registry row with E, its digest and the first certificate serial. The validator quorum seals the registry root (§8.1) |
 | `RenewKagemushaDevice` | Registry authority | Row is live, or retired by its account; row not held; bound account not blocked; no holder-requested block on the device id (§7.2); new serial is the row's serial plus one; the device key's signature over the renewal request; where the tier has R8 on, the renewal evidence by the checks of §7.1; for an iPhone re-attestation (§7.2), the new attestation by the checks of §8.1 | Raises the row's serial and, where evidence was checked, replaces E. A row retired by its account becomes live. The validator quorum seals the registry root. The issuer signs the new certificate, and the witnesses its receipt, only after this is final |
 | `AnchorKagemushaHead` | Registry authority | That the device key in the row signed this head, and that its sequence number is not below the row's | Records the acknowledged head and its sequence number |
-| `RetireKagemushaDevice` | Registry authority, or the bound account | From the registry authority: the old key's signed Migrate naming a successor row bound to the same account, and the new key's signature on the same request. From the bound account: its own signature (a declared loss, §7.2) | Sets the row to retired. For a Migrate it records the final redeemed total and the successor. It emits no block entry |
+| `RetireKagemushaDevice` | Registry authority, or the bound account | From the registry authority: the old key's signed Migrate naming a successor row bound to the same account, and the new key's signature on the request of §7.2, step 2. The issuer applies the other conditions of §7.2 before it submits: neither row is held, and the successor has taken over no other row. Whether the chain checks them too is not defined. From the bound account: its own signature (a declared loss, §7.2) | Sets the row to retired. For a Migrate it records the final redeemed total and the successor, and moves the old row's loaded total less its claimed total, if positive, to the successor (§8.2). It emits no block entry |
 | `LoadKagemusha` | The bound account | Row is live and not held; account not blocked; Load is open; load id is new | Moves the amount into the pool; adds it to the row's loaded total; raises the row's load counter by one and records that value as the voucher number of this load |
 | `RefundKagemushaLoad` | Anyone | The load exists and is not refunded; a statement signed by the voucher key that this load id and voucher number are void | Returns the load to the bound account as §7.1 says |
 | `UnloadKagemusha` | Anyone | With a RedeemSplit: its signature against the row's key, the row's status and, where the relation fixed in Q0 requires it, its proof (§8.2). With a device id only: nothing more | Records the claim, if any; pays what is due to the bound account or queues it (§8.2) |
@@ -6427,7 +6762,7 @@ succession to its live end. None iterates over rows or claims.
 | `SettleKagemushaFee` | Registry authority | §5.8: both device signatures, that the SendSplit's `fee_policy_id` names a record in the fee policy table, the fee under that record, that neither row is held, and that this payment's fee was not paid before | Pays one fee to the record's beneficiary |
 | `SubmitKagemushaEvidence` | Anyone | Two objects signed by one registered device key that satisfy a predicate of §5.3, with both signatures checked against that row's key | Places a hold on that key's row or, if that row was retired by Migrate, on the live row at the end of its succession (§8.2). Evidence of an issuer-key fault is recorded and places no hold |
 | `ReinstateKagemushaDevice` | Whoever the owner names (§3.2) | To be defined with that decision | Ends a hold and says what the holder gets back |
-| `FundKagemushaRecovery`, `ClaimKagemushaRecovery`, `PayKagemushaRecovery` | The insurer funds; the bound account files; the payout is submitted as §7.3 defines | §7.3. All three are refused unless the scheme enables recovery. A payout changes no row's status and never touches the pool | Pays an insurance claim from the recovery account, within the cap |
+| `FundKagemushaRecovery`, `ClaimKagemushaRecovery`, `PayKagemushaRecovery` | The insurer funds; the bound account files; who submits the payout, and after what check of `recovery_delay`, is not defined (§7.3 names no submitter) | §7.3. All three are refused unless the scheme enables recovery. A payout changes no row's status and never touches the pool | Pays an insurance claim from the recovery account, within the cap |
 
 Under the proof-carrying design, `LoadKagemusha` and `UnloadKagemusha` also
 carry what the relation fixed in Q0 requires (§2.3), and the existing top-up
@@ -6465,8 +6800,11 @@ same check applies to it.
   outage of the issuer, the chain or the witness quorum that lasts longer
   than what is left of a lease plus `expiry_grace` stops that phone sending
   until it ends. That is R8 at work: the control the scheme switched on needs
-  all three. With R8 off no wallet has to renew, and such an outage stops
-  nothing offline.
+  all three. With R8 off no lease forces a renewal. Where the tier sets
+  `receive_not_after`, an outage that lasts longer than what is left of it
+  stops that phone requesting until it ends, and a cleared block is not
+  lifted while it lasts. That is R6 at work. With R6 and R8 off such an
+  outage stops nothing offline.
 - Unload needs a ledger node and nothing else. It does not need the issuer, a
   valid certificate or a fresh list (§8.2).
 - Where the tier has R8 off, a new certificate carries no renewal evidence,
@@ -6613,8 +6951,8 @@ when it is ready (§5.10). The one exception is the declaration of loss in
     signature, that the load is committed to that account, and that it was not
     refunded before. The wallet takes the same statement in place of the
     voucher and steps its last folded number past it, with a MintFold of
-    amount zero whose subject is the void statement. §5.1 and H7 of §2.1
-    describe a MintFold for a voucher only; Q0 fixes the void form (§2.3).
+    amount zero whose subject is the void statement (§5.1). H7 of §2.1 has
+    no clause for the void form; Q0 fixes it (§2.3).
     An issuer that signs a void statement and also releases a voucher has
     created unbacked value, as a stolen voucher key does (§8.1).
   - A load with neither a voucher nor a void statement. The amount stays in
@@ -6655,8 +6993,10 @@ when it is ready (§5.10). The one exception is the declaration of loss in
     and retirement of the device id by its account (§7.2) do not stop an
     unload.
   - Under the proof-carrying design the wallet proves the RedeemSplit before
-    it commits it. Whether the chain requires that proof, and what follows
-    for a phone that cannot make it, is in §8.2.
+    it commits it. Whether the chain requires that proof is fixed with the
+    relation (§8.2). Under either answer a phone that cannot make the proof
+    cannot unload, because the wallet commits no RedeemSplit without its
+    proof, and no way out is designed (§3.1, §8.2).
 - **Sync.** A direct exchange with the issuer, authenticated by the device key
   with a signature over an issuer nonce (on iPhone also an App Attest
   assertion). That signature changes no state and is not a journal object. The
@@ -6669,9 +7009,12 @@ when it is ready (§5.10). The one exception is the declaration of loss in
   stays one transition behind until the next sync, and nothing follows from
   that.
   - A wallet that resumed (§7.2) has a gap in its journal. It uploads what its
-    files hold above the acknowledged head and then a resume record: its last
-    transition, complete and signed, as the checkpoint holds it (§5.10). The
-    issuer accepts a resume record on three checks, each on an input it holds:
+    files hold above the acknowledged head and then a resume record (§5.1):
+    the checkpoint it resumed at, which holds its last transition, complete
+    and signed, the balance, the redeemed total, the last voucher number
+    folded, the Migrate flag and the lists of open Requests and unresolved
+    payments (§5.10). The issuer accepts a resume record on three checks,
+    each on an input it holds:
     the device key's signature on that transition; a sequence number above the
     acknowledged head's, or the same sequence number with the same digest;
     and cumulative totals not below those at the acknowledged head. It then
@@ -6792,10 +7135,12 @@ scheme has switched on.
 
 With R6, R7 and R8 off none of the rows occurs. Receive freshness,
 `send_blocked`, the per-counterparty cap, `require_anchor`, a tier-row notice
-that switches a control on for certificates already issued, and a block at
-the holder's request are this document's additions under the owner's three
-controls. Each counts as an
-enabled regulatory control only if the owner confirms it (§12).
+that switches a control on for certificates already issued, a block at the
+holder's request, a clock that R7 or R8 can no longer use, the block-list
+version a wallet must hold again after a resume, and a critical extension that
+the wallet's app does not know are this document's additions under the owner's
+three controls. Each counts as an enabled regulatory control only if the owner
+confirms it (§12).
 
 Stops that need no network, listed so that the table is not read as complete
 for every stop:
@@ -6830,9 +7175,11 @@ Common rules.
   a key store that went back to an earlier state would show.
 - A wallet never deletes its device key, its journal or its current marker on
   its own reading of the phone. It deletes a marker only where §5.10 says so.
-  It deletes an old key and old files only in the two places named below,
-  each after a final on-chain fact. This is a wallet rule: a wallet never
-  destroys its own key or balance on a condition that may pass.
+  It deletes an old key only in the two places named below, after a Migrate
+  and after a declared loss, each after a final on-chain fact. It deletes
+  old files only after a declared loss; after a Migrate they are kept. This
+  is a wallet rule: a wallet never destroys its own key or balance on a
+  condition that may pass.
 - The marker decides the wallet's state (§5.10). The files are a record of
   history. Everything in this section follows from that.
 
@@ -6881,7 +7228,7 @@ What is lost with the files, and for whom.
 | Journal history in the gap | The issuer cannot replay those commits (§7.1) | The issuer loses a detection tool. The holder loses nothing |
 | Requests that are closed, and decisions older than the last few the marker keeps | A Payment presented again for one of them gets no signed answer. The wallet cannot rule out that it credited that payment in the gap, so it does not answer `Refused` (§5.10). If the payment had in fact been refused and the Outcome never reached the payer, or if it arrives late for a Request that had closed, the payer cannot refund | The other party. The amount stays in neither wallet. It concerns a payment that did not complete |
 | Unresolved SendSplits beyond those the marker keeps complete | They cannot be presented again from this phone. A `Refused` Outcome for one that the marker no longer lists cannot be refunded | The holder |
-| The per-payer tally for the current day and month | It restarts from what the old files still hold | Nobody while the payer's phone meets the assumptions. It weakens the per-receiver bound of §3.2 |
+| The per-payer tally for the current day and month | It restarts from what the old files still hold | Nobody under a day or month limit while the payer's phone meets the assumptions. Under the per-counterparty cap an unmodified payer passes it once more (§5.4). It weakens the per-receiver bound of §3.2 |
 | The block list | With R6 on, the wallet neither pays nor requests until it holds the version its checkpoint names (§7.1 table) | The holder, until the list returns. The cause is R6 |
 | Stored copies of Outcomes received from others | The wallet asks again by presenting the Payment | Nobody |
 | Under the proof-carrying design: the last proof and its witness, if they were only in the files | The wallet has its balance and can prove no new transition, so it cannot pay offline. It cannot unload or Migrate either: a RedeemSplit and a Migrate are transitions, and the wallet commits none unproven (§5.2) | The holder. §5.10 keeps both in the key store for this reason. Whether a key store can hold them is a qualification item (§2.3). Until it is shown, P1 after a loss of files is not shown for the proof-carrying design |
@@ -6890,10 +7237,13 @@ How many Requests, decisions and SendSplits the marker keeps is set in §5.10.
 Larger numbers protect other parties' refunds and cost a larger key-store
 write for each signed object. Owner decision (§12).
 
-**Stopped.** A wallet is stopped only when the key store has answered and the
-device key or the marker is gone. Nothing on the phone then shows which state
-is the latest, and no flow gives the balance back: any path that did would let
-an ordinary user back up, pay, remove the marker and restore. The cases found:
+**Stopped.** A wallet is stopped when the key store has answered and the
+device key or the marker is gone. It is also stopped in the two cases of
+§5.10 in which the key store has not behaved as T2 says: two markers that
+recovery cannot order, and the last case below. Nothing on the phone then
+shows which state is the latest, and no flow gives the balance back: any path
+that did would let an ordinary user back up, pay, remove the marker and
+restore. The cases found:
 
 - The device key is gone. The phone was erased or reset. On Android the app
   was uninstalled without keeping its data, or its storage was cleared; the
@@ -6918,7 +7268,11 @@ an ordinary user back up, pay, remove the marker and restore. The cases found:
 - At a sync the issuer shows a transition signed by this device key above the
   checkpoint's sequence number. The wallet decides on the transition and its
   own signature on it, not on the issuer's word. It means the key store went
-  back to an earlier state, which T2 rules out.
+  back to an earlier state, which T2 rules out. The key and a valid marker
+  are present in this case, and the state is worked out again at every start
+  with no stored verdict (§9). So this stop needs a record that survives a
+  restart. That record is not designed; a key-store entry beside the marker
+  is the candidate.
 
 The holder of a stopped wallet can leave it as it is or declare the loss.
 Where a scheme enables recovery insurance, a claim is the only way to any
@@ -6927,10 +7281,12 @@ which T1 to T6 hold. The evidence gate tests that per tuple (§10.4).
 
 The existing attested suite does not tell a failed read from an absent item.
 Its Android key store uses the alias lookup
-(`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt:61, 81, 164`).
-Its iPhone key store reads every keychain error as "no key" and every failure
-to open the key as a lost key
-(`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift:67-78`).
+(`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt:61, 81, 164`
+at commit `b2a3cd05bc`).
+Its iPhone key store has an existence check that reads every keychain error
+as "no key", and a load that reads every failure to open the key as a lost
+key
+(`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift:67-79`).
 The wallet core of §9 does not copy either.
 
 The flows:
@@ -6939,16 +7295,20 @@ The flows:
   moves to a new device key under the same account.
   1. The new device enrolls and holds its certificate and receipt (§7.1).
   2. The old wallet syncs. It then asks the issuer whether a Migrate to the
-     named new device id would be accepted. The issuer makes every check of
-     step 4 except the Migrate's own signature, and signs its answer. On a
-     refusal the old wallet signs nothing. The step is there so that the old
-     journal is not closed by a transition the issuer then refuses. The
-     issuer accepts a Migrate it answered yes to, unless a hold has reached
-     either row in between.
+     named new device id would be accepted. The request names both device
+     ids, and the new key signs it before it is sent. The issuer makes every
+     check of step 4 except the Migrate's own signature, and signs its
+     answer. On a refusal the old wallet signs nothing. The step is there so
+     that the old journal is not closed by a transition the issuer then
+     refuses. The issuer accepts a Migrate it answered yes to, unless a hold
+     has reached either row in between. A yes therefore reserves the new
+     device id: from then on the issuer answers no to every other device id
+     that asks to Migrate into it.
   3. The old key signs `Migrate` as its terminal transition. It names the new
      device id, the whole balance, the redeemed total, the old journal's day
-     and month counters, and the Requests it carries (below). The new key
-     signs the same request. The old wallet does not sign while one of its own
+     and month counters, and the Requests it carries (below). The old key
+     signs last, only after the issuer's yes to the request that the new key
+     signed in step 2. The old wallet does not sign while one of its own
      Requests is still open for new payments (§5.2). The Migrate is committed
      like any signed object and is sent to the issuer by either phone. Until
      the issuer has accepted it the balance is in neither wallet. The old
@@ -6957,7 +7317,7 @@ The flows:
      issuer answers. Putting older files back on the old phone changes
      nothing: its marker holds the Migrate.
   4. The issuer accepts it only if the registry binds both device ids to one
-     account, the new key has signed the same request, the old journal
+     account, the new key has signed the request of step 2, the old journal
      extends the acknowledged head by replay or by a resume record,
      neither row is held, and the new row has not already taken over
      another row's balance by Migrate. A wallet folds one countersigned
@@ -7015,9 +7375,10 @@ The flows:
   Migrate and the MigrateFold are proven transitions (§2.1).
 
   A Migrate needs a new enrollment. After a scheme is closed to loads the
-  ledger still registers a device as the successor of a Migrate, for an
-  account that already has a live row (§5.11). A holder whose phone is
-  failing can therefore still Migrate, or unload.
+  ledger still registers a further device for an account that already has a
+  live row (§5.11). The ledger cannot require a Migrate at that point: the
+  new device enrolls in step 1, before the Migrate is signed. A holder
+  whose phone is failing can therefore still Migrate, or unload.
 - **iPhone whose App Attest key died** while the payment key and the marker
   survive. Apple documents that an App Attest key does not survive a
   reinstall or a restore. Offline the wallet pays and receives as before; the
@@ -7026,8 +7387,10 @@ The flows:
   the device id, the payment public key and the head, and the payment key
   signs the same transcript. The issuer submits it as a renewal; the
   validators verify Apple's chain and replace the App Attest facts in E
-  (§8.1). Device id, balance and marker are unchanged. The certificate serial
-  advances, so the wallet receives a new certificate and receipt.
+  (§8.1), with R8 on or off. Device id, balance and marker are unchanged. The
+  certificate serial advances, so the wallet receives a new certificate and
+  receipt. The Recertify that adopts the re-attested E has no clause in the
+  relation of §2.1 yet; Q0 fixes it (§2.3).
   - It shows a live instance of the app and possession of the payment key. It
     does not show the same device.
   - The wallet asks for it only when it is ready or has just resumed, that is,
@@ -7069,8 +7432,12 @@ The flows:
     control, is the owner's decision (§12). With it off, a lost or stolen
     phone that can be unlocked can be spent by whoever holds it, as cash can.
   - The wallet deletes the old key and the old files of a wallet declared
-    lost only after the retirement is final and the user has confirmed a
-    second time. That deletion is tidying. It has no security function.
+    lost only where the key store has answered and no valid marker of that
+    wallet is left, and then only after the retirement is final and the
+    user has confirmed a second time. That deletion is tidying. It has no
+    security function. Where the old key and a valid marker are present
+    (§7.1), the wallet deletes neither: that wallet can still resume at its
+    balance.
 - **Limits across certificates (R7).** The limit subject is the account
   (§5.4). The day and month counters belong to a journal, so to a device id,
   and not to a certificate. The issuer gives each device certificate of an
@@ -7084,10 +7451,12 @@ The flows:
   whole share in every window in which its certificate can still send.
   - Renewal. The issuer knows the counters at the head: from the journal, or
     after a resume from the last transition in the resume record, which
-    carries them. The `Recertify` carries the day and month counters of the
-    transition before it. A new certificate never resets them. If the new
-    share is below what the counters already show, the wallet sends nothing
-    more in that window.
+    carries them. The issuer sets the new certificate's opening counters as
+    §5.4 says, including the case of a resume record dated ahead of issuer
+    time. After the `Recertify` the wallet's counters for the day and the
+    month that contain `not_before` start at those opening counters. A new
+    certificate never resets them. If the new share is below what the
+    counters already show, the wallet sends nothing more in that window.
   - Moving share between two live devices of one account. The issuer raises
     one device's share only after it holds the other device's `Recertify` to a
     certificate with the lower share. A head declared in a sync request is not
@@ -7111,12 +7480,13 @@ The flows:
     before the loss. If the old phone turns up after its share was given
     away, its next certificate carries what is unallocated then.
   - After a lost phone whose certificate is `Never`. There is no such date,
-    and retirement stops nothing offline. The scheme chooses one of two rules
-    in the tier row. Never return the share: the account's usable limit stays
-    reduced by the lost device's share. Or return it after a set period: from
-    then on the account can send up to the old share per window through the
-    old phone, on top of its limit, if that phone still works. Owner decision
-    (§12).
+    and retirement stops nothing offline. The share does not return: the
+    account's usable limit stays reduced by the lost device's share unless
+    that phone comes back and syncs (§5.4). Returning the share after a set
+    period is the alternative put to the owner (§12). Under it the account
+    could from then on send up to the old share per window through the old
+    phone, on top of its limit, if that phone still works. No tier-row field
+    carries that choice until it is decided.
 
   Who checks. The wallet's core applies the counter rules. The issuer checks
   them by replay at the next sync, outside any gap, and it alone enforces the
@@ -7156,16 +7526,19 @@ Rules:
    user (below): paid from the pool, false claims would make the pool short
    while every assumption held.
 2. On-chain scheme parameter: `recovery_cap` per account per period.
-3. A claim is an on-chain instruction signed by the account bound to the
-   device id. One paid claim per device id. A held row accepts no claim. A
-   row retired by Migrate accepts none, because its balance moved. A row
-   retired by its account accepts one, like a live row.
+3. A claim is an on-chain instruction, `ClaimKagemushaRecovery`, signed by
+   the account bound to the device id. One paid claim per device id. A held
+   row accepts no claim. A row retired by Migrate accepts none, because its
+   balance moved. A row retired by its account accepts one, like a live row.
 4. A claim changes nothing about the device id. Neither filing nor payout
    retires, blocks or holds it. The registry row keeps accepting Load and
    Unload, no block entry is emitted, and a phone that still works is
    unaffected online and offline.
 5. Reference head H: the head of the presented journal, which must extend the
-   acknowledged head; with no journal, the acknowledged head itself.
+   acknowledged head; with no journal, the acknowledged head itself. With no
+   journal, value loaded above the acknowledged head is outside the amount.
+   It is not refunded as a load either: once its voucher was released the
+   issuer signs no void statement for it (§7.1).
 6. Amount = min(remaining cap, cash in the recovery account, balance at H
    minus any outflow by that id above H that has reached the issuer or the
    chain by payout). The issuer computes the amount and signs it. The chain
@@ -7176,9 +7549,12 @@ Rules:
    the wallet is in use. An optional `recovery_delay` before payout, which may
    be zero, gives time for that and for outflow above H to arrive. It suspends
    nothing. It is not a bound: under R5 no receiver has to sync within it.
-8. Payout is on-chain to the bound account, booked against the device id in
-   the row's recovery counter. It is never re-issued as offline balance and
-   never counted in the row's loaded total or paid total (§8.2).
+8. Payout is on-chain to the bound account, by `PayKagemushaRecovery`, which
+   carries the issuer-signed amount of rule 6. It is booked against the
+   device id in the row's recovery counter. It is never re-issued as offline
+   balance and never counted in the row's loaded total or paid total (§8.2).
+   Who submits the payout, and whether the chain refuses one before
+   `recovery_delay` has passed, is not defined.
 9. A claim is refused when the cap for the period is used up or the recovery
    account is empty. It may be filed again later. A claim is not a payment of
    §1, and §8.4 does not apply to it.
@@ -7233,7 +7609,12 @@ a claim or a fee can arrive after any delay.
 
 Registration carries the issuer-signed authorization and is capped by a
 scheme-wide per-window per-tier cap. Where the asset has an issuer-attested
-retail identity, the per-user device cap is keyed on that identity.
+retail identity, the per-user device cap is keyed on that identity. The
+per-user device cap is not defined further: this document gives it no
+parameter name and no value, and does not say whether the chain enforces it
+among the registration caps of §6 or the issuer does when it signs the
+authorization. Where there is no attested identity it can only be a cap per
+account, which does not limit anyone who opens another account (below).
 
 **The enrollment statement E.** §5.1 defines the object and §2.1 says how a
 proof uses it. The row holds it in full. It says what the vendor's hardware
@@ -7276,8 +7657,10 @@ in the transaction, the policy entry, the revoked set and the block's time.
 Every validator therefore reaches the same verdict. The parser follows the
 structure of each certificate from the top and never matches a pattern,
 because the challenge and the app identity are bytes the applicant chooses.
-§2.1 states the same checks as the enrollment relation; the native check and
-a proof of that relation must accept the same evidence.
+The normative list is the enrollment relation of §2.1, clauses EA1 to EA10
+and EI1 to EI8. The items below summarize it, and where the two differ §2.1
+applies. The native check and a proof of that relation must accept the same
+evidence.
 
 - Android.
   1. The chain for the app attestation key verifies, link by link, up to a
@@ -7288,7 +7671,8 @@ a proof of that relation must accept the same evidence.
      origin "generated", and a security level of TEE or StrongBox.
   3. The device key's certificate verifies under the app attestation key. It
      shows purpose "sign", curve P-256, origin "generated", the same security
-     level and no user-authentication requirement (§5.9).
+     level, and no use limit, no user-authentication requirement and no
+     unlocked-device requirement (§5.9).
   4. Both attestations show a locked bootloader and a verified boot; OS,
      vendor and boot patch levels at or above the entry's floor; and, in the
      list the operating system fills in, the entry's package name and
@@ -7307,7 +7691,8 @@ a proof of that relation must accept the same evidence.
      The counter is zero. The key id is the hash of the App Attest key. The
      nonce covers the hash of the enrollment transcript. The credential
      certificate is within its validity at the block's time. From iOS 27 the
-     launch category and the bundle version are the entry's.
+     launch category is App Store and, where the entry holds a lowest bundle
+     version, the reported one is at or above it (EI7).
   2. The transcript names the payment key, the payment key's signature over
      the transcript verifies, and the two keys differ.
   3. The transcript and the device id are checked as for Android.
@@ -7384,7 +7769,17 @@ about a failure of T4. None is part of the argument for a property of §1.
   proof-carrying design, a proof that starts from a sealed leaf.
 - Accounts cost a keypair and at most a fee, so a per-account cap does not
   gate a key thief. The gate is the scheme-wide registration cap, which honest
-  enrollment shares; a thief can also exhaust it to deny enrollment.
+  enrollment shares; a thief can also exhaust it to deny enrollment. None of
+  this needs a stolen key. One phone can attest many keys. The unmodified
+  app enrolls again after each declared loss or reinstall: the row its
+  account retired no longer counts against the per-user device cap (§7.2),
+  and where the asset has no issuer-attested retail identity it can also
+  use a fresh account. So under an honest issuer one phone can register many
+  device ids, up to the scheme-wide cap: the unmodified app one after
+  another, a compromised phone side by side, each with its own row and its
+  own limits. Once a window's cap is used up, every enrollment waits for the
+  next window, the new device of a Migrate and a re-enrollment after a loss
+  included. No rule against this is designed.
 - What sealing E changes. One statement for each carrier above.
   - In a proof. A device key has a place in a proven history only through a
     leaf under a root that the validator quorum sealed, and the validators
@@ -7422,18 +7817,30 @@ about a failure of T4. None is part of the argument for a property of §1.
   voucher was issued and spent; the bound is that load.
 - List key. No value created; honest devices can be blocked among wallets
   that take the forged segments, until the correction reaches those wallets
-  (§5.5). Merge-only entries stop a forged list lifting a block.
+  (§5.5). Merge-only entries stop a forged list lifting a block. A forged
+  segment also carries an issuer time of the thief's choosing, which raises
+  "last issuer time", and with it the floor, in each wallet that merges it
+  (§5.4, §5.5). A time set far enough ahead puts such a wallet in the
+  clock-reset state, which suspends its sending under a time-dependent
+  control until real time comes within the tolerance of the floor or a sync
+  brings the floor down (§5.4).
 - Registry authority key alone. This is the issuer's on-chain account.
   - It signs registration authorizations. The validators still check the
     vendor evidence, so it registers only keys that a genuine phone attested.
     One phone can attest many keys, so the thief can fill the registration cap
     with rows for its own phone, and deny enrollment to others.
   - Such a row has no certificate, so no honest receiver accepts a payment
-    from it. Its key can sign a RedeemSplit. Where an unload needs no proof,
-    the chain cannot tell how much that key holds, and the row is paid as
-    §8.2 says: at `unload_limit` per window above its own loads, or in full
-    at once where the scheme sets no limit. Where an unload must carry a
-    proof, the row has no proven value to redeem.
+    from it. The validators registered its key only as one attested for the
+    released app, on Android with a locked bootloader, and that app signs a
+    RedeemSplit only for value it holds (T3). So the stolen key alone draws
+    nothing from the pool. A row draws only where T1, T2 or T3 also fails on
+    the phone that holds its key. What the stolen key adds is the number of
+    such rows, past the checks the issuer makes before it authorizes a
+    registration. Where an unload needs no proof, the chain cannot tell how
+    much such a key holds, and the row is paid as §8.2 says: at
+    `unload_limit` per window above its own loads, or in full at once where
+    the scheme sets no limit. Where an unload must carry a proof, the row has
+    no proven value to redeem.
   - It submits renewals. It cannot pass renewal evidence the phone did not
     make.
   - It adds serials to the revoked set. Leaving a revoked serial out lets a
@@ -7444,8 +7851,9 @@ about a failure of T4. None is part of the argument for a property of §1.
     below the row's, because the chain checks both (§6).
   - It cannot retire a row without the device's signed Migrate or the bound
     account's signature. Retirement by an account stops nothing offline
-    (§7.2). It supplies a retired row's final redeemed total; set too high,
-    that leaves the row's unload door as open as a live row's and no wider.
+    (§7.2). It cannot set a retired row's final redeemed total: that is the
+    redeemed total named in the Migrate the old key signed, and the chain
+    checks that signature (§6, §7.2).
   - It cannot refund a load without the voucher key's statement.
   - It submits fee settlements but cannot forge the device signatures in
     them.
@@ -7518,12 +7926,15 @@ about a failure of T4. None is part of the argument for a property of §1.
   a row may record, and no pool condition refuses a claim. A recorded claim is
   never reduced or cancelled.
 - **Release.** The part of a row's claims that keeps its paid total at or
-  below its own loaded total is due at once. This part is the holder taking
-  back what it loaded. The part above the row's own loads is value the row
-  received from others. How fast it is released is set by `unload_limit`, a
-  scheme parameter. Its value is an amount per unload window, or no limit.
-  The unload window is a scheme parameter measured in ledger time. The value
-  is the owner's choice, and this document does not choose it. The two costs:
+  below its own loaded total is due at once. This part is at most what the
+  holder loaded. It need not be the same value: a row that paid its loads
+  away and was then paid by others redeems what it received at once, up to
+  its loaded total, and counterfeit among it is not slowed. The part above
+  the row's own loads is value the row received from others. How fast it is
+  released is set by `unload_limit`, a scheme parameter. Its value is an
+  amount per unload window, or no limit. The unload window is a scheme
+  parameter measured in ledger time. The value is the owner's choice, and
+  this document does not choose it. The two costs:
   - With a limit. A row is released at most `unload_limit` per window above
     its own loads. That slows honest receivers while every assumption holds.
     A merchant who loaded nothing and took 10,000 from honest payers is paid
@@ -7601,14 +8012,19 @@ about a failure of T4. None is part of the argument for a property of §1.
     (§5.8). Its queue entry leaves the queue: no cash is set aside for it, the
     shortfall falls by its amount, and the entries behind it move up.
     Otherwise cash set aside for a held entry would keep other rows waiting
-    while the pool has cash. What a hold does offline is §5.5.
+    while the pool has cash. How an entry leaves the middle of a queue that
+    is kept as three counters, without the instruction touching every entry
+    behind it (§6), is not designed. What a hold does offline is §5.5.
   - What it does not do. It changes no value that the row paid to others, and
     it delays no other row (P4).
   - When it can happen. A phone on which T1 to T3 hold never signs two
     successors of one state (§5.10), and a tuple that fails the power-cut
     tests of the evidence gate is not supported. So a hold reaches only a
-    phone on which an assumption failed: taken over by its holder, taken over
-    by someone else's malware, or faulty. The chain cannot tell these apart.
+    phone on which an assumption failed, or the phone that took over that
+    phone's balance by Migrate, on which no assumption need have failed
+    (§3.1, group C, item 6). The first is a phone taken over by its holder,
+    taken over by someone else's malware, or faulty. The chain cannot tell
+    these apart.
   - What ends it. Nothing in this design yet. What the holder gets back, and
     who may order it, is an owner decision (§3.2). `ReinstateKagemushaDevice`
     is defined with it. Until it is, a held balance stays held.
@@ -7637,8 +8053,8 @@ start of day 1, all of it from loads. Merchant M loaded nothing, was paid
 2,500 by honest payers, and records 2,500 on day 1. Holder H loaded 800 and
 records 800 on day 3. Row X loaded nothing, and its key signs a RedeemSplit
 for 1,000,000 on day 1, with no proof. X can exist only where T1, T2 or T3
-failed on that phone, or where the row was registered under a stolen registry
-authority key.
+failed on that phone. A stolen registry authority key adds such rows and does
+not by itself make one (§8.1).
 
 With `unload_limit` at 1,000:
 
@@ -7735,9 +8151,11 @@ affect. They do not show which rows are compromised.
    - Through a stolen voucher key, where a mint rests on that key (§8.1).
 3. **Rate.** No pool-wide cap exists (§8.2). With `unload_limit` set, the most
    that can leave the pool above devices' own loads in one window is the
-   number of rows times the limit, plus fees within their cap. Lowering the
-   limit slows honest net receivers by the same factor. With no limit there
-   is no bound on the rate.
+   number of rows times the limit, plus fees within their cap. Counterfeit
+   paid to a row that has paid its own loads away leaves at once, within that
+   row's loaded total, and the limit does not slow it. Lowering the limit
+   slows honest net receivers by the same factor. With no limit there is no
+   bound on the rate.
 4. **Issuer-side signal.** At a common past instant T, replay every journal
    synced after T up to T and sum the balances. Counterfeit at T is at least
    that sum minus `(L(T) − claimed(T))`. The bound stays valid, and is
@@ -7751,10 +8169,11 @@ affect. They do not show which rows are compromised.
    this signal does not exist.
 5. **What the protocol does not supply.** The number of phones compromised at
    once (compromises are correlated: one exploit or one leaked attestation
-   batch reaches many), the receivers each reaches per window, the windows
-   until a block entry reaches them, and the share of receivers that never
-   refresh a list. No empirical compromise rate for phone key stores was
-   found. Any estimate of C rests on assumed values for these.
+   batch reaches many), the device ids each of them holds (§8.1), the
+   receivers each reaches per window, the windows until a block entry reaches
+   them, and the share of receivers that never refresh a list. No empirical
+   compromise rate for phone key stores was found. Any estimate of C rests on
+   assumed values for these.
 
 ### 8.4 When the pool is short
 
@@ -7816,6 +8235,9 @@ would fall on every holder of the asset.
 
 ### 8.5 What the existing ledger code can and cannot carry
 
+The file and line citations of this section were read at commit
+`b2a3cd05bc` (§11.1). Several of the cited lines have moved since.
+
 Reusable: pool key, custody transfer, the non-signing reserve account (§6),
 the index pattern (its admission is marked incomplete), the Torii command
 surface, the governance proposal pattern (install-once, no rotation), and the
@@ -7851,9 +8273,14 @@ Not reusable as is, whether or not payments carry a proof:
   signature check, and its only X.509 parser is a test dependency
   (`crates/iroha_core/Cargo.toml:243`). An Android chain needs ECDSA P-256,
   ECDSA P-384 and, for the older root, RSA-4096, with SHA-256 and SHA-384. An
-  Apple attestation needs ECDSA P-384. A renewal needs P-256 only. Today the
-  checks of §8.1 exist outside the node: in the issuer's Python
-  (`python/iroha_app_attestation/`) and in the Kotlin attestation verifier
+  Apple attestation needs ECDSA P-384. A renewal through an app attestation
+  key or an App Attest assertion needs P-256 only. The fallback renewal of a
+  phone without an app attestation key (§7.1) and an iPhone re-attestation
+  (§7.2) need the full chain check. Today the
+  checks of §8.1 exist outside the node and outside any circuit: in the
+  issuer's Python (`python/iroha_app_attestation/`), a profile script
+  (`scripts/android_attestation_certificate_profile.py`) and the Kotlin
+  attestation verifier
   (`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/`).
   Writing them for the node adds dependencies to a consensus crate, and they
   must give the same answer on every validator: no network fetch, no local
@@ -7867,9 +8294,12 @@ Not reusable as is, whether or not payments carry a proof:
 - The gadgets for an enrollment proof. The repository has no P-384, RSA or
   SHA-384 gadget, so the server-made enrollment proof of §7.1 cannot be built
   from what exists. The validators' native check needs none of them.
-- None of the instructions of §6 exists. The existing instructions are the
-  top-up and the redemption of Recursive V1
-  (`crates/iroha_data_model/src/isi/kagemusha_v1.rs:2853, 2863`).
+- None of the instructions of §6 exists. At commit `b2a3cd05bc` the existing
+  instructions were the top-up and the redemption of Recursive V1
+  (`crates/iroha_data_model/src/isi/kagemusha_v1.rs:2853, 2863`). Commit
+  `92562ad371` added a third, `TopUpKagemushaOrdinaryV1`, a top-up of the
+  ordinary profile that block execution runs (line 2875 of the same file at
+  commit `752590f825`). Rows 4 and 10 of §11.1 do not list it.
 - On a non-boundary block, a load that writes a top-up receipt under the
   existing witness tag gives a non-zero top-up count with no attestation flag,
   and the node enters recovery. So does any write under that tag that does not
@@ -7891,15 +8321,20 @@ everything while no release keys exist (§2.2).
   (§2.3).
 - **Two pure steps.** `prepare(state, input) → (pending, bytes to sign)`
   runs the pre-check of §5.2 step 1 and builds the object. `finish(pending,
-  signature, proof) → (checkpoint bytes, marker name, commit record,
-  messages)` verifies the signature under the device key and normalizes it
-  to low-S, and builds the checkpoint of §5.10. The core drives the seven
-  steps of §5.2 through four traits the platform implements: `Signer`,
-  `Prover`, `Store` and `Markers`. The order is fixed in the core: sign;
-  prove, for a transition; for a credit, sign the Outcome; create the
-  marker; write the commit record; delete the previous marker. Messages are
-  returned only after the commit has succeeded and the previous marker is
-  confirmed absent.
+  signatures, proof) → (checkpoint bytes, marker name, commit record,
+  messages)` builds the checkpoint of §5.10. The core verifies each
+  signature under the device key and normalizes it to low-S when `Signer`
+  returns it, before `Prover` is called, so that the proof is made over the
+  signature that is stored. For a credit the Outcome is signed after the
+  proof (§5.2), so the core calls `Signer` a second time before `finish`,
+  and `finish` takes both signatures. No other section states a low-S rule;
+  whether a receiver, the issuer or the relation requires it is not
+  defined. The core drives the seven steps of §5.2 through four traits the
+  platform implements: `Signer`, `Prover`, `Store` and `Markers`. The order
+  is fixed in the core: sign; prove, for a transition; for a credit, sign
+  the Outcome; create the marker; write the commit record; delete the
+  previous marker. Messages are returned only after the commit has
+  succeeded and the previous marker is confirmed absent.
 - **`Markers`** has four calls: create (name, bytes), read, delete and list.
   Read returns the bytes, absent or unknown. Delete returns absent or
   unknown. List returns the names or unknown. The platform maps its own
@@ -7910,10 +8345,15 @@ everything while no release keys exist (§2.2).
 - **`Prover`** has one call: prove (the predecessor proof, the transition,
   its signature, the witness) → proof, or failure. It is called between
   signing and marker creation and nowhere else. A failure is an error before
-  the marker: nothing is stored and the state is unchanged. The core never
-  writes a commit record for a transition without a proof. There is no state
-  in which a committed transition waits for a proof, and no balance that is
-  reported apart from spendable balance.
+  the marker: nothing is stored and the state is unchanged. For a
+  ReceiveFold the core may call it again while the Request is open and
+  undecided. Once the Request has closed with no credit committed, the
+  receiver signs a `Refused` Outcome, reason proof, and commits it with a
+  marker step; that commit takes no proof (§5.2). Whether `handle` does
+  this itself or returns the choice to the app is not designed. The core
+  never writes a commit record for a transition without a proof. There is
+  no state in which a committed transition waits for a proof, and no
+  balance that is reported apart from spendable balance.
 - **Recovery** (§5.10, V1 to V8) runs inside `open`. It runs again before
   `prepare` whenever the previous marker step did not end with a confirmed
   result. No other entry point signs or releases.
@@ -7921,16 +8361,21 @@ everything while no release keys exist (§2.2).
   reason: ready, waiting or stopped. Only ready permits `prepare`. In the
   waiting state every call that would sign returns "try again" and changes
   nothing. In the stopped state every such call is refused. The core
-  evaluates the state at each open and each use and stores no verdict.
+  evaluates the state at each open and each use. Two rules of §5.10 need a
+  record that lasts across starts: the stop found at a sync, and
+  "unreadable", which means a read that still fails after an unlock and a
+  restart. Where that record is kept is not designed; a key-store entry
+  beside the marker is the candidate. The core stores no other verdict.
 - **Resume.** `open` also reports a resume: the commit counters at the two
   ends of the gap, and which records were lost (§5.10). A resume is an
   event. It is not an error and not a state; after it the wallet is ready.
   The app shows it.
 - **No destruction.** The core never deletes the device key, the journal or
   the current marker on its own reading of the phone. §7.2 names the two
-  places where an old key and old files are deleted: after a declared loss
-  and after a Migrate. The core does each only as a separate call that the
-  app makes, after the final on-chain fact §7.2 requires.
+  places where an old key is deleted: after a declared loss, where the old
+  files are deleted with it, and after a Migrate, where the old files are
+  kept. The core does each only as a separate call that the app makes,
+  after the final on-chain fact §7.2 requires.
 - **One process at a time.** `open` takes an exclusive lock on the journal,
   and the journal stays open for the life of the process.
 - **Failure contract.**
@@ -7950,11 +8395,20 @@ everything while no release keys exist (§2.2).
     allows; or committed and not yet released, because the previous
     marker's deletion is not confirmed.
   - `open` and `status` return, once the wallet is ready: the head commit's
-    object, which may not have been released; every unresolved SendSplit
-    that can be presented again, which after a resume is the newest two;
-    the payment ids, amounts and receivers of the other unresolved
-    SendSplits; and the latest RedeemSplit without a ledger receipt.
-    Presenting any of them twice is harmless (§5.2).
+    object, which may not have been released; the Requests the checkpoint
+    lists (§5.10); every unresolved SendSplit that can be presented again,
+    which after a resume is the newest two; the payment ids, amounts and
+    receivers of the other unresolved SendSplits; and the latest
+    RedeemSplit without a ledger receipt. Presenting any of them twice is
+    harmless (§5.2).
+  - After a resume a listed unresolved Payment can be presented again with
+    its proof only while its SendSplit is still the wallet's last
+    transition, because the proof entry holds only the proof of the current
+    state (§5.10). Otherwise presenting it can only fetch a stored Outcome
+    or, where the receiver's table gives a signed answer, draw a `Refused`,
+    which the payer folds as a refund (§5.2). Keeping the proof of each
+    listed Payment in the key store, about 6.5 KB each, would remove that
+    limit and is not designed.
 - **What "complete" is in the API.** `handle(message)` reports a credit, and
   `pay` returns a Payment, only after step 6 is confirmed. The core reports
   "complete" from one place. For a received payment that place is after the
@@ -7971,7 +8425,9 @@ everything while no release keys exist (§2.2).
 - **Public API**: `open`, `enroll`, `load`, `request`, `preview`, `pay`,
   `handle(message)`, `unload`, `sync`, `migrate`, `status`. `unload` takes
   no payee: an unload pays only the account bound to the device id in the
-  registry (§7.1).
+  registry (§7.1). The list names no call for the two deletions above, for
+  the iPhone re-attestation (§7.2) or for showing notices as a separate
+  code (§5.11). Those calls are not defined.
 - **Test mode**: a separate testing artifact with software keys, an
   in-process test issuer and ledger, and a test scheme with its own root
   key. Its `Markers` implementation can return unknown, return damaged
@@ -7986,11 +8442,11 @@ everything while no release keys exist (§2.2).
   store.
 - **A build without the prover.** At commit `b2a3cd05bc` the mobile bridge
   links the prover into every build
-  (`crates/connect_norito_bridge/Cargo.toml:42, 49`). A staged, uncommitted
-  edit in the working tree removes those features from the bridge. Whichever
-  lands, the bridge needs a feature that selects the prover, so that the
-  evidence gate's test app and test schemes can be built without it. No build
-  without the prover holds production value.
+  (`crates/connect_norito_bridge/Cargo.toml:42, 49`). Commit `92562ad371`
+  removed those features from the bridge. The bridge needs a feature that
+  selects the prover, so that the evidence gate's test app and test schemes
+  can be built without it. No build without the prover holds production
+  value.
 
 ## 10. Platforms
 
@@ -8017,7 +8473,7 @@ what the owner decides for each tuple.
 | Platform class | What E states about the operating system | What exists today | Open before any tuple of the class can be claimed |
 |---|---|---|---|
 | Android, remotely provisioned attestation chain | At the boot in which the key was generated the secure hardware had been told: bootloader locked, boot verified, this boot key, these OS, vendor and boot patch levels. The operating system named the wallet's package and signing digest. As of enrollment, or of the last renewal where R8 is on | Google's published test chains for Pixel 8a, 9 Pro and 9a. No chain captured by this project | A captured chain per tuple (group h). Whether the app attestation key works on the tuple, offline and for how long. The gate finding |
-| Android, factory-provisioned attestation chain | The same fields. The attestation key is shared by a production batch, and such keys have leaked: Google's revocation list held 1,733 key-compromise entries on 2026-09-29. A leaked key that is not yet listed signs the same fields for a key held in software | The repository's Pixel 6 StrongBox chain, recorded as a factory chain under Google's first root (`specs/kagemusha_v1_production_readiness.md:416-419`) | The owner's policy on factory-provisioned roots (§10.3). Then as the row above |
+| Android, factory-provisioned attestation chain | The same fields. The attestation key is shared by a production batch, and such keys have leaked: Google's revocation list held 1,733 key-compromise entries on 2026-09-29. A leaked key that is not yet listed signs the same fields for a key held in software | The repository's Pixel 6 StrongBox chain, recorded as a factory chain under Google's first root (`specs/kagemusha_v1_production_readiness.md:416-419`) | The owner's policy on factory-provisioned chains (§10.3). Then as the row above |
 | iPhone | No operating-system statement. Apple certified a Secure Enclave key for this scheme's App ID in the production environment, and from iOS 27 a launch category and a bundle version | One development-environment attestation and two assertions from an iPhone 17 Pro Max on iOS 26.7 (`specs/kagemusha_v1_production_readiness.md:327-342`) | A production-environment attestation on each tuple. Whether an old jailbroken device can enroll (test h7). Whether iPhones are admitted to a pool that claims the OS constraint: the owner's decision. The gate finding |
 | HarmonyOS NEXT | None. Its documented attestation carries no boot, lock or patch field | Nothing | Not in the first cut (§10.2) |
 
@@ -8028,11 +8484,12 @@ Candidate tuples and what is known about each.
   (`specs/kagemusha_v1_production_readiness.md:355-357`). Three facts bear on
   it. Google's update commitment for the Pixel 6 ends in October 2026, so
   under a patch floor at renewal it falls behind for good (§10.3). Its
-  StrongBox chain is a factory chain, so a policy that refuses factory roots
-  leaves only its TEE, whose chain class has not been captured. And the form
-  of the Android marker depends on the Android release (§5.10), so each
-  release a listed Pixel may run is its own tuple. A current Pixel, launched
-  with remote provisioning only, is needed beside it.
+  StrongBox chain is a factory chain, so a policy that refuses the
+  factory-provisioned chain class leaves only its TEE, whose chain class has
+  not been captured. And the form of the Android marker depends on the
+  Android release (§5.10), so each release a listed Pixel may run is its own
+  tuple. A current Pixel, launched with remote provisioning only, is needed
+  beside it.
 - **iPhone.** The record is an iPhone 17 Pro Max on iOS 26.7. On iOS 26 the
   attestation carries no launch category and no bundle version, so beyond the
   environment the issuer cannot tell builds of one App ID apart (§9). iOS 27
@@ -8089,29 +8546,36 @@ The verifier turns a vendor attestation into an enrollment statement E (§5.1).
 It runs in two places: in the issuer service at enrollment and at each renewal,
 and in every validator at registration and at each renewal that carries
 evidence, natively, before the registry is sealed (§7.1, §8.1). Today the
-checks of boot state, lock state, patch level and app identity exist only in
-the issuer's Python and in a script
+checks of boot state, lock state, patch level and app identity exist outside
+the node and outside any circuit: in the issuer's Python, a profile script and
+the Kotlin attestation verifier
 (`python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061`,
 `attested_enrollment.py:178-217`,
-`scripts/android_attestation_certificate_profile.py:643-760`). The validators
-need the same checks in the node, with one result on every validator.
+`scripts/android_attestation_certificate_profile.py:643-760`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/KagemushaKeyMintOneUseAttestationVerifierV1.kt:339, 369-371, 487-498`).
+The validators need the same checks in the node, with one result on every
+validator.
 
 Android chain.
 
 - Anchor on Google's root public keys, not certificate bytes. There are two:
   the RSA-4096 root and the ECDSA P-384 root, which Google says began signing
   chains on 2026-02-01. The verifier accepts no operator-configured Android
-  roots. Nothing is removed from the existing suite (§11).
+  roots. The existing suite's enrollment verifier is kept and changed (§11.1
+  row 1). What is removed from the suite, and when, is the owner's decision
+  (§11).
 - Classify factory versus remotely provisioned chains as Google's reference
   verifier does. Ignore expiry only for factory chains. For a remotely
   provisioned chain, check that its certificates were in date at the time of
-  enrollment: they live two to four weeks in Google's test chains, and Google
-  says the short life must be enforced. Never check leaf validity. Replace the
-  exact version-pair set.
+  enrollment: in Google's test chains the attestation key's certificate lives
+  9 to 29 days and the intermediate about 70, and Google says the short life
+  must be enforced. Never check leaf validity. Replace the exact version-pair
+  set with the lowest attestation version of the policy entry (§5.1).
 - Check every certificate serial against Google's revocation list. The issuer
-  fetches the list. The validators check against a snapshot that is a ledger
-  input named by the policy entry, so that every validator reaches the same
-  result. The issuer re-checks stored serials daily (§6).
+  fetches the list daily and adds new serials to the ledger's revoked set
+  (§6). The validators check against a snapshot that is a ledger input named
+  by the policy entry, so that every validator reaches the same result. The
+  issuer tests a device's stored serials at each renewal (§5.11).
 - Read the key description by walking the certificate's structure from the
   top, never by matching bytes: the challenge, the subject and the
   application id are bytes the caller chose. Take it from the certificate
@@ -8158,7 +8622,7 @@ The app attestation key.
   the digest authorization. Changing either later needs a new key and a
   Migrate for every enrolled Android phone.
 
-Factory-provisioned roots. This is an owner decision (§12), and this document
+Factory-provisioned chains. This is an owner decision (§12), and this document
 does not take it. The two choices and their costs:
 
 - Refuse them. E is then issued only under remotely provisioned chains. That
@@ -8176,17 +8640,21 @@ iPhone.
 
 - Pin the public key of Apple's App Attestation root. Require the production
   environment and reject the development one. Require the App ID of this
-  scheme. On iOS 27 require the launch category "App Store" and the expected
-  bundle version. Do not read the undocumented leaf extensions as a statement
-  about the operating system.
+  scheme. On iOS 27 require the launch category "App Store". Where the policy
+  entry holds a lowest bundle version, require the reported one to be at or
+  above it; whether an entry may hold one is the owner's decision on an
+  app-build floor (EI7). Do not read the undocumented leaf extensions as a
+  statement about the operating system.
 - Enrollment and re-attestation require a payment-key signature over the
   transcript. The existing verifier requires the two keys to differ.
 - A renewal carries an assertion by the enrolled App Attest key. It shows that
   something holding that key signed the request, and nothing about the
   operating system. It cannot carry a new attestation of the same key: Apple
   refuses to attest a key twice.
-- The app is opted out of Mac availability and the verifier accepts only iOS
-  attestations.
+- The app is opted out of Mac availability. The attestation has no documented
+  field that tells an iPhone from an iPad or a Mac (§10.1), so the verifier
+  cannot refuse one by what it reads. Tests a19 and h7 (i) record what
+  happens.
 
 Admission and tiers.
 
@@ -8200,10 +8668,11 @@ Admission and tiers.
   applies to a phone past its vendor's updates.
 - Play Integrity and the vendors' own verdicts (Samsung Knox attestation,
   Huawei's integrity checks, Xiaomi's trusted-device token) each need the
-  vendor's server to produce or to verify. None enters E as designed
-  (§5.1). If the owner requires one, it enters E only as a field signed by
-  the party that made the vendor call (§2.1). The issuer may otherwise use
-  one at enrollment or renewal. Whether Play Integrity is required is an owner
+  vendor's server to produce or to verify. None enters E (§5.1). If the
+  owner requires one, the issuer applies it at enrollment or at renewal. It
+  still does not enter E, so no proof and no receiver sees it, and it rests
+  on the issuer's own check (§2.1). The issuer may otherwise use one at
+  enrollment or renewal. Whether Play Integrity is required is an owner
   decision (§12); requiring it excludes phones without Google Play.
 
 Client changes.
@@ -8226,9 +8695,13 @@ Client changes.
   X.509 provider when it builds and reads the wrapper (§5.10).
 - The key stores of the existing suite are not copied. The Android one uses
   the alias lookup, which answers "absent" on any key-store error
-  (`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt:61, 81, 164`).
-  The iPhone one reads every keychain error as "no key"
-  (`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift:67-78`).
+  (`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt:61, 81, 164`
+  at commit `b2a3cd05bc`).
+  The iPhone one has an existence check that reads every keychain error as
+  "no key"
+  (`IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift:67-69`),
+  and a load that takes `errSecItemNotFound` as absent without checking that
+  protected data is available (lines 71-79 and 116-130).
   The wallet core takes "present", "absent" and "unknown" from the calls §5.10
   names.
 - On iPhone the app requires a passcode at enrollment and says, before the
@@ -8296,12 +8769,8 @@ Terms used in this section.
   durable commit of the ReceiveFold with its `Credited` Outcome, and the
   confirmed marker step. The paying wallet shows it after it has stored a
   `Credited` Outcome, and shows "sent, not confirmed" before that.
-- Step numbers in this section are the gate app's, which has no prover:
-  1 the wallet is ready; 2 sign in memory; 3 create the new marker, which
-  carries the checkpoint; 4 commit to the journal, durably; 5 delete the
-  previous marker and confirm it absent; 6 release. §5.2 has seven steps,
-  because its step 3 is the proof. Steps 3 to 6 here are steps 4 to 7 of
-  §5.2.
+- Step numbers in the tests are those of §5.2 and of the crash table of
+  §5.10. The gate app has no prover, so its step 3 does nothing.
 
 #### 10.4.2 What the tests take as given and what they turn into facts
 
@@ -8332,8 +8801,8 @@ is unsupported.
   iPhone passcode, removed or reset, apart.
 - A journal commit that has returned survives a power cut. A key-store
   creation or deletion that has returned and been read back survives a power
-  cut. A key store that loses writes loses its latest ones, and never keeps a
-  later write while losing an earlier one.
+  cut and a forced restart. A key store that loses writes loses its latest
+  ones, and never keeps a later write while losing an earlier one.
 - The wallet can tell "absent" from "cannot be read now" by the calls §5.10
   names.
 - The device key and the marker survive a reboot, an operating-system update
@@ -8455,8 +8924,8 @@ must be written), 10.4.8 (the tests the gate does not replace) and 10.4.10
 
 | Group | What it tests | Tests |
 |---|---|---|
-| a | No payment from a restored or rolled-back state | 20 |
-| b | Crashes and power cuts at every step of the marker order | 14 |
+| a | No payment from a restored or rolled-back state | 19 |
+| b | Crashes and power cuts at every step of the marker order | 13 |
 | c | Key-store writes and commits across power loss | 7 |
 | d | What the key store returns, and what survives a settings change | 8 |
 | e | The one-use key on TEE and on StrongBox, per vendor | 7 |
@@ -8475,22 +8944,45 @@ platform class (§10.1) and with the fields of E that h1 found.
   - a reset in group a, in any build, or a path of group a that exists on the
     tuple and was not run;
   - destroyed, in the release build, on a path that T6 does not name;
+  - a fail of any other pass condition that group a states (the receiver
+    forms, a4 to a6, a8, a14, a19);
   - a fail in b1 to b7 or in b9 to b13;
   - on iPhone, a fail in c1 at the wait the design uses;
-  - a lost creation in c2 or a returned deletion in c3 at the delay the
-    design uses, or a fail in c4, c5, c6 or c7;
+  - a lost creation in c2 or a returned deletion in c3 at a delay at or
+    beyond the wait before release that the design uses on the tuple's
+    platform (§5.10), or at any delay where the design has no such wait;
+  - a fail in c4, c5 or c6, or in c7 at the marker sizes of 0.6 KB to 4 KB.
+    The larger entries of c7 are measurements, for Q0 (§2.3) and for the
+    size a Migrate marker may reach (§5.10);
   - no marker form that passes d1 on the tuple's Android release;
   - a fail in d2 to d5, d7 or d8, or in d6 apart from the iPhone passcode
     case;
-  - a chain that the verifier cannot tie to a pinned root, or an accepted
-    negative, in h1 or h3; a rejected release build or an accepted negative
-    in h6 or h7 (i);
+  - in h1, a condition unmet that the enrollment relation of §2.1 requires:
+    a chain that ends at a pinned root, both security levels hardware, a
+    locked and verified boot, patch levels at or above the floor, the
+    release build's app identity, origin generated, and the root of trust
+    and the patch levels in the hardware-enforced list. Such a tuple cannot
+    enroll. A tuple that meets these and cannot create the app attestation
+    key is not unsupported for that; whether it is admitted is the owner's
+    decision (§10.3);
+  - an accepted negative in h3; a rejected release build or an accepted
+    negative in h6 or h7 (i);
   - a fail in i1, i2, i3, i5, i6, j1 or j2;
-  - a miss in g3, where the owner made the time target a gate.
+  - a miss in g3 or g4, where the owner made the time target a gate.
+
+  The results of g3 and g4 are recorded per ordered pair of phones. How a
+  pair's miss is attributed to a tuple is fixed when the owner makes the
+  time target a gate (§12). Until then no g3 or g4 result changes a tuple's
+  finding.
 
   A tuple also stays unsupported until a wallet design for its platform
   exists (HarmonyOS NEXT today). Test b8 is not a tuple result: a fail there
   is a finding against the design on every tuple.
+
+  What a fail seen only with a true power cut on the opened unit means, for
+  P2 and for P1, depends on the owner's ruling in 10.4.4 on whether that
+  cut is inside what an ordinary user can do. It is not yet written. Until
+  it is, such a fail makes the tuple unsupported like any other.
 
   Two of these causes are a holder's own action ending the wallet: destroyed
   on a path T6 does not name, and no marker form surviving a screen-lock
@@ -8508,10 +9000,11 @@ platform class (§10.1) and with the fields of E that h1 found.
   been taken over, and the app is the released app. The finding is recorded
   with the evidence that exists for the assumption on that tuple. On Android
   that is what E states, as of enrollment and of each renewal where R8 is on
-  (h1, h2), together with h4's record that a takeover after boot leaves that
-  evidence unchanged. On iPhone it is the App Attest facts and nothing about
-  the operating system, and h7 (ii) may show that an old jailbroken device
-  enrolls.
+  (h1, h2), together with h4's record where h4 could be run on the tuple.
+  The documentation says that a takeover after boot leaves that evidence
+  unchanged, and h4 records whether it does. On iPhone it is the App Attest
+  facts and nothing about the operating system, and h7 (ii) may show that an
+  old jailbroken device enrolls.
 - **Supported.** As above, and in addition P2 is shown against a compromised
   phone. On Android that needs all of: tag 405 in the hardware-enforced list
   (e2 or e3); a pass in e4, e5 and e6; e7 workable inside the time target;
@@ -8621,14 +9114,12 @@ and both the payer's and the receiver's proving fall inside the payment. If
 the qualification ends without such a proof, the owner chooses among these.
 This document chooses none.
 
+- A different target: a stated, longer time for a proof-carrying payment.
 - Relax one named constraint and run the qualification once more under a new
-  budget and date. The candidates are the timing wish for a proof-carrying
-  payment, the 10 KB bound of R9, the absence of a trusted setup, and the
-  list of phones.
+  budget and date. The candidates are the absence of a trusted setup, the
+  10 KB bound of R9, and the list of phones.
 - A narrower device list: only the tuples on which the proof met the
   targets.
-- Adopt one of the candidate shapes that §2.3 lists, after it has been
-  designed and checked. None is designed today.
 - Payments in the signature-only form. A receiver then checks the last hop
   only: the certificate, the receipt, E as the validators sealed it, and the
   device signature. It learns nothing about earlier hops. Nothing then shows
@@ -8712,8 +9203,10 @@ defines its own authority for an offline payment. The tree holds three today.
 3. The attested-app suite. Authority is a device signature under an issuer
    certificate, with no proof. It landed on 2026-10-02 in commit `465f1b5920`.
    It is 26 files and 10,435 lines in Swift, Kotlin, JavaScript, Python and
-   two stub Rust crates. It has no payment engine, no test and no caller in
-   the repository.
+   two stub Rust crates. It has no payment engine and no caller in the
+   repository. It landed with no test. A Swift test added since exercises
+   one helper of its issuer client, and staged packaging tests require its
+   JavaScript file as a package member (§11.1 row 1).
 
 Device probes and testnet probes are diagnostics. They carry no payment
 authority and are not counted.
@@ -8725,9 +9218,10 @@ down only by these decisions, each the owner's:
 
 - Replacing the attested-app suite in place (§11.1 row 1). This returns the
   count to three. It needs no measurement, because nothing in the repository
-  consumes the suite. The owner first says whether any app outside the
-  repository uses it. If it is approved, the gate app and the wallet core are
-  written in the suite's two stub crates.
+  consumes the suite except the tests that row 1 names, which its dependency
+  check covers. The owner first says whether any app outside the repository
+  uses it. If it is approved, the gate app and the wallet core are written in
+  the suite's two stub crates.
 - Withdrawing the ordinary profile's online-control path (row 4). This needs
   the owner's statement that this proposal replaces the record of 2026-10-01,
   a migration item for the adapters that record names, and the end-to-end
@@ -8736,15 +9230,18 @@ down only by these decisions, each the owner's:
   per-hop relation is built on those circuits.
 - Ending Recursive V1 on qualified hardware as a separate design. That
   happens when Q0 has specified the relation of §2.1 against this design's
-  objects and the Guard for qualified hardware is retired (rows 2, 3 and 6).
+  objects (rows 2 and 3) and the Guard for qualified hardware is retired. No
+  row retires that Guard. Row 6 is a candidate, and its decision may keep the
+  one-successor rule for cards (§11.1). Until the owner approves that
+  removal, the count does not go below two.
 
-The end state is one track: this design, with a proof on every payment. The
-recursion code is its prover and its verifier, and it is kept. If the
-qualification ends without a proof that meets PC in a time the owner accepts,
-the owner chooses among the options of 10.4.6, and the end state of rows 2,
-3, 10 and 14 is decided with that choice. This document does not anticipate
-the choice, and it does not recommend removing the recursion code in any
-case.
+With all three decisions taken, the end state is one track: this design,
+with a proof on every payment. The recursion code is its prover and its
+verifier, and it is kept. If the qualification ends without a proof that
+meets PC in a time the owner accepts, the owner chooses among the options of
+10.4.6, and the end state of rows 2, 3, 10 and 14 is decided with that
+choice. This document does not anticipate the choice, and it does not
+recommend removing the recursion code in any case.
 
 **While more than one track exists.**
 
@@ -8777,9 +9274,12 @@ case.
 and Q3 of the proof qualification (§2.3). Building runs beside them as far as
 the three lists below allow.
 
-1. **The owner fixes the gate's inputs** (10.4.4): the list of tuples, the
-   time target for the exchange and whether it is a gate, the number of
-   trials, and whether P2 must hold against a compromised phone.
+1. **The owner fixes the gate's inputs.** 10.4.4 has the full list. It
+   includes the list of tuples; the time target for the exchange, its
+   percentile, its end points and whether it is a gate; the number of trials
+   for the durability tests; whether a true power cut on an opened phone is
+   inside what an ordinary user can do; the patch floor that test h1
+   applies; and whether P2 must hold against a compromised phone.
 2. **The evidence gate** (§10.4). The gate app is written; its marker,
    checkpoint, commit and recovery code is the wallet core's (§9), built
    first. The existing probes are reused. The Android one-use probe is
@@ -8829,8 +9329,11 @@ the three lists below allow.
      platform classes a pool admits;
    - the owner has replaced the normative statements listed in §11.1;
    - the two key properties of step 3 are decided;
-   - row 1 of §11.1 is resolved, so that the tree holds one design for
-     stock-phone keys and not two.
+   - row 1 of §11.1 is resolved. That alone does not leave one design in
+     the tree. The ordinary profile (row 4), which also uses a stock-phone
+     key, and the secure-element path (row 6) could still be there when
+     production value starts. Whether that satisfies "only one design" is
+     the owner's decision (§12).
 8. **Removals.** §11.1 gives, per row, the earliest point and whose decision
    it is. The check before each removal is a search of the repository for
    callers, a build of the workspace and of the Swift and Kotlin packages,
@@ -8858,16 +9361,20 @@ itself, which is what the gate is for:
   and restore rules in `formal/`. Those rules can fail on a crash or a
   restore between two steps, and a model enumerates such interleavings within
   its bounds. Group b tests the same tables on devices;
-- the carriers of §5.6, which move opaque bytes and are sized for a 7.6 KB
+- the carriers of §5.6, which move opaque bytes and are sized for a 7.7 KB
   Payment;
 - the attestation verifiers of §10.3, in the issuer and in the node, with
   the chain through an app attestation key. Group h uses them;
 - the time rules, limits, expiry and block-list checks as logic over typed
   fields (§5.4, §5.5);
-- the block index, the registry and its registration flow, the ledger
-  instructions of §6 and the accounting of §8, against a test scheme;
-- the issuer service: enrollment, sync, replay, acceptance of a resume
-  record, numbering of vouchers, key custody (§6, §7);
+- the block index and the accounting of §8, against a test scheme;
+- the registry and its registration flow, the ledger instructions of §6 and
+  the issuer service (enrollment, sync, replay, acceptance of a resume
+  record, numbering of vouchers, key custody; §6, §7), against a test
+  scheme. Of these three only the logic over typed fields is not redone.
+  Their byte formats and signature checks sit behind the interface that is
+  replaced when the relation is fixed (§2.3), and what they put on the
+  circuit-facing surface below is provisional;
 - the test artifact and test scheme of §9;
 - the normative specification, as a draft.
 
@@ -8877,7 +9384,7 @@ Not fixed before the gate's ruling, because a finding decides it:
   release rule on iPhone with any wait before release (c1);
 - the manifest settings, which group a tests with and without;
 - the list of supported tuples, the platform classes a pool admits, and the
-  policy on factory-provisioned roots;
+  policy on the factory-provisioned chain class;
 - the fields of E per platform class and the policy entries (h1, h2, h6): for
   example whether a list of boot keys is usable, and whether a renewal on a
   tuple can carry a fresh leaf;
@@ -8889,29 +9396,24 @@ Not fixed before the gate's ruling, because a finding decides it:
 
 Not started before the gate's ruling: prover work for phones, and the
 server-side enrollment circuit. Which roots and signature algorithms that
-circuit must verify follows from the ruling on platform classes and factory
-roots.
+circuit must verify follows from the ruling on platform classes and
+factory-provisioned chains.
 
-Not fixed before Q0, because the relation decides it. This is the
-circuit-facing surface; §2.3 has the relation choices.
-
-- the transition preimage and its digest function, and the state commitment,
-  which carries the digest of E;
-- the digest authorization of the device key;
-- the signature schemes of the certificate, the receipt and the voucher, and
-  the form in which the validators' seal reaches a proof;
-- the shape of the load and unload instructions, and the replay guard for
-  mints, of which the voucher number is the wallet's side;
-- the payment envelope and the Outcome;
-- how a SendSplit binds its `fee_policy_id` (§5.8);
-- every conformance vector.
+Not fixed before Q0, because the relation decides it: the circuit-facing
+surface. §2.3 lists it and has the relation choices; that list is the one
+that applies. It includes the layout of E and of a policy entry. Which fields
+E has is fixed earlier, at the gate's ruling (above), and Q0 fixes their
+layout.
 
 Code behind that surface is written behind one module boundary and is
 provisional. Provisional formats are used in a test scheme only. No
 enrollment or balance in a provisional format outlives the test scheme that
 made it. The rule exists so that a later change of format never strands a
 balance or re-enrolls a real user. The cost is accepted: if the relation
-changes that surface, the code and vectors behind it are redone.
+changes that surface, the code and vectors behind it are redone. This
+document does not say which of the choices made for the proof are kept if
+the owner's ruling at the end of Q3 is the signature-only form. That is
+decided with that ruling (10.4.6).
 
 No effort estimate exists for the gate, for the design outside the proof, or
 for any removal. §2.3 has what estimates exist for Q0 to Q3.
@@ -8929,29 +9431,48 @@ removal decision is the owner's. The end state is given for the target: a
 proof-carrying payment under the relation of §2.1. Rows 2, 3, 10 and 14 are
 decided again if the owner chooses otherwise at the end of Q3 (§11).
 
+The table describes the tree at commit `b2a3cd05bc`. Eight later commits, up
+to `752590f825`, and the changes staged on top of them added about 130
+KAGEMUSHA files, mostly to the ordinary profile (row 4), with a new ledger
+instruction (`TopUpKagemushaOrdinaryV1`) and node code for the ordinary mint
+family (`OrdinaryPreDebit113`). Rows 3, 4, 5, 10 and 13, their counts, their
+"Consumed today by" cells and their line citations are not current. The
+table has to be re-read against the tree before the owner rules on those
+rows.
+
 | # | Component and where | Consumed today by | End state under the proof-carrying target | Replaced by | Earliest removal |
 |---|---|---|---|---|---|
-| 1 | Attested-app suite, signature only. 26 files, 10,435 lines. Swift `IrohaSwift/Sources/IrohaSwift/KagemushaAttested/` (9 files, 3,064 lines). Kotlin `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/attested/` (7 files, 3,149 lines). JavaScript `javascript/iroha_js/src/kagemushaAttestedV1.js` (2,424 lines). Python `python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py` and `attested_selection.py` (1,561 lines). Rust crates `crates/iroha_kagemusha_attested` and `crates/iroha_kagemusha_issuer` (7 files, 237 lines; a layout test, an empty vector generator, two empty tests, an issuer that exits with "service implementation pending") | Nothing in the repository. No test names it. The JavaScript package exports no entry for it. No file under `kotlin/client-android` or `kotlin/kagemusha-wallet-android` refers to it. The shared envelope does not register its profile code. Its Swift and Kotlin types are public, so a consumer outside the repository cannot be excluded from the repository alone | Replaced in place. Its wire objects are withdrawn. As a design it carries no proof, so a receiver learns nothing about earlier hops; what a receiver checks on the last hop of this design (certificate, receipt, E, device signature) takes over its role. Kept and changed: the enrollment verifier (§10.3) and the Secure Enclave and App Attest key code (`KagemushaAttestedHardware.swift`). The two crates become the wallet core and the issuer service | The objects of §5.1, the wallet core (§9), the issuer service (§6) | When the owner approves it. Needs no measurement |
-| 2 | Recursive proof stack. `crates/iroha_core_zk/src/kagemusha_v1_recursion/` (193 files, 151,759 lines, including row 3); `kagemusha_polynomial_store_v1` (7 files, 4,141 lines); `kagemusha_p256_curve_gadget.rs`, `kagemusha_v1_poseidon.rs`, `kagemusha_v1_crypto.rs`; the data model in `crates/iroha_data_model/src/kagemusha/` (59 files, 47,031 lines, including row 4's types) | Node block execution (`crates/iroha_core/src/smartcontracts/isi/kagemusha.rs:2617-2633`), which keeps a reject-all verifier while no release keys exist. The mobile bridge, which linked the prover in every build at commit `b2a3cd05bc` (`crates/connect_norito_bridge/Cargo.toml:42, 49`); an uncommitted edit found in the tree later on 2026-10-02 removes both features from those two lines, so this cell and the last item of §9 are to be read again before either is relied on. The Rust client (`crates/iroha/Cargo.toml:30`). Row 14. No build produces a State proof (§2.2) | Kept. The relation of §2.1 is built from it and specified against this design's objects in Q0. Keys are generated for that relation. It has no P-384, RSA or SHA-384 gadget; the server-made enrollment proof needs them (Q1) | Nothing | Never under the target. Otherwise only as a separately approved consensus, genesis and finality-proof format change, which this document does not recommend |
+| 1 | Attested-app suite, signature only. 26 files, 10,435 lines. Swift `IrohaSwift/Sources/IrohaSwift/KagemushaAttested/` (9 files, 3,064 lines). Kotlin `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/attested/` (7 files, 3,149 lines). JavaScript `javascript/iroha_js/src/kagemushaAttestedV1.js` (2,424 lines). Python `python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py` and `attested_selection.py` (1,561 lines). Rust crates `crates/iroha_kagemusha_attested` and `crates/iroha_kagemusha_issuer` (7 files, 237 lines; a layout test, an empty vector generator, two empty tests, an issuer that exits with "service implementation pending") | No caller in the repository. No test named it at that commit. Since then a Swift test exercises one helper of its issuer client (`IrohaSwift/Tests/IrohaSwiftTests/KagemushaAttestedIssuerIntegerTests.swift`, commit `92562ad371`), and staged, uncommitted packaging tests require the JavaScript file as a package member (`scripts/tests/sorafs_javascript_package_source_test.py`, `scripts/tests/sorafs_javascript_installed_test.py`). The JavaScript package exports no entry for it. No file under `kotlin/client-android` or `kotlin/kagemusha-wallet-android` refers to it. The shared envelope does not register its profile code. Its Swift and Kotlin types are public, so a consumer outside the repository cannot be excluded from the repository alone | Replaced in place. Its wire objects are withdrawn. As a design it carries no proof, so a receiver learns nothing about earlier hops; what a receiver checks on the last hop of this design (certificate, receipt, E, device signature) takes over its role. Kept and changed: the enrollment verifier (§10.3), the Secure Enclave and App Attest key code (`KagemushaAttestedHardware.swift`), and the SQLite connection that the gate reuses for the journal on iPhone (`KagemushaAttestedDatabase.swift`, 10.4.7). The two crates become the wallet core and the issuer service | The objects of §5.1, the wallet core (§9), the issuer service (§6) | When the owner approves it. Needs no measurement |
+| 2 | Recursive proof stack. `crates/iroha_core_zk/src/kagemusha_v1_recursion/` (193 files, 151,759 lines, including row 3); `kagemusha_polynomial_store_v1` (7 files, 4,141 lines); `kagemusha_p256_curve_gadget.rs`, `kagemusha_v1_poseidon.rs`, `kagemusha_v1_crypto.rs`; the data model in `crates/iroha_data_model/src/kagemusha/` (59 files, 47,031 lines, including row 4's types) | Node block execution (`crates/iroha_core/src/smartcontracts/isi/kagemusha.rs:2617-2633`), which keeps a reject-all verifier while no release keys exist. The mobile bridge, which linked the prover in every build at commit `b2a3cd05bc` (`crates/connect_norito_bridge/Cargo.toml:42, 49`); commit `92562ad371` removed the prover features from those two lines, and what the bridge still uses of this row has not been read since. The Rust client (`crates/iroha/Cargo.toml:30`). Row 14. No build produces a State proof (§2.2) | Kept. The relation of §2.1 is built from it and specified against this design's objects in Q0. Keys are generated for that relation. It has no P-384, RSA or SHA-384 gadget; the server-made enrollment proof needs them (Q1) | Nothing | Never under the target. Otherwise only as a separately approved consensus, genesis and finality-proof format change, which this document does not recommend |
 | 3 | Ordinary circuits: the P-256 Guard and its State consumer. 84 files, 30,859 lines with "ordinary" in the name inside row 2's directory, for example `ordinary_guard_composition.rs` and `production_ordinary_guard.rs` | The production prover is built from them (§2.2). The production construction refuses the ordinary State (`crates/iroha_core_zk/src/kagemusha_v1_recursion/composite.rs:1961-1968`) | Kept. The per-hop relation is built on their P-256 equations: one device signature per hop under the key in the proven predecessor state. The Guard is specified again against this design's objects; the existing one is bound to the online profile's approval objects and runs four P-256 equations per transition. The production refusal is lifted for the new Guard, and an ordinary ReceiveFold consumer is added | The Guard specified against this design's objects | Not a candidate. With row 2 |
 | 4 | Ordinary online-control path: an issuer approval for each operation. Spec `specs/kagemusha_app_owned_hardware_v1.md`. Code: the ordinary files of `crates/iroha_core_zk/src/kagemusha_v1_state/` (50 files, 33,042 lines); `kagemusha_ordinary_*` in the data model (24 files, 18,196 lines); `crates/iroha/src/client/ordinary_native.rs`; the route `/v1/kagemusha/ordinary/current-wallet` (`crates/iroha_torii_shared/src/ordinary_wallet_current.rs:11`); Kotlin files named `*Ordinary*` (18 files, 2,048 lines); Swift ordinary and approval files (17 files, 2,415 lines); Python `ordinary_*.py` (8 files, 1,831 lines). Which of these files serve row 3 has not been traced | The owner record of 2026-10-01 names thin BPNG, BOI and CBSI adapters (`specs/kagemusha_v1_production_readiness.md:8-25`). No adapter code under those names is in the repository | Not used: it needs the network to authorize each operation, which R1 excludes. Not traced end to end. Its enrollment half (hardware key, key attestation, Play Integrity, App Attest) continues in row 12 | Enrollment (§7.1) and the offline exchange (§5.2) | After the owner says this proposal replaces the 2026-10-01 record (§12), the adapters have a migration item, the trace is done, and the Guard of row 3 no longer uses its approval objects. Not before Q1 |
 | 5 | V1 native wallet: coordinator, durable state, bootstrap. `crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs` and its directory (56 files, 34,840 lines); the other files of `crates/iroha_core_zk/src/kagemusha_v1_state/` (49 files, 43,702 lines); the bridge's bootstrap, reserve-finality and hardware-evidence files | The Swift, Kotlin and Java coordinator bridges and wallet classes of row 13. The generic bridge installs no coordinator and returns device-unavailable (`specs/kagemusha_device_bridge_v1.md:635-644`) | Replaced by the wallet core as the owner of wallet state. Which prover-facing parts are reused is decided in Q0 | The wallet core (§9) with the commit rule of §5.2 and the marker of §5.10 | When the Swift and Kotlin shells over the wallet core pass conformance and the prover runs behind the new core |
-| 6 | Secure-element device path. Specs `specs/kagemusha_device_bridge_v1.md`, `specs/kagemusha_device_sender_v1.md`, `specs/kagemusha_receiver_admission_v1.md`, `specs/kagemusha_guard_bundle_v1.md`, `specs/kagemusha_pixel6_ese_service_contract_v1.md`; the Apple route in `specs/kagemusha_v1_phone_algorithm.md:524-538`. Code: `crates/connect_norito_bridge/src/kagemusha_device_bridge_v1.rs` and its directory (4 files, 3,518 lines); Kotlin `KagemushaOmapiDeviceLifecycleV1.kt`, `KagemushaSecureElementApduV1.kt`, `KagemushaDeviceLifecycleBridgeV1.kt`, `KagemushaDeviceOperationCodecV1.kt`; Swift `KagemushaSecureElement*.swift`, `KagemushaDeviceLifecycleBridgeV1.swift`, `KagemushaDeviceOperationCodecV1.swift` (5 files, 4,072 lines); Java mirrors | Nothing that runs. No applet exists in the repository, both routes need access the project does not have, and stock dispatch returns unavailable (`specs/kagemusha_device_sender_v1.md:5-7`) | Not used. R2 excludes a custom applet, and the design does not assume that wallet logic runs in secure hardware (§14). It is the one existing text that states a one-successor contract, which the finding "supported" of §10.4 would need | Nothing. This design has no hardware route | Candidate. Not before the gate's ruling on groups e and f and the host proofs of Q1. The decision says whether the one-successor rule and the command framing are kept for cards |
+| 6 | Secure-element device path. Specs `specs/kagemusha_device_bridge_v1.md`, `specs/kagemusha_device_sender_v1.md`, `specs/kagemusha_receiver_admission_v1.md`, `specs/kagemusha_guard_bundle_v1.md`, `specs/kagemusha_pixel6_ese_service_contract_v1.md`; the Apple route in `specs/kagemusha_v1_phone_algorithm.md:524-538`. Code: `crates/connect_norito_bridge/src/kagemusha_device_bridge_v1.rs` and its directory (4 files, 3,518 lines); Kotlin `KagemushaOmapiDeviceLifecycleV1.kt`, `KagemushaSecureElementApduV1.kt`, `KagemushaDeviceLifecycleBridgeV1.kt`, `KagemushaDeviceOperationCodecV1.kt`; Swift `KagemushaSecureElement*.swift`, `KagemushaDeviceLifecycleBridgeV1.swift`, `KagemushaDeviceOperationCodecV1.swift` (5 files, 4,072 lines); Java mirrors | Nothing that runs. No applet exists in the repository, both routes need access the project does not have, and stock dispatch returns unavailable (`specs/kagemusha_device_sender_v1.md:5-7`) | Not used. R2 excludes a custom applet, and the design does not assume that wallet logic runs in secure hardware (§14). It is the one existing text that states a one-successor contract, which the finding "supported" of §10.4 would need | Nothing. This design has no hardware route | Candidate. Not before the gate's ruling on groups e and f and the host proofs of Q1. The decision says whether the one-successor rule and the command framing are kept for cards, and whether the Guard for qualified hardware is retired. Until it is retired, Recursive V1 on qualified hardware remains a separate track (§11) |
 | 7 | Device probes. Android key probes in `kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/probe/` (`AndroidKeyMintSingleUseProbeV1.kt`, `AndroidKeyMintOneUseSelectionCandidateV1.kt`, `KeyMintRestartDiagnosticV1.kt`, `AndroidPixel6TestnetStrongBoxObservationV1.kt`) and their device tests; iOS `examples/ios/KagemushaAppAttestProbe/` (250 lines of Swift) | The Pixel 6 measurements (`specs/kagemusha_v1_production_readiness.md:342-379`) | Kept and extended for the evidence gate (10.4.7) | Not replaced | Not before the gate has run and its results are recorded |
 | 8 | Testnet probes. `crates/connect_norito_bridge/src/kagemusha_testnet_*.rs` and `platform_jni/kagemusha_testnet_*.rs` (11 files, 5,272 lines); Swift `KagemushaTestnet*.swift` (5 files, 774 lines); Kotlin `probe/KagemushaTestnet*.kt` and `probe/Pixel6Testnet*.kt`; `scripts/prepare_kagemusha_testnet_observation_bundle.py` | Testnet diagnostics only | Not used | The test artifact and test scheme of §9 | Candidate. Same earliest point as row 6 |
-| 9 | Peer transports. The envelope `IrohaPeerWireV1` (Swift, Kotlin, C#); animated QR `IrohaPeerQRV1`; NFC `IrohaPeerNfcV1` with the CoreNFC and Android carriers; Nearby `IrohaPeerNearbyV1`. Together: Swift 7 files, 9,416 lines; Kotlin 6 files, 5,051 lines. A second QR framing in Rust (`crates/iroha_data_model/src/qr_stream.rs`, `specs/qr_stream.md`). `specs/peer_transport_v1.md` | The V1 wallet classes. The envelope registers profile 1 only (`IrohaSwift/Sources/IrohaSwift/IrohaPeerWireV1.swift:6-11`) | Kept. This design uses one envelope and one QR framing under a new profile code, with limits sized for the proof-carrying Payment (§5.6). The normative specification names the framing; the other framing is then a removal candidate. Profile 1 goes with row 13 | Not replaced | The carriers are not removed. The duplicate framing: when the normative specification names one |
+| 9 | Peer transports. The envelope `IrohaPeerWireV1` (Swift, Kotlin, C#); animated QR `IrohaPeerQRV1`; NFC `IrohaPeerNfcV1` with the CoreNFC and Android carriers; Nearby `IrohaPeerNearbyV1`. Together: Swift 7 files, 9,416 lines; Kotlin 6 files, 5,051 lines. A second QR framing in Rust (`crates/iroha_data_model/src/qr_stream.rs`, `specs/qr_stream.md`). A third optical carrier, Petal Stream (`specs/petal_stream.md`, `crates/iroha_petal`, with SDK ports in Swift, Kotlin, JavaScript, C# and Python). `specs/peer_transport_v1.md` | The V1 wallet classes. The envelope registers profile 1 only (`IrohaSwift/Sources/IrohaSwift/IrohaPeerWireV1.swift:6-11`) | Kept. This design uses one envelope and one QR framing under a new profile code, with limits sized for the proof-carrying Payment (§5.6). The normative specification names the framing; the other framing is then a removal candidate. The end state of Petal Stream is not decided here; it is the owner's (§12). Profile 1 goes with row 13 | Not replaced | The carriers are not removed. The duplicate framing: when the normative specification names one. Petal Stream: with the owner's decision (§12) |
 | 10 | Ledger. Instructions `TopUpKagemushaV1` and `RedeemKagemushaV1` (`crates/iroha_data_model/src/isi/kagemusha_v1.rs:2853-2870`); execution and reserve in `crates/iroha_core` (12 files, 9,824 lines; `smartcontracts/isi/kagemusha.rs`, `smartcontracts/isi/kagemusha/kagemusha_v1_reserve.rs`); mint-finality seals; the governed verifier registry (`specs/kagemusha_v1_production_readiness.md:124-130`) | Every node: block execution, genesis and the finality-proof format | The top-up path stays and gains the missing mint-credit producer (§8.5). Redemption, receipts and the pool invariant change shape (§8.5). The instructions of §6 are added under a new witness tag. New with them: the validators verify the raw vendor attestation at registration and seal the registry (§8.1) | The instructions of §6 | Only the parts §8.5 lists as not reusable, when their replacements exist. A consensus change |
 | 11 | Torii routes and SDK Torii clients. `/v1/kagemusha/readiness`, `/top-up`, `/redeem`, `/operations/{operation_id}` (`crates/iroha_torii/src/lib.rs:4956-4959`); `/authority-state/{asset_definition_id}` (`crates/iroha_torii/src/kagemusha_state.rs:14`); 11 files, 4,542 lines in `iroha_torii` and `iroha_torii_shared`; clients in Swift, Kotlin, Java, JavaScript, C# and Python | The SDK wallet classes and operators | The command surface is reused (§8.5). Schemas follow row 10. The ordinary route goes with row 4 | Routes for the instructions of §6 | With row 10 |
-| 12 | Attestation verifiers and enrollment clients. Python `python/iroha_app_attestation/` (25 files, 7,605 lines; raw verifiers `attestation.py`, `apple_receipt.py`, `play_integrity.py`, `revocation.py`, `provider.py`). The Android hardware key store (`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt`). Swift App Attest evidence and enrollment (`KagemushaAppAttestEvidenceV1.swift`, `KagemushaAppAttestEnrollmentVerifierV1.swift`) | Ordinary enrollment (row 4) and the attested-app suite (row 1) | Kept and changed as §10.3 lists: the app attestation key on Android, the output E, and a second copy of the verification in the node for the validators. The `ordinary_*` workers go with row 4 | Not replaced | Not a candidate |
+| 12 | Attestation verifiers and enrollment clients. Python `python/iroha_app_attestation/` (25 files, 7,605 lines; raw verifiers `attestation.py`, `apple_receipt.py`, `play_integrity.py`, `revocation.py`, `provider.py`). The Android hardware key store (`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt`). The Kotlin attestation verifier (`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/`) and the `iroha-attestation` command in `kotlin/tools`. Swift App Attest evidence and enrollment (`KagemushaAppAttestEvidenceV1.swift`, `KagemushaAppAttestEnrollmentVerifierV1.swift`) | Ordinary enrollment (row 4) and the attested-app suite (row 1) | Kept and changed as §10.3 lists: the app attestation key on Android, the output E, and a second copy of the verification in the node for the validators. The `ordinary_*` workers go with row 4 | Not replaced | Not a candidate |
 | 13 | V1 wire types and SDK wallet classes. Swift (59 files, 21,172 lines outside row 1, including the Swift files of rows 4, 6 and 8); Kotlin `core-jvm` (33 files, 12,991 lines), `client-android` (36 files, 6,266 lines), `kagemusha-wallet-android` (9 files, 786 lines); Java duplicates in `java/iroha_android` (24 files, 3,484 lines with tests); JavaScript (13 files, 4,745 lines with tests); C# (16 files, 6,598 lines with tests); Python (5 files, 5,055 lines with tests) | Apps built on the SDKs. The cross-SDK fixture tests (`scripts/tests/kagemusha_hard_cut_test.py`) | Replaced by thin Swift and Kotlin shells over the wallet core (§9). There is one payment format, so the V1 Request, Payment and Acknowledgement types are withdrawn. What the JavaScript, C#, Python and Java surfaces keep is not designed here | The shells and the objects of §5.1 | When the shells exist and no consumer of profile 1 remains. The Java duplicates follow `specs/jvm_consolidation_inventory.md` |
 | 14 | Release, key-artifact and qualification tooling. Specs `specs/kagemusha_v1_compact_keys.md`, `specs/kagemusha_v1_native_profile_binding.md`, `specs/kagemusha_v1_provider_policy_binding.md`, `specs/kagemusha_v1_physical_evidence.md`, `specs/kagemusha_v1_release_runner_validation.md`. Code: the KAGEMUSHA scripts and their tests under `scripts/` and `pytests/scripts/` (21 Python files, 17,851 lines); `crates/iroha_kagami/src/kagemusha.rs` and its module (3 files, 3,727 lines); the governance release schemas in Swift, JavaScript, C# and Python | The release process of the recursive stack. No release keys exist (§2.2) | Kept. The key codec and layout authentication serve the keys generated for the new relation. Provider policy and physical evidence describe an OEM hardware provider; they are re-scoped or withdrawn in Q0. The record format of physical evidence is the pattern for the gate's records (10.4.7) | For a device support claim, the evidence gate (§10.4) | Not a candidate while row 2 is kept |
 | 15 | Formal model. `formal/kagemusha_v1/` (5 files, 1,763 lines, TLA+) | `scripts/tests/kagemusha_formal_proof_gates_test.py` | Kept while row 6 exists. It models one hardware-enforced successor per state (`formal/kagemusha_v1/README.md:8-13, 21-26`), not this design | The model of the commit, marker, checkpoint and restore rules (§11) | With row 6 |
 
+Three sets of KAGEMUSHA files have no row: the parameters in
+`crates/iroha_config` (3 files), `crates/iroha_crypto/src/kagemusha.rs`, and
+the KAGEMUSHA fixtures under `fixtures/`. Which rows they serve has not been
+traced, so no end state is given for them.
+
 **The existing specifications.** Fourteen KAGEMUSHA specifications exist under
-`specs/` besides this proposal and its evidence appendix. "Superseded" means
-that the text must be rewritten or withdrawn if this proposal is accepted.
-"Kept" means that it stays normative for a component that remains.
-"Unaffected" means that nothing here changes it.
+`specs/` besides this proposal, its evidence appendix and the evidence gate
+file. "Superseded" means that the text must be rewritten or withdrawn if this
+proposal is accepted. "Kept" means that it stays normative for a component
+that remains. "Unaffected" means that nothing here changes it. The line
+counts are those of commit `b2a3cd05bc`. Two files have changed since.
+`kagemusha_v1_native_profile_binding.md` now also defines a mint
+authorization family for the ordinary profile (`OrdinaryPreDebit113`), and
+`kagemusha_v1_compact_keys.md` has a staged, uncommitted edit. Their rows
+have to be read again before the owner rules on them.
 
 | Specification | Lines | Status if this proposal is accepted |
 |---|---|---|
@@ -9057,9 +9578,13 @@ In the other specifications:
   Q0 fixes.
 - `specs/peer_transport_v1.md:3-15`. Exactly three message kinds, the third
   an Acknowledgement sent after staging in a rollback-resistant inbox, with
-  no cancellation kind. `:65-71`. The size table. `:78-79`. A smaller limit
-  cannot be advertised as an offline-capable profile. Change: the messages of
-  §5.2 and the sizes of §5.6.
+  no cancellation kind. `:34-51`. Sender funds become an irrevocable credit
+  at hardware commit, the receiver's hardware stages the payment before it
+  signs the acknowledgement, and distinct payments against one Request are
+  all accepted. `:65-71`. The size table. `:78-79`. A smaller limit cannot be
+  advertised as an offline-capable profile. Change: the messages of §5.2,
+  under which no hardware stages a payment, a `Refused` Outcome is refunded
+  and a Request is single-use, and the sizes of §5.6.
 - `specs/qr_stream.md:13-17`. The payload is one of the three V1 values.
   Change: decided when the normative specification names one framing (row
   9).
@@ -9121,18 +9646,25 @@ names six decisions: choices 1, 2 and 3 (as one), 4, 5 and 12 of §3.2, and
 the one-design decision of §11.1. The lists below add the decisions each part
 of the design puts to the owner. This document takes none of them. Some
 overlap, because the same question arises in more than one section. The same
-decision is asked in items 1 and 34; 3 and 79; 5, 18, 67 and 81; 6, 33 and
-82; 7, 48 and 68; 9 and 60; 10 and 45; 11, 22, 23, 51, 52, 66 and 85; 12, 40
-and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
-46; 49 and 65; 53 and 66; 73 and 89. One answer settles each group.
+decision is asked in items 1 and 34; 3 and 79; 5, 18, 67, 80, 81 and 86; 6, 33,
+35 and 82; 7, 48, 49, 54, 65 and 68; 9 and 60; 10 and 45; 11, 22, 23, 51, 52,
+53, 66, 85 and 94; 12, 40 and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37
+and 77; 38 and 50; 39 and 46; 73 and 89. One answer settles each group.
+Items 43 and 61, and items 47 and 71, are different decisions that depend on
+each other.
 
 
 **Criterion, assumptions and residual risk (§1, §3, §4)**
 
-1. Confirm or correct each reading of the criterion in section 1: 'completed'
+1. Confirm or correct each reading in section 1, under 'How this document reads
+   the criterion' and 'Readings of the requirements'. Among them: 'completed'
    means the receiving wallet reported complete; 'durably' means as durable as
-   the phone and not beyond the destruction of the key; P4 covers reduce,
-   refuse, hold and delay; what 'require connectivity' covers.
+   the phone and not beyond the destruction of the key; 'spend it onward
+   offline' means with no network, no proof still to be made and no other
+   party; the assumptions of P2 are T1 to T6 and no others; under P3 a renewal
+   under R8 falls under P5 and redemption is the holder's own choice; P4 covers
+   reduce, refuse, hold and delay; what 'require connectivity' covers; when a
+   wallet reports complete under PC; and the readings of R2, R4 and R8.
 2. Whether P1, P3, P5 and PC may rest on assumptions at all. The criterion puts
    'under the stated security assumptions' on P2 only; the design claims the
    others under T1-T5 on the holder's own phone and the issuer side, and P1
@@ -9143,7 +9675,9 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
    stock phones. If no, 'supported with a stated assumption' meets P2 as
    written (section 3.2 choice 1). This also settles how 'we cannot allow
    compromised OS' is to be taken, given that the proof shows boot-time facts
-   only.
+   only. The existing V1 specifications require an attested non-forking
+   provider for offline authority (`specs/kagemusha_v1.md:183-194`). The
+   answer 'no' withdraws that requirement (section 11.1).
 4. Which phones may hold value: every phone that enrolls, only tuples the gate
    supports, or no stock phone above a small amount (section 3.2 choice 2).
 5. Which platform classes a pool admits when it claims the operating-system
@@ -9155,14 +9689,18 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
    for the gate's durability test and the second anchor's tests (section 3.1 A3
    and B1).
 7. Which regulatory controls are on by default (section 3.2 choice 4), and
-   whether the six additions count as explicitly enabled regulatory controls:
+   whether the nine additions count as explicitly enabled regulatory controls:
    receive freshness, send_blocked, the per-counterparty cap, require_anchor, a
    tier-row notice that switches a control on for certificates already issued,
-   a block at the holder's own request (section 1).
+   a block at the holder's own request, a clock that R7 or R8 can no longer use
+   (it needs a re-anchor), the block-list version a wallet must hold again
+   after a resume with R6 on, and a critical extension that the wallet's app
+   does not know (section 1).
 8. Who supplies a difference between redemptions and loads after an assumption
    has failed: the operator, the asset's issuer by new issuance, a fee-funded
-   reserve, a third party, or nobody (which fails P1 or P4 in substance). None
-   is chosen (section 3.2 choice 5).
+   reserve, a third party, or nobody (which fails P1 or P4 for the last honest
+   holder if the criterion reaches redemption; that reading is the owner's,
+   item 9). None is chosen (section 3.2 choice 5).
 9. The release rate on unloads above a row's own loads: no limit, or a limit;
    and with it whether P1 and P3 govern redemption (section 3.2 choice 6;
    section 3.1 C3).
@@ -9172,7 +9710,9 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
 11. What a renewal under R8 may check: whether an app-build floor is part of
     R8; the patch floor's value; whether a phone past its vendor's update
     commitment (Pixel 6, October 2026) stays under it (section 3.2 choices 8
-    and 9).
+    and 9); whether a revoked certificate in the vendor chain, and a class
+    that is no longer admitted, are refusals under R8 (section 2.1,
+    'Renewal'; section 3.1 C5).
 12. What a held phone's holder gets back and who may order it, where the two
     signatures came from a tuple fault, someone else's malware, or a phone the
     holder had migrated from; and whether to pursue recovery from the bound
@@ -9219,9 +9759,10 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     the block authority enter such a device under R6 so that receivers holding
     the list refuse it at once, which stops honest phones of a leaked factory
     batch (§2.1 'Policy inputs').
-25. Whether Play Integrity or Apple's receipt and fraud metric are required
-    fields of E; each rests on the key of the party that made the vendor call
-    (§2.1).
+25. Whether a scheme requires Play Integrity or Apple's receipt and fraud
+    metric at enrollment and renewal. Where it does, the issuer applies the
+    check; it does not enter E, so no proof and no receiver sees it, and it
+    rests on the issuer's own check (§2.1).
 26. Whether the mint stays sealed by the validator quorum inside the relation;
     if not, a stolen voucher key mints value every proof accepts (§2.3 'Mint
     authorization').
@@ -9256,11 +9797,13 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     destroying the device key (lost phone, erase, Android uninstall without
     keeping data, clear storage) destroys the balance on any single-phone
     design.
-35. iPhone key-store durability: if the first iPhone gate test fails and no
-    barrier works, choose among accepting the exposure (pay, force restart,
-    delete app, reinstall, pay again), having an iPhone wallet stop when its
-    files are absent (an honest holder then loses the balance after an app
-    deletion or a one-app restore), or treating the tuple as unsupported.
+35. iPhone key-store durability: if the first iPhone gate test fails on a tuple
+    and no barrier works, that tuple is unsupported (10.4.6). Two further
+    courses exist, and neither changes the finding: accepting the exposure
+    (pay, force restart, delete app, reinstall, pay again), which leaves P2
+    unmet against an ordinary user; or having an iPhone wallet stop when its
+    files are absent, which leaves P1 unmet for an honest holder after an app
+    deletion or a one-app restore. The owner decides what follows for iPhone.
 36. If a wait before release is the barrier that works on iPhone: whether its
     length is acceptable inside the payment time.
 37. The checkpoint caps: 4 Requests listed, 2 complete and 6 short unresolved
@@ -9304,7 +9847,10 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     that a lost phone's share then never returns to the account (5.4)?
 48. Confirm as explicitly enabled regulatory controls the additions beyond the
     owner's words: `require_anchor`, receive freshness (`receive_not_after`),
-    the per-counterparty cap (5.4), the `send_blocked` flag (5.5).
+    the per-counterparty cap and a clock that R7 or R8 can no longer use (5.4),
+    the `send_blocked` flag and the block-list version a wallet must hold again
+    after a resume (5.5), and a critical extension that the wallet's app does
+    not know (5.11).
 49. Holder-requested blocking (5.5): may a scheme switch it on, and does it
     then count as an explicitly enabled regulatory control? Where on, whoever
     holds the account key can stop a working phone paying among holders of the
@@ -9314,9 +9860,9 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     the key store (about 0.1 KB plus 40 B per entry per segment) so that
     nothing stops?
 51. Is an app-build floor part of what R8 checks at renewal (5.11)? If yes it
-    is a reason to refuse a renewal and old builds die out within one lease; if
-    no, no renewal is refused for a build or version and a defective build is
-    retired only by its users updating.
+    is a reason to refuse a renewal and old builds die out within one lease and
+    its grace; if no, no renewal is refused for a build or version and a
+    defective build is retired only by its users updating.
 52. The patch floor (5.11): its value per platform class, and whether it
     applies to phones past their vendor's update commitment (Pixel 6: October
     2026). Such a phone cannot send after its lease and its holder must Migrate
@@ -9326,8 +9872,8 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
 54. Does a tier-row notice that brings in a lease for certificates issued
     without one count as the scheme explicitly enabling R8 (5.11)? If not, a
     new lease reaches a certificate only at a sync its holder chooses.
-55. Renewal now needs k of n witnesses as well as the issuer and one final
-    ledger write, because every certificate has its own receipt (5.1, 5.11).
+55. Renewal needs k of n witnesses as well as the issuer and one final ledger
+    write, because every certificate has its own receipt (5.1, 5.11).
     Accept that dependency under R8, in exchange for a stolen certificate key
     alone being useless offline?
 56. Fees (5.8): who pays (payer on top, or receiver out of the amount); one
@@ -9373,8 +9919,8 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     one witness outside the issuer operator's control, or (B) notary with a
     seasoning delay on every first receipt; k and n. Also whether a receipt is
     wanted at all once a proof starts from the validators' seal, and whether
-    the ledger should again pay a row above its own loads only while a receipt
-    is recorded on-chain (dropped in this text, with the reason).
+    the ledger should pay a row above its own loads only while a receipt is
+    recorded on-chain (not in this design; section 8.2 gives the reason).
 65. Holder-requested blocking (sections 7.2, 6): off, so that whoever holds the
     account key cannot stop a live phone and a lost unlocked phone can be spent
     like cash; or on as part of R6, so that the account can block its own
@@ -9392,7 +9938,10 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
 68. Which of the document's additions count as enabled regulatory controls
     (section 7.1): receive freshness, send_blocked, the per-counterparty cap,
     require_anchor, a tier-row notice that switches a control on for
-    certificates already issued, a block at the holder's request.
+    certificates already issued, a block at the holder's request, a clock that
+    R7 or R8 can no longer use, the block-list version a wallet must hold again
+    after a resume, and a critical extension that the wallet's app does not
+    know.
 69. A load left with neither a voucher nor a void statement (section 7.1):
     accept that no rule ends the wait and that the wallet cannot load again
     meanwhile, or anchor every voucher on-chain (one more write per load) so
@@ -9444,9 +9993,9 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     accepted as the stated assumptions, 'supported with a stated assumption'
     meets P2 as worded and the P4 consequence goes to the residual-risk section
     (10.4.6).
-80. Factory-provisioned attestation roots: refuse them (excludes leaked factory
+80. The factory-provisioned chain class: refuse it (excludes leaked factory
     keys, and also the recorded Pixel 6 StrongBox chain and older
-    Xiaomi/OPPO/vivo generations) or admit them as a separate platform class
+    Xiaomi/OPPO/vivo generations) or admit it as a separate platform class
     (those phones enroll; an unlisted leaked key then enrolls software keys)
     (§10.3).
 81. Which platform classes a pool admits: iPhone (no OS statement),
@@ -9473,11 +10022,13 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     renewal can only show the app that holds the device key and not the same
     secure hardware (§10.3)?
 87. Unit of R9: 10,000 bytes of canonical binary, or of the text form a code
-    shows? The proof-carrying Payment is about 7.6 KB binary and about 10.2 KB
+    shows? The proof-carrying Payment is about 7.7 KB binary and about 10.2 KB
     in the repo's text form (§5.6).
 88. Carriers a wallet must support; whether to build and measure a Bluetooth LE
     carrier; whether to encrypt Payment and Outcome against bystanders, about
-    100 bytes (§5.6).
+    100 bytes (§5.6); and the end state of Petal Stream, a third optical
+    carrier that exists in the repository: used by this design, kept beside
+    it, or removed (§11.1 row 9).
 89. Privacy of enrollment evidence: raw vendor attestation on the chain so that
     validators verify it themselves, or only a digest so that it is hidden and
     validators cannot (§5.7).
@@ -9487,10 +10038,10 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     an exception to the no-parallel-implementations rule until the removals
     (§11, §11.1)?
 91. If Q0 to Q3 end without a proof that meets PC in a time the owner accepts:
-    choose among relaxing one named constraint for one more cycle, a narrower
-    device list, a candidate shape after design and check, the signature-only
-    form with what it lacks, hardware that runs wallet logic, or no production
-    release (10.4.6).
+    choose among a stated, longer time for a proof-carrying payment, relaxing
+    one named constraint for one more cycle, a narrower device list, the
+    signature-only form with what it lacks, hardware that runs wallet logic,
+    or no production release (§2.3, 10.4.6).
 92. Play Integrity: required at enrollment and renewal (excludes phones without
     Google Play) or an optional issuer signal; and whether iPhone tiers carry
     lower limits while test h7 is open (§10.3).
@@ -9504,9 +10055,36 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
     automatic freeze; and whether a minimum app build is part of a renewal
     under R8 (§14). §14 also names points that have no other item here: one
     issuer or several, privacy tiers, other device classes and the design
-    outage. §11.1 points here for two more: an enrollment class for cards,
-    and the typed treatment a retail-governed asset needs before Load and
-    Unload open for it.
+    outage. For these four the question itself is not yet stated (§14).
+    §11.1 points here for two more: an enrollment class for cards, and the
+    typed treatment a retail-governed asset needs before Load and Unload
+    open for it.
+95. An enrollment interrupted between the generation of the device key and
+    the first confirmed marker (§5.10) is not designed. Decide which
+    alias recovery reads as the device key when another key of the app sits
+    beside the new one, and how a key that was never registered and has no
+    marker is cleared. No value exists at that point; until this is decided
+    recovery stops on such a phone.
+96. Circuit releases: a proof that travels and verifies under a key that does
+    not change between releases is not designed (§2.3 'Circuit releases').
+    Without it a wallet that has not updated its app cannot be paid value that
+    passed through a newer wallet until it reaches an app store, and no
+    regulatory control asks for that (§3.1 B6). What follows for a new circuit
+    release until it is designed is the owner's.
+97. Who may make a proof: whether a server may make the proof for the
+    transitions that are online by nature (MintFold, RedeemSplit, Recertify,
+    Migrate). It would keep an unload open to a phone whose prover no longer
+    runs, and it shows the server the wallet's state. Not designed (§2.3 'Who
+    may make a proof').
+98. The key for four issuer signatures that have no key role (§6):
+    the countersignature on a Migrate, the sync acknowledgement that
+    creates a time anchor, the answer before a Migrate and the recovery
+    amount. The root certifies only certificate, voucher, list and witness
+    keys, and §8.1 lists no theft of the key behind these four.
+    Assign each to an existing role, or certify a further role.
+99. Whether production value may start while the ordinary profile (§11.1
+    row 4) and the secure-element path (row 6) are still in the tree, and
+    whether that satisfies 'only one design' (§11, step 7).
 
 ## 13. Evidence
 
@@ -9514,9 +10092,10 @@ and 62; 13, 19, 32 and 91; 15 and 94; 25 and 92; 37 and 77; 38 and 50; 39 and
 holds the sources. Its section 0 is a claim map made for revision 5; sections
 1 to 7 are older research; section 8 lists the sources for what revision 6
 added: the study of what evidence exists that a phone runs a genuine operating
-system, and the acceptance-criterion design. The marker that carries a
-checkpoint has no separate source list; its platform statements are cited
-where §5.10 makes them. The test procedures of the evidence gate are in
+system, and the acceptance-criterion design. For the marker that carries a
+checkpoint it lists the sources by file, most without a line number; the
+platform statements are also cited where §5.10 makes them. The test
+procedures of the evidence gate are in
 [`kagemusha_evidence_gate.md`](kagemusha_evidence_gate.md), with the sources
 for its platform statements in its part 10.4.10.
 
@@ -9545,14 +10124,14 @@ and the certificate.
 **Why a proof takes the place of the signed history.** The owner said: "to do
 device to device transfers, we really cannot have payment data exceed around
 10k or so, which is why we were looking at using cryptographic proofs to
-proof in a concise way correctness". One earlier hop costs about 0.85 KB as
-signed records (certificate, receipt, signed transition; an estimate). A
-payment passes 10 KB after about eleven earlier hops, or at once when the
-payer's balance merges about eleven received payments, because each one
-brings its own history. R4 and R9 together exclude that. The proof of §2.1
-checks every earlier hop at a constant size. No such proof has been produced
-yet (§2.2). A payment in the signature-only form does not check earlier hops
-at all (§2).
+proof in a concise way correctness". One earlier hop costs about 1.0 KB as
+signed records (certificate 0.53 KB, receipt 0.15 KB, signed transition
+0.315 KB; estimates of §5.1). A payment of 1.14 KB passes 10 KB after about
+nine earlier hops, or at once when the payer's balance merges about nine
+received payments, because each one brings its own history. R4 and R9
+together exclude that. The proof of §2.1 checks every earlier hop at a
+constant size. No such proof has been produced yet (§2.2). A payment in the
+signature-only form does not check earlier hops at all (§2).
 
 **Wallet logic in secure hardware.** The 2025 document has the balance, the
 limits and the one-time-spend counters kept and enforced inside the secure
@@ -9631,13 +10210,15 @@ payment that is complete once the receiver has verified and recorded it; PC
 says exactly when (§5.2). The receiver able to spend again offline, for any
 number of hops. Synchronization that is optional. A block list refreshed at
 sync. Optional limits and expiry, which stop sending and leave receiving
-alone; here only the block-list freshness control of §5.5 stops a wallet
-requesting. Higher limits by tier for named users. Unload only to the bound
-account. A lost phone is a lost balance (T6). PIN or biometric before paying:
-the owner said "pin/biometric is a ux functionality but generally it should
-be related to the secure hardware on a phone", and §5.9 has the platform
-check it. Optional fees: the owner said "optional fees sound good, but can
-only be received to an online account when someone syncs" (§5.8).
+alone; here requesting is stopped by the R6 rules of §5.5: receive
+freshness, a block entry that covers the wallet's own certificate, and the
+missing list after a resume. §7.1 lists every stop. Higher limits by tier
+for named users. Unload only to the bound account. A lost phone is a lost
+balance (T6). PIN or biometric before paying: the owner said "pin/biometric
+is a ux functionality but generally it should be related to the secure
+hardware on a phone", and §5.9 has the platform check it. Optional fees: the
+owner said "optional fees sound good, but can only be received to an online
+account when someone syncs" (§5.8).
 
 **What the acceptance criterion rules out.**
 
@@ -9697,14 +10278,18 @@ the meaning of the size bound; carriers; privacy tiers and bystander
 confidentiality; the default on forced sync; holding, count and since-sync
 caps; one issuer or several; a lost-or-stolen report; Play Integrity; the
 recovery default; relay of undelivered payments; other device classes; the
-design outage; the limit day. §12 also asks the owner to confirm that the
-later statements override the 2025 document wherever the two disagree, which
-this document assumes. Two points of the old document have no decision item
-here: clearing history from the phone after a sync, and location stamps on
-records. A third is its version checks that force app updates and push
-emergency rules. In this design no version floor acts offline: every release
-accepts every rules version ever allowed (§5.11). Whether a minimum app build
-is part of what a renewal under R8 checks is the owner's decision (§12).
+design outage; the limit day. For four of these this document does not state
+the question: privacy tiers, one issuer or several, other device classes and
+the design outage. What is to be decided on each has to be written, with
+what the 2025 document says, before the owner can decide it. §12 also asks
+the owner to confirm that the later statements override the 2025 document
+wherever the two disagree, which this document assumes. Two points of the
+old document have no decision item here: clearing history from the phone
+after a sync, and location stamps on records. A third is its version checks
+that force app updates and push emergency rules. In this design no version
+floor acts offline: every release accepts every rules version ever allowed
+(§5.11). Whether a minimum app build is part of what a renewal under R8
+checks is the owner's decision (§12).
 
 **Set aside by the owner.** Smart cards: "right now smart cards are future
 optionality to explore but there are no plans right now to use." The owner

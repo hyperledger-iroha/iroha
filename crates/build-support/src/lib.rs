@@ -484,7 +484,7 @@ mod tests {
                 // Claim a fresh owner before creating children; never reuse another fixture.
                 match fs::create_dir(&root) {
                     Ok(()) => break root,
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
                     Err(error) => panic!("create owned Git metadata fixture: {error}"),
                 }
             };

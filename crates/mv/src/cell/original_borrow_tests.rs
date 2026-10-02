@@ -131,3 +131,21 @@ fn released_original_observation_never_accepts_equal_republication() {
     cell.block().commit();
     assert!(!original.try_matches_current().unwrap());
 }
+
+#[test]
+fn first_original_noncopy_borrow_on_cold_thread_allocates_no_mutex_or_collector_backing() {
+    use crate::allocation_test_support::without_allocations;
+    let cell = Cell::new(String::from("original"));
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let original = without_allocations(|| cell.try_committed_borrow().unwrap());
+                assert_eq!(original.current(), "original");
+                assert!(original.undo().is_none());
+                without_allocations(|| assert!(original.try_matches_current().unwrap()));
+                without_allocations(|| drop(original));
+            })
+            .join()
+            .unwrap();
+    });
+}

@@ -1,5 +1,6 @@
 [versions]
 kotlin = "2.3.10"
+coroutines = "1.9.0"
 agp = "9.0.1"
 junit = "5.11.4"
 junitPlatform = "1.11.4"
@@ -15,6 +16,7 @@ androidxTestRunner = "1.6.2"
 androidxTestJunit = "1.2.1"
 
 [libraries]
+coroutines-core-jvm = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm", version.ref = "coroutines" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }

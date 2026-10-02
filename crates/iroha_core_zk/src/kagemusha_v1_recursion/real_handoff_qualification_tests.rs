@@ -2111,18 +2111,18 @@ fn parent_from_generated(proof: KagemushaGeneratedRecursiveStateProofV1) -> Pare
     }
 }
 
-struct StateKeys {
-    eq: KagemushaLoadedEqRecursiveStateArtifactsV1,
-    ep: KagemushaLoadedEpRecursiveStateArtifactsV1,
-    eq_transport_protocol: PlonkProtocol<EqAffine>,
-    ep_transport_protocol: PlonkProtocol<EpAffine>,
-    eq_protocol: PlonkProtocol<EqAffine>,
-    ep_protocol: PlonkProtocol<EpAffine>,
-    eq_protocol_digest: DigestV1,
-    ep_protocol_digest: DigestV1,
+pub(super) struct StateKeys {
+    pub(super) eq: KagemushaLoadedEqRecursiveStateArtifactsV1,
+    pub(super) ep: KagemushaLoadedEpRecursiveStateArtifactsV1,
+    pub(super) eq_transport_protocol: PlonkProtocol<EqAffine>,
+    pub(super) ep_transport_protocol: PlonkProtocol<EpAffine>,
+    pub(super) eq_protocol: PlonkProtocol<EqAffine>,
+    pub(super) ep_protocol: PlonkProtocol<EpAffine>,
+    pub(super) eq_protocol_digest: DigestV1,
+    pub(super) ep_protocol_digest: DigestV1,
 }
 
-fn decode_state_keys(
+pub(super) fn decode_state_keys(
     eq_params: &ParamsIPA<EqAffine>,
     ep_params: &ParamsIPA<EpAffine>,
     state: &KagemushaStateV1,
@@ -2343,7 +2343,7 @@ fn decode_state_keys(
     }
 }
 
-fn terminally_verify_state_proof(
+pub(super) fn terminally_verify_state_proof(
     state_keys: &StateKeys,
     proof: &KagemushaGeneratedRecursiveStateProofV1,
 ) {

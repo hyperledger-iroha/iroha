@@ -1,10 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
-import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
@@ -21,7 +19,6 @@ public final class Ed25519RouteAdmissionTests {
     gatewayProviderRejectsIdentityPoint();
     vpnOutboundRejectsIdentityPoint();
     vpnInboundRejectsIdentityPoint();
-    multisigProposeRejectsIdentityPoint();
     System.out.println("[IrohaAndroid] Ed25519 route admission tests passed.");
   }
 
@@ -32,16 +29,7 @@ public final class Ed25519RouteAdmissionTests {
         HttpClientTransport.buildVpnQuoteCreatePayload("standard", nonCanonicalText);
     assert VALID_PUBLIC_KEY_HEX.equals(quote.get("metering_public_key_hex"));
 
-    final Map<String, Object> proposal =
-        HttpClientTransport.buildMultisigProposePayload(
-            MultisigProposeRequest.builder()
-                .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
-                .setMultisigAccountAlias("cbdc@banka")
-                .setSignerAccountId("alice")
-                .addInstructionBytes(new byte[] {1})
-                .setPublicKeyHex(nonCanonicalText)
-                .build());
-    assert VALID_PUBLIC_KEY_HEX.equals(proposal.get("public_key_hex"));
+
   }
 
   private static void gatewayProviderRejectsIdentityPoint() {
@@ -74,18 +62,6 @@ public final class Ed25519RouteAdmissionTests {
                 vpnQuoteJson(IDENTITY_PUBLIC_KEY_HEX).getBytes(StandardCharsets.UTF_8)));
   }
 
-  private static void multisigProposeRejectsIdentityPoint() {
-    expectIllegalArgument(
-        () ->
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
-                    .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
-                    .setMultisigAccountAlias("cbdc@banka")
-                    .setSignerAccountId("alice")
-                    .addInstructionBytes(new byte[] {1})
-                    .setPublicKeyHex(IDENTITY_PUBLIC_KEY_HEX)
-                    .build()));
-  }
 
   private static void expectIllegalArgument(final Runnable call) {
     try {

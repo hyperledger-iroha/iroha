@@ -95,9 +95,6 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
-import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteBridge;
-import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteRequestV1;
-import org.hyperledger.iroha.android.validationfee.ValidationFeeHijiriQuoteV1;
 import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingCheckpointPersisterV1;
 import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerificationV1;
 import org.hyperledger.iroha.sdk.client.ParliamentTimedOvnCastingProofPageVerifierV1;
@@ -120,27 +117,6 @@ public final class HttpClientTransport implements IrohaClient {
   private static final String TRON_BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   private static final String ENTRYPOINT_HASH_HEADER = "x-iroha-entrypoint-hash";
-
-  interface ValidationFeeHijiriQuoteCodec {
-    byte[] encode(ValidationFeeHijiriQuoteRequestV1 request);
-
-    ValidationFeeHijiriQuoteV1 verify(byte[] responseNorito, byte[] requestNorito);
-  }
-
-  private static final ValidationFeeHijiriQuoteCodec NATIVE_HIJIRI_QUOTE_CODEC =
-      new ValidationFeeHijiriQuoteCodec() {
-        @Override
-        public byte[] encode(final ValidationFeeHijiriQuoteRequestV1 request) {
-          return ValidationFeeHijiriQuoteBridge.encodeRequestV1(request);
-        }
-
-        @Override
-        public ValidationFeeHijiriQuoteV1 verify(
-            final byte[] responseNorito, final byte[] requestNorito) {
-          return ValidationFeeHijiriQuoteBridge.verifyResponseV1(
-              responseNorito, requestNorito);
-        }
-      };
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
@@ -808,79 +784,8 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  /**
-   * Posts one account-signed, native-Norito Hijiri validation-fee quote request.
-   *
-   * <p>The authenticated account may be the quoted account or a direct signatory of that multisig
-   * controller; Torii resolves and authorizes that live relationship. The projection is exposed
-   * only after native canonical decoding, exact request binding, hash validation, and Q16
-   * aggregate-fee verification succeed.
-   */
-  public CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
-      final ValidationFeeHijiriQuoteRequestV1 request,
-      final ToriiCanonicalRequestAuth canonicalAuth) {
-    return postValidationFeeHijiriQuote(request, canonicalAuth, NATIVE_HIJIRI_QUOTE_CODEC);
-  }
 
-  /** Convenience overload constructing the frozen V1 request. */
-  public CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
-      final String accountId,
-      final int qualifyingTransferCount,
-      final ToriiCanonicalRequestAuth canonicalAuth) {
-    return postValidationFeeHijiriQuote(
-        new ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount),
-        canonicalAuth);
-  }
 
-  CompletableFuture<ValidationFeeHijiriQuoteV1> postValidationFeeHijiriQuote(
-      final ValidationFeeHijiriQuoteRequestV1 request,
-      final ToriiCanonicalRequestAuth canonicalAuth,
-      final ValidationFeeHijiriQuoteCodec codec) {
-    Objects.requireNonNull(request, "request");
-    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
-    Objects.requireNonNull(codec, "codec");
-    if (!"https".equalsIgnoreCase(config.baseUri().getScheme())) {
-      throw new IllegalStateException(
-          "Hijiri validation-fee quote requests require an HTTPS Torii base URL");
-    }
-    final byte[] encoded = Objects.requireNonNull(codec.encode(request), "encoded request");
-    final byte[] body = encoded.clone();
-    if (body.length == 0 || body.length > ValidationFeeHijiriQuoteRequestV1.MAX_REQUEST_BYTES) {
-      throw new IllegalArgumentException(
-          "Hijiri validation-fee quote request must contain 1.."
-              + ValidationFeeHijiriQuoteRequestV1.MAX_REQUEST_BYTES
-              + " bytes");
-    }
-    final TransportRequest transportRequest =
-        buildExactNoritoPostRequest(
-            "/v1/validation-fee/hijiri/quote",
-            body,
-            ValidationFeeHijiriQuoteV1.MAX_RESPONSE_BYTES,
-            canonicalAuth,
-            true);
-    return fetchExactNoritoBytes(
-            transportRequest,
-            "Hijiri validation-fee quote",
-            true,
-            true,
-            true,
-            true,
-            true)
-        .thenApply(
-            response -> {
-              final ValidationFeeHijiriQuoteV1 quote =
-                  Objects.requireNonNull(
-                      codec.verify(response.clone(), body.clone()),
-                      "verified Hijiri validation-fee quote");
-              if (quote.qualifyingTransferCount() != request.qualifyingTransferCount()
-                  || !sameCanonicalHijiriQuoteAccount(
-                      quote.accountId(), request.accountId())) {
-                throw new IllegalStateException(
-                    "Hijiri validation-fee quote response does not bind the exact request");
-              }
-              return quote;
-            });
-  }
 
   private static NetworkId requireNetworkTransactionDomain(
       final Map<String, Object> unsignedPayload) {
@@ -975,17 +880,6 @@ public final class HttpClientTransport implements IrohaClient {
                     response, requestPayload, expectedNetworkId, draftIntent));
   }
 
-  /** Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`. */
-  @Override
-  public CompletableFuture<MultisigResponse> proposeMultisig(
-      final MultisigProposeRequest requestBody) {
-    final NetworkId expectedNetworkId = config.requireLocalSigningContext().networkId();
-    final byte[] body = encodeJsonBody(buildMultisigProposePayload(requestBody));
-    final TransportRequest request = buildJsonPostRequest("/v1/multisig/propose", body);
-    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose")
-        .thenApply(
-            response -> validateMultisigResponse(response, requestBody, expectedNetworkId));
-  }
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
   public CompletableFuture<GovernanceContractResponse> getGovernanceContract(
@@ -2801,16 +2695,6 @@ public final class HttpClientTransport implements IrohaClient {
     return future;
   }
 
-  private static boolean sameCanonicalHijiriQuoteAccount(
-      final String left, final String right) {
-    try {
-      return Arrays.equals(
-          AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes(),
-          AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes());
-    } catch (final AccountAddress.AccountAddressException error) {
-      return false;
-    }
-  }
 
   private static void requireExactSignedResponseProvenance(
       final TransportRequest request,
@@ -3609,223 +3493,8 @@ public final class HttpClientTransport implements IrohaClient {
     return hexLower(Blake3.hashUnbounded(canonicalBytes));
   }
 
-  static Map<String, Object> buildMultisigProposePayload(
-      final MultisigProposeRequest request) {
-    Objects.requireNonNull(request, "request");
-    final boolean hasAccountId = request.multisigAccountId() != null;
-    final boolean hasAlias = request.multisigAccountAlias() != null;
-    if (hasAccountId == hasAlias) {
-      throw new IllegalArgumentException(
-          "Exactly one of multisigAccountId or multisigAccountAlias must be provided");
-    }
-    if (request.instructions().isEmpty()) {
-      throw new IllegalArgumentException("instructions must not be empty");
-    }
 
-    final Map<String, Object> payload = new LinkedHashMap<>();
-    if (hasAccountId) {
-      payload.put(
-          "multisig_account_id",
-          normalizeNonBlank(request.multisigAccountId(), "multisigAccountId"));
-    } else {
-      payload.put(
-          "multisig_account_alias",
-          normalizeNonBlank(request.multisigAccountAlias(), "multisigAccountAlias"));
-    }
-    payload.put("signer_account_id", normalizeNonBlank(request.signerAccountId(), "signerAccountId"));
-    if (request.publicKeyHex() != null) {
-      payload.put(
-          "public_key_hex",
-          normalizeEd25519PublicKeyHex(request.publicKeyHex(), "publicKeyHex"));
-    }
-    if (request.signatureB64() != null) {
-      payload.put(
-          "signature_b64",
-          normalizeRequiredExactBase64Payload(request.signatureB64(), "signatureB64"));
-    }
-    if (request.creationTimeMs() != null) {
-      if (request.creationTimeMs().longValue() < 0L) {
-        throw new IllegalArgumentException("creationTimeMs must be non-negative");
-      }
-      payload.put("creation_time_ms", request.creationTimeMs());
-    }
-    payload.put("fee_payment", request.feePayment().toJsonMap());
-    if (request.memo() != null) {
-      payload.put("memo", normalizeNonBlank(request.memo(), "memo"));
-    }
-    putValidationFeePolicyMetadata(
-        payload,
-        request.validationFeePolicyVersion(),
-        request.validationFeePolicyHash(),
-        request.validationFeeHijiriFeeQuoteHash(),
-        request.validationFeeInstructionIndex(),
-        request.validationFeeTransferEntryIndex());
-    final List<String> instructions = new ArrayList<>();
-    int index = 0;
-    for (final byte[] instruction : request.instructions()) {
-      if (instruction == null || instruction.length == 0) {
-        throw new IllegalArgumentException("instructions[" + index + "] must not be empty");
-      }
-      instructions.add(Base64.getEncoder().encodeToString(instruction));
-      index++;
-    }
-    payload.put("instructions", instructions);
-    return payload;
-  }
 
-  /** Rejects a multisig response that changes a signature-bound request field. */
-  static MultisigResponse validateMultisigResponse(
-      final MultisigResponse response,
-      final MultisigProposeRequest request,
-      final NetworkId expectedNetworkId) {
-    Objects.requireNonNull(response, "response");
-    Objects.requireNonNull(request, "request");
-    Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
-    if (!response.ok()) {
-      throw new IllegalStateException("multisig response.ok must be true");
-    }
-    final String signerAccountId =
-        AccountIdLiteral.requireCanonicalI105Address(
-            normalizeNonBlank(request.signerAccountId(), "signerAccountId"),
-            "signerAccountId");
-    if (request.multisigAccountId() != null) {
-      final String expectedMultisigAccountId =
-          AccountIdLiteral.requireCanonicalI105Address(
-              normalizeNonBlank(request.multisigAccountId(), "multisigAccountId"),
-              "multisigAccountId");
-      if (!expectedMultisigAccountId.equals(response.resolvedMultisigAccountId())) {
-        throw new IllegalStateException(
-            "multisig response resolved account does not match the requested account");
-      }
-    }
-    if (!request.feePayment().hasSamePayerAndGasBound(response.feePayment())) {
-      throw new IllegalStateException(
-          "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound");
-    }
-    if (request.creationTimeMs() != null
-        && !request.creationTimeMs().equals(response.creationTimeMs())) {
-      throw new IllegalStateException(
-          "multisig response creation_time_ms is not bound to the request");
-    }
-    final List<byte[]> expectedProposalInstructions;
-    final byte[] proposalHash;
-    try {
-      expectedProposalInstructions =
-          NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request);
-      proposalHash =
-          NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(expectedProposalInstructions);
-    } catch (final Exception ex) {
-      throw new IllegalStateException(
-          "multisig request does not contain canonical proposal instructions", ex);
-    }
-    final String expectedProposalId = hexLower(proposalHash);
-    if (response.proposalId() == null
-        || !response.proposalId().equals(response.instructionsHash())
-        || !expectedProposalId.equals(response.proposalId())) {
-      throw new IllegalStateException(
-          "multisig response proposal hash does not match the exact requested instructions and validation-fee marker");
-    }
-    if (response.submitted()) {
-      if (response.txHashHex() == null
-          || response.transactionPayloadB64() != null
-          || response.signingMessageB64() != null) {
-        throw new IllegalStateException(
-            "submitted multisig response must contain only the final transaction hash");
-      }
-      return response;
-    }
-    if (request.multisigAccountId() == null) {
-      throw new IllegalStateException(
-          "unsigned multisig drafts require a caller-trusted concrete multisigAccountId; a server-resolved alias is not signing intent");
-    }
-    if (response.txHashHex() != null || response.executedTxHashHex() != null) {
-      throw new IllegalStateException(
-          "unsubmitted multisig response must not contain transaction hashes");
-    }
-    if (response.creationTimeMs() == null) {
-      throw new IllegalStateException(
-          "unsubmitted multisig response must contain creation_time_ms");
-    }
-    final TransactionPayload decoded =
-        decodeUnsignedDraftPayload(
-            response.transactionPayloadB64(),
-            response.signingMessageB64(),
-            "multisig response");
-    if (!response.feePayment().equals(decoded.feePayment())) {
-      throw new IllegalStateException(
-          "multisig response fee_payment does not match the transaction payload");
-    }
-    if (decoded.creationTimeMs() != response.creationTimeMs().longValue()) {
-      throw new IllegalStateException(
-          "multisig response creation_time_ms does not match the transaction payload");
-    }
-    try {
-      final byte[] verifiedProposalHash =
-          NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
-              decoded,
-              response.resolvedMultisigAccountId(),
-              expectedProposalInstructions);
-      if (!Arrays.equals(proposalHash, verifiedProposalHash)) {
-        throw new IllegalStateException(
-            "multisig response executable changed the proposal hash");
-      }
-    } catch (final Exception ex) {
-      throw new IllegalStateException(
-          "multisig response transaction payload does not match the exact requested executable",
-          ex);
-    }
-    final TransactionPayload expected =
-        TransactionPayload.builder()
-            .setNetworkId(expectedNetworkId)
-            .setAuthority(signerAccountId)
-            .setCreationTimeMs(response.creationTimeMs())
-            .setExecutable(decoded.executable())
-            .setFeePayment(response.feePayment())
-            .setMetadata(canonicalMultisigTransactionMetadata(request))
-            .buildDecodedForCodec();
-    if (!sameTransactionPayload(decoded, expected)) {
-      throw new IllegalStateException(
-          "multisig response transaction payload does not match the exact requested envelope and metadata");
-    }
-    return response;
-  }
-
-  private static Map<String, JsonValue> canonicalMultisigTransactionMetadata(
-      final MultisigProposeRequest request) {
-    final Map<String, JsonValue> metadata = new LinkedHashMap<>();
-    if (request.memo() != null) {
-      metadata.put("memo", JsonValue.string(normalizeNonBlank(request.memo(), "memo")));
-    }
-    if (request.validationFeePolicyVersion() != null) {
-      metadata.put(
-          "validation_fee_policy_version",
-          JsonValue.number(request.validationFeePolicyVersion()));
-      metadata.put(
-          "validation_fee_policy_hash",
-          JsonValue.string(
-              normalizeHex32(
-                  request.validationFeePolicyHash(), "validationFeePolicyHash")));
-      if (request.validationFeeHijiriFeeQuoteHash() != null) {
-        metadata.put(
-            "validation_fee_hijiri_fee_quote_hash",
-            JsonValue.string(
-                normalizeHex32(
-                    request.validationFeeHijiriFeeQuoteHash(),
-                    "validationFeeHijiriFeeQuoteHash")));
-      }
-      if (request.validationFeeInstructionIndex() != null) {
-        metadata.put(
-            "validation_fee_instruction_index",
-            JsonValue.number(request.validationFeeInstructionIndex()));
-      }
-      if (request.validationFeeTransferEntryIndex() != null) {
-        metadata.put(
-            "validation_fee_transfer_entry_index",
-            JsonValue.number(request.validationFeeTransferEntryIndex()));
-      }
-    }
-    return metadata;
-  }
 
   private static TransactionPayload decodeUnsignedDraftPayload(
       final String transactionPayloadB64,
@@ -3886,67 +3555,6 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
-  static void putValidationFeePolicyMetadata(
-      final Map<String, Object> payload,
-      final Long validationFeePolicyVersion,
-      final String validationFeePolicyHash,
-      final String validationFeeHijiriFeeQuoteHash,
-      final Long validationFeeInstructionIndex,
-      final Long validationFeeTransferEntryIndex) {
-    final boolean hasPolicyVersion = validationFeePolicyVersion != null;
-    final boolean hasPolicyHash = validationFeePolicyHash != null;
-    final boolean hasHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != null;
-    final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
-    final boolean hasTransferEntryIndex = validationFeeTransferEntryIndex != null;
-    if (hasPolicyVersion != hasPolicyHash) {
-      throw new IllegalArgumentException(
-          "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
-    }
-    if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-      throw new IllegalArgumentException(
-          "validationFeeHijiriFeeQuoteHash requires validationFeePolicyVersion and validationFeePolicyHash");
-    }
-    if (!hasPolicyVersion && hasInstructionIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeInstructionIndex requires validation fee policy metadata");
-    }
-    if (!hasPolicyVersion && hasTransferEntryIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeTransferEntryIndex requires validation fee policy metadata");
-    }
-    if (hasTransferEntryIndex && !hasInstructionIndex) {
-      throw new IllegalArgumentException(
-          "validationFeeTransferEntryIndex requires validationFeeInstructionIndex");
-    }
-    if (!hasPolicyVersion) {
-      return;
-    }
-    if (validationFeePolicyVersion.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeePolicyVersion must be non-negative");
-    }
-    if (hasInstructionIndex && validationFeeInstructionIndex.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
-    }
-    if (hasTransferEntryIndex && validationFeeTransferEntryIndex.longValue() < 0L) {
-      throw new IllegalArgumentException("validationFeeTransferEntryIndex must be non-negative");
-    }
-    payload.put("validation_fee_policy_version", validationFeePolicyVersion.toString());
-    payload.put(
-        "validation_fee_policy_hash",
-        normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
-    if (hasHijiriFeeQuoteHash) {
-      payload.put(
-          "validation_fee_hijiri_fee_quote_hash",
-          normalizeHex32(
-              validationFeeHijiriFeeQuoteHash, "validationFeeHijiriFeeQuoteHash"));
-    }
-    if (hasInstructionIndex) {
-      payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
-    }
-    if (hasTransferEntryIndex) {
-      payload.put("validation_fee_transfer_entry_index", validationFeeTransferEntryIndex.toString());
-    }
-  }
 
   static Map<String, Object> buildVerifyingKeyRegisterPayload(
       final VerifyingKeyRegisterRequest request) {

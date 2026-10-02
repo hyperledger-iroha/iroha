@@ -178,3 +178,44 @@ fn malformed_enum_field_attribute_is_rejected_before_codegen() {
     validate_data_field_attrs(&input.data)
         .expect_err("enum fields must use the same validation as struct fields");
 }
+
+#[test]
+fn required_attribute_recognizes_transparent_macro_and_parenthesized_option_types() {
+    for ty in [
+        syn::parse_quote!(Option<u32>),
+        syn::parse_quote!(::core::option::Option<u32>),
+        syn::parse_quote!((Option<u32>)),
+    ] {
+        let grouped = syn::Type::Group(syn::TypeGroup {
+            group_token: Default::default(),
+            elem: Box::new(ty),
+        });
+        let nested = syn::Type::Group(syn::TypeGroup {
+            group_token: Default::default(),
+            elem: Box::new(grouped),
+        });
+        let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
+        field.ty = nested;
+        let attrs = FieldAttr::parse(&field.attrs).unwrap();
+        validate_required_attr(&field, &attrs, true).expect("transparent Option remains required");
+    }
+    for ty in [
+        syn::parse_quote!(u32),
+        syn::parse_quote!(Vec<Option<u32>>),
+        syn::parse_quote!(&Option<u32>),
+        syn::parse_quote!((Option<u32>,)),
+    ] {
+        let mut field: syn::Field = syn::parse_quote!(#[norito(required)] value: u32);
+        field.ty = syn::Type::Group(syn::TypeGroup {
+            group_token: Default::default(),
+            elem: Box::new(ty),
+        });
+        let attrs = FieldAttr::parse(&field.attrs).unwrap();
+        assert_eq!(
+            validate_required_attr(&field, &attrs, true)
+                .unwrap_err()
+                .to_string(),
+            "#[norito(required)] can only be used on Option fields"
+        );
+    }
+}

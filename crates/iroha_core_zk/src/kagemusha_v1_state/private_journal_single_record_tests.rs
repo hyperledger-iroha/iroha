@@ -1,7 +1,10 @@
 //! Original single-record transport checks. Synthetic bytes confer no native authority.
 
 use super::*;
-use std::{fs::OpenOptions, os::fd::AsRawFd as _};
+use std::{
+    fs::OpenOptions,
+    os::{fd::AsRawFd as _, unix::fs::FileExt as _},
+};
 
 const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "original-record.wal",
@@ -179,8 +182,7 @@ fn actual_descriptor_payload_is_compared_even_when_cached_metadata_is_test_refre
             journal.previous_frame_hash = hash;
         }
         std::fs::write(path.join(FORMAT.filename), &file_bytes).unwrap();
-        journal.observed_version =
-            JournalFileVersion::from_metadata(&journal.journal.metadata().unwrap());
+        journal.observed_version = JournalFileVersion::from_file(&journal.journal).unwrap();
         assert_eq!(journal.check_owned(), Ok(()));
         assert_eq!(
             journal.require_single_record(&original),
@@ -198,8 +200,7 @@ fn actual_descriptor_header_is_checked_even_when_cached_metadata_is_test_refresh
         let mut file_bytes = std::fs::read(path.join(FORMAT.filename)).unwrap();
         file_bytes[header_byte] ^= 1;
         std::fs::write(path.join(FORMAT.filename), &file_bytes).unwrap();
-        journal.observed_version =
-            JournalFileVersion::from_metadata(&journal.journal.metadata().unwrap());
+        journal.observed_version = JournalFileVersion::from_file(&journal.journal).unwrap();
         assert_eq!(journal.check_owned(), Ok(()));
         assert_eq!(
             journal.require_single_record(&original),
@@ -234,8 +235,8 @@ fn identical_named_file_replacement_cannot_redirect_the_held_original() {
     std::fs::rename(&file, &displaced).unwrap();
     std::fs::copy(&displaced, &file).unwrap();
     assert_ne!(
-        std::fs::metadata(&file).unwrap().ino(),
-        journal.file_identity.1
+        FileIdentity::of(&File::open(&file).unwrap()).unwrap(),
+        journal.file_identity
     );
     assert!(journal.require_single_record(&original).is_err());
     assert_poisoned(&mut journal, &original);

@@ -208,10 +208,24 @@ impl PartialEq for BlockPublicationIdentity {
 impl Eq for BlockPublicationIdentity {}
 
 impl Publication {
+    // Initialize opaque native mutex storage during original owner construction.
+    // The first source observation must not perform lazy platform allocation.
+    // This construction cost is separate from the three explicit charged layouts;
+    // TODO: admit native mutex backing before claiming complete construction custody.
+    fn initialized_version(version: Identity<Version>) -> Mutex<Identity<Version>> {
+        let mutex = Mutex::new(version);
+        drop(
+            mutex
+                .lock()
+                .expect("new publication identity mutex is not poisoned"),
+        );
+        mutex
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             owner: Shared::new(Owner, None),
-            version: Mutex::new(Shared::new(Version, None)),
+            version: Self::initialized_version(Shared::new(Version, None)),
             released: ReleaseNotification::default(),
         }
     }
@@ -262,7 +276,7 @@ impl Publication {
             })?;
         Ok(Self {
             owner,
-            version: Mutex::new(version),
+            version: Self::initialized_version(version),
             released,
         })
     }
@@ -279,7 +293,7 @@ impl Publication {
         let next = NextPublication::from_admission(reservation);
         Self {
             owner: Shared::new(Owner, Some(owner_charge)),
-            version: Mutex::new(next.0),
+            version: Self::initialized_version(next.0),
             released: ReleaseNotification::new_charged(notification_charge),
         }
     }

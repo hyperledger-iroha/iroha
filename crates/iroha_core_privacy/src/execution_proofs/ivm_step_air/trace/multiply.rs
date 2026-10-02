@@ -122,10 +122,13 @@ fn correction_residues(
 
 /// Code-derived modes and verifier-owned terminal selection. Success is the
 /// selected division/square mode minus its fixed trap flag, never a witness bit.
+/// Other is a disjoint private workspace owner; public trace callers keep zero.
+/// Active convolution, inactive carries and signed corrections have distinct masks.
 pub(in super::super) struct Selection {
     pub(in super::super) multiply: F,
     pub(in super::super) division: F,
     pub(in super::super) square: F,
+    pub(in super::super) other: F,
     pub(in super::super) signed: F,
     pub(in super::super) success: F,
     pub(in super::super) quotient: [F; 4],
@@ -142,6 +145,7 @@ pub(in super::super) fn append_residues(
         multiply: active,
         division,
         square,
+        other,
         signed,
         success,
         quotient,
@@ -162,7 +166,13 @@ pub(in super::super) fn append_residues(
             &bank[CARRY_DIGITS + 9 * carry..CARRY_DIGITS + 9 * (carry + 1)],
             2,
         )));
-        out.push(F::ONE.sub(active).sub(success).mul(bank[CARRY + carry]));
+        out.push(
+            F::ONE
+                .sub(active)
+                .sub(success)
+                .sub(other)
+                .mul(bank[CARRY + carry]),
+        );
     }
     for k in 0..8 {
         let incoming = if k == 0 { F::ZERO } else { bank[CARRY + k - 1] };
@@ -191,7 +201,7 @@ pub(in super::super) fn append_residues(
         sources,
         1,
         sources.sign(0),
-        F::ONE.sub(division).sub(square),
+        F::ONE.sub(division).sub(square).sub(other),
     );
     correction_residues(
         out,
@@ -200,7 +210,7 @@ pub(in super::super) fn append_residues(
         sources,
         0,
         sources.sign(1),
-        F::ONE.sub(division).sub(square),
+        F::ONE.sub(division).sub(square).sub(other),
     );
     for (operand, offset) in [(0, SIGNED_UNSIGNED), (1, SIGNED_SIGNED)] {
         for limb in 0..4 {

@@ -45,17 +45,39 @@ impl ColumnStateV1 {
         challenges: ZkX509Rfc5280StarkChallengesV1,
         sha_union: &ZkX509ShaUnionCentersV1,
     ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
+        self.step_with_inverse_v1(
+            column,
+            context,
+            last,
+            der_challenges,
+            challenges,
+            sha_union,
+            &mut zero_safe_inverse_v1,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn step_with_inverse_v1(
+        &mut self,
+        column: usize,
+        context: &RowContextV1,
+        last: bool,
+        der_challenges: ZkX509DerStarkChallengesV1,
+        challenges: ZkX509Rfc5280StarkChallengesV1,
+        sha_union: &ZkX509ShaUnionCentersV1,
+        inverse: &mut impl FnMut(F, F) -> (F, F),
+    ) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
         let row = &context.base;
         let fixed = &context.fixed;
         if (AUX_NUMERIC_INVERSE..AUX_NUMERIC_ZERO_SUM + numeric::LOOKUP_LANES_V1).contains(&column)
         {
             let offset = column - AUX_NUMERIC_INVERSE;
             let event = numeric_lookup_event_v1(row, fixed);
-            let mut values = numeric_replay::step_v1(
+            let mut values = numeric_replay::step_with_inverse_v1(
                 event,
                 challenges,
                 offset % numeric::LOOKUP_LANES_V1,
                 &mut self.sums,
+                inverse,
             )?;
             let result = values[offset / numeric::LOOKUP_LANES_V1];
             zeroize_fields_v1(&mut values);
@@ -153,10 +175,10 @@ impl ColumnStateV1 {
             let query_factor = profile_byte_factor_v1(&row, lane, challenges);
             let topology_query_gate = row[BASE_PROFILE_TOPOLOGY_QUERY_ACTIVE];
             let topology_query_factor = profile_topology_query_factor_v1(&row, lane, challenges);
-            let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-            let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+            let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+            let (query_zero, query_inverse) = inverse(query_gate, query_factor);
             let (topology_query_zero, topology_query_inverse) =
-                zero_safe_inverse_v1(topology_query_gate, topology_query_factor);
+                inverse(topology_query_gate, topology_query_factor);
             let value = match kind {
                 0 => self.sums[0],
                 1 => table_inverse,
@@ -201,8 +223,8 @@ impl ColumnStateV1 {
                         row[BASE_A],
                     )
                 };
-            let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-            let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+            let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+            let (query_zero, query_inverse) = inverse(query_gate, query_factor);
             let value = match lookup.kind {
                 0 => self.sums[0],
                 1 => table_inverse,
@@ -261,8 +283,8 @@ impl ColumnStateV1 {
                 challenges,
             )
         };
-        let (table_zero, table_inverse) = zero_safe_inverse_v1(table_gate, table_factor);
-        let (query_zero, query_inverse) = zero_safe_inverse_v1(query_gate, query_factor);
+        let (table_zero, table_inverse) = inverse(table_gate, table_factor);
+        let (query_zero, query_inverse) = inverse(query_gate, query_factor);
         let value = match lookup.kind {
             0 => self.sums[0],
             1 => table_inverse,
@@ -915,3 +937,9 @@ mod tests {
         }
     }
 }
+
+// TODO: Keep the private batch inversion experimental until native parity,
+// complete same-shape timings and enclosing resource/erasure review succeed.
+#[cfg(test)]
+#[path = "rfc5280_inverse_window_tests.rs"]
+pub(super) mod inverse_window_tests;

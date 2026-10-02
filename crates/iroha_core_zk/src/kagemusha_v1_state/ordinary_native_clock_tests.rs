@@ -774,3 +774,42 @@ fn received_historical_signed_clock_authenticates_sender_originals_without_nativ
     assert!(recovered.retained_cash_clock_originals(&context).is_err());
     assert_eq!(recovered.journal.recovery_prefix().unwrap(), prefix);
 }
+
+/// Bare complete public mathematical clock frame for full proof-original fixture codecs.
+/// Uses actual known-public BLS signatures/finality, creates no ClockWAL/elapsed-time capability.
+pub(crate) fn ordinary_signed_clock_data_for_qualification_v1(
+    nonce: [u8; 32],
+    at_ms: u64,
+) -> (
+    Vec<u8>,
+    iroha_data_model::kagemusha::KagemushaOrdinaryCashClockContextV1,
+) {
+    let fixture = Fixture::new();
+    let replies = fixture.replies(nonce, [at_ms; 4]);
+    let frame = KagemushaOrdinaryNativeSignedClockOriginalV1 {
+        version: 1,
+        installed_selection_digest: fixture.selected.selection_digest(),
+        request_nonce: nonce,
+        certified_context_id: fixture
+            .native
+            .verifier()
+            .verify_retained_decision(fixture.native.latest())
+            .unwrap()
+            .context_id(),
+        originals: replies,
+    };
+    // Only canonical public DATA is returned. No verified clock or current owner is constructed.
+    let context = iroha_data_model::kagemusha::KagemushaOrdinaryCashClockContextV1 {
+        version: 1,
+        request_nonce: nonce,
+        signed_observations_original_digest: signed_observation_digest(
+            nonce,
+            frame.certified_context_id,
+            &frame.originals,
+        )
+        .unwrap(),
+        lower_at_ms: at_ms,
+        upper_at_ms: at_ms.checked_add(1).unwrap(),
+    };
+    (frame.canonical_original().unwrap(), context)
+}

@@ -9,6 +9,7 @@ history under the section numbers of the revision each was written for.
 Section 7 lists sources the revision-5 drafts added.
 Section 8 lists the sources for what revision 6 added. The claim map in
 section 0 was made for revision 5 and has not been redone for revision 6.
+Section 0 names the rows that were restated against revision 6.
 
 ## How to read this
 
@@ -51,11 +52,17 @@ section 0 was made for revision 5 and has not been redone for revision 6.
   one exists.
 
 
-## 0. Current claim map (revision 5)
+## 0. Claim map (made for revision 5)
 
-This section maps the factual claims the proposal makes to their sources. It
-is organised by proposal section. Read it in place of sections 1 to 6. Those
-sections were written for earlier revisions and stay below as history.
+This section maps the factual claims of revision 5 of the proposal to their
+sources. It is organised by the section numbers of revision 5, except the
+group headed §3.1 and §4.1, which names sections of revision 6. It is not a
+claim map of revision 6. These rows were restated against revision 6 or
+added for it, and every other row was last checked against revision 5:
+C-4-4; C-2-2 to C-2-4 and C-2-7; C-2.2-6 and C-2.2-15; C-3-1 to C-3-4;
+C-4.1-6, C-4.1-7, C-4.1-9 and C-4.1-21 to C-4.1-24; C-5.1-1; C-5.6-1,
+C-5.6-8 and C-5.6-20; C-10-7; C-14-13. Read it in place of sections 1 to 6.
+Those sections were written for earlier revisions and stay below as history.
 
 What it covers. Facts about platforms, the repository, published work and the
 June 2025 document. It does not list design rules. A rule is a choice, not a
@@ -78,8 +85,8 @@ Columns.
   `b2a3cd05bc` on branch `optimizations` unless a row names the working tree.
   "app. N" names the older section of this appendix that holds the row, with
   the row's label where it has one.
-- **Class**: as defined under "How to read this". "Source reading" means the
-  behaviour was inferred from code and not observed.
+- **Class**: the Kind defined under "How to read this". "Source reading" means
+  the behaviour was inferred from code and not observed.
 - **Passes**: how many automated passes opened the source.
   - `2`: a research pass and a second check.
   - `1`: one research pass. A later adversarial pass argued against the claim
@@ -118,8 +125,8 @@ disagree, this section is the later reading.
   uses are already in section 3.
 - C-5.6-14 tightens the section 5 row on Google Nearby Connections.
 - C-5.6-20 replaces the statement that QR is the only carrier that works
-  between every pair of phones. That holds only among the carriers the repo
-  implements.
+  between every pair of phones. Among the carriers the repo implements it
+  holds for the two optical ones, QR and Petal Stream.
 
 References the older rows left inexact, now given in full.
 
@@ -167,7 +174,7 @@ References the older rows left inexact, now given in full.
 | C-4-1 | Device keys are non-exportable, and access by one app only is enforced by the OS, not by the secure hardware. | https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave ; https://developer.android.com/privacy-and-security/keystore (app. 2: I6, Android T1 row) | documented | 2 | supported, limit: on iPhone the scope is the App ID on that device, not one install |
 | C-4-2 | The Android chain shows hardware custody, locked verified boot and patch level at key generation. | AOSP attestation page above; `py/attestation.py:1027-1058` (app. 2 Android) | documented | 2 | supported, limit: holds only while the attestation key is not a leaked factory key |
 | C-4-3 | On Android the app identity in the chain is asserted by the OS and cannot be enforced by the secure hardware. | KeyMint `Tag.aidl` line 676, https://raw.githubusercontent.com/LineageOS/android_hardware_interfaces/lineage-22.2/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl (app. 2 Android) | documented | 2 | supported |
-| C-4-4 | No API re-attests an existing Android key. | none; the API surface in the AOSP attestation page (app. 2, first Android row) | inference | 2 | supported, limit: an absence in the API surface |
+| C-4-4 | No API re-attests an existing Android key. | none; the API surface in the AOSP attestation page (app. 2, first Android row) | inference | 2 | supported, limit: an absence in the API surface. A new key can be attested offline under an app attestation key the wallet holds (app. 8); an Android renewal carries such a leaf (proposal §4, §7.1) |
 | C-4-5 | An App Attest attestation carries the App ID hash, the environment, a counter of zero, the key id and a nonce over a value the caller chose; it carries no OS version, patch, boot or jailbreak state. | Apple validating page above (app. 2 I1) | documented | 2 | supported |
 | C-4-6 | On iOS 27 and later the attestation also carries a distribution category and a bundle version. | https://developer.apple.com/videos/play/wwdc2026/201/ (app. 2 I1) | documented | 2 | supported, limit: not exercised on a device; the repo's iPhone observations are development-environment only (app. 2 I15) |
 | C-4-7 | In the existing code the iPhone payment key is a second, app-created Secure Enclave key whose public key is hashed into the attested client data. | `py/attested_selection.py:9-21`; `py/attestation.py:648`; `Swift/KagemushaAttested/KagemushaAttestedModels.swift:963-978` (app. 2 I3) | repo-code | 2 | supported |
@@ -182,12 +189,12 @@ References the older rows left inexact, now given in full.
 | Id | Claim | Source | Class | Passes | Status |
 |---|---|---|---|---|---|
 | C-2-1 | Recursive V1 has no offline limits and no block list. | `crates/iroha_core_zk/src/kagemusha_v1_state/mod.rs:851-893`; `crates/iroha_core/src/state.rs:3983-3984, 4357-4367` (app. 2: P1, last Ledger row) | repo-code | 2 | supported, limit: a load or unload already runs under the general ledger's account controls |
-| C-2-2 | A proof-carrying payment is about 7.4 KB with one witness. | `crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs:60, 90`; `specs/peer_transport_v1.md:68` (app. 2 P5; app. 4) | extrapolation | 2 | supported, limit: the 6,528 B proof cap plus an estimated 0.9 KB; both are caps and estimates; no such message has been built |
-| C-2-3 | A signature-only payment is about 0.9 KB with one witness. | field lists of proposal §5.1 under the existing encoder's rules (app. 2, "Message sizes") | extrapolation | 2 | supported, limit: no encoder or fixture exists; an 8-entry list delta adds about 0.46 KB |
-| C-2-4 | Under the repo's QR framing a 0.9 KB payment is about 7 frames and a 7.4 KB payment about 48; one pass takes 0.6 to 1.4 s and 4 to 10 s at 12 to 5 frames per second. | `Swift/IrohaPeerQRV1.swift:198-199, 267-293`; `Swift/IrohaPeerWireV1.swift:208-212` (app. 5) | extrapolation | 1+m | supported, limit: computed from constants; no scan was timed |
+| C-2-2 | A proof-carrying payment is about 7.7 KB with one witness. | `crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs:60, 90`; `specs/peer_transport_v1.md:68` (app. 2 P5; app. 4) | extrapolation | 2 | supported, limit: the 6,528 B proof cap plus an estimated 1.14 KB; both are caps and estimates; no such message has been built |
+| C-2-3 | A signature-only payment is about 1.14 KB with one witness. | field lists of proposal §5.1 under the existing encoder's rules (app. 2, "Message sizes") | extrapolation | 2 | supported, limit: no encoder or fixture exists; a list segment adds about 0.1 KB plus 40 B per entry |
+| C-2-4 | Under the repo's QR framing a 0.90 KB Request is about 7 frames, a 1.14 KB Payment about 8 or 9 and a 7.7 KB Payment about 49 to 51; one pass takes 0.6 to 1.4 s, 0.7 to 1.8 s and 4 to 10 s at 12 to 5 frames per second. | `Swift/IrohaPeerQRV1.swift:198-199, 267-293`; `Swift/IrohaPeerWireV1.swift:208-212` (app. 5) | extrapolation | 1+m | supported, limit: computed from constants; no scan was timed. 5 frames per second is the Swift widget's default; 12 is the rate `specs/qr_stream.md:153-159` recommends for the Rust framing, and no source gives it for this framing |
 | C-2-5 | The repo's QR widget defaults to 5 frames per second. | `IrohaSwift/Sources/IrohaSwiftTransferUI/KagemushaWidgets.swift:281` (interval 0.20 s) (app. 5) | repo-code | 1+m | supported |
 | C-2-6 | The repo's device gates are 10 s proving, 1 s verification and 30 s handoff at p95, and 128 MiB of process memory. | `crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs:34, 46, 48, 50`; `readiness:119-122` (app. 2: P24, P25) | repo-code | 2 | supported, limit: acceptance limits, not measurements |
-| C-2-7 | One earlier hop of carried history costs about 0.85 KB, so a payment that carries its history passes 10 KB after about eleven hops. | computed from the estimated object sizes (app. 5) | extrapolation | 1 | supported, limit: the object sizes are themselves estimates |
+| C-2-7 | One earlier hop of carried history costs about 1.0 KB, so a 1.14 KB payment that carries its history passes 10 KB after about nine earlier hops. | computed from the estimated object sizes of proposal §5.1: certificate 0.53 KB, receipt 0.15 KB, transition 0.315 KB (app. 5) | extrapolation | 1 | supported, limit: the object sizes are themselves estimates |
 | C-2-8 | Offline double spending cannot be prevented by software or cryptography alone. | https://arxiv.org/pdf/2512.10636 §1 and §5; https://eprint.iacr.org/2020/1400.pdf p.2; https://www.imf.org/-/media/files/publications/ftn063/2025/english/ftnea2025005.pdf p.19 (app. 2 Prior art) | documented | 2 | supported |
 | C-2.1-1 | With only the last hop's signature checked, a compromised phone can fork a balance through software-only states and fold both branches back under a valid proof. | `phone_algorithm:84-92, 30-33` and reasoning (app. 2 P7) | inference | 2 | supported, limit: an argument; the attack has not been written as a test |
 | C-2.1-2 | No published design was found that combines per-hop proofs with a uniqueness primitive of a stock phone; the precedents found run custom code in a secure element or trusted application. | https://www.federalreserve.gov/econres/feds/files/2025105pap.pdf pp.6-8; https://arxiv.org/pdf/2012.08003 §3; https://www.usenix.org/legacy/event/nsdi09/tech/full_papers/levin/levin_html/ (app. 1 prior-art; app. 2 Prior art) | inference | 2 | supported, limit: an absence finding |
@@ -202,7 +209,7 @@ References the older rows left inexact, now given in full.
 | C-2.2-3 | No shipped build can produce a State proof; the witness source the provers need has only a failing test stub; there is no Rotate entry point. | `recursion/native_outgoing_witness.rs:57, 167-178` (app. 2 P9) | repo-code | 2 | supported |
 | C-2.2-4 | A lineage generator for the secure-hardware relation exists as ignored unit tests and has no recorded completed run. | `recursion/real_payment_corridor/state_milestone.rs:2879-2974` (app. 3, "closest thing to an end-to-end real proof") | repo-code | 2 | supported |
 | C-2.2-5 | An "ordinary" Guard circuit verifies two full-width P-256 signatures at k = 16 in both fields under a mock prover. | `recursion/ordinary_guard_composition.rs:178-181`; `recursion/ordinary_guard_composition_tests.rs:262-323` (app. 3, "what exists for stock-phone keys") | repo-code | 2 | supported, limit: no pass ran the test |
-| C-2.2-6 | The production construction refuses the ordinary State, and ordinary ReceiveFold is refused in every construction. | `recursion/composite.rs:1961-1968, 1003-1008` (app. 2 P10; app. 3) | repo-code | 2+m | supported |
+| C-2.2-6 | The production construction refuses the ordinary State, and ordinary ReceiveFold is refused in every construction. | `recursion/composite.rs:1961-1968, 1003-1008` (app. 2 P10; app. 3) | repo-code | 2+m | supported, limit: read at commit `b2a3cd05bc`. Commit `92562ad371` replaces the ReceiveFold refusal and adds `recursion/ordinary_state_receive_consumer.rs`; the later code was not read |
 | C-2.2-7 | The repo records key generation for the stock-phone path as blocked at 8,584 advice columns against a 1,024-column ceiling. | `status.md:168-171` at commit `b2a3cd05bc`; the same passage is at lines 176-179 in the working tree, which has uncommitted edits; ceiling at `recursion/artifact_resource_preflight.rs:34-39, 485-490` (app. 3, "recorded reason") | repo-measured | 2+m | supported, limit: the record does not say which circuit the figure belongs to, and no pass reproduced it |
 | C-2.2-8 | At 2 MiB per advice column at k = 16, 8,584 columns are about 16.8 GiB for one advice bank, about 134 times the 128 MiB gate; the 1,024 ceiling is 16 times that gate. | arithmetic on C-2.2-7 and C-2.2-11; the code comment at `recursion/artifact_resource_preflight.rs:34-38` gives 4 GiB for two buffers of 1,024 columns | extrapolation | m | supported, limit: it sizes a refused configuration of unknown composition; it shows scale and is not a memory measurement |
 | C-2.2-9 | P-256 cost in this stack is unmeasured; the reduced-window tests run at k = 18 as a test choice. | `crates/iroha_core_zk/src/kagemusha_p256_curve_gadget.rs:1140-1162` (app. 3, "what the repo records about P-256 cost") | repo-code | 2 | supported |
@@ -211,7 +218,7 @@ References the older rows left inexact, now given in full.
 | C-2.2-12 | The phone spec sketches a five-slice k = 15 split of the Claim circuit: 79 MiB for one bank and eighteen proof instances per transition. | `phone_algorithm:768-771, 811-813, 833-834` (app. 4) | repo-code | 1 | supported, limit: slice arithmetic is test-only; the rest is unimplemented and unmeasured |
 | C-2.2-13 | The Pixel 6 secure element denies the app a channel. | `phone_algorithm:515-519` (app. 4) | repo-measured | 1 | supported, limit: the raw probe output is outside the repository |
 | C-2.2-14 | The phone spec requires the counter to step by exactly one; the code accepts any App Attest counter above a floor. | `phone_algorithm:10-24, 234-243`; `crates/iroha_data_model/src/kagemusha/kagemusha_v1/hardware_selection.rs:489`; `recursion/composite.rs:1605, 1652-1656`; `Swift/KagemushaAppAttestEvidenceV1.swift:342-347` (app. 6) | repo-code | 1+m | supported |
-| C-2.2-15 | No on-device harness runs this prover, and the mobile bridge enables the prover feature unconditionally. | `crates/connect_norito_bridge/Cargo.toml:42, 49` (app. 2 P38; app. 3) | repo-code | 2+m | supported |
+| C-2.2-15 | No on-device harness runs this prover, and the mobile bridge enables the prover feature unconditionally. | `crates/connect_norito_bridge/Cargo.toml:42, 49` (app. 2 P38; app. 3) | repo-code | 2+m | supported, limit: read at commit `b2a3cd05bc`. Commit `92562ad371` removes `proofs-halo2` and `kagemusha-production-prover` from those lines of the bridge manifest; the later code was not read |
 
 ### Proposal §2.3: qualification plan
 
@@ -233,14 +240,14 @@ References the older rows left inexact, now given in full.
 | C-2.3-14 | With no setup and 10 KB both fixed, Halo-style accumulation is the only family for which an implemented cross-party merge was found. | https://o1-labs.github.io/proof-systems/specs/pickles/ ; https://github.com/tachyon-zcash/ragu ; https://github.com/microsoft/Nova (app. 2 P35; app. 3) | inference | 2 | supported, limit: a survey result; one counter-example refutes it |
 | C-2.3-15 | The stage estimates are 1.5 to 4, 8 to 14 and 3 to 5 engineer-weeks. | app. 3 sizing rows; app. 4 | extrapolation | 1 | supported, limit: automated estimates for a V1-shaped relation; for scale only |
 
-### Proposal §3: what the requirements cannot buy
+### Proposal §3.1 and §4.1: a compromised phone; three rows revision 6 omits
 
 | Id | Claim | Source | Class | Passes | Status |
 |---|---|---|---|---|---|
-| C-3-1 | One compromised device can spend the same value any number of times, and the receiver cannot tell at the time of the exchange. | https://www.brookings.edu/wp-content/uploads/2020/07/Design-Choices-for-CBDC_Final-for-web.pdf §8.3; https://arxiv.org/pdf/2408.06956 §I, §III-B; https://arxiv.org/pdf/2512.10636 §4.2 (app. 2 Prior art) | inference | 2 | supported, limit: each part is documented; applying them to this design is the proposal's synthesis |
-| C-3-2 | An offline scheme can have at most two of: offline payments, no double spending, no loss of funds when a device is lost. | https://www.bankofcanada.ca/wp-content/uploads/2021/12/swp2021-67.pdf p.2 fn 5-6; https://arxiv.org/pdf/2512.10636 §2.2 (app. 2 Prior art) | documented | 2 | supported |
-| C-3-3 | No central bank was found to have committed to bearing losses from offline counterfeit; the literature treats who underwrites as a policy choice. | https://www.bis.org/publications/project-polaris-handbook-offline-payments-cbdc.pdf Annex A p.97; https://arxiv.org/pdf/2603.16320 App. G; https://www.bankofengland.co.uk/report/2025/digital-pound-experiment-report-offline-payments (app. 2 Prior art) | inference | 2 | supported, limit: a negative finding |
-| C-3-4 | Published offline schemes do not trust phone clocks for time-based limits. | Bank of England report above; IMF note above p.21 and fn 34 (app. 2 Prior art) | documented | 2 | supported |
+| C-3-1 | One compromised device can spend the same value any number of times, and the receiver cannot tell at the time of the exchange. | https://www.brookings.edu/wp-content/uploads/2020/07/Design-Choices-for-CBDC_Final-for-web.pdf §8.3; https://arxiv.org/pdf/2408.06956 §I, §III-B; https://arxiv.org/pdf/2512.10636 §4.2 (app. 2 Prior art) | inference | 2 | supported, limit: each part is documented; applying them to this design is the proposal's synthesis. Revision 6 states it in §3.1, group A, item 1, and in §4.1 |
+| C-3-2 | An offline scheme can have at most two of: offline payments, no double spending, no loss of funds when a device is lost. | https://www.bankofcanada.ca/wp-content/uploads/2021/12/swp2021-67.pdf p.2 fn 5-6; https://arxiv.org/pdf/2512.10636 §2.2 (app. 2 Prior art) | documented | 2 | supported. Revision 6 does not state it |
+| C-3-3 | No central bank was found to have committed to bearing losses from offline counterfeit; the literature treats who underwrites as a policy choice. | https://www.bis.org/publications/project-polaris-handbook-offline-payments-cbdc.pdf Annex A p.97; https://arxiv.org/pdf/2603.16320 App. G; https://www.bankofengland.co.uk/report/2025/digital-pound-experiment-report-offline-payments (app. 2 Prior art) | inference | 2 | supported, limit: a negative finding. Revision 6 does not state it, and no underwriting is part of its argument (proposal §3) |
+| C-3-4 | Published offline schemes do not trust phone clocks for time-based limits. | Bank of England report above; IMF note above p.21 and fn 34 (app. 2 Prior art) | documented | 2 | supported. Revision 6 does not state it |
 
 ### Proposal §4.1 and §5.10: the marker and the counter study
 
@@ -251,10 +258,10 @@ References the older rows left inexact, now given in full.
 | C-4.1-3 | Items of that class can be read only while the phone is unlocked. | the two Apple pages of C-4.1-2 | documented | m | supported. A read on a locked phone fails, so "cannot read the marker" does not show that the marker is gone |
 | C-4.1-4 | Android's alias lookup returns false both when the key is absent and when the keystore call fails for another reason. | https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java (`getKeyMetadata`, `engineContainsAlias`) | documented (source reading) | m | supported, limit: AOSP `main`; not run. A false result does not show that the marker is gone |
 | C-4.1-5 | With developer options, a package rollback restores an app's data and leaves Keystore alone. | `frameworks/base` `PackageManagerShellCommand.java:628-652, 3538-3561`; `RollbackManagerServiceImpl.java:871-881, 1075-1101` (app. 6) | documented (source reading) | 1 | supported, limit: not run on a production build |
-| C-4.1-6 | Xiaomi and Honor document restore of third-party app data onto the same phone; Meizu documents a local backup of app data; Huawei documents backup of app data and excludes what it calls financial application data. | vendor URLs listed at the head of this section | third-party | 1+m | supported, limit: no vendor says what happens to Keystore keys; how Huawei classes an app is not documented. Corrected sentence for the proposal: "Xiaomi and Honor document restore of third-party app data onto the same phone, and Meizu a local backup of app data. Huawei documents it too and excludes what it calls financial application data; how an app is classed is not documented." |
-| C-4.1-7 | Samsung says both that app data moves between Galaxy phones and that data in private storage cannot be backed up. | https://www.samsung.com/us/support/answer/ANS10002458/ | third-party | 1+m | supported, limit: the two statements are not reconciled; needs a device test |
+| C-4.1-6 | Xiaomi and Honor document restore of third-party app data onto the same phone; Meizu documents a local backup of app data; Huawei documents backup of app data and excludes what it calls financial application data. | vendor URLs listed at the head of this section | documented | 1+m | supported, limit: no vendor says what happens to Keystore keys; how Huawei classes an app is not documented. Corrected sentence for the proposal: "Xiaomi and Honor document restore of third-party app data onto the same phone, and Meizu a local backup of app data. Huawei documents it too and excludes what it calls financial application data; how an app is classed is not documented." |
+| C-4.1-7 | Samsung says both that app data moves between Galaxy phones and that data in private storage cannot be backed up. | https://www.samsung.com/us/support/answer/ANS10002458/ | documented | 1+m | supported, limit: the two statements are not reconciled; needs a device test |
 | C-4.1-8 | Device-only keychain items other than the passcode class return when a backup is restored to the same iPhone. | https://support.apple.com/guide/security/keybags-for-data-protection-sec6483d5760/web ; https://developer.apple.com/forums/thread/93373 (app. 6) | documented | 1 | supported |
-| C-4.1-9 | Developers report that a Secure Enclave key is gone or no longer signs after an erase and restore. | https://developer.apple.com/forums/thread/749819 (app. 2 I11a) | third-party | 2 | supported, limit: whether the key still signs after a restore without erase has no source |
+| C-4.1-9 | Developers report that a Secure Enclave key is gone or no longer signs after an erase and restore. | https://developer.apple.com/forums/thread/749819 (app. 2 I11a) | third-party | 2 | supported, limit: for a restore without erase the proposal cites one developer report from 2018 that such a key was gone (§5.10), and this appendix holds no source for that report |
 | C-4.1-10 | One desktop tool's guide says it restores one app's data and does not restore that app's keychain data. | https://imazing.com/guides/how-to-export-backup-and-transfer-ios-apps-data-and-settings (app. 6) | third-party | 1+m | supported, limit: a tool vendor's guide; not run |
 | C-4.1-11 | Preventing a second signature needs state in trusted hardware; cryptography alone cannot do it. | Amos, Georgiou, Kiayias, Zhandry (STOC 2020); Goyal et al. (TCC 2010); TrInc (NSDI 2009); https://arxiv.org/abs/2512.10636 ; https://arxiv.org/abs/2601.18644 (app. 6) | third-party | 1 | supported, limit: arguments and a corollary; no formal impossibility result specific to offline payments was found |
 | C-4.1-12 | "Every published design found that prevents offline double spending runs wallet code in a secure element or a trusted application. Every design without such hardware detects or scores risk afterwards." | https://eprint.iacr.org/2026/2199 §I-B, §I-C, §II (full text read by the pass that compiled this map); https://arxiv.org/abs/2012.08003 ; https://arxiv.org/abs/2408.06956 ; https://www.pbc.gov.cn/en/3688110/3688172/4157443/4293696/2021072014364791207.pdf (app. 6) | third-party | 1+m for the first source; 1 for the rest, several read as abstracts | contradicted by the first source, which the older row cites: it prevents double spending for an offline receiver without trusted hardware, by having the payer, while online, obtain a coin issued to the receiver's key; the receiver cannot spend that coin again offline. Corrected: "Every published design found that prevents double spending of value the receiver can spend again offline runs wallet code in a secure element or a trusted application. One published design prevents it without trusted hardware by giving up that property: the payer, while online, has each coin issued to a named receiver, and the receiver cannot spend it again offline. R1 and R4 exclude that. Every other design found without such hardware detects or scores risk afterwards." The conclusion for this design stands |
@@ -266,14 +273,16 @@ References the older rows left inexact, now given in full.
 | C-4.1-18 | Tencent SOTER signs with a counter kept in the TEE and shared by every app on the phone. | https://github.com/Tencent/soter/wiki (app. 6) | documented | 1 | supported, limit: a vendor wiki; not tested |
 | C-4.1-19 | An iOS 17.0 defect leaves App Attest keys permanently invalid on some phones. | https://developer.apple.com/forums/thread/812308 (app. 6) | third-party | 1 | supported, limit: an Apple engineer confirms the defect in the thread; the count of affected users is one developer's |
 | C-4.1-20 | On HarmonyOS NEXT, backup and clone are off unless the app turns them on, and the key store documents no use limit, rollback tag or counter. | OpenHarmony files listed at the head of this section (app. 6) | documented | 1+m | supported, limit: not tested on a device; the absence in the tag table was found by text search |
-| C-4.1-21 | Whether Keystore and the keychain make a new item durable before they return is not known. | none | — | — | unsupported. Decided by the forced power-off tests of proposal §10.4 |
-| C-4.1-22 | The marker constructions prevent a reset by an ordinary user. | constructed from the rows above (app. 6) | inference | 1 | supported, limit: holds only if the device tests pass; untested on every device |
+| C-4.1-21 | On Android the AOSP key-store service sets no journal mode and no synchronous option on its database, and Android's SQLite build file sets no synchronous default, so by source reading each key-store transaction is synced before it returns. | keystore2 `database.rs` lines 1169-1192 on `main` (app. 7); https://android.googlesource.com/platform/external/sqlite/+/refs/heads/main/dist/Android.bp (fetched 2026-10-03) | documented (source reading) | 1 | supported, limit: a source reading of `main`; revision `5c5a412b3cff` of the file selects write-ahead-log mode under a flag; release branches and vendor builds were not read; nothing was run. Decided by the forced power-off tests of proposal §10.4 |
+| C-4.1-23 | Apple's published keychain source opens its database in write-ahead-log mode and sets no synchronous or full-sync option; Apple's SQLite build as read on macOS defaults such a database to `synchronous=NORMAL`, which SQLite documents as able to lose a committed transaction on power loss. | `SecDb.c` lines 887-890, https://github.com/apple-oss-distributions/Security (app. 7); https://www.sqlite.org/pragma.html ; `pragma compile_options` of `/usr/bin/sqlite3` on macOS 27.0.1 (`DEFAULT_WAL_SYNCHRONOUS=1`) | documented (source reading) | 1 | supported, limit: a source reading; the iOS build was not read and nothing was tested. The reading is unfavourable for a new keychain item being durable when the call returns (proposal §3.1, group B, item 1). Decided by the gate (proposal §10.4) |
+| C-4.1-22 | The marker that carries a checkpoint prevents a reset by an ordinary user. | constructed from the rows above (app. 6) | inference | 1 | unsupported until the gate runs on a tuple; it has run on none (proposal §4.1). On iPhone the source reading is unfavourable (C-4.1-23; proposal §3.1, group B, item 1). On Android the reading of AOSP source is favourable (C-4.1-21), on the Pixel 6 a sync issues no cache flush, so a true power cut is open there (C-4.1-24), and no vendor build was read |
+| C-4.1-24 | The Pixel 6 mounts its data partition as f2fs with `fsync_mode=nobarrier`, and f2fs in that mode issues no cache flush on a sync. | https://android.googlesource.com/device/google/gs101/+/refs/heads/main/conf/fstab.gs101.in ; https://www.kernel.org/doc/html/latest/filesystems/f2fs.html (both fetched 2026-10-03) | documented | 2 | supported, limit: the fstab is that of AOSP's `main` branch and not of a build read from a phone; whether the storage chip keeps its cache through a power cut is not known, and group c of proposal §10.4 decides |
 
 ### Proposal §5.1 to §5.5: objects, exchange, time, block list
 
 | Id | Claim | Source | Class | Passes | Status |
 |---|---|---|---|---|---|
-| C-5.1-1 | The object sizes (certificate about 330 B, receipt about 150 B, transition about 290 B, Request about 0.65 KB, Outcome about 0.2 KB) are estimates. | field lists under the existing encoder's rules (app. 2 "Message sizes"; app. 5) | extrapolation | 2 (Request and Outcome: 1) | supported, limit: no encoder exists; each extra witness adds about 67 B |
+| C-5.1-1 | The object sizes (certificate about 0.53 KB on Android and 0.48 KB on iPhone, receipt about 150 B, transition about 315 B, Request about 0.90 KB, Payment about 1.14 KB without a proof, Outcome about 0.2 KB) are estimates. | field lists under the existing encoder's rules (app. 2 "Message sizes"; app. 5) | extrapolation | 2 (Request and Outcome: 1) | supported, limit: no encoder exists; each extra witness adds about 67 B |
 | C-5.1-2 | The existing ports disagree on signed bytes, and no reference implementation or vectors exist. | `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/attested/KagemushaAttestedModelsV1.kt:121-136`; `Swift/KagemushaAttested/KagemushaAttestedModels.swift:208-219` (app. 2, attested-suite) | repo-code | 2 | supported |
 | C-5.2-1 | A SQLite commit under WAL with `synchronous=NORMAL` can be lost on power failure, and full fsync is off by default on Apple platforms. | https://www.sqlite.org/pragma.html ; `Swift/KagemushaAttested/KagemushaAttestedDatabase.swift:53-54` (app. 4) | documented; repo-code | 1 | supported, limit: no forced power-off test is recorded |
 | C-5.4-1 | The suspend-inclusive monotonic clocks are `elapsedRealtimeNanos` on Android and `mach_continuous_time` on Apple platforms. | AOSP `SystemClock.java`; https://developer.apple.com/documentation/kernel/1646199-mach_continuous_time (app. 2 I9; app. 4) | documented | 2 (Android row: 1) | supported |
@@ -288,14 +297,14 @@ References the older rows left inexact, now given in full.
 
 | Id | Claim | Source | Class | Passes | Status |
 |---|---|---|---|---|---|
-| C-5.6-1 | The repo has one message envelope and three carriers in Swift and Kotlin: animated QR, NFC over ISO 7816 commands, and Google Nearby Connections. | `Swift/IrohaPeerWireV1.swift:206-212`; `Swift/IrohaPeerQRV1.swift`; `Swift/IrohaPeerNfcV1.swift`; `Swift/IrohaPeerNearbyV1.swift`; `IrohaSwift/Sources/IrohaSwiftMobileTransports/`; `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeer{Wire,QR,Nfc,Nearby}V1.kt`; `kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerAndroidNfcV1.kt`, `IrohaPeerNearbyConnectionsTransportV1.kt` (app. 5) | repo-code | 1+m | supported |
+| C-5.6-1 | The repo has one message envelope and three carriers in Swift and Kotlin: animated QR, NFC over ISO 7816 commands, and Google Nearby Connections. | `Swift/IrohaPeerWireV1.swift:206-212`; `Swift/IrohaPeerQRV1.swift`; `Swift/IrohaPeerNfcV1.swift`; `Swift/IrohaPeerNearbyV1.swift`; `IrohaSwift/Sources/IrohaSwiftMobileTransports/`; `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeer{Wire,QR,Nfc,Nearby}V1.kt`; `kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerAndroidNfcV1.kt`, `IrohaPeerNearbyConnectionsTransportV1.kt` (app. 5) | repo-code | 1+m | supported, limit: the repo also implements a fourth carrier, Petal Stream (`specs/petal_stream.md`, `crates/iroha_petal`), which this row does not count |
 | C-5.6-2 | The repo has no Bluetooth LE, Multipeer Connectivity or Wi-Fi Aware carrier. | search of `*.swift`, `*.kt`, `*.java` and `*.rs` on 2026-10-02 for CoreBluetooth, CBPeripheralManager, BluetoothGatt, BluetoothLe, MultipeerConnectivity, MCSession and WifiAware: no carrier code found | repo-code | m | supported, limit: a negative search |
 | C-5.6-3 | The repo's transport spec names QR, NFC, Nearby and Multipeer and matches neither implemented byte layout; a second QR framing exists in Rust. | `specs/peer_transport_v1.md:83-96`; `specs/qr_stream.md`; `crates/iroha_data_model/src/qr_stream.rs` (app. 5) | repo-code | 1+m | supported, limit: this pass re-read the spec lines and confirmed the files exist; it did not compare the byte layouts again |
 | C-5.6-4 | The envelope registers one application profile, so messages of a new profile are refused today. | `Swift/IrohaPeerWireV1.swift:5-10` (app. 2, attested-suite) | repo-code | 2+m | supported |
 | C-5.6-5 | Of the three implemented carriers, only the Nearby one encrypts. | `Swift/IrohaPeerNearbyV1.swift:486, 826-845`; no cipher in `IrohaPeerQRV1.swift`, `IrohaPeerNfcV1.swift` or `IrohaPeerWireV1.swift` | repo-code | m | supported, limit: a text search for cipher names in the Swift sources |
 | C-5.6-6 | One QR symbol holds at most 2,953 bytes (version 40, lowest error correction). | https://www.qrcode.com/en/about/version.html (app. 5) | documented | 1 | supported, limit: no primary source was found for what a phone camera reads reliably from a phone screen |
 | C-5.6-7 | The repo's framing shows a still code up to 700 text bytes, about 0.34 KB of payload; above that it animates 256-byte frames with one parity frame per two and a header repeated every twelve. | `Swift/IrohaPeerQRV1.swift:198-199, 267-293`; `Swift/IrohaPeerWireV1.swift:208-212`; widget single-frame default 320 bytes at `IrohaSwift/Sources/IrohaSwiftTransferUI/KagemushaWidgets.swift:258` (app. 5) | repo-code | 1+m | supported |
-| C-5.6-8 | Under that framing a 0.65 KB Request is about 6 frames and a 0.2 KB Outcome is one still code. | computed as in C-2-4 | extrapolation | m | supported, limit: computed; sizes are estimates |
+| C-5.6-8 | Under that framing a 0.90 KB Request is about 7 frames and a 0.2 KB Outcome is one still code. | computed as in C-2-4 | extrapolation | m | supported, limit: computed; sizes are estimates |
 | C-5.6-9 | The existing limits are 1,024 B for a request, 7,552 B for a payment, 256 B for an acknowledgement and 9,211 B for the exchange. | `crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs:58-62, 217`; `specs/peer_transport_v1.md:61-71` (app. 5) | repo-code | 1+m | supported |
 | C-5.6-10 | Android removed phone-to-phone NFC (Beam) in Android 14; phone-to-phone NFC is reader mode against host card emulation. | https://developer.android.com/sdk/api_diff/34/changes/android.nfc.NfcAdapter ; https://developer.android.com/develop/connectivity/nfc/hce (app. 5) | documented | 1 | supported |
 | C-5.6-11 | An iPhone app can read an ISO 7816 card, which includes an Android phone emulating one, on iOS 13 or later. | https://developer.apple.com/documentation/corenfc/nfciso7816tag | documented | m | supported, limit: reading an Android phone's card emulation from an iPhone was not tested here |
@@ -307,7 +316,7 @@ References the older rows left inexact, now given in full.
 | C-5.6-17 | A store app on an iPhone can act as a Bluetooth LE central and as a peripheral, exchange data over a connection, and open an L2CAP channel on iOS 11 or later; it needs the user's Bluetooth permission. | https://developer.apple.com/documentation/corebluetooth/cbperipheralmanager ; https://developer.apple.com/documentation/corebluetooth/cbl2capchannel ; https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription | documented | m | supported |
 | C-5.6-18 | In the foreground an iPhone app can advertise 28 bytes, a local name and service identifiers only, plus 10 bytes of local name in the scan response; in the background its identifiers are visible only to iPhones scanning for them. | https://developer.apple.com/documentation/corebluetooth/cbperipheralmanager/startadvertising(_:) (app. 5) | documented | 1+m | supported |
 | C-5.6-19 | A store app on Android can scan, connect and, where the Bluetooth chipset supports LE advertising, advertise and serve a connection; on Android 12 or later it needs three runtime permissions; none of this needs Google Play services. | https://developer.android.com/develop/connectivity/bluetooth/bt-permissions ; https://developer.android.com/develop/connectivity/bluetooth/ble/ble-overview ; https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/main/framework/java/android/bluetooth/BluetoothAdapter.java (`getBluetoothLeAdvertiser`) ; https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/main/framework/java/android/bluetooth/le/BluetoothLeAdvertiser.java | documented | m | supported, limit: the advertiser is absent on a phone whose chipset lacks LE advertising; which target phones have it was not checked |
-| C-5.6-20 | The platforms allow a Bluetooth LE connection between store apps on every pair of phones that includes an iPhone, and on a pair of Android phones where at least one supports LE advertising. | C-5.6-17 and C-5.6-19 | inference | m | supported, limit: no source read states that an iPhone and an Android phone interoperate; it follows from both implementing the same standard roles. Not implemented in the repo. Setup time and throughput are not measured. HarmonyOS NEXT was not examined. This replaces "QR is the only carrier that works between every pair of target phones", which holds only among the carriers the repo implements |
+| C-5.6-20 | The platforms allow a Bluetooth LE connection between store apps on every pair of phones that includes an iPhone, and on a pair of Android phones where at least one supports LE advertising. | C-5.6-17 and C-5.6-19 | inference | m | supported, limit: no source read states that an iPhone and an Android phone interoperate; it follows from both implementing the same standard roles. Not implemented in the repo. Setup time and throughput are not measured. HarmonyOS NEXT was not examined. This replaces "QR is the only carrier that works between every pair of target phones", which does not hold among the carriers the repo implements either: Petal Stream is another optical carrier (`specs/petal_stream.md`) |
 | C-5.6-21 | No carrier has a recorded device measurement. | search of the repository's specs and status records (app. 5) | repo-code | 1 | supported, limit: a negative search |
 | C-5.6-22 | Encrypting the Payment and the Outcome to a key carried in the Request costs about 100 bytes. | none; one public key in the Request, one ephemeral key and one authentication tag | extrapolation | 1 | supported, limit: an estimate; no format exists |
 
@@ -353,6 +362,7 @@ References the older rows left inexact, now given in full.
 | C-10-4 | Google's update commitment for Pixel 6 ends in October 2026. | https://support.google.com/pixelphone/answer/4457705 (app. 2 Android) | documented | 2 | supported, limit: the month is computed from two statements; Google gives no day |
 | C-10-5 | The verifier changes of proposal §10.3 rest on the existing verifier's behaviour. | app. 2, Android rows and "Existing verifier behaviour" | repo-code | 2 | supported; those rows apply unchanged |
 | C-10-6 | The one-use key test has to cover StrongBox as well as the TEE, per vendor. | C-4.1-15 | inference | m | supported. The repo's probe measured a Pixel 6 StrongBox key only |
+| C-10-7 | The checks of boot state, lock state, patch level and app identity exist today outside the node and outside any circuit: in the issuer's Python, a profile script and the Kotlin attestation verifier (proposal §4, §8.5, §10.3). | `python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061` ; `python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py:178-217` ; `scripts/android_attestation_certificate_profile.py:643-760` ; `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/attestation/KagemushaKeyMintOneUseAttestationVerifierV1.kt:339, 369-371, 487-498` | repo-code | 2 | supported, limit: read, not run. The Kotlin lines cited cover the lock state, the boot state and the package name |
 
 ### Proposal §12 and §14: decisions and the June 2025 document
 
@@ -372,7 +382,7 @@ References the older rows left inexact, now given in full.
 | C-14-10 | It names Bluetooth LE advertising as a carrier. | TC3, "Executing an Offline Payment" | documented | 1+m | supported. An advertisement cannot carry a payment (C-5.6-18); a connection can (C-5.6-20) |
 | C-14-11 | Its summary recommends transaction limits only, and recommends against holding limits and synchronization requirements; its policy section then lists a balance ceiling, forced resync and an automatic freeze. | TC3, "Robust Policy Enforcement and Limits", "Double-Spending Controls", "Enforcement of Limits, Rules, and Policies Offline" | documented | 1+m | supported. The document is not consistent with itself on this point |
 | C-14-12 | It says the payment is complete once the receiver has verified and recorded it. | TC3, "Receipt and Verification" | documented | m | supported. This conflicts with C-14-5 and C-14-6 inside the same document |
-| C-14-13 | It says balance, limits and one-time-spend counters are kept and enforced inside the secure hardware, and that attestation checks block cloned devices. | TC3, "Double-Spending Controls", "Transaction Limits and Velocity" | documented | 1+m | supported as a description of TC3. Neither holds on stock phones: the secure hardware performs key operations and runs no app code (C-4-1), and attestation is made once at enrollment (C-4-4, C-4-5) |
+| C-14-13 | It says balance, limits and one-time-spend counters are kept and enforced inside the secure hardware, and that attestation checks block cloned devices. | TC3, "Double-Spending Controls", "Transaction Limits and Velocity" | documented | 1+m | supported as a description of TC3. Neither holds on stock phones: the secure hardware performs key operations and runs no app code (C-4-1), and the device key is attested once, at enrollment. Where R8 is on, an Android renewal adds a fresh attested leaf for a new key (proposal §4, §7.1). Nothing is attested at a payment (C-4-4, C-4-5) |
 | C-14-14 | SafetyNet Attestation was turned down in January 2025; Play Integrity returns a verdict about the app and the device and does not attest a key. | https://developer.android.com/privacy-and-security/safetynet/deprecation-timeline ; https://developer.android.com/google/play/integrity/overview (app. 5) | documented | 1 | supported |
 | C-14-15 | It says a wallet can be mapped back to an owner through provisioning records. | TC3, "Audit and Oversight" | documented | m | supported as a description of TC3; see C-5.7-3 |
 
@@ -380,8 +390,6 @@ References the older rows left inexact, now given in full.
 
 These claims have no source. The proposal states each as open.
 
-- Whether Keystore and the keychain make a new item durable before they
-  return (C-4.1-21).
 - That a phone's clock keeps running while the phone is powered off (C-5.4-4).
 - What an iPhone payment key does when the passcode is removed (C-5.9-6).
 - That Huawei phones and mainland-China builds lack Google Play services
@@ -852,7 +860,7 @@ timed.
 |---|---|---|---|---|
 | One QR symbol holds at most 2,953 bytes (version 40, level L); 2,331 at M, 1,663 at Q, 1,273 at H. | §5.6 | https://www.qrcode.com/en/about/version.html | documented | No primary source was found for what a phone camera reads reliably from a phone screen. |
 | The repo's QR framing shows a still code up to 700 text bytes, otherwise 256-byte shards with one parity frame per two and a header repeated every 12 frames. | §5.6 | `IrohaSwift/Sources/IrohaSwift/IrohaPeerQRV1.swift:198-199, 267-293`; `IrohaSwift/Sources/IrohaSwift/IrohaPeerWireV1.swift:208-212` | repo-code | About 0.34 KB of payload fits a still code after framing. |
-| A 0.9 KB payment is about 7 frames; a 7.4 KB payment about 48; 1 s against 4 to 10 s per pass at 12 to 5 frames per second. | §2 table; §5.6 | Computed from the row above; widget default interval `IrohaSwift/Sources/IrohaSwiftTransferUI/KagemushaWidgets.swift:281` (0.20 s) | extrapolation | data = ceil(N/256), parity = ceil(data/2), headers = 1 + floor((data+parity)/12). Real scans need one to two passes. |
+| A 0.90 KB Request is about 7 frames; a 1.14 KB Payment about 8 or 9; a 7.7 KB Payment about 49 to 51; 0.6 to 1.4 s, 0.7 to 1.8 s and 4 to 10 s per pass at 12 to 5 frames per second. | §2 table; §5.1; §5.6 | Computed from the row above; widget default interval `IrohaSwift/Sources/IrohaSwiftTransferUI/KagemushaWidgets.swift:281` (0.20 s) | extrapolation | data = ceil(N/256), parity = ceil(data/2), headers = 1 + floor((data+parity)/12). Real scans need one to two passes. |
 | Existing message limits: request 1,024 B, payment 7,552 B, acknowledgement 256 B. | §5.6 | `crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs:58-62`; `specs/peer_transport_v1.md:61-71` | repo-code | |
 | The repo's transport description names QR, NFC, Nearby and Multipeer and matches neither implemented byte layout; a second QR framing exists in Rust. | §5.6 | `specs/peer_transport_v1.md:83-96`; `specs/qr_stream.md`; `crates/iroha_data_model/src/qr_stream.rs` | repo-code | |
 | An iPhone can emulate a card only in the European Economic Area, iOS 17.4 or later, for a developer established there. | §5.6 | https://developer.apple.com/support/hce-transactions-in-apps/ | documented | The repo's NFC flow makes the receiver the card (`IrohaSwift/Sources/IrohaSwiftMobileTransports/IrohaPeerNfcCoreNFCV1.swift:449-453`). |
@@ -861,8 +869,8 @@ timed.
 | Google Nearby Connections on iOS: the README at the pinned revision says the only supported medium is Wi-Fi LAN. | §5.6 | https://github.com/google/nearby/blob/main/connections/README.md | documented | The same checkout contains Apple Bluetooth code, so the real status is unverified. |
 | SafetyNet Attestation was turned down in January 2025; Play Integrity returns verdicts and does not attest a key. | §14 | https://developer.android.com/privacy-and-security/safetynet/deprecation-timeline ; https://developer.android.com/google/play/integrity/overview | documented | |
 | The repo's two records disagree on Play Integrity: required, or an optional signal that lifts a tier cap. | §12 item 24 | `specs/kagemusha_v1_production_readiness.md:12-14`; `python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py:20-24, 39` | repo-code | |
-| One earlier hop of carried history costs about 0.85 KB; 10 KB is passed after about eleven hops. | §2 | Computed from the proposal's estimated object sizes (certificate 330 B, receipt 150 B, transition 290 B, signature 65 B) | extrapolation | The object sizes are themselves estimates. |
-| Request about 0.65 KB with one witness; Outcome about 0.2 KB. | §5.1 | Computed from the proposal's field lists | extrapolation | Not measured. |
+| One earlier hop of carried history costs about 1.0 KB; a 1.14 KB payment passes 10 KB after about nine hops. | §2 | Computed from the proposal's estimated object sizes (certificate 0.53 KB, receipt 0.15 KB, transition 0.315 KB; §5.1) | extrapolation | The object sizes are themselves estimates. |
+| Request about 0.90 KB with one witness; Outcome about 0.2 KB. | §5.1 | Computed from the proposal's field lists | extrapolation | Not measured. |
 | A device key can require user authentication per use or within a window; on Android the setting is fixed at key generation, shown in the attestation, and the key is invalidated when the secure lock screen is removed. | §12 item 23 | https://developer.android.com/privacy-and-security/keystore ; https://developer.apple.com/documentation/security/secaccesscontrolcreateflags | documented | Not device-tested. The existing code sets no such requirement (`kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/crypto/keystore/KagemushaAndroidHardwareAppKeyStoreV1.kt:255-259`). |
 | The existing signature-only code carries a balance ceiling and a cap on value sent since the last sync. | §12 item 20 | `IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedModels.swift:55-65`; `javascript/iroha_js/src/kagemushaAttestedV1.js:1929-1933` | repo-code | |
 | Recursive V1 specified that stable credentials, balance openings and hardware counters are not peer-visible, and that the credit is encrypted to the receiver. | §5.7 | `specs/kagemusha_v1.md:36-40, 240-251` | repo-code | Specified; never proven end to end. |
@@ -957,6 +965,13 @@ Marker and key-store behaviour (proposal §5.10):
 - keystore2 `database.rs`: the connection sets no journal mode or synchronous
   pragma (lines 1169-1192); listing is ordered by alias (lines 2759-2776):
   https://android.googlesource.com/platform/system/security/+/refs/heads/main/keystore2/src/database.rs
+  This is `main` as read on 2026-10-02. Revision `5c5a412b3cff` of the file
+  selects write-ahead-log mode under a flag. The release branches that target
+  phones run were not read. Android's SQLite build file sets no synchronous
+  default
+  (https://android.googlesource.com/platform/external/sqlite/+/refs/heads/main/dist/Android.bp,
+  fetched 2026-10-03), and under SQLite's own default a commit is synced in
+  either journal mode.
 - Apple's published Security source: `SecItemDb.c` leaves
   errSecInteractionNotAllowed as the query error for a locked item and returns
   errSecItemNotFound only when there was no error and nothing matched (lines
@@ -979,7 +994,8 @@ Ledger (proposal §5.8, §6, §8), read from code and not run:
 - `crates/iroha_core/src/smartcontracts/isi/kagemusha/kagemusha_v1_reserve.rs:256-297,
   1986-1996`: two pool counters and the underflow refusal.
 - `crates/iroha_data_model/src/isi/kagemusha_v1.rs:2853, 2863`: the two
-  existing ledger instructions.
+  ledger instructions that existed at commit `b2a3cd05bc`. Commit
+  `92562ad371` added a third, `TopUpKagemushaOrdinaryV1` (line 2875).
 - `crates/iroha_data_model/src/governance/types.rs:755-781`: the existing
   governance pattern installs a scheme cell once.
 
@@ -1004,7 +1020,21 @@ Prior art (proposal §4.1):
 One automated research pass per track and one adversarial pass, on 2026-10-02.
 Nothing was run on a device. Web pages were read through a fetch tool unless a
 line says a local copy of source code was read. Each line gives the source as
-the research pass recorded it.
+the research pass recorded it. A source the pass held only as a working file
+outside the repository is given by its primary URL or repository path, or
+left out.
+
+Each bullet in the first four groups is a candidate statement that the
+research pass examined. Unless the bullet cites the proposal section that
+makes it, it is not a statement the proposal makes, and a statement is not
+shown because it is listed. The confidence in brackets is the research
+pass's own label. The legend above does not define it, and it is not a
+verdict. The bullets carry no Kind and no Status. Where a bullet has a
+verdict, the bullet states it. Proposal §3, §3.2 and §4 say what is claimed,
+what is not shown and what is not relied on. The sources under a bullet are
+not tied to the part of the bullet each supports. A repository of circuit
+code listed under an attestation bullet bears on the cost of checking that
+statement inside a proof, and not on the statement.
 
 
 ### Android: what the secure hardware signs about the operating system
@@ -1050,7 +1080,10 @@ the research pass recorded it.
   - https://developer.android.com/privacy-and-security/keystore
 - A signature made later by an attested key implies that the boot before that
   signature had the same boot key, lock state and boot state as at key
-  generation, and patch levels not lower. (confidence: medium)
+  generation, and patch levels not lower. (confidence: medium) Verdict:
+  required by the KeyMint interface; it cannot be observed on a production
+  phone, and the proposal does not assume it (§4; §3.2 counts it as an
+  untested bound).
   - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
     (lines 191-223, 505-524)
   - https://source.android.com/docs/security/features/keystore/features
@@ -1076,18 +1109,20 @@ the research pass recorded it.
   - https://android.googlesource.com/platform/cts/+/refs/heads/main/tests/tests/keystore/src/android/keystore/cts/AttestKeyTest.java
     (lines 153-207)
   - https://arxiv.org/html/2507.07927 (third-party)
-- On a stated day the issuer (or a witness quorum) verified the phone's Google
-  chain, its expiry and revocation status, and recorded the attested level,
-  boot state, patch levels and app id. (confidence: medium)
-  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_single_design_proposal.md
-    (sections 4 T2 and 5.1)
+- On a stated day the validators verified the phone's vendor chain up to a
+  pinned root and against the revocation list of that day, and sealed the
+  enrollment statement with the attested level, boot state, patch levels and
+  app identity. This is a rule of the design and not a sourced fact (proposal
+  §4, §8.1).
 - The attestation key's certificate was not on Google's revocation list as of a
   cached copy. (confidence: high)
   - https://android.googleapis.com/attestation/status (measured 2026-10-02)
   - https://www.guardsquare.com/blog/bypassing-key-attestation-api
     (third-party)
-- The running operating system is uncompromised at the time of the payment.
-  (confidence: high)
+- Not shown by any evidence: that the running operating system is
+  uncompromised at the time of the payment. Every attested field is fixed at
+  boot or supplied by the running system (proposal §4). (confidence in this
+  negative: high)
   - https://source.android.com/docs/security/features/verifiedboot
   - https://source.android.com/docs/security/features/verifiedboot/dm-verity
   - https://developer.android.com/google/play/integrity/overview
@@ -1114,10 +1149,12 @@ the research pass recorded it.
   - repo
     crates/iroha_core_zk/src/kagemusha_v1_recursion/app_attest_assertion_fold.rs,
     app_attest_assertion_cbor.rs; kagemusha_p256_curve_gadget.rs lines 640-732
-  - third-party regulad/aaoracled README (scratchpad aa_master_README.md)
+  - third-party: https://github.com/regulad/aaoracled (README)
 - The paying device booted only Apple-signed system software (boot-time
   guarantee), enforced locally by the hardware chain of trust and Sealed Key
-  Protection. (confidence: high)
+  Protection. (confidence: high) Verdict: enforced on the phone only; no
+  evidence of it reaches a relying party or the proof, and no iPhone
+  attestation carries a boot field (proposal §4).
   - Apple Platform Security guide Aug 2026: Secure Enclave, Boot process for
     iPad and iPhone devices, Sealed Key Protection (SKP), OS-bound keys/PKA
     (support.apple.com/guide/security/)
@@ -1129,7 +1166,8 @@ the research pass recorded it.
   exist on Apple silicon and can be attested to a relying party (Managed Device
   Attestation) — but not for a store app. (confidence: high)
   - Apple Platform Security guide Aug 2026: Managed Device Attestation for
-    Apple devices (aps.txt lines 10322-10600)
+    Apple devices
+    (https://support.apple.com/guide/security/managed-device-attestation-sec8a37b4cb2/web)
   - https://support.apple.com/guide/deployment/managed-device-attestation-dep28afbde6a/web
   - repo specs/kagemusha_v1_phone_algorithm.md:524 (same conclusion)
 
@@ -1144,41 +1182,40 @@ the research pass recorded it.
   - https://developer.android.com/privacy-and-security/security-key-attestation
   - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/rkp/README.md
   - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
-  - Google test vector android/keyattestation
-    testdata/sony-xperia10-iii/sdk33/TEE_EC.pem (copy in session scratchpad,
-    parsed with openssl)
-  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061
+  - Google test vector
+    https://github.com/android/keyattestation/tree/main/testdata
+    (sony-xperia10-iii/sdk33/TEE_EC.pem, parsed with openssl)
+  - python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061
   - https://github.com/o1-labs/o1js/pull/1885
   - https://github.com/crema-labs/ecdsa-p384-circom
   - https://arxiv.org/abs/2603.25190 (third-party preprint)
   - https://github.com/noir-lang/noir_rsa
   - https://arxiv.org/abs/2401.11735
   - https://zkmopro.org/docs/performance
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/pasta_sha256.rs:36-39
+  - crates/iroha_core_zk/src/pasta_sha256.rs:36-39
 - Android: at the boot during which the key was generated, the OS version and
   the system, vendor and boot patch levels were at or above a floor.
   (confidence: high)
   - https://raw.githubusercontent.com/LineageOS/android_hardware_interfaces/lineage-22.2/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
     (OS_PATCHLEVEL lines 588-606, VENDOR_PATCHLEVEL 786-804, BOOT_PATCHLEVEL
     806-824)
-  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py:178-217
+  - python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py:178-217
 - Android: the operating system named the wallet's package, version and
   signing-certificate digest as the app allowed to use the key. (confidence:
   high)
   - https://raw.githubusercontent.com/LineageOS/android_hardware_interfaces/lineage-22.2/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
     (lines 655-678)
-  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:1039-1048
+  - python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:1039-1048
 - Android, implied by a valid device signature with nothing added: the phone
   booted under the same verified-boot key and lock state as at enrollment and
-  was not rolled back to an older release. (confidence: medium)
+  was not rolled back to an older release. (confidence: medium) Verdict:
+  required by the KeyMint interface; it cannot be observed on a production
+  phone, and the proposal does not assume it (§4; §3.2 counts it as an
+  untested bound).
   - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
     (Root of Trust Binding, Version Binding)
-  - /private/tmp/claude-501/-Users-takemiyamakoto-devstuff-iroha/0ff45d0f-fe0f-4fdc-aaa7-2ad563428e01/scratchpad/rev6/properties.md
-    (A.2 row 2, sibling note)
 - Android, optional per hop: at the boot in which this hop was signed, the
   phone was locked, verified and at patch level X. (confidence: low)
-  - /private/tmp/claude-501/-Users-takemiyamakoto-devstuff-iroha/0ff45d0f-fe0f-4fdc-aaa7-2ad563428e01/scratchpad/rev6/properties.md
-    (A.2 row 3)
   - https://developer.android.com/privacy-and-security/security-key-attestation
     (rule that only the extension nearest the root is trusted)
 - iPhone, at enrollment: Apple certified an App Attest key for the wallet's App
@@ -1188,25 +1225,47 @@ the research pass recorded it.
   - https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server
   - https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity
   - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
-  - sample c0.der and c1.der in the session scratchpad, parsed with openssl
-  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:574-652
+  - the two certificates in the repo fixture
+    python/iroha_app_attestation/tests/fixtures/apple_official_sample_attestation.cbor
+    (1,057 and 583 bytes), parsed with openssl
+  - python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:574-652
 - iPhone, optional per hop: the holder of the Apple-certified App Attest key
   signed this transition, with an assertion counter value and the App ID hash.
   (confidence: medium)
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/app_attest_assertion_fold.rs:36-101
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_platform_equation.rs:158-255
-  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_v1_phone_algorithm.md:112-148
+  - crates/iroha_core_zk/src/kagemusha_v1_recursion/app_attest_assertion_fold.rs:36-101
+  - crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_platform_equation.rs:158-255
+  - specs/kagemusha_v1_phone_algorithm.md:112-148
 - A named party checked what only a vendor server can answer, at a time it
   recorded: the chain was not on Google's revocation list, the Play Integrity
   verdict met policy, Apple's receipt verified. (confidence: high)
   - https://developer.android.com/google/play/integrity/overview
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_data_model/src/kagemusha/kagemusha_ordinary_app_enrollment_v1.rs:857-914
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_issuer_equation.rs:162-197
-  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_v1_provider_policy_binding.md
+  - crates/iroha_data_model/src/kagemusha/kagemusha_ordinary_app_enrollment_v1.rs:857-914
+  - crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_issuer_equation.rs:162-197
+  - specs/kagemusha_v1_provider_policy_binding.md
 - HarmonyOS: a key was generated or imported in the HUKS key store for a named
   application id. (confidence: low)
-  - OpenHarmony huks-key-attestation-overview.md (copy in the session
-    scratchpad)
+  - OpenHarmony huks-key-attestation-overview.md; the same page at
+    https://developer.huawei.com/consumer/en/doc/harmonyos-guides/huks-key-attestation-overview
+- The node links P-256 and SHA-2. It has no P-384 or RSA signature check, and
+  its only X.509 parser is a test dependency (proposal §8.5). Read from the
+  manifest at commit `b2a3cd05bc`; nothing was built.
+  - crates/iroha_core/Cargo.toml:191 (`sha2`), 225 (`p256`), 243
+    (`x509-parser`, under `[dev-dependencies]`)
+- The chain sizes and signature algorithms in the table "What one chain
+  contains" of proposal §2.2. The research pass parsed published samples with
+  openssl. Its output was not kept, and only the Apple sizes were measured
+  again.
+  - https://github.com/android/keyattestation/tree/main/testdata :
+    `sony-xperia10-iii/sdk33/TEE_EC.pem` for the factory-provisioned chain
+    (3,613 bytes, four certificates). The Pixel 9a vectors are under `tegu/`
+    and the Android 17 vectors under `frankel/sdk37` and `tokay/sdk37`; which
+    files gave the 3,113 to 3,305 bytes was not recorded.
+  - python/iroha_app_attestation/tests/fixtures/apple_official_sample_attestation.cbor :
+    two certificates of 1,057 and 583 bytes.
+- The figure of about 30 s on a Pixel 9a for a two-certificate P-256 chain
+  (proposal §2.2: Yamamoto et al., "Anastasia", a talk, 2025-10-21). No URL
+  was recorded, and a search on 2026-10-03 found none. The figure has no
+  source a reader can open.
 
 ### Samsung, Huawei, Xiaomi, OPPO, vivo, Honor, Meizu
 
@@ -1232,7 +1291,7 @@ the research pass recorded it.
   - third-party: arXiv 2507.07927
   - https://github.com/privacy-scaling-explorations/circom-ecdsa-p256
   - https://eprint.iacr.org/2024/2010
-  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs
+  - crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs
     lines 20-30
 - Samsung Knox Enhanced Attestation v3: Samsung's server judged that this
   Galaxy device's warranty fuse is untripped, its boot chain is official and
@@ -1304,9 +1363,16 @@ the research pass recorded it.
   - https://www.honor.com/content/dam/honor/global/overview-test/img/MagicOS-10.0-Security-Technical-White-Paper.pdf
 - Negative result: on no vendor examined does any evidence available to an
   ordinary app distinguish a genuine, locked, fully booted phone from the same
-  phone after a run-time takeover of its operating system. (confidence: high)
-  - third-party:
-    https://blog.quarkslab.com/bypassing-android-hardware-attestation.html
+  phone after a run-time takeover of its operating system. This is an
+  inference from the sources below; none states it. (confidence: high)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/KeyCreationResult.aidl
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (in the two files: the root of trust and the patch levels are those given
+    to the secure hardware at boot; the application id 'Cannot be
+    hardware-enforced')
+  - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
+    (an attacker who modifies the operating system may get past the
+    restrictions App Attest relies on)
 
 ### Ways to pay twice with every proposed constraint in the proof
 
@@ -1322,7 +1388,10 @@ the research pass recorded it.
   - specs/kagemusha_single_design_proposal.md sec 4, 4.1 (compromised-phone M)
 - Unlocked/rooted Android phone presenting a leaked factory keybox
   (TrickyStore-style attestation spoof) (Android (any model whose factory batch
-  key or keybox has leaked)). Verdict: stopped by a constraint.
+  key or keybox has leaked)). Verdict: stopped only where the policy entry
+  refuses factory-provisioned chains, or the certificate serial is already in
+  the revocation set used at enrollment or renewal; otherwise passes every
+  constraint.
   - https://developer.android.com/privacy-and-security/security-key-attestation
   - https://android.googleapis.com/attestation/status
   - https://android-developers.googleblog.com/2022/03/upgrading-android-attestation-remote.html
@@ -1342,7 +1411,8 @@ the research pass recorded it.
   - regulad/aaoracled (third-party; SETUP.md:
     checkm8+palera1n-roothide+Dopamine2-roothide)
   - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
-  - Apple WWDC26 session 201 'Mitigate fraud with App Attest and DeviceCheck'
+  - https://developer.apple.com/videos/play/wwdc2026/201/ (WWDC26 session 201,
+    'Secure your apps with App Attest')
   - repo crates/iroha_core_zk/src/kagemusha_p256_curve_gadget.rs (counter
     floor, not == prev+1)
 - iOS app on an Apple-silicon Mac or in a tampered/resigned app container
@@ -1351,28 +1421,30 @@ the research pass recorded it.
   - https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server
   - https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide
   - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
-  - Apple WWDC26 session 201 (launch category, bundle version)
+  - https://developer.apple.com/videos/play/wwdc2026/201/ (launch category,
+    bundle version)
 - Relaying signing/attestation requests to a genuine phone the attacker also
-  owns (Android and iPhone). Verdict: stopped by a constraint.
+  owns (Android and iPhone). Verdict: stopped by a constraint where the relay
+  phone is uncompromised; a compromised relay phone is case M, which passes
+  every constraint.
   - https://blog.quarkslab.com/bypassing-android-hardware-attestation.html
-  - Apple WWDC26 session 201
-  - specs/kagemusha_single_design_proposal.md sec 4.1 (challenge binding;
-    broker reduces to M)
+  - https://developer.apple.com/videos/play/wwdc2026/201/
+  - specs/kagemusha_single_design_proposal.md sec 2.1 (EA7 and EI2, the app
+    identity; EA8 and EI5, the binding to the enrollment transcript) and sec
+    4.1 (M)
 - Old, unpatched phone enrolled at an acceptable patch level that never renews
   (Android (any model past vendor support, or kept offline)). Verdict: stopped
   only online.
   - https://source.android.com/docs/security/bulletin/2025-09-01
   - https://source.android.com/docs/security/bulletin/2025-03-01
-  - specs/kagemusha_single_design_proposal.md sec 5.4 (floors on receiver's own
-    time; R8)
-  - rev6 os_circuit.md sec 5.4 (patch floor vs forced renewal conflict)
+  - specs/kagemusha_single_design_proposal.md sec 4 and 7.1 (the patch floor
+    is applied at enrollment and at a renewal; a receiver applies none; R8)
 - Phone on a vendor whose attestation carries no boot state (Huawei HarmonyOS
   NEXT) (Huawei HarmonyOS NEXT (HUKS attestation); any platform with no
   hardware-signed boot/lock/patch field). Verdict: passes every constraint.
   - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/huks-key-attestation-overview
   - OpenHarmony security_huks dcm_attest.c (VerifyIdsInfo empty check), commit
     82fd7821d33b
-  - rev6 os_vendors.md sec 3.2, 3.4, 5
 
 ### The acceptance-criterion design (assumptions, properties, removed rules)
 
@@ -1381,8 +1453,8 @@ android.googlesource.com and Apple's documentation. Pages fetched in this
 pass were read through an automated summary, not line by line.
 
 - `IKeyMintDevice.aidl`, AOSP `hardware/interfaces`, local copy: lines
-  191-221 (root-of-trust binding and version binding, restated in A.2), lines
-  356-366 (the caller's attestation key), lines 505-520 (`upgradeKey` and
+  191-221 (root-of-trust binding and version binding), lines 356-366 (the
+  caller's attestation key), lines 505-520 (`upgradeKey` and
   `KEY_REQUIRES_UPGRADE`).
 - `Tag.aidl`, same tree, local copy: the creation time belongs in the
   software-enforced list; the application id cannot be hardware-enforced;
@@ -1415,11 +1487,54 @@ pass were read through an automated summary, not line by line.
 - Apple's page on validating apps that connect to a server, local copy: the
   assertion's authenticator data and the rule that the counter must exceed
   the previous one.
-- The study of counter and commitment primitives of 2026-10-02
-  (`uniq_full.md`): the App Attest counter, the passcode-only keychain
-  class, the attestation-key chain, vendor feature files, leaf sizes.
+- The study of counter and commitment primitives of 2026-10-02: the App
+  Attest counter, the passcode-only keychain class, the attestation-key
+  chain, vendor feature files, leaf sizes. It was read as a working file
+  outside the repository. Section 6 lists that study's sources.
 - Not read: any vendor's KeyMint implementation; any device.
 
 ### The marker that carries a checkpoint
 
-No separate source list was recorded by that pass.
+Proposal §5.10 and part 10.4.10 of the evidence gate name these sources by
+file. Line numbers were not recorded unless one is given. A file with the
+fetch date 2026-10-03 was read on branch `main` through an automated summary,
+not line by line. Nothing was run.
+
+- What removing the screen lock deletes: keystore2 `database.rs`
+  (`unbind_keys_for_user`) and `super_key.rs` on the AOSP release branches
+  `android12`, `android13` and `android14`; `unbind_auth_bound_keys_for_user`
+  on the Android 15 branch and on `main`. Both functions are in
+  https://android.googlesource.com/platform/system/security/+/refs/heads/main/keystore2/src/database.rs
+  (fetched 2026-10-03). For the release-branch files no URL or line was
+  recorded.
+- The listing batch of 358,400 bytes: `RESPONSE_SIZE_LIMIT` in
+  https://android.googlesource.com/platform/system/security/+/refs/heads/main/keystore2/src/utils.rs
+  (fetched 2026-10-03).
+- `setPrivateKeyEntry` updates the certificate of an existing Keystore key,
+  `toCertificate` returns nothing for bytes that do not parse, and
+  `engineSetCertificateEntry` replaces a certificate entry of the same name:
+  https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java
+  (fetched 2026-10-03; section 7 has line numbers for other methods of the
+  file).
+- A full restore first clears an app that declares no backup agent:
+  `FullRestoreEngine.java`, AOSP `frameworks/base`, lines 380-401 (section
+  6). Removal of a package clears its key-store data:
+  `RemovePackageHelper.java`, lines 349-358 (section 6).
+- The settings app opens the app's own activity in place of its
+  clear-storage dialog: `AppStorageSettings.java`. The update checkpoint is
+  committed before ordinary apps can run:
+  `ActivityManagerService.finishBooting`. For both no URL, branch or line was
+  recorded.
+- The keychain database: `SecDb.c`, lines 887-890 (section 7), and
+  `SecItemServer.c`, for which no path or line was recorded, in
+  https://github.com/apple-oss-distributions/Security
+- SQLite defaults. Android: the build file sets no synchronous default,
+  https://android.googlesource.com/platform/external/sqlite/+/refs/heads/main/dist/Android.bp
+  (fetched 2026-10-03). Apple: `pragma compile_options` of `/usr/bin/sqlite3`
+  on macOS 27.0.1 reports `DEFAULT_SYNCHRONOUS=2` and
+  `DEFAULT_WAL_SYNCHRONOUS=1`; the iOS build was not read. What
+  `synchronous=NORMAL` can lose under a write-ahead log:
+  https://www.sqlite.org/pragma.html
+- The size of a keychain item: no source. Proposal §5.10 says that a
+  checkpoint of 0.6 to 3.3 KB "is inside every figure seen"; no figure was
+  recorded.

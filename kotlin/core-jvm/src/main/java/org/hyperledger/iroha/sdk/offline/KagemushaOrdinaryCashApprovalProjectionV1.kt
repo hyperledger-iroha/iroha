@@ -94,19 +94,35 @@ class KagemushaOrdinaryCashApprovalProjectionV1 private constructor(
         ): KagemushaOrdinaryCashApprovalProjectionV1 =
             requireProjection(KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION, originalW, originalS, binding)
 
-        // Shared Rust fixture messages exercise generic model grammar before ordinary credential
-        // authentication. Production ordinary callers always provide retained public bindings.
+        /** Distinct incoming W2 data projection. It cannot construct a Native signing holder. */
+        @JvmStatic fun requireIncomingPreparation(w: ByteArray, s: ByteArray,
+            binding: KagemushaOrdinaryCashApprovalOriginalBindingV1): KagemushaOrdinaryCashApprovalProjectionV1 =
+            requireProjection(KagemushaOrdinaryCashApprovalPurposeV1.PREPARE_TRANSITION, w, s, binding).also {
+                require(it.operationTag() == 1 || it.operationTag() == 3)
+                require(unsigned(w, 317, 8).subtract(unsigned(w, 309, 8)) <= BigInteger.valueOf(10_000))
+            }
+
+        /** Distinct ordinary incoming W1. The generic/OEM terminal grammar stays unchanged. */
+        @JvmStatic fun requireIncomingTerminal(w: ByteArray, s: ByteArray,
+            binding: KagemushaOrdinaryCashApprovalOriginalBindingV1): KagemushaOrdinaryCashApprovalProjectionV1 =
+            requireProjection(KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION, w, s, binding, true)
+
+        // Shared Rust fixture messages use the model's purpose-selected subject before ordinary
+        // credential authentication. Production callers still provide retained public bindings.
         internal fun requireModelMessageShape(
             purpose: KagemushaOrdinaryCashApprovalPurposeV1,
             w: ByteArray,
             s: ByteArray,
-        ): KagemushaOrdinaryCashApprovalProjectionV1 = requireProjection(purpose, w, s, null)
+        ): KagemushaOrdinaryCashApprovalProjectionV1 = requireProjection(purpose, w, s, null,
+            purpose == KagemushaOrdinaryCashApprovalPurposeV1.MONETARY_TRANSITION &&
+                (s.getOrNull(331)?.toInt() == 1 || s.getOrNull(331)?.toInt() == 3))
 
         private fun requireProjection(
             purpose: KagemushaOrdinaryCashApprovalPurposeV1,
             w: ByteArray,
             s: ByteArray,
             binding: KagemushaOrdinaryCashApprovalOriginalBindingV1?,
+            ordinaryIncomingTerminal: Boolean = false,
         ): KagemushaOrdinaryCashApprovalProjectionV1 {
             require(w.size == 325 && s.size == 460) { "Cash approval original message width differs" }
             val originalW = w.copyOf()
@@ -129,8 +145,11 @@ class KagemushaOrdinaryCashApprovalProjectionV1 private constructor(
             if (purpose == KagemushaOrdinaryCashApprovalPurposeV1.PREPARE_TRANSITION) {
                 require(!candidatePresent && !terminalPresent) { "Preparation carries a candidate or terminal commitment" }
             } else {
-                val outgoing = operation == 2 || operation == 4
-                require(candidatePresent == outgoing && terminalPresent == outgoing) {
+                if (ordinaryIncomingTerminal) require(operation == 1 || operation == 3) {
+                    "Ordinary incoming terminal requires Mint or Receive"
+                }
+                val commitmentsRequired = ordinaryIncomingTerminal || operation == 2 || operation == 4
+                require(candidatePresent == commitmentsRequired && terminalPresent == commitmentsRequired) {
                     "Terminal commitments differ from the cash operation"
                 }
             }

@@ -64,6 +64,17 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     fun ordinaryOutgoingTransportBinding(): KagemushaOrdinaryOutgoingTransportBindingV1 =
         KagemushaOrdinaryOutgoingTransportBindingV1(bridge)
 
+    fun ordinaryIntegrityRefreshTransportBinding(guard:()->Unit):KagemushaOrdinaryIntegrityRefreshTransportBindingV1 =
+        KagemushaOrdinaryIntegrityRefreshTransportBindingV1(bridge,guard)
+    internal fun ordinaryIncomingTransportBinding(endpoint:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1,
+        guard:()->Unit):KagemushaOrdinaryIncomingTransportBindingV1 {
+        val completed=ordinaryIntegrityRefreshTransportBinding(guard).completedKey(endpoint)
+        return KagemushaOrdinaryIncomingTransportBindingV1(bridge,completed.incomingKey(),completed.retail(),guard)
+    }
+
+    fun ordinaryMintFundingTransportBinding(guard:()->Unit):KagemushaOrdinaryMintFundingTransportBindingV1 =
+        KagemushaOrdinaryMintFundingTransportBindingV1(bridge,guard)
+
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {
         enrollmentPhases.revokeLocal()

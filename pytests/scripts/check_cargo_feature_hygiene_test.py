@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import re
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -114,17 +117,85 @@ def test_retired_kagemusha_switches_cannot_return_as_empty_aliases() -> None:
         assert any(f"Cargo feature `{retired}` is unclassified" in error for error in _guarded_errors(package, changed))
 
 
-def test_production_and_unix_native_exports_have_no_feature_opt_out() -> None:
+def _assert_unconditional_ordinary_native_declarations(source: str) -> None:
+    """Read the SDK declarations with their attached attributes and enclosing scope."""
+
+    quoted = r'"(?:\\.|[^"\\])*"'
+    code = re.sub(
+        rf'{quoted}|//[^\n]*|/\*.*?\*/',
+        lambda match: match.group() if match.group().startswith('"') else "",
+        source,
+        flags=re.S,
+    )
+    for declaration in ("mod ordinary_native;", "pub use ordinary_native::{"):
+        matches = list(re.finditer(rf"(?m)^{re.escape(declaration)}", code))
+        assert len(matches) == 1, f"one top-level {declaration} declaration required"
+        prefix = code[:matches[0].start()]
+        structural_prefix = re.sub(quoted, '""', prefix)
+        assert structural_prefix.count("{") == structural_prefix.count("}"), (
+            f"{declaration} must be unconditional at module scope"
+        )
+        attributes = re.search(r"(?:\s*#\s*\[[^\]]*\])*\s*$", structural_prefix)
+        assert attributes is not None
+        assert not re.search(r"#\s*\[\s*cfg(?:_attr)?\b", attributes.group()), (
+            f"{declaration} must be unconditional, without a cfg attribute"
+        )
+        assert not re.search(r"(?m)^[ \t]*#\s*!\s*\[\s*cfg(?:_attr)?\b", structural_prefix), (
+            f"{declaration} must be unconditional, without a file cfg attribute"
+        )
+
+
+def test_production_and_native_exports_have_no_platform_or_feature_opt_out() -> None:
     core = ROOT / "crates/iroha_core_zk/src"
     for source in core.rglob("*.rs"):
         assert 'feature = "kagemusha-production-prover"' not in source.read_text(), source
     client = (ROOT / "crates/iroha/src/client.rs").read_text()
-    assert '#[cfg(unix)]\nmod ordinary_native;' in client
-    assert '#[cfg(unix)]\npub use ordinary_native::' in client
+    _assert_unconditional_ordinary_native_declarations(client)
     assert 'feature = "kagemusha-ordinary-native"' not in client
     core_entry = (core / "lib.rs").read_text()
     assert 'pub mod kagemusha_v1_recursion;' in core_entry
     assert 'pub mod kagemusha_v1_state;' in core_entry
+
+
+def test_native_declaration_reader_accepts_unrelated_cfg_and_documentation() -> None:
+    source = '''#[cfg(unix)]
+mod other_platform_module;
+/// The portable native owner.
+#[doc = "Native [custody]"]
+mod ordinary_native;
+// Its public portable API.
+pub use ordinary_native::{NativeOwner};
+'''
+    _assert_unconditional_ordinary_native_declarations(source)
+
+
+@pytest.mark.parametrize("declaration", ["mod ordinary_native;", "pub use ordinary_native::{"])
+@pytest.mark.parametrize("gate", [
+    '#[cfg(unix)]',
+    '#[cfg(feature = "kagemusha-ordinary-native")]',
+    '#[cfg(any(\n    unix,\n    feature = "native-only",\n))]',
+    '#[cfg_attr(unix, cfg(feature = "native-only"))]',
+])
+@pytest.mark.parametrize("documentation", ["", '#[doc = "Native [custody]"]\n'])
+def test_native_declarations_reject_platform_and_feature_gates(
+    declaration: str, gate: str, documentation: str,
+) -> None:
+    source = 'mod ordinary_native;\npub use ordinary_native::{NativeOwner};\n'
+    changed = source.replace(declaration, f"{gate}\n{documentation}// Retained custody declarations.\n{declaration}")
+    with pytest.raises(AssertionError, match="must be unconditional"):
+        _assert_unconditional_ordinary_native_declarations(changed)
+
+
+@pytest.mark.parametrize("wrapper", ["file", "indented-file", "module"])
+def test_native_declarations_reject_enclosing_platform_gates(wrapper: str) -> None:
+    source = 'mod ordinary_native;\npub use ordinary_native::{NativeOwner};\n'
+    if wrapper == "module":
+        changed = f'#[cfg(unix)]\nmod hidden {{\n{source}}}\n'
+    else:
+        indentation = "  " if wrapper == "indented-file" else ""
+        changed = f'{indentation}#![cfg(unix)]\n{source}'
+    with pytest.raises(AssertionError, match="must be unconditional"):
+        _assert_unconditional_ordinary_native_declarations(changed)
 
 
 def test_core_backends_reject_optional_owners_and_missing_circuit_params() -> None:

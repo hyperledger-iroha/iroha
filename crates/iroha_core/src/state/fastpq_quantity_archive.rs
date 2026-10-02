@@ -71,11 +71,15 @@ pub(super) enum QuantityKindInput<'a> {
     Transfer(QuantityTransferInput<'a>),
     Mint(QuantitySupplyInput<'a>),
     Burn(QuantitySupplyInput<'a>),
+    Retire(&'a AssetDefinitionId, AxtAssetIncarnationV1),
 }
 
 impl<'a> From<&'a FastpqExecutionEffectKindV1> for QuantityKindInput<'a> {
     fn from(kind: &'a FastpqExecutionEffectKindV1) -> Self {
         match kind {
+            FastpqExecutionEffectKindV1::Retire(asset) => {
+                Self::Retire(&asset.definition, asset.incarnation)
+            }
             FastpqExecutionEffectKindV1::Transfer(value) => Self::Transfer(QuantityTransferInput {
                 source: (&value.source).into(),
                 destination: (&value.destination).into(),
@@ -275,6 +279,9 @@ fn visit_layouts(
         failure.map_or(Ok(()), Err)
     }
     let quantities = match kind {
+        // Definition and incarnation are fixed-width values; retirement retains no
+        // controller, quantity, or output-sized temporary allocation.
+        QuantityKindInput::Retire(_, _) => return Ok(()),
         QuantityKindInput::Transfer(value) => {
             account(value.source, &mut visit)?;
             account(value.destination, &mut visit)?;
@@ -370,6 +377,12 @@ fn clone_kind(
     ledger: &mut ChargedBuffer<AllocationCharge>,
 ) -> Result<FastpqExecutionEffectKindV1, QuantityCaptureIssue> {
     Ok(match kind {
+        QuantityKindInput::Retire(definition, incarnation) => {
+            FastpqExecutionEffectKindV1::Retire(FastpqExecutionAssetV1 {
+                definition: definition.clone(),
+                incarnation,
+            })
+        }
         QuantityKindInput::Transfer(value) => {
             FastpqExecutionEffectKindV1::Transfer(FastpqExecutionTransferV1 {
                 source: clone_balance(value.source, reservation, ledger)?,

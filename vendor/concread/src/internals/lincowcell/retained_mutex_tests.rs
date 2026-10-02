@@ -333,3 +333,63 @@ fn chained_retirement_preserves_original_recorded_poison_verdict() {
         assert_eq!(mutex.is_poisoned(), poisoned);
     }
 }
+
+#[test]
+fn first_original_mutex_acquisitions_on_cold_threads_allocate_no_rust_backing() {
+    for mode in 0..4 {
+        let mutex = Mutex::new(7_usize);
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    without_allocations(|| {
+                        let guard = match mode {
+                            0 => mutex.lock().unwrap(),
+                            1 => mutex.try_lock().unwrap(),
+                            2 => mutex.lock_retained().unwrap(),
+                            _ => mutex.try_lock_retained().unwrap(),
+                        };
+                        assert_eq!(*guard, 7);
+                        drop(guard);
+                    });
+                })
+                .join()
+                .unwrap();
+        });
+    }
+}
+
+#[test]
+fn retained_abandonment_keeps_original_explicit_poison_policy_after_backing_unwind() {
+    let mutex = Mutex::new(7_usize);
+    assert!(catch_unwind(AssertUnwindSafe(|| {
+        let guard = mutex.lock_retained().unwrap();
+        assert_eq!(*guard, 7);
+        panic!("unrelated enclosing source failed before mutation");
+    }))
+    .is_err());
+    // All four paths consult the same original explicit flag, even though the
+    // backing native mutex cannot distinguish the retained read-only unwind.
+    assert!(!mutex.is_poisoned());
+    assert_eq!(*mutex.lock().unwrap(), 7);
+    assert_eq!(*mutex.try_lock().unwrap(), 7);
+    assert_eq!(*mutex.lock_retained().unwrap(), 7);
+    assert_eq!(*mutex.try_lock_retained().unwrap(), 7);
+    assert!(catch_unwind(AssertUnwindSafe(|| {
+        let mut guard = mutex.try_lock_retained().unwrap();
+        *guard = 8;
+        panic!("actual original publication was interrupted");
+    }))
+    .is_err());
+    assert!(mutex.is_poisoned());
+    assert!(matches!(mutex.try_lock(), Err(TryLockError::Poisoned(_))));
+    assert!(matches!(
+        mutex.try_lock_retained(),
+        Err(TryLockError::Poisoned(_))
+    ));
+    assert!(mutex.lock().is_err());
+    assert!(mutex.lock_retained().is_err());
+    assert!(
+        mutex.is_poisoned(),
+        "native recovery never clears original poison"
+    );
+}

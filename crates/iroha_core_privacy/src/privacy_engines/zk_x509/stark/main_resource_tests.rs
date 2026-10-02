@@ -136,6 +136,7 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
 fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    eprintln!("MAIN current owner plan before original pins: {plan:?}");
     assert_eq!(plan.masks, 84_422_208);
     let cut_payload = aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(
         layout.common_lde_size(),
@@ -643,6 +644,9 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         fixed_recovery_butterflies +=
             fixed * (stripes - 1) * (stripe_rows / 2) * u64::from(stripe_rows.ilog2());
     }
+    eprintln!(
+        "MAIN current work before original pins: columns={columns}, native_cells={native_cells}, masked_cells={masked_cells}, quotient_rows={quotient_rows}, residues={residues}, cached_columns={cached_columns}, quotient_native_iffts={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_iffts={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}"
+    );
     assert_eq!(SECURITY_LANES, 1);
     assert_eq!(layout.registered_segments.len(), 49);
     assert_eq!(columns, 5_811);
@@ -733,4 +737,113 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
     eprintln!(
         "MAIN DEEP synthetic-division recurrence steps: original={original_division_steps}, grouped={grouped_division_steps}; each individual claim remains checked, base-field weighted sums remain"
     );
+}
+
+#[test]
+fn registration_quotient_phase_ledger_retains_originals_chunks_and_growth() {
+    use main_resources::MainRegistrationQuotientPayloadV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    let mut saw_fixed_growth = false;
+    for registration in &layout.registered_segments {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+        let stripe_rows = plan.quotient_coset_rows.min(1 << 19);
+        let actual =
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, cap).unwrap();
+        let width = segment.base_width + segment.aux_width + segment.fixed_width;
+        let metadata = width * core::mem::size_of::<Vec<F>>()
+            + SECURITY_LANES * core::mem::size_of::<Vec<E>>()
+            + 2 * SECURITY_LANES * core::mem::size_of::<Vec<Vec<E>>>()
+            + 2 * SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * core::mem::size_of::<Vec<E>>()
+            + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 * core::mem::size_of::<&mut [F]>()
+            + 2 * super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 * core::mem::size_of::<F>()
+            + 16 * core::mem::size_of::<usize>()
+            + main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
+                segment.trace_log2,
+                main_quotient_stripes::MainQuotientStripeV1::new_v1(segment.trace_log2, plan.quotient_coset_log2, 0).unwrap(),
+            ).unwrap();
+        let quotients = SECURITY_LANES * plan.quotient_coset_rows * core::mem::size_of::<E>();
+        let copy = plan.quotient_coset_rows * core::mem::size_of::<E>();
+        let chunks = SECURITY_LANES * COMPOSITION_DEGREE_CHUNKS * cap * core::mem::size_of::<E>();
+        let growth = if stripe_rows > segment.trace_size() {
+            saw_fixed_growth = true;
+            segment.trace_size() * core::mem::size_of::<F>()
+        } else {
+            0
+        };
+        assert_eq!(
+            actual.stripe,
+            metadata
+                + width * stripe_rows * core::mem::size_of::<F>()
+                + growth
+                + quotients
+                + chunks
+        );
+        assert_eq!(
+            actual.interpolation,
+            metadata + quotients + copy + 2 * chunks
+        );
+        assert_eq!(
+            actual.accumulation,
+            metadata + 2 * chunks + cap * core::mem::size_of::<E>()
+        );
+        assert_eq!(
+            actual.maximum_v1(),
+            [actual.stripe, actual.interpolation, actual.accumulation]
+                .into_iter()
+                .max()
+                .unwrap()
+        );
+        assert!(
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, usize::MAX).is_err()
+        );
+    }
+    assert!(saw_fixed_growth);
+}
+
+#[test]
+fn current_registration_resource_owner_plan_diagnostic() {
+    use main_resources::MainRegistrationQuotientPayloadV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    eprintln!("MAIN current owner-plan diagnostic: {plan:?}; joint={joint:?}");
+    let mut maximum = 0;
+    for (index, registration) in layout.registered_segments.iter().enumerate() {
+        let phases =
+            MainRegistrationQuotientPayloadV1::new_v1(&layout, *registration, cap).unwrap();
+        let ordinary = plan.quotient_cache_plan_v1(&layout, *registration).unwrap();
+        let joint_cache = joint
+            .quotient_cache_plan_v1(&layout, *registration)
+            .unwrap();
+        maximum = maximum.max(phases.maximum_v1());
+        eprintln!(
+            "MAIN current registration-owner diagnostic: index={index}, registration={registration:?}, phases={phases:?}, ordinary_cache={ordinary:?}, joint_cache={joint_cache:?}"
+        );
+    }
+    assert_eq!(maximum, plan.quotient_stage);
+    for phase in [
+        main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
+        main_ca_resources::MainCaBufferPhaseV1::Registration,
+        main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+        main_ca_resources::MainCaBufferPhaseV1::Finalization,
+    ] {
+        eprintln!(
+            "MAIN current joint-phase diagnostic: phase={phase:?}, required={}",
+            joint.required_v1(phase).unwrap()
+        );
+    }
+    // This is source-derived allocation arithmetic only. Original numeric pins,
+    // complete native proof/RSS and all external limits remain separate gates.
+    assert_eq!(plan.maximum_live_buffers, 3_697_993_184);
 }

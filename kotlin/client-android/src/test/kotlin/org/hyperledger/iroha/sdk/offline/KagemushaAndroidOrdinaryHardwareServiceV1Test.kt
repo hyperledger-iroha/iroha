@@ -32,13 +32,13 @@ class KagemushaAndroidOrdinaryHardwareServiceV1Test {
         }
         reject { KagemushaAndroidOrdinaryHardwareServiceFactoryV1.selectOriginalFactory(listOf(substitute).iterator()) }
     }
-    @Test fun activatedSIsBoundToProjectedSAndDistinctReservedW() {
+    @Test fun activatedSIsBoundToProjectedSAndDistinctNativeW() {
         val endpoint = Endpoint()
         val selected = requireAccount(native(endpoint), "activated-S")
         assertEquals("native-W", selected.walletAccountId())
         assertEquals("activated-S", selected.signatoryAccountId())
         assertTrue(endpoint.calls.all { it.first == 21 && it.second in setOf(12, 15) })
-        assertTrue(endpoint.calls.any { it.second == 12 })
+        assertTrue(endpoint.calls.none { it.second == 12 })
         assertEquals(0, endpoint.closes)
     }
     @Test fun anotherActivatedSCannotReserveNativeIdentity() {
@@ -94,15 +94,17 @@ class KagemushaAndroidOrdinaryHardwareServiceV1Test {
     @Test fun replacedNativeSignatoryCannotReuseTheOriginalProjection() {
         assertReplacedSelectionRefused(2, "another-S".toByteArray())
     }
-    @Test fun reservationForAnotherWCannotOpenTheOrdinaryRoute() {
+    @Test fun completedSelectionDoesNotReserveNewFinancialIdentityToReachRecovery() {
         val endpoint = Endpoint().apply { reservation[1] = "another-W".toByteArray() }
-        reject { requireAccount(native(endpoint), "activated-S") }
-        assertTrue(endpoint.calls.any { it.second == 12 })
+        val selected=requireAccount(native(endpoint), "activated-S")
+        assertEquals("native-W",selected.walletAccountId())
+        assertTrue(endpoint.calls.none {it.second==12})
+        assertEquals(0,endpoint.closes)
     }
-    @Test fun changedRetainedReservationClosesItsOriginalBridge() {
-        val endpoint = Endpoint().apply { substituteReservation = true }
-        reject { requireAccount(native(endpoint), "activated-S") }
-        assertEquals(1, endpoint.closes)
+    @Test fun dataOnlyFactoryNeverRenewsAConsumedFinancialReservation() {
+        val endpoint=Endpoint().apply {substituteReservation=true}
+        requireAccount(native(endpoint),"activated-S")
+        assertTrue(endpoint.calls.none {it.second==12});assertEquals(0,endpoint.closes)
     }
     @Test fun retainedSelectionCannotCrossNativeCoordinators() {
         val originalEndpoint = Endpoint()

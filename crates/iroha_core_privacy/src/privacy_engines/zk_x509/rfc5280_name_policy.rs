@@ -160,15 +160,19 @@ pub(super) fn populate_source_node(
     for (slot, role) in CLASS_ROLES.into_iter().enumerate() {
         let delta = row[BASE_ROLE].sub(F(role));
         row[NODE_CLASS + 2 * slot] = F(u64::from(delta == F::ZERO));
-        row[NODE_CLASS + 2 * slot + 1] = delta.inv().unwrap_or(F::ZERO);
+        row[NODE_CLASS + 2 * slot + 1] = delta.inverse_or_zero_canonical_v1();
     }
     if [0, 2, 3, 4]
         .into_iter()
         .any(|slot| row[NODE_CLASS + 2 * slot] == F::ONE)
     {
-        row[NODE_NONEMPTY_INVERSE] = row[BASE_D]
-            .inv()
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
+        // Preserve the checked constructor's Semantic rejection for an empty
+        // or malformed count; admitted private counts use the fixed chain.
+        let count = row[BASE_D];
+        if count == F::ZERO || F::canonical(count.0).is_none() {
+            return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
+        }
+        row[NODE_NONEMPTY_INVERSE] = count.inverse_or_zero_canonical_v1();
     }
     if (row[NODE_CLASS] == F::ONE || row[NODE_CLASS + 2] == F::ONE) && row[BASE_CHILD].0 >= 4 {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
@@ -184,7 +188,7 @@ pub(super) fn populate_fixed_byte(
     let name = row[BASE_ROLE] == F(9);
     let delta = row[BASE_ROLE].sub(F(9));
     row[NAME] = F(u64::from(name));
-    row[NAME_INVERSE] = delta.inv().unwrap_or(F::ZERO);
+    row[NAME_INVERSE] = delta.inverse_or_zero_canonical_v1();
     row[NAME_FIRST] = row[NAME].mul(row[BASE_IS_WRITE]);
     row[BASE_STATE_BEFORE] = F(*previous);
     if name {
@@ -212,4 +216,52 @@ pub(super) fn populate_fixed_byte(
     }
     row[BASE_STATE_AFTER] = F(*previous);
     Ok(())
+}
+
+#[cfg(test)]
+mod inverse_tests {
+    use super::*;
+
+    #[test]
+    fn private_name_class_inverse_cells_preserve_zero_and_nonempty_semantics() {
+        for role in 0..=64 {
+            let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            row[BASE_ROLE] = F(role);
+            row[BASE_D] = F(3);
+            populate_source_node(&mut row).unwrap();
+            for (slot, expected_role) in CLASS_ROLES.into_iter().enumerate() {
+                let delta = F(role).sub(F(expected_role));
+                assert_eq!(row[NODE_CLASS + 2 * slot], F(u64::from(delta == F::ZERO)));
+                assert_eq!(
+                    row[NODE_CLASS + 2 * slot + 1],
+                    delta.inv().unwrap_or(F::ZERO)
+                );
+            }
+            let mut fixed = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            fixed[BASE_ROLE] = F(role);
+            populate_fixed_byte(&mut fixed, &mut 0).unwrap();
+            assert_eq!(
+                fixed[NAME_INVERSE],
+                F(role).sub(F(9)).inv().unwrap_or(F::ZERO)
+            );
+        }
+        for slot in [0, 2, 3, 4] {
+            for count in [F::ZERO, F(GOLDILOCKS_MODULUS_V1), F(u64::MAX)] {
+                let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+                row[BASE_ROLE] = F(CLASS_ROLES[slot]);
+                row[BASE_D] = count;
+                assert_eq!(
+                    populate_source_node(&mut row),
+                    Err(ZkX509Rfc5280StarkErrorV1::Semantic)
+                );
+            }
+            for count in 1..=256 {
+                let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+                row[BASE_ROLE] = F(CLASS_ROLES[slot]);
+                row[BASE_D] = F(count);
+                populate_source_node(&mut row).unwrap();
+                assert_eq!(row[NODE_NONEMPTY_INVERSE], F(count).inv().unwrap());
+            }
+        }
+    }
 }

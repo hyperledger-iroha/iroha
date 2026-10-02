@@ -28,6 +28,14 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
+// Construct the permanent native mutex before an original read or admission probe.
+// Opaque platform mutex storage is separate from allocation_layout's payload charge.
+fn initialized_writer_mutex() -> Mutex<()> {
+    let mutex = Mutex::new(());
+    drop(mutex.lock().expect("new EBR writer mutex is not poisoned"));
+    mutex
+}
+
 /// Explicitly unaccounted mode for callers that do not attach allocation custody.
 ///
 /// This mode makes no resource-admission guarantee. A cell using another charge
@@ -90,7 +98,7 @@ impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static> ReservedEb
     pub fn initialize(self, value: T) -> EbrCell<T, Charge> {
         let mut original = self.initialize_owned(value);
         EbrCell {
-            write: Mutex::new(()),
+            write: initialized_writer_mutex(),
             active: Atomic::from(original.data.take().expect("original initialized backing")),
         }
     }
@@ -793,7 +801,7 @@ where
     /// A charge need not implement `Clone`; it is moved into this exact allocation.
     pub fn new_charged(data: T, charge: Charge) -> Self {
         Self {
-            write: Mutex::new(()),
+            write: initialized_writer_mutex(),
             active: Atomic::new(Allocation {
                 value: data,
                 charge: ManuallyDrop::new(charge),
@@ -956,6 +964,28 @@ mod tests {
 
     use super::EbrCell;
     use std::thread::scope;
+
+    #[cfg(all(feature = "maps", not(feature = "dhat-heap"), not(miri)))]
+    #[test]
+    fn fresh_original_writer_constructors_need_no_cold_acquisition_allocation() {
+        use crate::internals::bptree::node::allocation_tests::without_allocations;
+        let ordinary = EbrCell::new(37_u64);
+        let reserved = super::ReservedEbrCell::try_new(super::Untracked)
+            .unwrap_or_else(|_| panic!("original backing admission"))
+            .initialize(41_u64);
+        scope(|scope| {
+            scope
+                .spawn(|| {
+                    for (cell, expected) in [(&ordinary, 37), (&reserved, 41)] {
+                        let original = without_allocations(|| cell.try_acquire_writer().unwrap());
+                        assert_eq!(original.copy_current().unwrap(), expected);
+                        without_allocations(|| drop(original));
+                    }
+                })
+                .join()
+                .unwrap();
+        });
+    }
 
     #[test]
     fn original_writer_copy_never_clones_or_publishes_and_preserves_poison() {
@@ -1274,7 +1304,7 @@ mod tests_linear {
 #[cfg(test)]
 mod staged_commit_tests {
     use super::*;
-    use std::sync::{Arc, atomic::AtomicUsize};
+    use std::sync::{atomic::AtomicUsize, Arc};
     use std::time::{Duration, Instant};
 
     struct Counts {

@@ -19,6 +19,11 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
         when (phase(fields)) {
             1 -> { count(fields, 2); digest(fields[1]) }
             15 -> {
+                if (method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION) {
+                    count(fields, 3); ticket(fields[1]); require(fields[2].size == 4)
+                    require(ByteBuffer.wrap(fields[2]).order(ByteOrder.LITTLE_ENDIAN).int in 0..3)
+                    return
+                }
                 require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL)
                 count(fields, 3); require(fields[1].size == 4)
                 when (ByteBuffer.wrap(fields[1]).order(ByteOrder.LITTLE_ENDIAN).int) {
@@ -54,7 +59,18 @@ internal object KagemushaAppOwnedHardwareFrameV1 {
         if (phase(request) in 9..14) require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION)
         when (phase(request)) {
             1 -> prepare(method, request[1], fields)
-            15 -> { require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL); count(fields, 1); digest(fields[0]) }
+            15 -> {
+                if (method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION) {
+                    count(fields, 6); equal(fields[0], request[2]); require(fields[3].size == 4)
+                    val total = ByteBuffer.wrap(fields[3]).order(ByteOrder.LITTLE_ENDIAN).int
+                    val offset = ByteBuffer.wrap(request[2]).order(ByteOrder.LITTLE_ENDIAN).int * 65536
+                    require(total in 1..262144 && offset in 0 until total && fields[1].size == minOf(65536, total - offset))
+                    digest(fields[2]); digest(fields[4]); digest(fields[5])
+                } else {
+                    require(method == KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL)
+                    count(fields, 1); digest(fields[0])
+                }
+            }
             2 -> state(fields, fenced = true, method = method, ticket = request[1])
             3 -> { count(fields, 1); digest(fields[0]); equal(fields[0], sha(request[2])) }
             4 -> { count(fields, 1); receiptShape(fields[0], method, request[1]) }

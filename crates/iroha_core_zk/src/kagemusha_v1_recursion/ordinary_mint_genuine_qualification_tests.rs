@@ -15,6 +15,7 @@ use crate::kagemusha_v1_recursion::{
     },
     ordinary_mint_public::{ordinary_mint_public_column_v1, ordinary_mint_public_data_v1},
 };
+use crate::kagemusha_v1_state::DigestV1;
 use halo2_proofs::dev::MockProver;
 use iroha_crypto::{
     Algorithm, KeyGenOption, KeyPair,
@@ -26,15 +27,23 @@ use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _
 #[path = "ordinary_zero_bootstrap_fixture.rs"]
 mod originals;
 
-struct MintOriginals {
-    enrollment: originals::Fixture,
-    statement: KagemushaOrdinaryMintAuthorizationStatementV1,
-    approval: KagemushaOrdinaryMintApprovalV1,
-    opening: KagemushaCreditOpeningV1,
-    encrypted_credit: Vec<u8>,
+pub(super) struct MintOriginals {
+    pub(super) enrollment: originals::Fixture,
+    pub(super) statement: KagemushaOrdinaryMintAuthorizationStatementV1,
+    pub(super) approval: KagemushaOrdinaryMintApprovalV1,
+    pub(super) opening: KagemushaCreditOpeningV1,
+    pub(super) encrypted_credit: Vec<u8>,
 }
 
 fn sign_message(message: &[u8], apple: bool) -> KagemushaAppOperationApprovalEvidenceV1 {
+    sign_message_with_counter(message, apple, 17)
+}
+
+pub(super) fn sign_message_with_counter(
+    message: &[u8],
+    apple: bool,
+    counter: u32,
+) -> KagemushaAppOperationApprovalEvidenceV1 {
     let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
     if !apple {
         let signature: P256Signature = key.sign(message);
@@ -46,7 +55,7 @@ fn sign_message(message: &[u8], apple: bool) -> KagemushaAppOperationApprovalEvi
     let mut auth = [0; 37];
     auth[..32].fill(2);
     auth[32] = 0x40;
-    auth[33..].copy_from_slice(&17_u32.to_be_bytes());
+    auth[33..].copy_from_slice(&counter.to_be_bytes());
     let mut nonce = Sha256::new();
     nonce.update(auth);
     nonce.update(Sha256::digest(message));
@@ -65,12 +74,22 @@ fn sign_message(message: &[u8], apple: bool) -> KagemushaAppOperationApprovalEvi
 }
 
 fn fixture(apple: bool) -> MintOriginals {
-    let account = AccountId::new(
-        KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
-    let enrollment = originals::fixture_for_account(apple, [41; 32], [40; 32], [42; 32], &account);
+    fixture_for_active_state(apple, [41; 32], [40; 32], [42; 32], [49; 32], [47; 32])
+}
+
+/// Known-public mathematical originals derived by the same maintained sole encoders/signers.
+/// This is test data, never a Native enrollment, clock, FI decision or finalized source grant.
+pub(super) fn fixture_for_active_state(
+    apple: bool,
+    release_id: DigestV1,
+    suite_id: DigestV1,
+    vk_digest: DigestV1,
+    manifest_digest: DigestV1,
+    predecessor_public_sha256: DigestV1,
+) -> MintOriginals {
+    let account = super::ordinary_qualification_wallet_account_v1(62);
+    let enrollment =
+        originals::fixture_for_account(apple, release_id, suite_id, vk_digest, &account);
     let c = &enrollment.credential;
     let s = &c.subject;
     let (recipient, _) = X25519Sha256::new().keypair(KeyGenOption::UseSeed(vec![32; 32]));
@@ -108,12 +127,12 @@ fn fixture(apple: bool) -> MintOriginals {
         predecessor: KagemushaOrdinaryFinancialHeadV1 {
             state_commitment: enrollment.state.state_commitment,
             logical_sequence: enrollment.state.logical_sequence,
-            state_original_sha256: [47; 32],
+            state_original_sha256: predecessor_public_sha256,
         },
         release_id: s.release_id,
         suite_id: s.suite_id,
         vk_digest: enrollment.state.vk_digest,
-        artifact_manifest_digest: [49; 32],
+        artifact_manifest_digest: manifest_digest,
         recipient_app_credential_digest: c.canonical_digest().unwrap(),
         app_credential_profile_id: s.hardware_profile_id,
         policy_epoch: s.policy_epoch,
@@ -449,3 +468,10 @@ fn verify_platform(
             "actual P256/Apple complete-original signature equation over public mathematical C",
         );
 }
+
+#[path = "ordinary_active_state_qualification_tests.rs"]
+mod active_state;
+
+#[cfg(unix)]
+#[path = "ordinary_active_mint_state_tests.rs"]
+pub(super) mod active_mint_state;

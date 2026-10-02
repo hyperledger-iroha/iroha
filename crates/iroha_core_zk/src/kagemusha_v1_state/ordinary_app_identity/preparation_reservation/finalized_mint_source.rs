@@ -21,7 +21,7 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
     // Private full-original copy solely from this authentic completed Native WAL. Historical
     // custody checks already join its canonical FI certificate, possession, admitted time and
     // immutable prefix; no offered bytes or newly decoded FI can create this financial owner.
-    fn retained_finalized_source_enrollment_original(&self) -> Result<Vec<u8>> {
+    pub(crate) fn retained_finalized_source_enrollment_original(&self) -> Result<Vec<u8>> {
         self.recheck_historical_proof_custody()?;
         let completion = decode(self.reservation.completed.as_ref().ok_or(Custody)?)?;
         let Record::EnrollmentComplete {

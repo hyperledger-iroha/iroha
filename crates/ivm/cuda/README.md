@@ -148,9 +148,13 @@ for this dedicated qualification process and must not ship in node builds.
 Device discovery skips devices whose context cannot be initialized and applies
 `[accel].max_gpus` to usable devices. Each context owns admission and quarantine
 state for its production kernels. Golden tests run on the exact selected device
-and must complete real kernel work before that kernel is admitted. Failed kernel
-admission or execution excludes that device/kernel pair; other kernels and
-devices remain candidates. Context and stream faults exclude the affected device.
+and must complete real kernel work before that kernel is admitted. A parity mismatch
+or backend failure during admission or execution excludes that device/kernel pair;
+other kernels and devices remain candidates. Local capacity exhaustion, owner-lock
+contention, and temporary unavailability leave the exact artifact unqualified and
+eligible for another public self-test. No result from a deferred self-test is
+published, and a concurrent quarantine always wins over that deferral. Context and
+stream faults exclude the affected device.
 Task assignment uses operation identity and public workload dimensions only;
 operand limbs, digest state, and signature bytes do not select a device.
 Task scopes pin their manager generation and device so nested dispatch cannot

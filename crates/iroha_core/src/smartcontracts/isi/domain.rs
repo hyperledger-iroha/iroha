@@ -2434,7 +2434,7 @@ pub mod isi {
         #[metrics(+"unregister_asset_definition")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
@@ -2803,6 +2803,15 @@ pub mod isi {
                 )
                 .into());
             }
+            let retirement =
+                crate::smartcontracts::isi::asset::isi::QuantityRetirementOwner::retain(
+                    state_transaction,
+                    authority,
+                    crate::smartcontracts::isi::asset::isi::QuantityRetirementScope::Definition(
+                        &asset_definition_id,
+                    ),
+                    std::iter::once(&asset_definition_id),
+                );
             remove_asset_definition_associated_permissions(state_transaction, &asset_definition_id);
             let mut assets_to_remove = Vec::new();
             assets_to_remove.extend(
@@ -2821,9 +2830,8 @@ pub mod isi {
                 .cloned();
             let mut events = Vec::with_capacity(assets_to_remove.len() + 1);
             for asset_id in assets_to_remove {
-                if state_transaction
-                    .world
-                    .remove_asset_and_metadata_with_total(&asset_id)?
+                if retirement
+                    .remove_asset(state_transaction, &asset_id)?
                     .is_none()
                 {
                     error!(%asset_id, "asset not found. This is a bug");
@@ -2833,11 +2841,9 @@ pub mod isi {
                     domain.clone(),
                 ));
             }
-            if state_transaction
-                .world
-                .remove_asset_definition_entry(&asset_definition_id)
-                .is_none()
-            {
+            let removed = retirement.retire_definition(state_transaction, &asset_definition_id)?;
+            drop(retirement);
+            if removed.is_none() {
                 return Err(FindError::AssetDefinition(asset_definition_id).into());
             }
             state_transaction

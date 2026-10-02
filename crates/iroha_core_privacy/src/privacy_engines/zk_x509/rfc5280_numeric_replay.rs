@@ -1,12 +1,11 @@
 //! Bounded clearing replay of one temporal lookup auxiliary column.
 
 use super::{
-    F, ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkErrorV1, numeric, zero_safe_inverse_v1,
-    zeroize_fields_v1,
+    F, ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkErrorV1, numeric, zeroize_fields_v1,
 };
 
 #[cfg(test)]
-use super::{PrivateTableV1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1};
+use super::{PrivateTableV1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, zero_safe_inverse_v1};
 
 struct ClearingEventV1(numeric::NumericLookupEventV1<F>);
 impl Drop for ClearingEventV1 {
@@ -20,11 +19,23 @@ impl Drop for ClearingEventV1 {
 
 /// Advance one numeric lookup lane, returning all four prefix/inverse values.
 /// The caller retains and clears the two sums, and checks both after the final row.
+#[cfg(test)]
 pub(super) fn step_v1(
     event: numeric::NumericLookupEventV1<F>,
     challenges: ZkX509Rfc5280StarkChallengesV1,
     lane: usize,
     state: &mut [F; 2],
+) -> Result<[F; 4], ZkX509Rfc5280StarkErrorV1> {
+    step_with_inverse_v1(event, challenges, lane, state, &mut zero_safe_inverse_v1)
+}
+
+/// Shared recurrence; alternate inverse ownership is test-only until qualified.
+pub(super) fn step_with_inverse_v1(
+    event: numeric::NumericLookupEventV1<F>,
+    challenges: ZkX509Rfc5280StarkChallengesV1,
+    lane: usize,
+    state: &mut [F; 2],
+    inverse: &mut impl FnMut(F, F) -> (F, F),
 ) -> Result<[F; 4], ZkX509Rfc5280StarkErrorV1> {
     let event = ClearingEventV1(event);
     let event = &event.0;
@@ -43,7 +54,7 @@ pub(super) fn step_v1(
     }
     let active = event.source.add(event.query);
     let factor = numeric::lookup_factor_v1(event.tuple, challenges.tuple[lane]);
-    let (zero, inverse) = zero_safe_inverse_v1(active, factor);
+    let (zero, inverse) = inverse(active, factor);
     let values = [inverse, zero, state[0], state[1]];
     let weight = event.source.mul(event.multiplicity).sub(event.query);
     state[0] = state[0].add(weight.mul(inverse));

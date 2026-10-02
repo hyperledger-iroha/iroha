@@ -475,3 +475,40 @@ fn each_malformed_nested_original_side_refuses_without_replacing_or_leaking_auth
         }
     }
 }
+
+#[test]
+fn standby_retirement_capture_retains_exact_original_predecessor_and_remaining_active_authority() {
+    let (predecessor, _) = authenticated_populated_pair();
+    let target = predecessor
+        .releases
+        .iter()
+        .find(|row| row.status == iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1)
+        .unwrap()
+        .release_id;
+    let mut current = predecessor.clone();
+    current.retire_standby(target).unwrap();
+    let state = state();
+    // This exercises the source-cut owner; certified State publication has a separate due test.
+    install_pair(&state, predecessor.clone(), current.clone());
+    let captured = CapturedGovernedRegistry::try_capture(&state, limits())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        captured.current_bytes(),
+        norito::encode_canonical(&current).unwrap()
+    );
+    assert_eq!(
+        captured.predecessor_bytes().unwrap(),
+        norito::encode_canonical(&predecessor).unwrap()
+    );
+    assert_eq!(current.authority_policy, predecessor.authority_policy);
+    assert_eq!(current.active_release_id, predecessor.active_release_id);
+    assert_eq!(current.releases.len() + 1, predecessor.releases.len());
+    assert!(captured.try_matches_current().unwrap());
+    state.world.kagemusha_verifier_registry.block().commit();
+    assert!(!captured.try_matches_current().unwrap());
+    assert_eq!(
+        captured.current_bytes(),
+        norito::encode_canonical(&current).unwrap()
+    );
+}

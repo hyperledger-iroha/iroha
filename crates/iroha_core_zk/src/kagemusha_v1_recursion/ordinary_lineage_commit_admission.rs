@@ -29,7 +29,8 @@ pub use received_output_admission::{
 };
 
 const COMPACT_META_MAX: usize = 256 * 1024;
-const COMPACT_ORIGINAL_MAX: usize =
+/// Maximum complete sole outgoing original, including its full signed sender admission clock.
+pub const KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1: usize =
     KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1 + COMPACT_META_MAX;
 const COMMIT_BUNDLE_MAX: usize =
     3 * KAGEMUSHA_ORDINARY_NATIVE_SIGNED_CLOCK_ORIGINAL_MAX_BYTES_V1 + 3 * 1024 * 1024;
@@ -142,7 +143,7 @@ impl KagemushaOrdinaryCashOutgoingOriginalV1 {
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         self.validate_data()?;
         let raw = norito::encode_canonical(self).map_err(|e| e.to_string())?;
-        if raw.len() > COMPACT_ORIGINAL_MAX {
+        if raw.len() > KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1 {
             return reject();
         }
         Ok(raw)
@@ -151,7 +152,7 @@ impl KagemushaOrdinaryCashOutgoingOriginalV1 {
     /// # Errors
     /// Refuses malformed, oversized, noncanonical or trailing data.
     pub fn decode_original(raw: &[u8]) -> Result<Self> {
-        if raw.is_empty() || raw.len() > COMPACT_ORIGINAL_MAX {
+        if raw.is_empty() || raw.len() > KAGEMUSHA_ORDINARY_CASH_OUTGOING_ORIGINAL_MAX_BYTES_V1 {
             return reject();
         }
         let value: Self =

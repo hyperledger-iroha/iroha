@@ -436,3 +436,27 @@ and delivery disposes the undelivered owner exactly once. Managed regression
 controls cover that completion order, successful delivery, pending cancellation,
 original failure propagation and the existing single-reader/capability/timeout
 refusals; they do not qualify native or physical-device execution.
+
+## Retail fee quote and multisig proposal Java retirement (first release)
+
+The duplicate `java/iroha_android` Hijiri quote classes, transport methods and
+quote-only suites are retired with their old five-field policy/hash/coordinate
+proposal DTO, marker constructor and Norito DTO encoder. They target a superseded
+protocol. No alias or Java implementation replaces them. Java consumers use the
+actual Kotlin-owned `MultisigProposeRequest`, `HttpClientTransport` and
+`RetailFeeAssessmentBridge`; the immutable bounded assessment and sole Native
+marker are the current protocol.
+
+The generic Java instruction hash/exact outer multisig executable verifier and
+its adversarial suite remain unchanged. Canonical Kotlin transport controls retain
+proposal hashing, fee intent, trusted network, authority, complete metadata,
+creation time, default lifetime, nonce, attachments, outer executable and alias
+refusal checks. The shared Rust-produced instruction fixture remains unchanged.
+`CanonicalMultisigJavaConsumerTest` exercises this Kotlin API from Java, including
+instruction ownership, exact JSON shape, Ed25519 identity rejection, assessment
+object/UTF-8 bounds and missing trusted signing-context refusal before dispatch.
+
+This records source retirement and test declarations. The new controls have not
+yet executed; JNI, physical hardware, genuine monetary/proof admission and
+release qualification are separate. Original retired sources and assertion maps
+are retained in the source packet.

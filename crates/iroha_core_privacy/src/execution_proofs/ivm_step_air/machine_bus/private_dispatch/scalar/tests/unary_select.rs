@@ -129,14 +129,11 @@ fn native_unary_full_words_tags_zero_and_read_before_write_aliases_match() {
             );
         }
     }
-    // ABS has different private-tag and overflow traps; no successful total
-    // unary extension may accidentally admit it through the arithmetic map.
-    assert!(!is_supported(enc::encode_rr(
-        wide::arithmetic::ABS,
-        4,
-        2,
-        255
-    )));
+    // ABS has separate public-tag and overflow checks; it must not enter the
+    // total-unary destination path even though its shared ALU performs SUB.
+    let absolute = enc::encode_rr(wide::arithmetic::ABS, 4, 2, 255);
+    assert!(is_supported(absolute));
+    assert!(!is_alu(absolute));
 }
 
 #[test]

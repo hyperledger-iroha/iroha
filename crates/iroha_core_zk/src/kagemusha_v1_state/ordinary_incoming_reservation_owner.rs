@@ -105,10 +105,12 @@ impl IncomingReservationCandidateOriginals {
             return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
         }
         let selection = owner.captured_incoming_approval()?;
-        // Portable Receive service custody is a distinct incomplete relation; it cannot be
-        // promoted through this existing Mint assembler or an offered decoded source.
-        if selection.transition_statement()?.kind != KagemushaTransitionKindV1::MintFold
-            || self.operation != selection.challenge()?.operation_id
+        // The sole Math assembler independently dispatches the actual held Mint or Receive
+        // source; this retained row never promotes a decoder or an offered source capability.
+        super::incoming_native_driver::require_incoming_fold(
+            selection.transition_statement()?.kind,
+        )?;
+        if self.operation != selection.challenge()?.operation_id
             || self.nonce != selection.challenge()?.nonce
         {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
@@ -159,7 +161,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         candidate: KagemushaAuthenticatedOrdinaryIncomingCandidateV1,
         guard: KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1,
     ) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingApproval)?;
         let selection = self.captured_incoming_approval()?;
         candidate.recheck_incoming_selection(&selection, &guard)?;
         let proof = assemble_ordinary_incoming_reservation_v1(&selection, &candidate, &guard)
@@ -192,7 +194,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.require_incoming_candidate_capacity(&originals)?;
         self.persist(&Record::IncomingReservationCandidate(originals.clone()))?;
         self.incoming_reservation_candidate = Some(originals);
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingApproval)?;
         Ok(digest)
     }
     pub(super) fn replay_incoming_reservation_candidate(
@@ -232,7 +234,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
     /// Reserve exact global incoming request only after complete candidate fsync and re-admission.
     /// Account signature and HTTP dispatch remain separately fenced by the actual session owner.
-    pub fn reserve_proven_incoming_mint(&mut self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+    pub fn reserve_proven_incoming(&mut self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         self.require_current_financial_control()?;
         let originals = self
             .incoming_reservation_candidate
@@ -248,7 +250,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     }
     /// Exact full portable original; it is transport data, never a decoded money grant.
     pub fn incoming_reservation_proof_original(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingApproval)?;
         let row = self
             .incoming_reservation_candidate
             .as_ref()
@@ -257,7 +259,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         Ok(admitted.proof.original().to_vec())
     }
     /// W1 is selected only after an actual independently authenticated acknowledged Reserve.
-    pub fn select_retained_incoming_mint_terminal(
+    pub fn select_retained_incoming_terminal(
         &mut self,
         reserve_request_original_sha256: DigestV1,
     ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
@@ -326,13 +328,13 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Existing Ed64 comes from the exact same AccountSigned WAL, never a fresh signature.
     /// # Errors
     /// Rejects an uncertain account fence, changed proof/request or ambiguous acknowledgements.
-    pub fn sign_incoming_mint_reservation_transport(
+    pub fn sign_incoming_reservation_transport(
         &mut self,
         sign: impl FnOnce(
             &KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,
         ) -> Result<[u8; 64], KagemushaStateErrorV1>,
     ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
-        self.reserve_proven_incoming_mint()?;
+        self.reserve_proven_incoming()?;
         let row = self
             .incoming_reservation_candidate
             .as_ref()

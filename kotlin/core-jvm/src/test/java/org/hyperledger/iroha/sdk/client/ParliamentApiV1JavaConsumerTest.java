@@ -83,6 +83,22 @@ final class ParliamentApiV1JavaConsumerTest {
   }
 
   @Test
+  void governedStandbyRetirementUsesTheKotlinParserAndRejectsReplay() throws Exception {
+    byte[] original = Files.readAllBytes(fixturePath("kagemusha_verifier_release_retire_v1.json"));
+    assertEquals("KagemushaVerifierReleaseRetire",
+        ParliamentApiV1.Proposal.fromJson(original).getKind());
+    Map<String, Object> payload = objectValue(objectValue(original).get("payload"));
+    Map<String, Object> predecessor = objectValue(payload.get("expected_predecessor"));
+    List<?> rows = (List<?>) predecessor.get("releases");
+    predecessor.put("releases", rows.stream()
+        .filter(row -> !objectValue(row).get("release_id").equals(payload.get("standby_release_id")))
+        .collect(java.util.stream.Collectors.toList()));
+    assertThrows(IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(map(
+            "kind", "KagemushaVerifierReleaseRetire", "payload", payload))));
+  }
+
+  @Test
   void draftResponseUsesKotlinModelsAndRejectsForeignOrExtendedWireData() {
     Map<String, Object> response = map(
         "version", 1,

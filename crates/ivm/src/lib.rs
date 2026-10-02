@@ -38,6 +38,10 @@ mod core_host;
 mod cuda;
 #[cfg(feature = "cuda")]
 mod cuda_dispatch;
+// Exercise the production admission state machine without requiring PTX artifacts.
+#[cfg(all(test, not(feature = "cuda")))]
+#[path = "cuda_dispatch/admission.rs"]
+mod cuda_admission_tests;
 #[cfg(test)]
 #[path = "cuda_provenance.rs"]
 mod cuda_provenance_tests;

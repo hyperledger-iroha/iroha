@@ -187,6 +187,10 @@ pub(super) fn validate_request(
                 count(f, 3)?;
                 check(!f[2].is_empty() && f[2].len() <= 16 * 1024)
             }
+            15 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
+                count(f, 3)?;
+                check(number(&f[2])? <= 3)
+            }
             8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession => {
                 count(f, 3)?;
                 check(!f[2].is_empty() && f[2].len() <= 16 * 1024)
@@ -242,6 +246,20 @@ pub(super) fn validate_response(
                 }
             }
             14 => count(r, 0),
+            15 => {
+                count(r, 6)?;
+                check(r[0] == q[2])?;
+                let total = number(&r[3])? as usize;
+                let offset = number(&q[2])? as usize * 65536;
+                check(
+                    (1..=262144).contains(&total)
+                        && offset < total
+                        && r[1].len() == (total - offset).min(65536),
+                )?;
+                digest(&r[2])?;
+                digest(&r[4])?;
+                digest(&r[5])
+            }
             _ => Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
         };
     }

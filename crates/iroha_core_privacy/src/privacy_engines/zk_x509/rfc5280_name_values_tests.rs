@@ -125,6 +125,13 @@ fn name_values_actual_complete_census_binds_bytes_nodes_oid_and_profile_at_both_
                 .value
                 .value;
             assert_eq!(row[BASE_VALUE], source);
+            // Independently retain the old mathematical zero/inverse values at
+            // the actual private country, first-byte and last-byte boundaries.
+            let offset = row[BASE_ADDRESS].sub(row[BASE_DEPTH]);
+            let remaining = row[BASE_TAG_NUMBER].sub(row[BASE_ADDRESS]).sub(F::ONE);
+            assert_eq!(row[BASE_A], row[BASE_G].inv().unwrap_or(F::ZERO));
+            assert_eq!(row[BASE_D], remaining.inv().unwrap_or(F::ZERO));
+            assert_eq!(row[BASE_INVERSE], offset.inv().unwrap_or(F::ZERO));
             assert_eq!(row[BASE_SERIAL_BYTE_QUERY_VALUE], source);
             assert_eq!(row[BASE_SERIAL_BYTE_QUERY_ACTIVE], F::ONE);
             assert_eq!(

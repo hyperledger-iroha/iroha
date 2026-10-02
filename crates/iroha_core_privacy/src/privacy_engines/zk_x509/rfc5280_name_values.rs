@@ -294,8 +294,8 @@ pub(super) fn populate_rows(
             let after = transition(mode, state, byte).ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
             let remaining = length - offset - 1;
             let mut row = byte_row_v1(u64::from(node.document), u64::from(address), byte);
-            row[COUNTRY_INVERSE] = F(index as u64).inv().unwrap_or(F::ZERO);
-            row[LAST_INVERSE] = F(u64::from(remaining)).inv().unwrap_or(F::ZERO);
+            row[COUNTRY_INVERSE] = F(index as u64).inverse_or_zero_canonical_v1();
+            row[LAST_INVERSE] = F(u64::from(remaining)).inverse_or_zero_canonical_v1();
             row[COUNTRY] = F(u64::from(index == 0));
             row[INDEX] = F(index as u64);
             row[BASE_H] = F(u64::from(node.role_instance));
@@ -314,7 +314,7 @@ pub(super) fn populate_rows(
             row[BASE_ENDPOINT_INSTANCE] = F::ONE;
             row[BASE_IS_WRITE] = F(u64::from(offset == 0));
             row[BASE_STRICT] = F(u64::from(remaining == 0));
-            row[BASE_INVERSE] = F(u64::from(offset)).inv().unwrap_or(F::ZERO);
+            row[BASE_INVERSE] = F(u64::from(offset)).inverse_or_zero_canonical_v1();
             write_u8_bits_v1(&mut row, BASE_SMALL_BITS, (length - 1) as u8);
             push_family_row_v1(rows, row)?;
             state = after;

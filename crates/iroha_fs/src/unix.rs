@@ -691,7 +691,7 @@ pub struct RetainedFile {
     publication: PublicationAuthority,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileSnapshot {
     identity: FileIdentity,
     mode: u32,
@@ -701,6 +701,56 @@ pub struct FileSnapshot {
     length: u64,
     modified: (i64, i64),
     changed: (i64, i64),
+}
+
+/// Capture a revalidated private journal with exact owner-only mode.
+pub fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
+    let value = validate_file(file, true)?;
+    if value.mode() & 0o7777 != 0o600 {
+        return Err(denied("private journal requires mode 0600"));
+    }
+    snapshot_file(file, true)
+}
+/// Validate retained public-file custody and its accepted read modes.
+pub fn validate_public_original(file: &File) -> io::Result<()> {
+    let value = validate_file(file, false)?;
+    if !matches!(value.mode() & 0o7777, 0o644 | 0o444) {
+        return Err(denied("public original requires mode 0644 or 0444"));
+    }
+    Ok(())
+}
+impl Directory {
+    pub(super) fn snapshot_directory(&self) -> io::Result<FileSnapshot> {
+        self.revalidate()?;
+        let file = &self.current().file;
+        validate_directory(file, false)?;
+        let value = file.metadata()?;
+        Ok(FileSnapshot {
+            identity: identity(file)?,
+            mode: value.mode(),
+            owner: value.uid(),
+            group: value.gid(),
+            links: value.nlink(),
+            length: value.len(),
+            modified: (value.mtime(), value.mtime_nsec()),
+            changed: (value.ctime(), value.ctime_nsec()),
+        })
+    }
+}
+
+/// Capture current metadata after validating the retained file authority.
+pub fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
+    let value = validate_file(file, private)?;
+    Ok(FileSnapshot {
+        identity: identity(file)?,
+        mode: value.mode(),
+        owner: value.uid(),
+        group: value.gid(),
+        links: value.nlink(),
+        length: value.len(),
+        modified: (value.mtime(), value.mtime_nsec()),
+        changed: (value.ctime(), value.ctime_nsec()),
+    })
 }
 
 impl RetainedFile {

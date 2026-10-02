@@ -14,11 +14,11 @@ Nothing in this file has been run. It lists tests and holds no results. Where
 it says how a platform behaves, the statement comes from documentation or
 source code unless it says measured.
 
-Step numbers in the tests are the gate app's, which has no prover: 1 the
-wallet is ready; 2 sign in memory; 3 create the new marker, which carries the
-checkpoint; 4 commit to the journal, durably; 5 delete the previous marker and
-confirm it absent; 6 release. The proposal's §5.2 has seven steps, because its
-step 3 is the proof. Steps 3 to 6 here are steps 4 to 7 of §5.2.
+Step numbers in the tests are those of §5.2 and of the crash table of §5.10:
+1 pre-check; 2 sign in memory; 3 prove in memory; 4 create the new marker,
+which carries the checkpoint; 5 commit to the journal, durably; 6 delete the
+previous marker and confirm it absent; 7 release. The gate app has no prover,
+so its step 3 does nothing.
 
 #### 10.4.4 Conditions for every test
 
@@ -28,9 +28,10 @@ and one per build family. Each operating-system major version a listed model
 may run is its own tuple. Two phones already have records in the repository:
 a Pixel 6 on Android 17, build
 `google/oriole/oriole:17/CP2A.260705.006/15641320`, and an iPhone 17 Pro Max
-on iOS 26.7 (`specs/kagemusha_v1_production_readiness.md:327-415`). No
-HarmonyOS NEXT phone can enter the gate until a wallet design for it exists
-(§10.2).
+on iOS 26.7 (`specs/kagemusha_v1_production_readiness.md:327-415`). A
+HarmonyOS NEXT phone can be listed for the capture of h9 only. It enters no
+other test and stays unsupported until a wallet design for it exists (§10.2,
+10.4.6).
 
 **What every record holds.** Android: manufacturer, model, build fingerprint,
 operating-system version, security patch level, bootloader lock state,
@@ -50,8 +51,8 @@ record holds its SHA-256.
 - the marker with its checkpoint and its terms entry, and the recovery and
   resume rules, as §5.10 gives them;
 - the Request, Payment and Outcome exchange with stand-in objects of the
-  estimated sizes (0.85 KB, 1.1 KB and 0.2 KB), under a test scheme id, and a
-  second Payment form padded to 7.6 KB to stand in for the proof;
+  estimated sizes (0.90 KB, 1.1 KB and 0.2 KB), under a test scheme id, and a
+  second Payment form padded to about 7.7 KB to stand in for the proof;
 - a stand-in issuer and ledger that issue numbered vouchers, countersign a
   Migrate, and accept a resume record at a sync;
 - the carriers of §5.6.
@@ -95,7 +96,8 @@ result code of every key-store call. Its builds:
   well. An ordinary user cannot do it without opening the phone.
 - Trigger. The instrumented build signals the chosen pause (a screen flash
   read by a photodiode, or an audio tone). The rig cuts power after a set
-  delay from the signal.
+  delay from the signal. For the forced restart no trigger is defined: how
+  the key combination is timed to a set delay is not designed.
 
 **Number of trials.** A count of clean trials bounds a failure rate; it does
 not show that the rate is zero. With n clean trials the rate is below about
@@ -114,7 +116,8 @@ accomplice again and tries again.
 - whether a true power cut on an opened phone is inside what an ordinary user
   can do;
 - the patch floor that test h1 applies;
-- whether P2 must hold against a compromised phone (10.4.6).
+- whether P2 must hold against a compromised phone (10.4.6);
+- the budget table of §2.3, which has a row for the gate.
 
 The pass conditions of 10.4.5 are fixed with them. A condition changed later
 is an owner decision, recorded with the result that prompted it.
@@ -122,10 +125,14 @@ is an owner decision, recorded with the result that prompted it.
 #### 10.4.5 The tests
 
 Each test gives the property it supports, the setup, the steps, what to
-record, and pass and fail. A test with no pass condition is a measurement;
-10.4.6 says how its result is used. Three tests run first, because a fail in
-any of them changes the design before the rest is worth running: c1 on
-iPhone, d1 on Android, and h1 with h2 on each Android tuple.
+record, and pass and fail. A test with no pass condition is a measurement.
+Its result is recorded with the tuple and enters a finding only where 10.4.6
+names it. Three tests run first, because a fail in any of them changes the
+design before the rest is worth running: c1 on iPhone, d1 on Android, and h1
+with h2 on each Android tuple. Of h2 the run made when the phone is put in
+airplane mode is the one that runs first; its repeats after 7, 30 and 90
+days run beside the other tests. The longest interval a test names is 90
+days (h2, i5), so the gate takes at least 90 days.
 
 **Group a — no payment from a restored or rolled-back state**
 
@@ -166,12 +173,12 @@ Pass for P2: anything but reset, in every build. A reset on any path makes
 the tuple unsupported.
 
 Pass for P1: kept or resumed, in the release build. Destroyed is the expected
-result on the paths T6 names: an erase, an uninstall that does not keep the
-app's data, clearing the app's storage, and on iPhone removing or resetting
-the passcode. Destroyed on any other path means that a platform or vendor
-path ends the wallet although the holder kept the phone, the app and the
-passcode. 10.4.6 says what follows from that. After a resume, record also
-what the wallet lost with its files (§5.10 lists it).
+result on the paths T6 names: an erase, on Android an uninstall that does
+not keep the app's data or clearing the app's storage, and on iPhone
+removing or resetting the passcode. Destroyed on any other path means that a
+platform or vendor path ends the wallet although the holder kept the phone,
+the app and the passcode. 10.4.6 says what follows from that. After a
+resume, record also what the wallet lost with its files (§5.10 lists it).
 
 Receiver forms. Run once per platform on one path that returns older files
 (a1 on Android, a15 on iPhone).
@@ -341,8 +348,7 @@ assertion, and with what counter). §7.2 uses the last when it re-attests.
   staff call an implementation detail, so the wallet resumes at S1. Pass:
   kept or resumed, and never ready at an earlier state. Run on each iOS
   release on the list. If a release removes the keychain items with the app,
-  the result is destroyed, and deleting the app is then an uninstall in the
-  sense of T6.
+  the result is destroyed on a path T6 does not name, and 10.4.6 applies.
 - **a17. Operating-system update.** A minor and a major update between
   payments. Pass: kept.
 - **a18. Passcode.** Capture a12's backup at S0, pay, remove the passcode,
@@ -448,12 +454,14 @@ those of §5.10.
   marker-creation call, after the request has left the app's process; kill
   the process; start at once; sign a different object. 1,000 times, with the
   restart delayed by 0, 10, 100 and 1,000 ms. Record, at every start, the
-  markers listed, their commit counters, and the wallet state. Pass: the
-  wallet is ready after every start and never stopped; recovery's own write
-  and read-back precedes its listing (§5.10); where two markers with one
-  commit counter are seen, the one with no journal commit is deleted and
-  nothing was released from it. Fail: a stopped wallet, or two different
-  released objects at one sequence number.
+  markers listed, their commit counters and start numbers, and the wallet
+  state. Pass: the wallet is ready after every start and never stopped;
+  recovery's own write and read-back precedes its listing (§5.10); where two
+  markers with one commit counter are seen, the one whose commit the journal
+  holds is kept, or, where the journal holds neither, the one with the
+  higher start number (§5.10, V4); the other is deleted and nothing was
+  released from it. Fail: a stopped wallet, or two different released
+  objects at one sequence number.
 - **b12. Refunds beyond the checkpoint's list.** Setup: nine payments with no
   stored Outcome, so that the oldest is beyond the list of unresolved
   SendSplits the checkpoint holds in full or in short form (§5.10); the
@@ -504,13 +512,17 @@ both power-cut methods.
 - **c2. A returned creation.** Steps: create a marker; read it back with the
   same bytes; cut power after a delay d; start; list. Delays: under 100 ms,
   1 s, 5 s, 30 s. 100 times per delay and method. Record whether the marker
-  is present. Pass: present every time. While the files are intact recovery
-  repairs a lost creation (§5.10), and b2 checks that it does. With the files
-  removed it does not; c1 is that case.
+  is present. Pass: present every time, at every delay at or beyond the wait
+  before release that the design uses on the platform (§5.10). A loss at a
+  shorter delay is recorded. Where the design has no such wait, every delay
+  counts. While the files are intact recovery repairs a lost creation
+  (§5.10), and b2 checks that it does. With the files removed it does not;
+  c1 is that case.
 - **c3. A returned deletion.** Steps: delete a marker; confirm it absent; cut
   power after delay d; start; list. Same delays and counts. Record whether
-  the marker is back. Pass: absent every time, at every delay, with both
-  methods. If only the deletion is lost, two markers exist and the one with
+  the marker is back. Pass: absent every time, with both methods, at every
+  delay that counts in c2. A returned deletion at a shorter delay is
+  recorded. If only the deletion is lost, two markers exist and the one with
   the higher commit counter wins, which is safe; record that the wallet ends
   at the later state.
 - **c4. Order of loss.** Steps: three payments in quick succession; cut power
@@ -530,15 +542,22 @@ both power-cut methods.
 - **c7. The marker entry holds its bytes.** Steps: write, read back, list and
   delete a marker of 0.6 KB, 3 KB and 4 KB, and an entry of 7 KB and of 14 KB
   as stand-ins for the proof entry of §5.10, whose bound Q0 fixes (§2.3); on
-  iPhone also 16 KB. Repeat after a reboot and after an operating-system
-  update. Pass: the bytes read
-  equal the bytes written, every time.
+  iPhone also 16 KB. The same larger entries stand for the marker of a
+  Migrate, which grows by 32 B for each Request the Migrate carries and has
+  no fixed bound (§5.10). Repeat after a reboot and after an
+  operating-system update. Pass: for the marker of 0.6 KB, 3 KB and 4 KB the
+  bytes read equal the bytes written, every time. The larger entries are
+  measurements, for Q0 (§2.3) and for the size a Migrate marker may reach:
+  record for each whether the bytes read equal the bytes written.
 
 What the sources say, as a reading and not a result. AOSP's key-store
 service opens its database with SQLite's default settings, which sync each
-transaction before it returns. So c2 and c3 are expected to pass on a Pixel.
-Vendor builds of Android were not read. On iPhone the reading is unfavourable
-and c1 decides.
+transaction before it returns. The Pixel 6 mounts its data partition with
+`fsync_mode=nobarrier`, under which f2fs issues no flush to storage on a sync
+(§4, T2). So c2 and c3 are expected to pass on a Pixel 6 after a forced
+restart, and nothing is expected of them after a true power cut. Vendor
+builds of Android were not read. On iPhone the reading is unfavourable and c1
+decides.
 
 **Group d — what the key store returns, and what survives a settings change**
 
@@ -757,8 +776,8 @@ for the timing wish and far from sufficient.
   it works and its time. Q0 needs this to fix the digest authorization of the
   device key (§2.3).
 - **g2. Carriers.** For every ordered pair of phones and each carrier of
-  §5.6: the time from first frame or tap to complete decode for a 0.85 KB
-  Request, a 1.1 KB Payment, a 7.6 KB Payment and a 0.2 KB Outcome. QR at 5,
+  §5.6: the time from first frame or tap to complete decode for a 0.90 KB
+  Request, a 1.1 KB Payment, a 7.7 KB Payment and a 0.2 KB Outcome. QR at 5,
   8 and 12 frames per second, counting second passes and the time to aim.
   Also the largest still code a phone reads reliably from another phone's
   screen at arm's length.
@@ -768,17 +787,18 @@ for the timing wish and far from sufficient.
   complete. The payer interval: from the payer's confirmation to the paying
   wallet showing complete, which includes the Outcome crossing back. Every
   ordered pair of phones, every carrier, at least 100 exchanges each, once
-  with the 1.1 KB Payment and once with the 7.6 KB one; then again in
+  with the 1.1 KB Payment and once with the 7.7 KB one; then again in
   low-power mode, and with a warm phone after ten minutes of continuous
   payments. Record median, 95th percentile and maximum of both intervals,
   and the share of each part from g1.
   Time the platform's authentication prompt of §5.9 separately; it comes
   before the payer's confirmation.
-  Pass: the owner's target on the receiver interval, and on the payer
-  interval if the owner includes it. By
-  arithmetic, not measurement: at the QR widget's default of 5 frames per
-  second the 1.1 KB Payment alone takes about 1.8 s to cross, and the 7.6 KB
-  one about 10 s (§5.6).
+  Pass: with the 1.1 KB Payment, on each carrier the owner requires (§2.3),
+  the owner's target on the receiver interval, and on the payer interval if
+  the owner includes it. The runs with the 7.7 KB Payment and on the other
+  carriers are measurements. By arithmetic, not measurement: at the QR
+  widget's default of 5 frames per second the 1.1 KB Payment alone takes
+  about 1.8 s to cross, and the 7.7 KB one about 10 s (§5.6).
 - **g4. With added steps.** Only where the design adopts one: the wait before
   release that c1 found for iPhone; a fresh attested leaf per payment (h2);
   an assertion per payment (h8); a one-use key per payment (e7). Repeat g3
@@ -828,7 +848,9 @@ receiver can check on the last hop.
   The record states, per tuple, which fields of E exist and which the secure
   hardware enforces. The repository's Pixel 6 record already shows a factory
   chain under Google's first root for StrongBox, which the current verifier
-  does not admit (§10.3).
+  does not admit (`specs/kagemusha_v1_production_readiness.md:419-420`).
+  Under §10.3 its admission depends on the owner's decision on the
+  factory-provisioned chain class.
 - **h2. Android: a leaf under the app attestation key, with no network.**
   This is what a renewal carries (§7.1). Steps: put the phone in airplane
   mode; generate a fresh key attested by the app attestation key, with a
@@ -913,7 +935,8 @@ receiver can check on the last hop.
 **Group i — onward spending and running with no network**
 
 Supports P1, P3, P5 and PC. Uses the release build with the stand-in issuer
-and ledger.
+and ledger. The release build cannot remove the wallet's files; the runs of
+i1, i5 and i6 that need that use the instrumented build (10.4.4).
 
 - **i1. Onward at once.** Steps: A pays B; the moment B shows complete, B
   pays C the whole amount, radios off. 100 times; again after B is power-cut
@@ -955,7 +978,9 @@ and ledger.
 
 **Group j — later misconduct by the payer**
 
-Supports P4. Uses the release build with the stand-in issuer and ledger.
+Supports P4. Uses the release build with the stand-in issuer and ledger. No
+build of the gate app signs two successors of one state, so how the two
+conflicting transitions of j1 and j2 are made is not defined.
 
 - **j1. The receiver learns.** Steps: A pays B. B's wallet then receives,
   once from a peer and once at a sync: a block entry for A's device; two
@@ -1015,7 +1040,10 @@ Reusable as it is or with a small change.
   tests it.
 - `IrohaSwift/Sources/IrohaSwift/KagemushaAttested/KagemushaAttestedHardware.swift`:
   creation and use of the Secure Enclave payment key. Reused for the key. Not
-  reused: its reading of every keychain error as "no key" (lines 67-78).
+  reused: its `exists` check, which reads every keychain error as "no key"
+  (lines 67-69), and its `load`, which takes `errSecItemNotFound` as absent
+  without checking that protected data is available (lines 71-79 and
+  116-130).
 - The carriers: `IrohaPeerQRV1`, `IrohaPeerNfcV1` and `IrohaPeerNearbyV1` in
   Swift and Kotlin, and the QR widget. Reused by g2 and g3.
 - The device records in `specs/kagemusha_v1_production_readiness.md:327-415`.
@@ -1188,8 +1216,9 @@ Sync, resume, Migrate and renewal (§5.9, §5.10, §7).
   certificate (same serial) is returned; lose the final acknowledgment of the
   Recertify and confirm the next sync brings the acknowledged head up to
   date. A renewal is refused only for an enabled regulatory control or
-  because the device's own key signed two successors; confirm each other
-  cause is not a refusal.
+  because the device's own key, or the key whose balance its row took over
+  by Migrate, signed two successors; confirm each other cause is not a
+  refusal.
 - iPhone App Attest: provoke `DCError.invalidKey` and `serverUnavailable`
   separately; the wallet must ask for re-attestation only on the former, and
   only while a valid marker is present.
@@ -1234,8 +1263,9 @@ Time, limits, block list, versions (§5.4, §5.5, §5.11).
 - Versions: the oldest released build and the newest pay each other in both
   directions, because every release accepts every rules version ever allowed;
   a SendSplit under a version outside the Request's range is answered with a
-  signed `Refused` and refunded; an object with an unknown critical extension
-  is not paid.
+  signed `Refused` and refunded where the receiver can read its subject and
+  the subject is one of its own Requests, and with no signed object where
+  it cannot; an object with an unknown critical extension is not paid.
 - Key revocation by peer relay: a wallet that holds a revocation of the key
   that signed its own certificate still pays and requests; a receiver that
   holds the revocation accepts that certificate until its own expiry, judged
@@ -1270,7 +1300,7 @@ One design (§11).
 
 Carriers (§5.6).
 
-- NFC: time to move 1.1 KB and 7.6 KB over ISO 7816 commands Android to
+- NFC: time to move 1.1 KB and 7.7 KB over ISO 7816 commands Android to
   Android and iPhone (reader) to Android (card); confirm an iPhone app reads
   an Android phone's card emulation; if tap from Android to iPhone outside
   the EEA is wanted, test the reversed flow (Android payer as card, iPhone
@@ -1278,7 +1308,7 @@ Carriers (§5.6).
 - Bluetooth LE, only if the owner wants the carrier: on iPhone to iPhone,
   iPhone and Android in both role assignments, Android to Android, and one
   Android phone without Google Play services, confirm a store app can
-  advertise a service, connect and move 1.1 KB, 7.6 KB and 10 KB; record
+  advertise a service, connect and move 1.1 KB, 7.7 KB and 10 KB; record
   connection setup time and transfer time; record on each Android tuple
   whether `getBluetoothLeAdvertiser` returns an advertiser; iPhone app in the
   foreground.

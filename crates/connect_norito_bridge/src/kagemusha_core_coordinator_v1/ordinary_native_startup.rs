@@ -44,6 +44,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "ordinary_android_existing_account.rs"]
+mod android_existing_account;
+
 const MAX: usize = 64 * 1024 * 1024 + 1024;
 /// First-release bounded Native startup request; decoding creates no authority.
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -77,6 +80,7 @@ struct Owner {
     source_installed: bool,
     pending_source: Option<Source>,
     installation_failed: bool,
+    selection_identity: StableAccountSelectionIdentity<AccountId>,
 }
 struct Pending {
     read: Read,
@@ -96,6 +100,7 @@ pub struct KagemushaNativeOrdinaryRuntimeStartupV1 {
     active: Mutex<Option<u64>>,
     initial_acquisition: Mutex<InitialAcquisition>,
     retirement: Arc<StartupRetirement>,
+    account_publication: ProtectedAccountPublication,
     storage: PathBuf,
     preparation: Disposition,
     platform: Disposition,
@@ -149,6 +154,7 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         Self::from_installed_runtime_and_native_account_inner(
             original,
             None,
+            false,
             authority,
             package_path,
             package_sha256,
@@ -171,6 +177,7 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
     fn from_installed_runtime_and_native_account_inner(
         original: NativeCompositionOriginal,
         installed_context: Option<Arc<InstalledContext>>,
+        protected_account_pending: bool,
         authority: Arc<Authority>,
         package_path: &Path,
         package_sha256: [u8; 32],
@@ -253,11 +260,15 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
                         source_installed: false,
                         pending_source: None,
                         installation_failed: false,
+                        selection_identity: StableAccountSelectionIdentity::new(),
                     })),
                     registry: SessionRegistry::new(),
                     active: Mutex::new(None),
                     initial_acquisition: Mutex::new(InitialAcquisition::new()),
                     retirement,
+                    account_publication: ProtectedAccountPublication::new(
+                        !protected_account_pending,
+                    ),
                     storage,
                     preparation,
                     platform,
@@ -343,11 +354,88 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         capacity: KagemushaDurableCapacityV1,
         integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
     ) -> Result<Arc<Self>, Error> {
+        Self::from_admitted_context_and_native_account_with_publication(
+            original,
+            context,
+            storage,
+            account,
+            clock_disposition,
+            preparation,
+            platform,
+            bootstrap,
+            cash,
+            cash_integrity_leases,
+            cash_receivers,
+            capacity,
+            integrity_leases,
+            false,
+        )
+    }
+    #[cfg(any(target_os = "android", all(test, unix)))]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_protected_android_storage_and_native_account(
+        original: NativeCompositionOriginal,
+        context: Arc<InstalledContext>,
+        storage: PathBuf,
+        account: AccountClient,
+        clock_disposition: Disposition,
+        preparation: Disposition,
+        platform: Disposition,
+        bootstrap: Disposition,
+        cash: Disposition,
+        cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        cash_receivers: Vec<
+            Arc<
+                iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+            >,
+        >,
+        capacity: KagemushaDurableCapacityV1,
+        integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+    ) -> Result<Arc<Self>, Error> {
+        Self::from_admitted_context_and_native_account_with_publication(
+            original,
+            context,
+            storage,
+            account,
+            clock_disposition,
+            preparation,
+            platform,
+            bootstrap,
+            cash,
+            cash_integrity_leases,
+            cash_receivers,
+            capacity,
+            integrity_leases,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn from_admitted_context_and_native_account_with_publication(
+        original: NativeCompositionOriginal,
+        context: Arc<InstalledContext>,
+        storage: PathBuf,
+        account: AccountClient,
+        clock_disposition: Disposition,
+        preparation: Disposition,
+        platform: Disposition,
+        bootstrap: Disposition,
+        cash: Disposition,
+        cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        cash_receivers: Vec<
+            Arc<
+                iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+            >,
+        >,
+        capacity: KagemushaDurableCapacityV1,
+        integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        protected_account_pending: bool,
+    ) -> Result<Arc<Self>, Error> {
         original.require_current()?;
         context.recheck().map_err(|_| Error::Rejected)?;
         Self::from_installed_runtime_and_native_account_inner(
             original,
             Some(context.clone()),
+            protected_account_pending,
             context.runtime_authority().map_err(|_| Error::Rejected)?,
             context.inventory_path(),
             context.inventory_sha256(),
@@ -418,13 +506,17 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
     }
 
     fn acquire_before_install(self: &Arc<Self>, path: &str) -> Result<(), Error> {
+        self.account_publication
+            .require_operational(&self.retirement)?;
         // Capture the original Native retirement generation before even package/path rechecks.
         // Logout before registry.begin exists must still retire this original acquisition.
         let generation = self.retirement.capture_original()?;
         let requested = Path::new(path);
-        if requested != self.storage
-            || requested.canonicalize().map_err(|_| Error::Rejected)? != self.storage
-        {
+        if requested != self.storage {
+            return Err(Error::Rejected);
+        }
+        #[cfg(unix)]
+        if requested.canonicalize().map_err(|_| Error::Rejected)? != self.storage {
             return Err(Error::Rejected);
         }
         if let Some(context) = self.installed_context.as_ref() {
@@ -449,6 +541,8 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         )
     }
     fn begin(&self) -> Result<(u64, Vec<Vec<u8>>), Error> {
+        self.account_publication
+            .require_operational(&self.retirement)?;
         let generation = self.retirement.capture_original()?;
         if let Some(context) = self.installed_context.as_ref() {
             context.recheck().map_err(|_| Error::Rejected)?;
@@ -508,6 +602,8 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         Ok((id, fields.ok_or(Error::Rejected)?))
     }
     fn finish(self: &Arc<Self>, id: u64, original: Option<&[u8]>) -> Result<u64, Error> {
+        self.account_publication
+            .require_operational(&self.retirement)?;
         let generation = self.retirement.capture_original()?;
         if let Some(context) = self.installed_context.as_ref() {
             context.recheck().map_err(|_| Error::Rejected)?;
@@ -559,6 +655,14 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
                                     self.integrity_leases.clone(),
                                 )
                             })
+                            .map(|mut source| {
+                                // Only the measured Android producer chooses exact local WAL
+                                // recovery. Offered frames cannot select Fresh or erase history.
+                                if self.installed_context.is_some() {
+                                    source.enable_native_local_recovery();
+                                }
+                                source
+                            })
                             .and_then(|source| {
                                 source.with_native_bootstrap_proving_material(
                                     self.profile.clone(),
@@ -577,6 +681,10 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
                         )
                     };
                     custody.recheck().map_err(|_| RegistryError::Rejected)?;
+                    owner
+                        .selection_identity
+                        .require_same_accounts(generation, custody.wallet(), custody.signatory())
+                        .map_err(|_| RegistryError::Rejected)?;
                     self.retirement
                         .require_original(generation)
                         .map_err(|_| RegistryError::Rejected)?;
@@ -602,12 +710,22 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
             .map_err(|_| Error::Rejected)?;
         let retained = self
             .registry
-            .dispatch(invocation, |owner| owner.pending_source.take())
+            .dispatch(invocation, |owner| {
+                let custody = owner.custody.as_ref().ok_or(Error::Rejected)?;
+                custody.recheck().map_err(|_| Error::Rejected)?;
+                owner.selection_identity.complete_read(
+                    handle,
+                    generation,
+                    custody.wallet(),
+                    custody.signatory(),
+                )?;
+                Ok(owner.pending_source.take())
+            })
             .map_err(|_| Error::Rejected)?;
         if !retained.session_is_current {
             return Err(Error::Rejected);
         }
-        let source = retained.value;
+        let source = retained.value?;
         if let Some(source) = source {
             let source =
                 source.with_native_account_session(Arc::new(BoundNativeAccountSessionV1 {
@@ -640,6 +758,8 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
             .ok_or(Error::Rejected)
     }
     fn require_current(&self) -> Result<(), Error> {
+        self.account_publication
+            .require_operational(&self.retirement)?;
         let generation = self.retirement.capture_original()?;
         self.registry
             .require_current_handle(self.handle()?)
@@ -671,6 +791,8 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         // An uncertain initial acquisition freezes every authority-bearing phase. Canonical
         // cancellation/close/logout must still retire the held selection; cleanup never
         // resets the uncertainty fence or creates another source/account owner.
+        self.account_publication
+            .require_phase(&self.retirement, request.phase)?;
         require_startup_phase(&self.initial_acquisition, request.phase)?;
         let (id, fields) = match request.phase {
             1 if request.id == 0 && request.original.is_empty() => self.begin()?,
@@ -752,26 +874,205 @@ impl BoundNativeAccountSessionV1 {
         }
         retained.value
     }
-    pub(super) fn refresh_incoming_clock(&self) -> Result<(), Error> {
-        self.recheck()?;
-        // Retain the actual immutable account context, then release the account mutex before
-        // the four public network reads. No offered clock/transport callback enters this path.
-        let account = self
+    // This gate checks the held installed identity and selected actual account registry,
+    // deliberately without treating an expired S/W observation as a renewal authority.
+    pub(super) fn recheck_installed_account_for_refresh(&self) -> Result<(), Error> {
+        self.startup.require_current()
+    }
+    // Pure proof/recovery retains the original selected registry and installed root.
+    // The finite S/W read is required again by every signer/effect after real renewal.
+    // Do not turn historical approval capture into a current account grant.
+    pub(super) fn recheck_retained_account_identity(&self) -> Result<(), Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
+        let invocation = self
             .startup
-            .owner
-            .lock()
-            .map_err(|_| Error::Rejected)?
-            .account
-            .clone();
-        let transport = self
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .recheck_retained_identity()
+                    .map_err(|_| Error::Rejected)?;
+                self.startup
+                    .retirement
+                    .require_original(self.retirement_generation)?;
+                self.startup.require_current()
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+    // This returns only routing DATA from the independently signed, still-held inventory.
+    // It neither renews S/W nor admits an FI token/session or financial operation.
+    pub(super) fn fi_http_endpoint_originals(&self) -> Result<(String, String), Error> {
+        self.recheck_retained_account_identity()?;
+        let originals = self
             .startup
             .inventory
-            .clock_transport(&account, &self.startup.clock)
+            .fi_http_endpoint_originals()
             .map_err(|_| Error::Rejected)?;
-        transport
-            .refresh_current_clock(&self.startup.clock)
-            .map_err(|_| Error::Rejected)?;
+        self.recheck_retained_account_identity()?;
+        Ok(originals)
+    }
+    pub(super) fn refresh_incoming_clock(&self) -> Result<(), Error> {
+        self.startup.require_current()?;
+        // The real startup renews both the four-node clock and the same immutable S/W read,
+        // then installs fresh custody in that same registry owner. No offered current DTO,
+        // callback, account replacement or widened expiry enters this path.
+        let (id, _) = self.startup.begin()?;
+        self.startup.finish(id, None)?;
         self.recheck()
+    }
+    // Only the actual Main-created private loan crosses to the retained AccountClient.
+    // Registry dispatch serializes the original owner, but never holds the registry mutex
+    // while this closure rechecks the selected handle or performs the actual network operation.
+    pub(super) fn sign_mint_consent(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintAccountSigningV1<'_>,
+    ) -> Result<[u8; 64], Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let value = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .sign_retained_mint_consent(&self.startup.inventory, original)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(value)
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+    // Only the actual Main-created private loan crosses to the retained AccountClient.
+    // Registry dispatch serializes the original owner, but never holds the registry mutex
+    // while this closure rechecks the selected handle or performs the actual network operation.
+    pub(super) fn sign_mint_transaction(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintTransactionSigningV1<'_>,
+    ) -> Result<[Vec<u8>; 2], Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let value = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .sign_retained_mint_transaction(&self.startup.inventory, original)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(value)
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+    // Only the actual Main-created private loan crosses to the retained AccountClient.
+    // Registry dispatch serializes the original owner, but never holds the registry mutex
+    // while this closure rechecks the selected handle or performs the actual network operation.
+    pub(super) fn submit_mint_transaction(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintFundingTransportV1<'_>,
+    ) -> Result<(), Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let value = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .submit_retained_mint_transaction(&self.startup.inventory, original)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(value)
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+    // Only the actual Main-created private loan crosses to the retained AccountClient.
+    // Registry dispatch serializes the original owner, but never holds the registry mutex
+    // while this closure rechecks the selected handle or performs the actual network operation.
+    pub(super) fn read_mint_finality(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryMintFundingTransportV1<'_>,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let value = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .read_retained_mint_finality(&self.startup.inventory, original)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(value)
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        retained.value
     }
     pub(super) fn sign_lineage(
         &self,
@@ -807,6 +1108,9 @@ impl BoundNativeAccountSessionV1 {
     /// # Errors
     /// Refuses an absent, closed, replaced or expired original Native account session/custody.
     pub(super) fn current_account_selection_originals(&self) -> Result<Vec<Vec<u8>>, Error> {
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
         let handle = self.startup.handle()?;
         let invocation = self
             .startup
@@ -822,7 +1126,9 @@ impl BoundNativeAccountSessionV1 {
                 }
                 self.startup.require_current()?;
                 let custody = owner.custody.as_ref().ok_or(Error::Unavailable)?;
-                custody.recheck().map_err(|_| Error::Rejected)?;
+                custody
+                    .recheck_retained_identity()
+                    .map_err(|_| Error::Rejected)?;
                 let wallet = custody
                     .wallet()
                     .canonical_i105()
@@ -831,13 +1137,23 @@ impl BoundNativeAccountSessionV1 {
                     .signatory()
                     .canonical_i105()
                     .map_err(|_| Error::Rejected)?;
-                custody.recheck().map_err(|_| Error::Rejected)?;
+                custody
+                    .recheck_retained_identity()
+                    .map_err(|_| Error::Rejected)?;
                 self.startup.require_current()?;
                 if self.startup.handle()? != handle {
                     return Err(Error::Rejected);
                 }
+                let selection = owner.selection_identity.original(
+                    self.retirement_generation,
+                    custody.wallet(),
+                    custody.signatory(),
+                )?;
+                self.startup
+                    .retirement
+                    .require_original(self.retirement_generation)?;
                 Ok(vec![
-                    handle.to_le_bytes().to_vec(),
+                    selection.to_le_bytes().to_vec(),
                     wallet.into_bytes(),
                     signatory.into_bytes(),
                 ])
@@ -850,6 +1166,9 @@ impl BoundNativeAccountSessionV1 {
         if self.startup.handle()? != handle {
             return Err(Error::Rejected);
         }
+        self.startup
+            .retirement
+            .require_original(self.retirement_generation)?;
         retained.value
     }
 
@@ -974,6 +1293,10 @@ impl BoundNativeAccountSessionV1 {
         result.value
     }
 }
+#[path = "ordinary_native_startup/account_publication.rs"]
+mod account_publication;
+use account_publication::{ProtectedAccountPublication, StableAccountSelectionIdentity};
+
 static STARTUP: OnceLock<Arc<KagemushaNativeOrdinaryRuntimeStartupV1>> = OnceLock::new();
 // These private state owners only order real construction/acquisition. Their scripted unit
 // controls establish one-use control flow, never Native custody or financial qualification.
@@ -1280,7 +1603,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_runtime_startup_v1(
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1<
     'local,

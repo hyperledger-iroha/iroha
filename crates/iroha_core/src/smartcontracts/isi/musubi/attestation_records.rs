@@ -11,7 +11,6 @@
 // projection capture. Fixed local containers do not fund cryptographic work.
 
 use super::*;
-use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_data_model::sorafs::capacity::ProviderId;
 use iroha_model_base::error::ParseError;
 

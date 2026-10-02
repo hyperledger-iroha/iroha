@@ -6,11 +6,11 @@ use crate::kagemusha_v1_crypto::seal_kagemusha_credit_v1_with_rng;
 use iroha_crypto::kagemusha::kagemusha_x25519_public_key_v1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KagemushaCreditOpeningV1,
-    KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryMintApprovalChallengeV1,
-    KagemushaOrdinaryMintApprovalV1, KagemushaOrdinaryMintAuthorizationContextV1,
-    KagemushaOrdinaryMintAuthorizationStatementV1, KagemushaSignedOrdinaryCurrentControlV1,
-    kagemusha_ciphertext_digest_v1, kagemusha_mint_credit_opening_commitment_v1,
-    kagemusha_recipient_credential_commitment_v1,
+    KagemushaHardwarePlatformClassV1, KagemushaOrdinaryFinancialHeadV1,
+    KagemushaOrdinaryMintApprovalChallengeV1, KagemushaOrdinaryMintApprovalV1,
+    KagemushaOrdinaryMintAuthorizationContextV1, KagemushaOrdinaryMintAuthorizationStatementV1,
+    KagemushaSignedOrdinaryCurrentControlV1, kagemusha_ciphertext_digest_v1,
+    kagemusha_mint_credit_opening_commitment_v1, kagemusha_recipient_credential_commitment_v1,
 };
 use rand::rand_core::{TryCryptoRng, TryRngCore};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -95,6 +95,7 @@ pub(super) enum MintRecord {
     Cancel {
         operation: DigestV1,
     },
+    Funding(Box<super::mint_funding::MintFundingRecord>),
 }
 pub(super) struct PendingMint {
     originals: MintOriginals,
@@ -103,6 +104,7 @@ pub(super) struct PendingMint {
     retained: Option<(Vec<u8>, u64, u64)>,
     capture: Option<(u64, u64)>,
     proven_request: Option<Vec<u8>>,
+    pub(super) funding: super::mint_funding::MintFundingState,
 }
 
 /// Historical proof borrow from a durably acknowledged dedicated Mint, never a debit/current grant.
@@ -439,6 +441,7 @@ impl MintOriginals {
             .map_err(material)?
             .checked_add(self.request_capacity)
             .and_then(|n| n.checked_add(self.incoming_prepared_capacity))
+            .and_then(|n| n.checked_add(super::mint_funding::FUNDING_CAPACITY_BYTES))
             .and_then(|n| n.checked_add(1024))
             .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)
     }
@@ -496,6 +499,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             retained: None,
             capture: None,
             proven_request: None,
+            funding: Default::default(),
         });
         self.require_current_financial_control()?;
         Ok(operation)
@@ -612,6 +616,105 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
             .capture = Some((interval.lower_ms(), interval.upper_ms()));
         self.captured_mint_selection()?.recheck()
+    }
+    /// Read only the retained dedicated Mint key/approval originals after an interrupted call.
+    /// Status 0 is uninvoked, 1 is invoked with unknown original, 2 is raw without capture,
+    /// and 3 is durably acknowledged capture. This never renews an interval or invokes the key.
+    /// # Errors
+    /// Refuses changed historical publication/journal/FI/C/PI or absent actual Mint ownership.
+    pub fn recover_mint_funding_platform(&self) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.publication.recheck_historical_cash_custody()?;
+        self.recheck_lineage_retained_custody()?;
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        p.originals
+            .recheck_originals(self, p.lease.as_deref(), false)?;
+        let status = match (p.fenced, p.retained.as_ref(), p.capture) {
+            (false, None, None) => 0,
+            (true, None, None) => 1,
+            (true, Some((raw, lower, upper)), capture) => {
+                p.originals
+                    .authenticate(self, p.lease.as_deref(), raw, *lower, *upper)?;
+                if let Some((captured_lower, captured_upper)) = capture {
+                    if captured_lower < *lower || captured_upper < *upper {
+                        return Err(KagemushaStateErrorV1::SnapshotRollback);
+                    }
+                    p.originals.authenticate(
+                        self,
+                        p.lease.as_deref(),
+                        raw,
+                        captured_lower,
+                        captured_upper,
+                    )?;
+                    3
+                } else {
+                    2
+                }
+            }
+            _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        };
+        let fields = vec![
+            vec![status],
+            p.originals.challenge.operation_id.to_vec(),
+            p.originals
+                .challenge
+                .canonical_signing_bytes()
+                .map_err(material)?,
+            p.originals.credential_original.clone(),
+            p.retained.as_ref().map_or(Vec::new(), |r| r.0.clone()),
+        ];
+        self.publication.recheck_historical_cash_custody()?;
+        self.recheck_lineage_retained_custody()?;
+        Ok(fields)
+    }
+    /// Finish only a retained raw Mint capture after a lost acknowledgment reply.
+    /// The actual original signing/FI/PI window must still admit both post-original bounds;
+    /// an expired raw record is never promoted into a historical captured proof.
+    /// # Errors
+    /// Refuses missing raw, expired original window or changed genuine private Native custody.
+    pub fn acknowledge_retained_mint_funding_platform(
+        &mut self,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let operation = self.mint_funding_operation_id()?;
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if p.capture.is_some() {
+            return self.captured_mint_selection()?.recheck();
+        }
+        if p.retained.is_none() {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        self.acknowledge_mint_capture(operation)
+    }
+    /// Read the genuine private platform floor for this retained Mint only; no offered floor.
+    /// # Errors
+    /// Refuses mismatched historical C/platform/floor or changed private Native custody.
+    pub fn mint_funding_platform_counter_original(
+        &self,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.recover_mint_funding_platform()?;
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let platform = self
+            .publication
+            .cash_financial()
+            .enrollment()
+            .app_credential()
+            .subject()
+            .platform_class;
+        match (platform, p.originals.previous_counter) {
+            (KagemushaHardwarePlatformClassV1::AndroidKeyMint, None) => Ok(vec![vec![5], vec![]]),
+            (KagemushaHardwarePlatformClassV1::AppleAppAttest, Some(floor)) => {
+                Ok(vec![vec![4], floor.to_le_bytes().to_vec()])
+            }
+            _ => Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        }
     }
     pub(crate) fn cancel_uninvoked_mint(
         &mut self,
@@ -852,6 +955,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     retained: None,
                     capture: None,
                     proven_request: None,
+                    funding: Default::default(),
                 });
             }
             MintRecord::Fence { operation } => {
@@ -940,6 +1044,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                     .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?
                     .proven_request = Some(original);
             }
+            MintRecord::Funding(record) => self.replay_mint_funding(*record)?,
             MintRecord::Cancel { operation } => {
                 let p = self
                     .pending_mint
@@ -1402,5 +1507,27 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         Ok(())
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn mint_funding_operation_id(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
+        Ok(self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .originals
+            .challenge
+            .operation_id)
+    }
+}
+impl KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1<'_> {
+    pub(crate) fn preparation_clock_original(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        let mut raw = None;
+        self.with_verified_preparation_clock(&mut |v| {
+            raw = Some(v.original().to_vec());
+            Ok(())
+        })?;
+        raw.ok_or(KagemushaStateErrorV1::SnapshotIntegrity)
     }
 }

@@ -302,7 +302,7 @@ fn header(
     }
 }
 
-/// Constrain canonical private fetch, native base debit and one-cycle commit,
+/// Constrain canonical private fetch, native base debit and exact-cycle commit,
 /// exact source registers, CALL fresh-parent state, protected RETURN target and
 /// the native bounded return-stack depth transition.
 ///
@@ -342,8 +342,12 @@ fn append_control_residues<'a>(
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
+    // GETGAS is a real scalar step and gas-owner write, but its native debit is zero.
+    let scalar_base_gas =
+        select(&|_, w| role(w) == Some(Role::Scalar) && wide::opcode(w) != wide::system::GETGAS);
     let scalar_extra_gas = select(&|_, w| {
         scalar::is_rotate(w)
+            || scalar::is_mean(w)
             || matches!(
                 wide::opcode(w),
                 wide::arithmetic::SLT
@@ -356,6 +360,13 @@ fn append_control_residues<'a>(
     let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
     let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
     let division_extra_gas = select(&|_, w| scalar::is_division(w)).mul(F(9));
+    let ceiling_selected = select(&|_, w| scalar::is_division_ceiling(w));
+    let ceiling_extra_gas = ceiling_selected.mul(F(2));
+    let ceiling_extra_cycles = ceiling_selected.mul(F(11));
+    let square_extra_gas = select(&|_, w| scalar::is_square_root(w)).mul(F(5));
+    let square_extra_cycles = square_extra_gas;
+    let mean_extra_cycles = select(&|_, w| scalar::is_mean(w)).mul(F(2));
+    let gcd_extra = select(&|_, w| scalar::is_gcd(w)).mul(F(11));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
@@ -457,9 +468,13 @@ fn append_control_residues<'a>(
         ] {
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
-        // Native base cost: two for CALL/RETURN, three for STORE64, one
-        // for scalar arithmetic and conditional branches, plus one for comparisons/rotates
-        // and two for the four multiply variants.
+        // Native base cost: zero for GETGAS, two for CALL/RETURN, three for
+        // STORE64, one for other scalar arithmetic and conditional branches,
+        // plus one for comparisons/rotates/MEAN
+        // and two for the four multiply variants, five for ISQRT.
+        // DIV_CEIL adds two gas beyond ordinary division and consumes twelve
+        // cycles; GCD consumes twelve gas/cycles, ISQRT six, MEAN three;
+        // other roles consume one cycle.
         // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
@@ -471,12 +486,15 @@ fn append_control_residues<'a>(
                 .add(returning)
                 .mul(F(2))
                 .add(store.mul(F(3)))
-                .add(scalar)
+                .add(scalar_base_gas)
                 .add(scalar_extra_gas)
                 .add(multiply_extra_gas)
                 .add(bit_count_extra_gas)
                 .add(move_extra_gas)
                 .add(division_extra_gas)
+                .add(ceiling_extra_gas)
+                .add(square_extra_gas)
+                .add(gcd_extra)
                 .add(branching)
         } else {
             F::ZERO
@@ -490,6 +508,10 @@ fn append_control_residues<'a>(
         );
         let carry_in = if i == 0 {
             active
+                .add(mean_extra_cycles)
+                .add(square_extra_cycles)
+                .add(ceiling_extra_cycles)
+                .add(gcd_extra)
         } else {
             row[CARRIES + 4 + i - 1]
         };

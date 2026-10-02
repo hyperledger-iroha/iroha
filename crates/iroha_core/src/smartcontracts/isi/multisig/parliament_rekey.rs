@@ -62,7 +62,8 @@ fn operator_bound_proposal_references_account(
         | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
         | ProposalKind::KagemushaVerifierPolicyInstall(_)
         | ProposalKind::KagemushaVerifierReleaseInstall(_)
-        | ProposalKind::KagemushaVerifierReleaseActivate(_) => false,
+        | ProposalKind::KagemushaVerifierReleaseActivate(_)
+        | ProposalKind::KagemushaVerifierReleaseRetire(_) => false,
     }
 }
 

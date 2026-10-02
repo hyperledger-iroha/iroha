@@ -1,8 +1,6 @@
 //! End-point querying logic, including custom public and authenticated routes.
 mod authority_originals;
-#[cfg(unix)]
 mod ordinary_native;
-#[cfg(unix)]
 pub use ordinary_native::{
     KagemushaAdmittedOrdinaryNativeInventoryV1, KagemushaNativeAccountCustodyV1,
     KagemushaNativeClockCatchupRequiredV1, KagemushaNativeClockTransportV1,

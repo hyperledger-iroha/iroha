@@ -991,6 +991,25 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
         let prep_bytes = prep.to_transport_bytes().unwrap();
         let credential_bytes = credential.canonical_bytes().unwrap();
         let certificate_bytes = f.certificate.canonical_bytes().unwrap();
+        let start = KagemushaOrdinaryEnrollmentHttpRequestV1::Start(
+            KagemushaOrdinaryRetailStartHttpRequestV1 {
+                wallet: f.selection.owner.account_id.canonical_i105().unwrap(),
+                signed_preparation_base64: STANDARD.encode(&prep_bytes),
+                raw_admission_original_base64: STANDARD.encode(&raw),
+                platform_original_base64: STANDARD.encode(&f.proof.raw_attestation),
+                core_possession_original_base64: STANDARD.encode(
+                    norito::encode_canonical(&KagemushaAppEnrollmentPossessionV1 {
+                        challenge: e,
+                        evidence: f.proof.app_possession.clone(),
+                    })
+                    .unwrap(),
+                ),
+                app_certificate_base64: STANDARD.encode(&credential_bytes),
+                selected_integrity: None,
+            },
+        );
+        let start_request: norito::json::Value =
+            norito::json::from_slice(&start.canonical_bytes().unwrap()).unwrap();
         let raw_request = norito::json!({
             "schema":"iroha.kagemusha.ordinary-app-raw-admission-request.v1", "operation":"issue",
             "operation_id":(operation.clone()), "signed_preparation_base64":(STANDARD.encode(&prep_bytes)),
@@ -1045,7 +1064,7 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
                 "certificate_request":certificate_request,
                 "certificate_response":{"certificate_base64":(STANDARD.encode(&credential_bytes)),"certificate_sha256_hex":(hex::encode(Sha256::digest(&credential_bytes)))},
                 "prepare_response":{"operation_id":(hex::encode(c.attestation_challenge().unwrap())),"signed_preparation_base64":(STANDARD.encode(&prep_bytes)),"attestation_challenge_base64":(STANDARD.encode(c.attestation_challenge().unwrap())),"expires_at_ms":(c.expires_at_ms)},
-                "start_request":{"signed_preparation_base64":(STANDARD.encode(prep_bytes)),"app_certificate_base64":(STANDARD.encode(credential_bytes))},
+                "start_request":start_request,
                 "start_response":{"challenge_id":(hex::encode(c.attestation_challenge().unwrap())),"canonical_challenge_base64":(STANDARD.encode(f.challenge.canonical_bytes().unwrap())),"account_signing_message_base64":(STANDARD.encode(f.challenge.account_signing_message().unwrap())),"expires_at_ms":(f.challenge.expires_at_ms)},
                 "finish_request":{"challenge_id":(hex::encode(c.attestation_challenge().unwrap())),"account_signature_base64":(STANDARD.encode(f.proof.account_signature.payload()))},
                 "finish_response":{"challenge_id":(hex::encode(c.attestation_challenge().unwrap())),"enrollment_id_hex":(hex::encode(f.certificate.subject.owner.enrollment_id().unwrap())),"canonical_certificate_base64":(STANDARD.encode(certificate_bytes))}

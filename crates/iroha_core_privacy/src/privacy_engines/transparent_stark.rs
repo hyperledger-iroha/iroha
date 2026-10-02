@@ -277,6 +277,35 @@ impl GoldilocksFieldV1 {
         }
         result
     }
+    /// Inverse of a canonical private residue, with zero mapped to zero.
+    ///
+    /// This fixed addition chain has 64 squarings and 10 multiplications for
+    /// every canonical input, including zero. It does not validate malformed
+    /// wrappers; callers needing validation must retain the checked `inv` API
+    /// or reject noncanonical inputs before entering this constructor helper.
+    /// The field operations and their compiled callers still need independent
+    /// side-channel review; this helper is not a whole-prover timing guarantee.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn inverse_or_zero_canonical_v1(self) -> Self {
+        fn square<const N: usize>(mut value: GoldilocksFieldV1) -> GoldilocksFieldV1 {
+            for _ in 0..N {
+                value = value.mul(value);
+            }
+            value
+        }
+        debug_assert!(self.0 < GOLDILOCKS_MODULUS_V1);
+        let x2 = self.mul(self).mul(self); // x^(2^2 - 1)
+        let x4 = square::<2>(x2).mul(x2);
+        let x8 = square::<4>(x4).mul(x4);
+        let x16 = square::<8>(x8).mul(x8);
+        let x24 = square::<8>(x16).mul(x8);
+        let x28 = square::<4>(x24).mul(x4);
+        let x30 = square::<2>(x28).mul(x2);
+        let x31 = x30.mul(x30).mul(self);
+        let x32 = x31.mul(x31).mul(self);
+        // (2^31 - 1) * 2^33 + (2^32 - 1) = p - 2.
+        square::<33>(x31).mul(x32)
+    }
     /// Multiplicative inverse, absent for zero.
     pub(crate) fn inv(self) -> Option<Self> {
         (self != Self::ZERO && self.0 < GOLDILOCKS_MODULUS_V1)
@@ -754,7 +783,7 @@ fn goldilocks_fft_window_v1<T>(
 /// halves at matching public offsets, preserving parallelism even at the last
 /// stage. Every starting power is computed exactly in the base field. There is
 /// no parallel reduction, additional field buffer, or witness-dependent choice.
-fn goldilocks_fft_stage_v1<T: Send>(
+fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
     values: &mut [T],
     width: usize,
     step: GoldilocksFieldV1,
@@ -768,6 +797,33 @@ fn goldilocks_fft_stage_v1<T: Send>(
     };
     if values.len() < FFT_PARALLEL_MIN_VALUES_V1 || rayon::current_num_threads() == 1 {
         serial_block(values);
+    } else if !PARALLEL_INNER {
+        // The caller already distributes bounded columns across workers. Keep
+        // exactly the same public windows and starting powers without nesting
+        // Rayon tasks inside each column or allocating another field buffer.
+        if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
+            for block in values.chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1) {
+                serial_block(block);
+            }
+        } else {
+            for chunk in values.chunks_exact_mut(width) {
+                let (left, right) = chunk.split_at_mut(width / 2);
+                for (index, (left, right)) in left
+                    .chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
+                    .zip(right.chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+                    .enumerate()
+                {
+                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    goldilocks_fft_window_v1(
+                        left,
+                        right,
+                        step.pow(first as u128),
+                        step,
+                        &butterfly,
+                    );
+                }
+            }
+        }
     } else if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
         // Both widths are powers of two, so no group straddles a task boundary.
         values
@@ -798,6 +854,21 @@ pub(crate) fn goldilocks_fft_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
 ) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_inner_parallelism_v1::<true>(values, root)
+}
+/// In-place FFT for a column whose bounded batch already owns parallelism.
+/// Validation and arithmetic use the same kernel as the single-column route.
+pub(crate) fn goldilocks_fft_coarse_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_inner_parallelism_v1::<false>(values, root)
+}
+
+fn goldilocks_fft_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
         || !size.is_power_of_two()
@@ -825,7 +896,7 @@ pub(crate) fn goldilocks_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1(values, width, step, |even, odd, twiddle| {
+        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(values, width, step, |even, odd, twiddle| {
             let scaled_odd = (*odd).mul(twiddle);
             let original_even = *even;
             *even = original_even.add(scaled_odd);
@@ -840,10 +911,24 @@ pub(crate) fn goldilocks_ifft_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
 ) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_ifft_with_inner_parallelism_v1::<true>(values, root)
+}
+/// In-place inverse FFT for a column in an already parallel bounded batch.
+pub(crate) fn goldilocks_ifft_coarse_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_ifft_with_inner_parallelism_v1::<false>(values, root)
+}
+
+fn goldilocks_ifft_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
     if root.0 >= GOLDILOCKS_MODULUS_V1 {
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
-    goldilocks_fft_v1(
+    goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(
         values,
         root.inv().ok_or(TransparentStarkErrorV1::DivisionByZero)?,
     )?;
@@ -920,7 +1005,7 @@ pub(crate) fn goldilocks_fp4_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1(values, width, step, |even, odd, twiddle| {
+        goldilocks_fft_stage_v1::<_, true>(values, width, step, |even, odd, twiddle| {
             let scaled_odd = (*odd).mul_base(twiddle);
             let original_even = *even;
             *even = original_even.add(scaled_odd);
@@ -2148,6 +2233,62 @@ mod tests {
             PrivacyProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         );
+    #[test]
+    fn canonical_private_inverse_or_zero_matches_independent_integer_arithmetic() {
+        fn reference(value: u64) -> u64 {
+            let modulus = u128::from(GOLDILOCKS_MODULUS_V1);
+            let mut exponent = GOLDILOCKS_MODULUS_V1 - 2;
+            let mut base = u128::from(value);
+            let mut result = 1_u128;
+            while exponent != 0 {
+                if exponent & 1 != 0 {
+                    result = result * base % modulus;
+                }
+                base = base * base % modulus;
+                exponent >>= 1;
+            }
+            result as u64
+        }
+        let mut values = (0..=1024_u64).collect::<Vec<_>>();
+        values.extend((GOLDILOCKS_MODULUS_V1 - 256)..GOLDILOCKS_MODULUS_V1);
+        let mut random = 0x8341_affe_624e_0321_u64;
+        for _ in 0..4096 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            values.push(random % GOLDILOCKS_MODULUS_V1);
+        }
+        for value in values {
+            let actual = GoldilocksFieldV1(value).inverse_or_zero_canonical_v1();
+            assert_eq!(actual.0, reference(value), "{value}");
+            assert!(actual.0 < GOLDILOCKS_MODULUS_V1);
+            assert_eq!(
+                u128::from(value) * u128::from(actual.0) % u128::from(GOLDILOCKS_MODULUS_V1),
+                u128::from(value != 0)
+            );
+            assert_eq!(
+                actual,
+                GoldilocksFieldV1(value)
+                    .inv()
+                    .unwrap_or(GoldilocksFieldV1::ZERO)
+            );
+        }
+    }
+
+    #[test]
+    fn private_inverse_helper_preserves_checked_inverse_rejection_policy() {
+        for malformed in [
+            0,
+            GOLDILOCKS_MODULUS_V1,
+            GOLDILOCKS_MODULUS_V1 + 1,
+            u64::MAX,
+        ] {
+            assert_eq!(GoldilocksFieldV1(malformed).inv(), None);
+        }
+        assert_eq!(
+            GoldilocksFieldV1::ZERO.inverse_or_zero_canonical_v1(),
+            GoldilocksFieldV1::ZERO
+        );
+    }
+
     #[test]
     fn noncanonical_fp4_fixture_preserves_strict_ordinary_constructors() {
         let malformed = GoldilocksFp4V1::noncanonical_fixture_v1();

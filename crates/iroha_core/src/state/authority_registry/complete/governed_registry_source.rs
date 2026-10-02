@@ -167,11 +167,7 @@ impl<'state> CapturedGovernedRegistry<'state> {
         state: &'state State,
         limits: RegistryCaptureLimits,
     ) -> Result<Option<Self>, RegistryCaptureError> {
-        let budget = state
-            .pipeline_ivm_prepared_cache
-            .read()
-            .execution_budget()
-            .clone();
+        let budget = state.ivm_execution_budget();
         let Some(source) =
             GovernedRegistrySource::try_capture(state).map_err(RegistryCaptureError::Source)?
         else {

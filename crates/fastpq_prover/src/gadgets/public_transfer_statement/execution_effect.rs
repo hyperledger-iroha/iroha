@@ -1,14 +1,15 @@
 //! Strict complete-entry quantity effects over the shared two-update SMT relation.
 //!
 //! Transfer consumes balance/balance ports; mint and burn consume balance/supply
-//! ports. Arithmetic, exact quantities, typed keys and original chronology are
+//! ports; retirement consumes zero-supply/lifecycle-presence ports. Arithmetic,
+//! exact quantities, typed keys and original chronology are
 //! checked here before generic SMT leaf bindings are constructed. Source facts
 //! and final public inputs require independent authenticated expectations. Local
 //! materialization establishes no finality, authorization or admission result.
 //! TODO: replace the ordinary transfer-only source capture and artifact format
 //! coherently before enabling this relation in any production proof dispatcher.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{
@@ -84,11 +85,11 @@ pub struct ExecutionEffectExpectations {
 pub struct ExecutionEffectRow {
     /// Original contiguous effect ordinal, independent of key sorting.
     pub effect_ordinal: u32,
-    /// Port zero then one: source/destination or balance/supply respectively.
+    /// Port zero then one: source/destination, balance/supply or zero-supply/lifecycle.
     pub leg: usize,
     /// Complete typed-key allocation index.
     pub key_index: usize,
-    /// Exact common asset/incarnation scale chosen from every original quantity.
+    /// Exact common asset/incarnation scale; lifecycle presence always uses scale zero.
     pub scale: u32,
     /// Complete normalized pre-value.
     pub before: FastpqQuantityUnits,
@@ -369,28 +370,31 @@ struct NormalizedRow {
     after: FastpqQuantityUnits,
     amount: FastpqQuantityUnits,
 }
-fn quantities(kind: &FastpqExecutionEffectKindV1) -> (&FastpqExecutionAssetV1, [&Quantity; 5]) {
+fn quantities(
+    kind: &FastpqExecutionEffectKindV1,
+) -> (&FastpqExecutionAssetV1, Option<[&Quantity; 5]>) {
     match kind {
         FastpqExecutionEffectKindV1::Transfer(t) => (
             &t.source.asset,
-            [
+            Some([
                 &t.amount,
                 &t.source_before,
                 &t.source_after,
                 &t.destination_before,
                 &t.destination_after,
-            ],
+            ]),
         ),
         FastpqExecutionEffectKindV1::Mint(t) | FastpqExecutionEffectKindV1::Burn(t) => (
             &t.balance.asset,
-            [
+            Some([
                 &t.amount,
                 &t.balance_before,
                 &t.balance_after,
                 &t.supply_before,
                 &t.supply_after,
-            ],
+            ]),
         ),
+        FastpqExecutionEffectKindV1::Retire(asset) => (asset, None),
     }
 }
 fn operation_rank(operation: FastpqOperationKind) -> u8 {
@@ -398,6 +402,7 @@ fn operation_rank(operation: FastpqOperationKind) -> u8 {
         FastpqOperationKind::Transfer => 0,
         FastpqOperationKind::Mint => 1,
         FastpqOperationKind::Burn => 2,
+        FastpqOperationKind::MetaSet => 3,
         _ => u8::MAX,
     }
 }
@@ -514,7 +519,7 @@ fn asset_scales(
             .validate()
             .map_err(|_| invariant("execution effect asset incarnation is invalid"))?;
         let scale = scales.entry(asset.clone()).or_default();
-        for value in values {
+        for value in values.into_iter().flatten() {
             *scale = (*scale).max(value.scale());
         }
     }
@@ -531,29 +536,65 @@ fn normalize_effects(
 ) -> Result<(Vec<NormalizedRow>, usize)> {
     let mut normalized = Vec::with_capacity(effects.effects.len() * 2);
     let mut last = HashMap::<Vec<u8>, FastpqQuantityUnits>::new();
+    let mut retired = BTreeSet::<FastpqExecutionAssetV1>::new();
+    let mut nonzero_balances = BTreeMap::<FastpqExecutionAssetV1, usize>::new();
     for (index, effect) in effects.effects.iter().enumerate() {
         if effect.ordinal != checked_u32(index)? {
             return Err(invariant("execution effect ordinals are not contiguous"));
         }
         let (asset, values) = quantities(&effect.kind);
         let scale = scales[asset];
+        // Closed retirement has no caller-supplied numeric presence fields. Supply
+        // is exactly zero at the asset scale; lifecycle presence uses its own fixed
+        // Boolean scale, never a supply/balance key or decimal quantity substitute.
         let [
             amount,
             first_before,
             first_after,
             second_before,
             second_after,
-        ] = values.map(|q| {
-            FastpqQuantityUnits::from_quantity(q, scale)
-                .ok_or_else(|| invariant("execution effect normalization failed"))
-        });
-        let (amount, first_before, first_after, second_before, second_after) = (
-            amount?,
-            first_before?,
-            first_after?,
-            second_before?,
-            second_after?,
-        );
+        ] = if let Some(values) = values {
+            let [
+                amount,
+                first_before,
+                first_after,
+                second_before,
+                second_after,
+            ] = values.map(|q| {
+                FastpqQuantityUnits::from_quantity(q, scale)
+                    .ok_or_else(|| invariant("execution effect normalization failed"))
+            });
+            [
+                amount?,
+                first_before?,
+                first_after?,
+                second_before?,
+                second_after?,
+            ]
+        } else {
+            let zero = FastpqQuantityUnits::from_quantity(&Quantity::zero(), scale)
+                .ok_or_else(|| invariant("retirement supply scale is invalid"))?;
+            let absent = FastpqQuantityUnits::from_quantity(&Quantity::zero(), 0)
+                .ok_or_else(|| invariant("retirement lifecycle zero is invalid"))?;
+            let present = FastpqQuantityUnits::from_quantity(&Quantity::from(1_u32), 0)
+                .ok_or_else(|| invariant("retirement lifecycle one is invalid"))?;
+            [zero, zero, zero, present, absent]
+        };
+        // Original chronology is checked independently of key/operation sorting.
+        // A lifecycle end cannot be duplicated or followed by any use of that same
+        // incarnation, even if a later operation supplies coherent zero quantities.
+        if retired.contains(asset) {
+            return Err(invariant("execution effect uses a retired incarnation"));
+        }
+        if matches!(&effect.kind, FastpqExecutionEffectKindV1::Retire(_)) {
+            if nonzero_balances.get(asset).copied().unwrap_or(0) != 0 {
+                return Err(invariant(
+                    "execution effect retires a nonzero observed balance",
+                ));
+            }
+            retired.insert(asset.clone());
+        }
+
         let (keys, operation) = effect_ports(
             &effect.kind,
             amount,
@@ -565,7 +606,28 @@ fn normalize_effects(
             .map(|(key, (before, after))| (key, before, after))
             .enumerate()
         {
-            let key = execution_quantity_key_v1(&key)?;
+            let balance_asset = match &key {
+                FastpqExecutionQuantityKeyV1::Balance(balance) => Some(&balance.asset),
+                _ => None,
+            };
+            let encoded_key = execution_quantity_key_v1(&key)?;
+            if let Some(asset) = balance_asset {
+                let count = nonzero_balances.entry(asset.clone()).or_default();
+                if last
+                    .get(&encoded_key)
+                    .is_some_and(|previous| previous.limbs().iter().any(|limb| *limb != 0))
+                {
+                    *count = count
+                        .checked_sub(1)
+                        .ok_or_else(|| invariant("execution balance census underflow"))?;
+                }
+                if after.limbs().iter().any(|limb| *limb != 0) {
+                    *count = count
+                        .checked_add(1)
+                        .ok_or_else(|| invariant("execution balance census overflow"))?;
+                }
+            }
+            let key = encoded_key;
             if last.get(&key).is_some_and(|previous| *previous != before) {
                 return Err(invariant(
                     "execution effect repeated-key quantities do not chain",
@@ -588,7 +650,7 @@ fn normalize_effects(
                 },
                 ordinal: effect.ordinal,
                 leg,
-                scale,
+                scale: before.scale(),
                 before,
                 after,
                 amount,
@@ -609,6 +671,31 @@ fn effect_ports(
 ) -> Result<([FastpqExecutionQuantityKeyV1; 2], FastpqOperationKind)> {
     let [first_before, first_after, second_before, second_after] = *port_values;
     match kind {
+        FastpqExecutionEffectKindV1::Retire(asset) => {
+            let zero = Quantity::zero();
+            if first_before.to_quantity() != Some(zero.clone())
+                || first_after != first_before
+                || second_before.to_quantity() != Some(Quantity::from(1_u32))
+                || second_after.to_quantity() != Some(zero)
+                || second_before.scale() != 0
+                || second_after.scale() != 0
+            {
+                return Err(invariant(
+                    "execution effect retirement presence/supply mismatch",
+                ));
+            }
+            Ok((
+                [
+                    FastpqExecutionQuantityKeyV1::Supply(asset.clone()),
+                    FastpqExecutionQuantityKeyV1::Lifecycle(asset.clone()),
+                ],
+                // The shared transition carrier already reserves MetaSet for semantics
+                // authenticated by its outer statement. Here the closed Retire variant
+                // determines BOTH exact keys/values; no arbitrary metadata row is accepted.
+                // Ordinary/AXT dispatch remains unchanged and does not accept this candidate.
+                FastpqOperationKind::MetaSet,
+            ))
+        }
         FastpqExecutionEffectKindV1::Transfer(t) => {
             if t.source.asset != t.destination.asset {
                 return Err(invariant(

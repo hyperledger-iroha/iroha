@@ -3,6 +3,7 @@
 //! The registry uses only typed first-release stores. No legacy state-path
 //! decoding or compatibility aliases live here.
 use super::prelude::*;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use crate::{
     governance::parliament::{
         canonical_governance_attempt_ids_v1, validate_parliament_randomness_redraw_lineage_v1,

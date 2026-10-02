@@ -66,6 +66,13 @@ mod received_source;
 mod receiver_request;
 pub(crate) use mint_capture::KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1;
 use mint_capture::{MintRecord, PendingMint};
+#[path = "ordinary_mint_funding.rs"]
+mod mint_funding;
+pub use mint_funding::{
+    KagemushaAuthenticatedOrdinaryMintAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryMintFundingTransportV1,
+    KagemushaAuthenticatedOrdinaryMintTransactionSigningV1,
+};
 #[path = "ordinary_incoming_state_commit.rs"]
 mod incoming_state_commit;
 #[path = "ordinary_cash_state_commit.rs"]
@@ -2752,3 +2759,8 @@ fn preparation_subject(
 #[cfg(test)]
 #[path = "ordinary_cash_owner_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+pub(crate) use platform_preparation::{
+    OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
+};

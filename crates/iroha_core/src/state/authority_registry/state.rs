@@ -93,6 +93,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
     contract_query_ivm_cache: parking_lot::Mutex<IvmCache> => ("state.contract_query_ivm_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
+    ivm_execution_pool: iroha_allocation::AllocationBudget => ("state.ivm_execution_pool",
+        Role::Local("Original finite execution allocation owner shared across cache reloads; resource refusal grants no consensus validity or publication authority"));
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache> => ("state.pipeline_ivm_prepared_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
     oracle: iroha_config::parameters::actual::Oracle => ("state.oracle",

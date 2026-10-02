@@ -591,7 +591,10 @@ define_instruction_handlers! {
     dispatch_instruction::<zk::CreateElection>,
     dispatch_instruction::<zk::SubmitBallot>,
     dispatch_instruction::<zk::FinalizeElection>,
-    dispatch_instruction::<zk::VerifyProof>,
+    // Generic verification records a bounded cryptographic result using an active registered
+    // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
+    // not authorize spending, key administration or stronger execution-proof semantics.
+    dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<zk::PruneProofs>,
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
@@ -622,6 +625,7 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseInstallV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseActivateV1>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeKagemushaVerifierReleaseRetireV1>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,

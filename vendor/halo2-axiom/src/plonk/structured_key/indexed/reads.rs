@@ -145,13 +145,16 @@ where
         Ok(())
     }
 
-    /// Fill a requested native-basis interval with constant-size decoding scratch.
+    /// Fill a native-basis interval using original-frame modes and bounded decoding scratch.
     ///
     /// Offsets are frame-relative (the supplied source must start at the same frame).
     /// The caller's original authenticated source owns freshness and failure poisoning;
     /// this operation cannot establish source identity. Invalid request, decoding error,
     /// failed read/seek or unwind clears the entire destination. Empty valid intervals
-    /// perform no I/O. No coefficient transform or full-column allocation occurs here.
+    /// perform no I/O. Identity needs no I/O; sparse reads binary-search original pairs;
+    /// bitmap reads scanner-ranked 4096-row windows into a 512-byte stack array and exact
+    /// requested targets. Every reread validates its bounds, padding, order or rank/target
+    /// shape. No coefficient transform, dense target map or full-column allocation occurs.
     pub(crate) fn copy_native_interval<R: Read + Seek>(
         &self,
         reader: &mut R,
@@ -244,49 +247,7 @@ where
                 }
             }
             IndexedKeyPolynomialV1::PermutationLagrange(column) => {
-                if n == 0 || column >= self.metadata.permutation_columns {
-                    return Err(invalid("indexed permutation column is invalid"));
-                }
-                let cells = n
-                    .checked_mul(self.metadata.permutation_columns)
-                    .ok_or_else(|| invalid("indexed permutation shape overflow"))?;
-                let first = column
-                    .checked_mul(n)
-                    .and_then(|v| v.checked_add(start))
-                    .ok_or_else(|| invalid("indexed permutation offset overflow"))?;
-                let offset = (first as u64)
-                    .checked_mul(4)
-                    .ok_or_else(|| invalid("indexed target offset overflow"))?;
-                let bytes = (destination.values.len() as u64)
-                    .checked_mul(4)
-                    .ok_or_else(|| invalid("indexed target length overflow"))?;
-                let at = subrange(self.metadata.permutation_targets, offset, bytes, frame)?;
-                if start != end {
-                    seek(reader, at)?;
-                    let omega = self.vk.domain.get_omega();
-                    let mut previous: Option<(usize, C::Scalar)> = None;
-                    for value in destination.values.iter_mut() {
-                        let mut bytes = [0; 4];
-                        reader.read_exact(&mut bytes)?;
-                        let target = u32::from_le_bytes(bytes) as usize;
-                        if target >= cells {
-                            return Err(invalid("indexed permutation target is invalid"));
-                        }
-                        *value = match previous {
-                            Some((prior, label))
-                                if prior.checked_add(1) == Some(target)
-                                    && prior / n == target / n =>
-                            {
-                                label * omega
-                            }
-                            _ => {
-                                C::Scalar::DELTA.pow_vartime([(target / n) as u64])
-                                    * omega.pow_vartime([(target % n) as u64])
-                            }
-                        };
-                        previous = Some((target, *value));
-                    }
-                }
+                self.copy_permutation_interval(reader, column, start, destination.values)?;
             }
         }
         let mut destination = destination;
@@ -294,3 +255,5 @@ where
         Ok(())
     }
 }
+
+mod permutation;

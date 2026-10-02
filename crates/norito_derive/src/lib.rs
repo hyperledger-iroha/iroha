@@ -51,7 +51,13 @@ use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
 include!("attribute_helpers.rs");
 
 fn is_option_type(ty: &syn::Type) -> bool {
-    type_ident(ty).is_some_and(|ident| ident == "Option")
+    match ty {
+        // Forwarded macro_rules! type fragments carry an invisible Group.
+        // Parentheses also preserve the same field type and presence contract.
+        syn::Type::Group(group) => is_option_type(&group.elem),
+        syn::Type::Paren(paren) => is_option_type(&paren.elem),
+        _ => type_ident(ty).is_some_and(|ident| ident == "Option"),
+    }
 }
 
 fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ident]) -> bool {
@@ -1909,7 +1915,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                                 }
                             });
                             // Required vs optional: for Option<T> fields, absence should map to None
-                            let is_option = matches!(&f.ty, syn::Type::Path(tp) if tp.path.segments.last().map(|s| s.ident == "Option").unwrap_or(false));
+                            let is_option = is_option_type(&f.ty);
                             if attrs.default {
                                 finals
                                     .push(quote! { #name: #name.unwrap_or_else(|| #default_expr) });

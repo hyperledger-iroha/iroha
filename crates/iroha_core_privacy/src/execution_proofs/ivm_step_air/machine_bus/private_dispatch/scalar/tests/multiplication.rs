@@ -216,11 +216,13 @@ fn private_multiply_exact_three_gas_and_unavailable_extended_arithmetic_are_boun
             assert!(!forged.accepts(&program));
         }
     }
-    for opcode in [
+    assert!(is_supported(enc::encode_rr(
         wide::arithmetic::DIV_CEIL,
-        wide::arithmetic::GCD,
-        wide::arithmetic::ABS,
-    ] {
-        assert!(!is_supported(enc::encode_rr(opcode, 4, 2, 3)));
-    }
+        4,
+        2,
+        3
+    )));
+    assert!(is_supported(enc::encode_rr(wide::arithmetic::GCD, 4, 2, 3)));
+    // Vector arithmetic still needs its original vector-state relation.
+    assert!(!is_supported(enc::encode_rr(wide::crypto::VADD64, 4, 2, 3)));
 }

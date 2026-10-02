@@ -44851,7 +44851,7 @@ mod validation_fee_torii_ingress_tests {
             min_interval_ms: 60000,
             max_source_age_ms: 300000,
             max_slippage_bps: 100,
-            validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+            validator_lane_id: iroha_model_base::topology::LaneId::new(0),
             min_reward_claim_xor_minor: 1,
         }
     }

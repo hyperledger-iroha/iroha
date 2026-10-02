@@ -42,21 +42,24 @@ pub(super) fn witness(opcode: u8, left: u64, right: u64) -> [F; WIDTH] {
 
 pub(super) fn residues(bank: &[F], sources: Sources<'_>, selectors: [F; 4]) -> Vec<F> {
     let mut out = Vec::with_capacity(CONSTRAINTS);
-    append_residues(&mut out, bank, sources, selectors);
+    append_residues(&mut out, bank, sources, selectors, F::ONE);
     out
 }
 
-/// Append the shared equations without allocating a second private residue owner.
+/// Append shared equations with an explicit owner for default arithmetic.
+/// Public callers retain one; only a disjoint private workspace owner uses zero.
+/// Packing, radix-four and Boolean checks remain unconditional.
 pub(super) fn append_residues(
     out: &mut Vec<F>,
     bank: &[F],
     sources: Sources<'_>,
     selectors: [F; 4],
+    arithmetic_owner: F,
 ) {
     let start = out.len();
     let [is_sub, is_and, is_or, is_xor] = selectors;
     let is_bitwise = is_and.add(is_or).add(is_xor);
-    let is_add = F::ONE.sub(is_sub).sub(is_bitwise);
+    let is_add = arithmetic_owner.sub(is_sub).sub(is_bitwise);
     for limb in 0..4 {
         out.push(bit(bank[TRANSFER + limb]));
         out.push(is_bitwise.mul(bank[TRANSFER + limb]));

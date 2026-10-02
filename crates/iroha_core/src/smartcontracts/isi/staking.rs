@@ -2298,6 +2298,7 @@ impl Execute for FinalizePublicLaneUnbond {
             .get(&share_key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("stake position not found".into()))?;
+        ensure_public_lane_stake_share_matches_key(&share_key, &share)?;
         let pending = share
             .pending_unbonds
             .remove(&self.request_id)

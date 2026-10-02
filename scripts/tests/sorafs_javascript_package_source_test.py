@@ -37,10 +37,16 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     sources, lock, _ = captured
     projected = project(sources, lock)
     expected = expected_files(sources)
-    assert len(sources) == 212 and len(projected.members) == 209
+    assert len(sources) == 213 and len(projected.members) == 210
     assert projected.version == "0.0.3"
+    rows = {row.name: row for row in projected.members}
+    attested = rows["dist/kagemushaAttestedV1.js"]
+    assert attested.source == "src/kagemushaAttestedV1.js"
+    assert attested.content is sources[attested.source]
+    assert "src/retailFeeAssessment.js" in sources and "dist/retailFeeAssessment.js" in rows
+    assert "src/validationFeeHijiriQuote.js" not in sources and "dist/validationFeeHijiriQuote.js" not in rows
     assert {row.name: row.content for row in projected.members} == expected
-    assert sum(row.name.startswith("dist/") for row in projected.members) == 171
+    assert sum(row.name.startswith("dist/") for row in projected.members) == 172
     assert projected.source_sha256 == tuple((name, hashlib.sha256(body).hexdigest()) for name, body in sorted(sources.items()))
     for row in projected.members:
         if row.name == package.CHECKSUM_MEMBER:
@@ -64,7 +70,7 @@ def test_original_tar_bytes_and_every_member_join_to_frozen_source(captured):
     assert reordered.projection == observed.projection
 
 
-@pytest.mark.parametrize("name", ("dist/index.js", "dist/native.js", "README.md", "package.json",
+@pytest.mark.parametrize("name", ("dist/index.js", "dist/native.js", "dist/kagemushaAttestedV1.js", "README.md", "package.json",
                                    "recipes/README.md", "native/iroha_js_host.checksums.json"))
 def test_resealed_member_substitution_rejects_even_with_valid_gzip_tar(captured, name):
     sources, lock, _ = captured
@@ -73,7 +79,7 @@ def test_resealed_member_substitution_rejects_even_with_valid_gzip_tar(captured,
         verify(archive_bytes(files), sources, lock)
 
 
-@pytest.mark.parametrize("name", ("src/index.js", "src/native.js", "src/validationError.js", "README.md", "recipes/README.md"))
+@pytest.mark.parametrize("name", ("src/index.js", "src/native.js", "src/kagemushaAttestedV1.js", "src/validationError.js", "README.md", "recipes/README.md"))
 def test_changed_source_cannot_relabel_an_existing_package(captured, name):
     sources, lock, raw = captured
     changed = dict(sources); changed[name] += b"\nchanged candidate source"
@@ -81,7 +87,7 @@ def test_changed_source_cannot_relabel_an_existing_package(captured, name):
         verify(raw, changed, lock)
 
 
-@pytest.mark.parametrize("name", ("dist/index.js", "dist/native.js", "recipes/README.md", "package.json", package.CHECKSUM_MEMBER))
+@pytest.mark.parametrize("name", ("dist/index.js", "dist/native.js", "dist/kagemushaAttestedV1.js", "recipes/README.md", "package.json", package.CHECKSUM_MEMBER))
 def test_missing_exact_package_member_rejects(captured, name):
     sources, lock, _ = captured
     files = expected_files(sources); files.pop(name)
@@ -220,7 +226,7 @@ def test_projection_and_original_content_perform_no_io_or_execution(captured, mo
                              (subprocess, ("run", "Popen")), (socket, ("create_connection",))):
             for name in names: patch.setattr(owner, name, forbidden)
         observed = verify(raw, sources, lock)
-    assert len(observed.projection.members) == 209
+    assert len(observed.projection.members) == 210
 
 
 @pytest.mark.parametrize("name", ("src/._hidden.js", "src/CVS/a.js", "src/.git/a.js", "src/a.orig/b.js",

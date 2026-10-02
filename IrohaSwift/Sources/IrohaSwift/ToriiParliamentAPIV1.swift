@@ -692,6 +692,7 @@ public enum ToriiParliamentAPIV1 {
         "KagemushaVerifierPolicyInstall",
         "KagemushaVerifierReleaseInstall",
         "KagemushaVerifierReleaseActivate",
+        "KagemushaVerifierReleaseRetire",
     ]
 
     /// Closed contract-lifecycle governance action inventory in wire-tag order.

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package org.hyperledger.iroha.sdk.offline
 
+import java.io.FilterOutputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.Base64
-import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** Exact existing service envelope. Neither decoding nor a carrier path installs a Core service. */
@@ -16,12 +17,22 @@ object KagemushaOrdinaryLineageHttpCodecV1 {
         ((KagemushaOrdinaryOutgoingFrameV1.MAXIMUM_DATA_BYTES + 2) / 3) * 4 +
         ((KagemushaOrdinaryOutgoingFrameV1.MAXIMUM_AUTHORITY_BYTES + 2) / 3) * 4 + 1024
 
-    fun requestBody(nativeRequest: ByteArray, nativeSignature: ByteArray, nativeServiceOriginal: ByteArray): ByteArray {
+    /** Stream the sole fixed service schema without another full proof JSON allocation. */
+    fun writeRequestBody(nativeRequest: ByteArray, nativeSignature: ByteArray, nativeServiceOriginal: ByteArray,
+        output: OutputStream) {
         require(nativeRequest.size in 1..KagemushaOrdinaryOutgoingFrameV1.MAXIMUM_REQUEST_BYTES && nativeSignature.size == 64 &&
             nativeServiceOriginal.size in 1..KagemushaOrdinaryOutgoingFrameV1.MAXIMUM_PROOF_BYTES)
-        return JsonEncoder.encode(linkedMapOf("schema" to "iroha.kagemusha.ordinary-lineage-cas-request.v1",
-            "canonical_request_base64" to base64(nativeRequest), "account_signature_base64" to base64(nativeSignature),
-            "proof_bundle_original_base64" to base64(nativeServiceOriginal))).toByteArray(Charsets.UTF_8)
+        fun text(value: String) = output.write(value.toByteArray(Charsets.US_ASCII))
+        fun original(raw: ByteArray) {
+            val noClose = object : FilterOutputStream(output) {
+                override fun write(value: ByteArray, offset: Int, length: Int) = out.write(value, offset, length)
+                override fun close() = flush()
+            }
+            Base64.getEncoder().wrap(noClose).use { it.write(raw) }
+        }
+        text("{\"schema\":\"iroha.kagemusha.ordinary-lineage-cas-request.v1\",\"canonical_request_base64\":\"")
+        original(nativeRequest); text("\",\"account_signature_base64\":\""); original(nativeSignature)
+        text("\",\"proof_bundle_original_base64\":\""); original(nativeServiceOriginal); text("\"}")
     }
     fun requestId(nativeRequest: ByteArray): String {
         require(nativeRequest.size in 1..KagemushaOrdinaryOutgoingFrameV1.MAXIMUM_REQUEST_BYTES)
