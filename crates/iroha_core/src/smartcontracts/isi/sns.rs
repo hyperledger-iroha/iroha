@@ -477,7 +477,12 @@ impl Execute for ConfigureAliasAutoRenew {
             )
             .into());
         }
-        if let Some(current) = current.as_ref()
+        // The exact live lease owner and revision have been checked. A stale
+        // persisted owner must not prevent explicit replacement or disable;
+        // persist_alias_auto_renew_state still admits the new owner's complete
+        // retained transfer shape before changing the original record.
+        if cfg!(all(test, sumeragi_core_mutation = "HC42"))
+            && let Some(current) = current.as_ref()
             && current.owner != record.owner
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -685,6 +690,10 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
         Ok(())
     }
 }
+#[cfg(test)]
+#[path = "sns/rekey_auto_renew_tests.rs"]
+mod rekey_auto_renew_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

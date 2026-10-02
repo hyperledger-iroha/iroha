@@ -196,10 +196,11 @@ struct Operator {
 
 fn exact_quorum(seats: usize) -> Result<u32> {
     ensure!(
-        seats >= 4 && (seats - 1) % 3 == 0,
-        "not an exact 3f+1 roster"
+        iroha::data_model::block::consensus::is_valid_committee_size(seats),
+        "not an exact 3f+1 roster within the supported 4..31 seats"
     );
-    Ok(u32::try_from(2 * ((seats - 1) / 3) + 1)?)
+    let faults = (seats - 1) / 3;
+    Ok(u32::try_from(seats - faults)?)
 }
 
 fn finality_limits() -> NativeFinalityLimits {
@@ -297,7 +298,7 @@ fn validator_xor_escrow(
                 && custom.id() == &SumeragiNposParameters::parameter_id()
             {
                 signed_npos += 1;
-                let parameters = SumeragiNposParameters::from_custom_parameter(custom)
+                let parameters = SumeragiNposParameters::from_custom_parameter(custom)?
                     .ok_or_else(|| eyre!("signed genesis NPoS parameters are invalid"))?;
                 ensure!(
                     parameters.xor_asset_definition_id == *xor,
@@ -2070,10 +2071,15 @@ async fn complete_real_xor_committee_rotates_four_to_seven_to_four() -> Result<(
 
 #[test]
 fn exact_quorum_uses_only_three_f_plus_one_equal_vote_geometry() {
-    assert_eq!(exact_quorum(4).unwrap(), 3);
-    assert_eq!(exact_quorum(7).unwrap(), 5);
-    assert!(exact_quorum(6).is_err());
-    assert!(exact_quorum(8).is_err());
+    for seats in 0..=64 {
+        let result = exact_quorum(seats);
+        if (4..=31).contains(&seats) && (seats - 1) % 3 == 0 {
+            assert_eq!(result.unwrap() as usize, seats - (seats - 1) / 3);
+        } else {
+            assert!(result.is_err(), "unsupported roster of {seats} seats");
+        }
+    }
+    assert!(exact_quorum(usize::MAX).is_err());
 }
 
 #[test]

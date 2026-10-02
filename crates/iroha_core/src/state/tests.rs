@@ -3506,6 +3506,7 @@ fn maximum_staking_quantity() -> Quantity {
 fn assert_public_lane_staking_invariant_error(world: &World, expected: &str) {
     let error = world
         .validate_quantity_ledger_invariants()
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("malformed public-lane staking state must fail closed");
     assert!(
         error.contains(expected),
@@ -6166,6 +6167,7 @@ fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
             transaction
                 .world
                 .sumeragi_npos_parameters()
+                .expect("original policy decoder completes")
                 .expect("signed NPoS parameters remain installed"),
             installed
         );

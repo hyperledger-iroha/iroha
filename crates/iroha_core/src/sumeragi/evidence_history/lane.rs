@@ -1,5 +1,7 @@
 //! Retained complete native parent/demotion custody under one original global admission cut.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
+use crate::sumeragi::runtime_availability::history::payload_error;
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_sumeragi::{
     api::CommittedTip,
@@ -42,10 +44,15 @@ impl LaneProofRead {
     pub(super) fn new(
         context: LaneEvidenceContext,
         height: u64,
-    ) -> Result<Self, (LaneEvidenceContext, io::Error)> {
+    ) -> Result<Self, (LaneEvidenceContext, Attempt<io::Error>)> {
         let frontier = match context.payload.custody_record(&context.scope.incarnation) {
             Ok(Some(row)) => row.frontier(),
-            Ok(None) => return Err((context, io::ErrorKind::InvalidData.into())),
+            Ok(None) => {
+                return Err((
+                    context,
+                    std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
+                ));
+            }
             Err(error) => return Err((context, payload_error(error))),
         };
         let genesis = context.authority.genesis();
@@ -57,11 +64,21 @@ impl LaneProofRead {
             })
             .and_then(|count| usize::try_from(count).ok());
         let Some(count) = count else {
-            return Err((context, io::ErrorKind::InvalidData.into()));
+            return Err((
+                context,
+                std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
+            ));
         };
         let headers = match ChargedBuffer::new(count, &context.budget) {
             Ok(headers) => headers,
-            Err(_) => return Err((context, io::ErrorKind::WouldBlock.into())),
+            Err(error) => {
+                return Err((
+                    context,
+                    payload_error(LanePayloadError::Materialization(
+                        iroha_allocation::PrepaidBufferError::Allocation(error),
+                    )),
+                ));
+            }
         };
         let crypto = BlsCrypto::new();
         if let Err(error) = context.authority.visit_members(|key, proof| {
@@ -103,7 +120,7 @@ impl LaneProofRead {
                         budget,
                         kura,
                     },
-                    io::Error::new(io::ErrorKind::InvalidData, error),
+                    io::Error::new(io::ErrorKind::InvalidData, error).into(),
                 ));
             }
         };
@@ -130,7 +147,7 @@ impl LaneProofRead {
             ordered: false,
         })
     }
-    pub(super) fn poll(&mut self) -> io::Result<()> {
+    pub(super) fn poll(&mut self) -> Result<(), Attempt<io::Error>> {
         while let Some(expected) = self.cursor.next_frontier() {
             if self.frame.is_none() {
                 let config = self
@@ -169,7 +186,7 @@ impl LaneProofRead {
             if retain && self.headers.as_slice().len() == self.headers.capacity() {
                 // Preserve both the cursor and the actual original frame on an inconsistent
                 // descriptor bound. An impossible push must never discard native custody.
-                return Err(io::ErrorKind::InvalidData.into());
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
             }
             let original = self.ready.as_ref().expect("original complete body custody");
             // Every frame above the interval is authenticated too; a file QC cannot select a branch.
@@ -189,11 +206,11 @@ impl LaneProofRead {
             }
             if retain && let Err(original) = self.headers.try_push(original) {
                 self.ready = Some(original);
-                return Err(io::ErrorKind::InvalidData.into());
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
             }
         }
         if self.headers.as_slice().len() != self.headers.capacity() {
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
         }
         if !self.ordered {
             self.headers.as_mut_slice().reverse();
@@ -270,16 +287,6 @@ impl LaneProofRead {
             offenders,
             safety_violation: attribution.safety_violation(),
         })
-    }
-}
-
-/// Original authenticated source decoding may refuse a local ceiling at any handoff.
-/// Report that refusal without allocating; malformed original storage remains terminal.
-pub(super) fn payload_error(error: LanePayloadError) -> io::Error {
-    if error.is_local_refusal() {
-        io::ErrorKind::WouldBlock.into()
-    } else {
-        io::Error::new(io::ErrorKind::InvalidData, error)
     }
 }
 

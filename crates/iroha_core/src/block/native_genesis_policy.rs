@@ -8,8 +8,16 @@ impl ValidBlock {
             return Ok(());
         }
         let metadata =
-            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
-                .map_err(Self::execution_context_error)?;
+            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block).map_err(
+                |error| match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                    Self::execution_context_error(error.to_string())
+                }) {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        BlockValidationError::ExecutionDeferred(reason)
+                    }
+                },
+            )?;
         let actual_execution = crate::sumeragi::staged_genesis_execution_policy_hash(state)
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
         let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);

@@ -98,8 +98,8 @@ fn decode_private_metadata(buffer: &[u8], owner: u32) -> io::Result<PrivateFileM
         .ok_or_else(|| invalid("truncated native inventory metadata"))?;
     let mode = word(bytes, 12)?;
     if word(bytes, 4)? != 1
-        || mode & 0o170000 != 0o100000
-        || mode & !0o177777 != 0
+        || mode & 0o170_000 != 0o100_000
+        || mode & !0o177_777 != 0
         || word(bytes, 8)? != owner
         || word(bytes, 24)? != 1
         || mode & 0o7777 & !0o600 != 0
@@ -108,7 +108,7 @@ fn decode_private_metadata(buffer: &[u8], owner: u32) -> io::Result<PrivateFileM
             "inventory requires a private single-link current-owner file",
         ));
     }
-    let offset = word(bytes, 16)? as i32;
+    let offset = word(bytes, 16)?.cast_signed();
     let security_length = word(bytes, 20)? as usize;
     if offset != 20 || FIXED.checked_add(security_length) != Some(length) {
         return Err(invalid("invalid native security attribute extent"));
@@ -134,7 +134,14 @@ mod tests {
 
     fn response() -> Vec<u8> {
         let mut bytes = vec![0; 36];
-        for (offset, value) in [(0, 36), (4, 1), (8, 501), (12, 0o100000), (16, 20), (24, 1)] {
+        for (offset, value) in [
+            (0, 36),
+            (4, 1),
+            (8, 501),
+            (12, 0o100_000),
+            (16, 20),
+            (24, 1),
+        ] {
             bytes[offset..offset + 4].copy_from_slice(&u32::to_ne_bytes(value));
         }
         bytes
@@ -146,7 +153,7 @@ mod tests {
         let zero = decode_private_metadata(&bytes, 501).unwrap();
         assert_eq!(zero.len(), 0);
         assert!(!zero.is_read_only());
-        bytes[12..16].copy_from_slice(&0o100400_u32.to_ne_bytes());
+        bytes[12..16].copy_from_slice(&0o100_400_u32.to_ne_bytes());
         bytes[28..36].copy_from_slice(&91_i64.to_ne_bytes());
         let sealed = decode_private_metadata(&bytes, 501).unwrap();
         assert_eq!(sealed.len(), 91);
@@ -162,7 +169,7 @@ mod tests {
             (0, 8193_u32),
             (4, 5),
             (8, 502),
-            (12, 0o100644),
+            (12, 0o100_644),
             (24, 2),
             (16, 0),
             (16, u32::MAX),
@@ -182,9 +189,9 @@ mod tests {
         for security_length in [1, 43, 44, 68] {
             let mut bytes = response();
             bytes.resize(36 + security_length, 0);
-            let reported = bytes.len() as u32;
+            let reported = u32::try_from(bytes.len()).unwrap();
             bytes[..4].copy_from_slice(&reported.to_ne_bytes());
-            bytes[20..24].copy_from_slice(&(security_length as u32).to_ne_bytes());
+            bytes[20..24].copy_from_slice(&u32::try_from(security_length).unwrap().to_ne_bytes());
             assert!(
                 decode_private_metadata(&bytes, 501).is_err(),
                 "malformed ACL length {security_length}"

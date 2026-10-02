@@ -9,9 +9,31 @@ fun interface KagemushaOrdinaryNativeMintFundingEndpointV1 {fun mintFunding(phas
 class KagemushaOrdinaryMintFundingTransportBindingV1 internal constructor(private val bridge:KagemushaCoreCoordinatorBridgeV1,private val guard:()->Unit){
  fun requireOpen(){guard();bridge.requireOrdinaryDescriptorOpen();guard()};fun revoke()=bridge.close()
  fun invoke(endpoint:KagemushaOrdinaryNativeMintFundingEndpointV1,phase:Int,fields:List<ByteArray> = emptyList()):List<ByteArray>{requireOpen();return bridge.invokeOrdinaryMintFunding(endpoint,phase,fields).also{requireOpen()}}
- internal fun prepared(endpoint:KagemushaOrdinaryNativeMintFundingEndpointV1,metadata:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1,fields:List<ByteArray>):KagemushaNativePreparedOrdinaryMintApprovalV1 {
+ private val originalNative by lazy {
+  originalOrdinaryMintFundingNativeV1(java.util.ServiceLoader.load(
+   KagemushaOrdinaryMintFundingNativeOwnerV1::class.java,
+   KagemushaCoreCoordinatorBridgeV1::class.java.classLoader).iterator())
+ }
+ /** Sole public preparation entry. No endpoint, metadata or prepared fields may be offered. */
+ fun prepareNative(amountLE128:ByteArray):KagemushaNativePreparedOrdinaryMintApprovalV1 = nativeOriginal {
+  KagemushaOrdinaryMintFundingFrameV1.requireRequest(1,listOf(amountLE128))
+  val held=invoke(originalNative.funding,1,listOf(amountLE128.copyOf()))
+  prepared(originalNative.funding,originalNative.metadata,held).also{it.requireCurrent()}
+ }
+ /** Exact Native12 recovery; no platform invocation or replacement operation is created here. */
+ fun recoverNative():KagemushaNativePreparedOrdinaryMintApprovalV1 = nativeOriginal {
+  val held=invoke(originalNative.funding,12)
+  KagemushaOrdinaryMintFundingFrameV1.requireResponse(12,held)
+  prepared(originalNative.funding,originalNative.metadata,held.subList(1,4)).also{it.requireCurrent()}
+ }
+ private fun<T> nativeOriginal(operation:()->T):T = try {
+  requireOpen();originalNative.recheck();requireOpen()
+  operation().also{requireOpen();originalNative.recheck();requireOpen()}
+ }catch(failure:Throwable){try{revoke()}catch(_:Throwable){};throw failure}
+ private fun prepared(endpoint:KagemushaOrdinaryNativeMintFundingEndpointV1,metadata:KagemushaOrdinaryNativeIntegrityRefreshEndpointV1,fields:List<ByteArray>):KagemushaNativePreparedOrdinaryMintApprovalV1 {
   KagemushaOrdinaryMintFundingFrameV1.requireResponse(1,fields)
   val key=KagemushaOrdinaryIntegrityRefreshTransportBindingV1(bridge,guard).completedKey(metadata)
+  key.recheck();requireOpen()
   return KagemushaNativePreparedOrdinaryMintApprovalV1.fromNative(this,endpoint,key,fields)
  }
 }

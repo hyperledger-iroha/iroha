@@ -86,7 +86,7 @@ fn bind_generated_manifest(
     context.nexus_amx_context_hash = hashes.nexus_amx.into();
     let manifest = manifest
         .with_sumeragi_context_parameters(context)
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     // Re-sign the original manifest, retaining its topology/PoPs, authority,
     // transaction order, timestamps, DA policies, and confidential policy.
     let rebound = manifest

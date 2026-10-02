@@ -193,6 +193,7 @@ final class KagemushaOrdinaryRuntimeStartupV1Tests: XCTestCase {
         requestFrame: request, fields: response)
     }
     func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invokeIncoming(request: Data) throws -> Data {
       incomingCalls += 1
       XCTAssertEqual(request, try KagemushaOrdinaryIncomingFrameV1.encodeRequest(

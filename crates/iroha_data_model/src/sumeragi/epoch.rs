@@ -322,7 +322,7 @@ pub(crate) mod validation_counts {
     pub(super) fn note() {
         CALLS.with(|calls| calls.set(calls.get() + 1));
     }
-    pub(crate) fn calls() -> usize {
+    pub fn calls() -> usize {
         CALLS.with(std::cell::Cell::get)
     }
 }

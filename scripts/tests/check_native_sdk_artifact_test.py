@@ -42,6 +42,9 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -76,6 +79,7 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
         expected = KAGEMUSHA_V1_C_SYMBOLS
         assert len(required) == len(expected)
         assert set(required) == expected
+
 
 
 def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
@@ -122,6 +126,33 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     assert not any(symbol.startswith("Java_pg_") for symbol in required)
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)
+
+
+def test_ordinary_host_jni_rejects_each_missing_shipping_endpoint() -> None:
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    owner = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_"
+    for method in (
+        "nativeStartupV1", "nativeCurrentControlV1", "nativeOutgoingV1",
+        "nativeIncomingV1", "nativeIntegrityRefreshV1", "nativeMintFundingV1",
+    ):
+        missing = owner + method
+        assert required.count(missing) == 1
+        library = types.SimpleNamespace(**{
+            symbol: object() for symbol in required if symbol != missing
+        })
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+            else:
+                raise AssertionError("native probe accepted missing ordinary JNI endpoint: " + missing)
+    # These wrappers ship only on Android; requiring them rejects genuine host builds.
+    for method in (
+        "nativeBindApplicationV1", "nativeRetireOriginalV1",
+        "nativeExistingAndroidAccountV1", "nativeConsumeExistingAndroidAccountV1",
+    ):
+        assert owner + method not in required
 
 
 def test_native_c_probe_rejects_an_artifact_without_the_trusted_provisioning_intake() -> None:
@@ -211,6 +242,19 @@ def test_kagami_consumes_the_same_native_artifact_inventory() -> None:
     assert tuple(symbols) == MODULE.REQUIRED_SYMBOLS["c-jni"]
 
 
+def test_kagami_consumes_the_same_privacy_export_inventory() -> None:
+    source = (REPO_ROOT / "crates/iroha_kagami/src/kagemusha.rs").read_text()
+    declaration = re.search(
+        r"const REQUIRED_PRIVACY_C_EXPORTS_V1: \[&str; (\d+)\] = \[(.*?)\n\];",
+        source,
+        re.DOTALL,
+    )
+    assert declaration is not None
+    symbols = re.findall(r'"([A-Za-z0-9_]+)"', declaration.group(2))
+    assert len(symbols) == int(declaration.group(1))
+    assert tuple(symbols) == MODULE.APPROVED_PRIVACY_C_EXPORTS
+
+
 def test_native_c_probe_rejects_required_kagemusha_export() -> None:
     for sdk in ("c-jni", "csharp"):
         for missing in (
@@ -221,6 +265,9 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_open_v1",
             "connect_norito_kagemusha_core_coordinator_invoke_v1",
             "connect_norito_kagemusha_core_coordinator_close_v1",
+            "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+            "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -554,8 +601,6 @@ def test_ordinary_native_lifecycle_rejects_each_missing_actual_endpoint() -> Non
         "connect_norito_kagemusha_ordinary_mint_funding_v1",
     )
     jni_methods = (
-        "nativeBindApplicationV1", "nativeRetireOriginalV1",
-        "nativeExistingAndroidAccountV1", "nativeConsumeExistingAndroidAccountV1",
         "nativeStartupV1", "nativeCurrentControlV1", "nativeOutgoingV1",
         "nativeIncomingV1", "nativeIntegrityRefreshV1", "nativeMintFundingV1",
     )
@@ -599,8 +644,12 @@ def test_ordinary_jni_inventory_matches_exact_shipping_consumer_and_definitions(
     owner = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_"
     selected = tuple(symbol for symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
                      if symbol.startswith(owner))
-    assert len(selected) == len(set(selected)) == 10
-    assert set(selected) == {owner + method for method in declared}
+    android_only = {
+        "nativeBindApplicationV1", "nativeRetireOriginalV1",
+        "nativeExistingAndroidAccountV1", "nativeConsumeExistingAndroidAccountV1",
+    }
+    assert len(selected) == len(set(selected)) == 6
+    assert set(selected) == {owner + method for method in declared - android_only}
     rules = (REPO_ROOT / "kotlin/kagemusha-wallet-android/consumer-rules.pro").read_text()
     assert re.search(r"-keep class org\.hyperledger\.iroha\.sdk\.offline\.KagemushaOrdinaryRuntimeJniV1\s*\{\s*native <methods>;\s*\}", rules)
     for method, source_name in entries:
@@ -630,3 +679,41 @@ def test_current_kagemusha_header_declarations_have_no_platform_exclusions() -> 
             declarations.update(names)
     assert declarations == KAGEMUSHA_V1_C_SYMBOLS
 
+
+def test_required_ordinary_jni_exports_include_windows_hosts() -> None:
+    """Production host artifacts must compile every required ordinary lifecycle wrapper."""
+    owner = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_"
+    entries = (
+        ("nativeStartupV1", "ordinary_native_startup.rs"),
+        ("nativeCurrentControlV1", "ordinary_current_control.rs"),
+        ("nativeOutgoingV1", "ordinary_outgoing_driver.rs"),
+        ("nativeIncomingV1", "ordinary_incoming_driver.rs"),
+        ("nativeIntegrityRefreshV1", "ordinary_integrity_refresh.rs"),
+        ("nativeMintFundingV1", "ordinary_mint_funding_driver.rs"),
+    )
+    for method, source_name in entries:
+        symbol = owner + method
+        assert symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
+        source = (REPO_ROOT / "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1" / source_name).read_text()
+        declaration = re.search(
+            r'#\[cfg\(([^\]]+)\)\]\s*#\[unsafe\(no_mangle\)\]\s*'
+            r'pub\s+extern\s+"system"\s+fn\s+' + re.escape(symbol) + r'\b',
+            source,
+        )
+        assert declaration is not None, symbol
+        targets = set(re.findall(r'target_os\s*=\s*"([^"]+)"', declaration.group(1)))
+        assert {"android", "linux", "macos", "windows"} <= targets, (symbol, targets)
+
+
+def test_required_testnet_startup_jni_module_is_portable() -> None:
+    """Portable native startup exports cannot disappear behind a Unix module gate."""
+    source = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni.rs").read_text()
+    declaration = "mod kagemusha_testnet_native_startup;"
+    assert declaration in source
+    assert re.search(r'#\[cfg\([^\]]+\)\]\s*' + re.escape(declaration), source) is None
+    wrappers = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/kagemusha_testnet_native_startup.rs").read_text()
+    owner = "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_"
+    for method in ("nativeContractV1", "nativeActivateV1"):
+        symbol = owner + method
+        assert symbol in MODULE.REQUIRED_SYMBOLS["c-jni"]
+        assert re.search(r'pub\s+extern\s+"system"\s+fn\s+' + re.escape(symbol) + r'\b', wrappers)

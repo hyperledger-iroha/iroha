@@ -913,6 +913,15 @@ impl BoundNativeAccountSessionV1 {
         }
         retained.value
     }
+    // This returns only routing DATA from the independently signed, still-held inventory.
+    // It neither renews S/W nor admits an FI token/session or financial operation.
+    pub(super) fn fi_http_endpoint_originals(&self) -> Result<(String, String), Error> {
+        self.recheck_retained_account_identity()?;
+        let originals = self.startup.inventory.fi_http_endpoint_originals()
+            .map_err(|_| Error::Rejected)?;
+        self.recheck_retained_account_identity()?;
+        Ok(originals)
+    }
     pub(super) fn refresh_incoming_clock(&self) -> Result<(), Error> {
         self.startup.require_current()?;
         // The real startup renews both the four-node clock and the same immutable S/W read,
@@ -1591,7 +1600,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_runtime_startup_v1(
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1<
     'local,

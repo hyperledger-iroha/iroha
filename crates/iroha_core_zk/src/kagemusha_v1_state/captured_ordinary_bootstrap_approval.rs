@@ -309,8 +309,23 @@ mod tests {
         journal: &KagemushaOrdinaryLogicalApprovalJournalV1,
     ) -> Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1> {
         let (challenge, lease) = fixture.integrity_refresh_originals();
-        let issuer =
+        let core_issuer =
+            iroha_crypto::KeyPair::from_seed(vec![63; 32], iroha_crypto::Algorithm::Ed25519);
+        let lease_issuer =
             iroha_crypto::KeyPair::from_seed(vec![61; 32], iroha_crypto::Algorithm::Ed25519);
+        assert!(matches!(
+            lease
+                .authenticate(
+                    journal.enrollment.app_credential(),
+                    &fixture.release,
+                    &fixture.trust,
+                    &fixture.app_authority,
+                    &challenge,
+                    lease_issuer.public_key(),
+                    1500,
+                ),
+            Err(error) if error == "Integrity preparation Core signature rejected"
+        ));
         let lease = Arc::new(
             lease
                 .authenticate(
@@ -319,7 +334,7 @@ mod tests {
                     &fixture.trust,
                     &fixture.app_authority,
                     &challenge,
-                    issuer.public_key(),
+                    core_issuer.public_key(),
                     1500,
                 )
                 .unwrap(),

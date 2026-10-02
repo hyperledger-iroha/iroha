@@ -419,6 +419,50 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
 }
 
 #[test]
+fn original_checkpoint_binary_refusal_preserves_exact_fields_and_retries() {
+    let fixture = Fixture::new();
+    let selected = checkpoint(&fixture);
+    let original = selected.encode_canonical().unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let producer = norito::with_decode_limits_scope(limits, || {
+        norito::with_decode_limits_scope(
+            norito::canonical_decode_limits(selected.genesis_wire.len()),
+            || decode_versioned_signed_block(&selected.genesis_wire),
+        )
+    })
+    .unwrap_err();
+    let iroha_version::error::Error::NoritoResourceLimit(expected) = producer else {
+        panic!("original binary decoder must retain its resource fields: {producer:?}");
+    };
+    assert!(
+        matches!(expected, norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 } if attempted > 0)
+    );
+    let error = norito::with_decode_limits_scope(limits, || {
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, super::super::FinalityReadError::DecodeResource(actual) if actual == expected),
+        "{error:?}"
+    );
+    assert_eq!(selected.encode_canonical().unwrap(), original);
+    let retried =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)
+            .unwrap();
+    assert_eq!(retried.export_checkpoint(selected.tip()).unwrap(), selected);
+    let mut malformed = selected.clone();
+    malformed.genesis_wire[0] = u8::MAX;
+    let error =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&malformed, &fixture.network, CHAIN)
+            .unwrap_err();
+    assert!(
+        matches!(error, super::super::FinalityReadError::Invalid(_)),
+        "{error:?}"
+    );
+    assert_eq!(selected.encode_canonical().unwrap(), original);
+}
+
+#[test]
 fn native_decision_data_retains_exact_selected_genesis_and_all_three_parents() {
     use crate::sumeragi_finality::test_fixtures::NativeFinalityFixture;
     let mut fixture = NativeFinalityFixture::start("native-decision-data-fixture");

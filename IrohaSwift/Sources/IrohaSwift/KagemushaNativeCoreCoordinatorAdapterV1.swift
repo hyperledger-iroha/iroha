@@ -36,7 +36,8 @@ public protocol KagemushaOutgoingStateProofExportingCoreV1: KagemushaNativeCoreC
 /// software monetary backend. Missing native authority continues to fail closed.
 public final class KagemushaNativeCoreCoordinatorAdapterV1:
   KagemushaOutgoingStateProofExportingCoreV1, KagemushaNativeIncomingCoreCoordinatorV1,
-  KagemushaNativeHardwarePolicyProvidingCoreV1, @unchecked Sendable {
+  KagemushaNativeHardwarePolicyProvidingCoreV1, KagemushaNativeMintFundingCoreCoordinatorV1,
+  @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -68,6 +69,13 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
 
   func ordinaryNativeTransportBinding() throws -> KagemushaOrdinaryNativeBindingV1 {
     try KagemushaOrdinaryNativeBindingV1(bridge: bridge)
+  }
+
+  /// Continue the dedicated funding phases on this same owner. Returned signatures,
+  /// decisions and finality originals are data; Native independently admits all effects.
+  public func invokeOrdinaryMintFunding(_ phase: KagemushaOrdinaryMintFundingPhaseV1,
+    originals: [Data] = []) throws -> [Data] {
+    try bridge.invokeOrdinaryMintFunding(phase, originals: originals)
   }
 
   /// Obtain the genuine native owner's opaque ordinary app-approval ticket.

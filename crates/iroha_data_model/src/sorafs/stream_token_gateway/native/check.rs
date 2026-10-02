@@ -80,7 +80,6 @@ impl StreamTokenGatewayFinalityFloorV1 {
 /// Admission authenticates historical recovery material. Only Serving asks the native owner
 /// to establish live eligibility for the independently retained physical HTTP serving attempt.
 /// No decoded subject or successful shape check establishes either fact.
-// Bounded inline gateway claims retain their canonical V1 layout.
 #[derive(
     Clone,
     Copy,
@@ -244,7 +243,7 @@ impl StreamTokenGatewayCheckV1 {
         {
             return Err(Error::BindingMismatch);
         }
-        match self.subject {
+        match &self.subject {
             Subject::Qualification => Ok(()),
             Subject::Admission {
                 request_digest,
@@ -254,7 +253,7 @@ impl StreamTokenGatewayCheckV1 {
                 request_digest,
                 result,
             } => {
-                if request_digest == [0; 32]
+                if *request_digest == [0; 32]
                     || (matches!(self.subject, Subject::Serving { .. })
                         && (result.record.outcome.status
                             != StreamTokenValidationStatusV1::Accepted
@@ -265,14 +264,14 @@ impl StreamTokenGatewayCheckV1 {
                 {
                     return Err(Error::BindingMismatch);
                 }
-                result_binding(&result, gateway, revision, digest)
+                result_binding(result, gateway, revision, digest)
             }
             Subject::Pending {
                 max_items,
                 readback_digest,
             } => {
-                if !(1..=STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1).contains(&max_items)
-                    || readback_digest == [0; 32]
+                if !(1..=STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1).contains(max_items)
+                    || *readback_digest == [0; 32]
                 {
                     return Err(Error::InvalidRequest);
                 }
@@ -284,7 +283,7 @@ impl StreamTokenGatewayCheckV1 {
                 {
                     return Err(Error::BindingMismatch);
                 }
-                record_binding(&record, gateway, revision, digest)
+                record_binding(record, gateway, revision, digest)
             }
         }
     }

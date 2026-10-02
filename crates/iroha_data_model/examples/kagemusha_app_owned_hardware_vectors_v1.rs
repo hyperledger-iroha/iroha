@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             policy_epoch: 1,
             hardware_epoch: 10,
             issued_at_ms: 1000,
-            expires_at_ms: 121000,
+            expires_at_ms: 121_000,
         };
         let signing = c.canonical_signing_bytes()?;
         let signed = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {

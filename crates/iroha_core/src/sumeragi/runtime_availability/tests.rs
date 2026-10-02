@@ -247,7 +247,7 @@ fn historical_lane_authority_refusal_keeps_original_file_and_rejects_a_fresh_rep
         .historical_record(record.lane, record.incarnation)
         .err()
         .expect("archive admission refusal");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert!(provider.scan.lock().is_some());
     let path = chain
         .kura()
@@ -300,13 +300,13 @@ fn historical_lane_authority_progresses_cancelled_original_scan_before_new_reque
         .historical_record(LaneId::new(99), [99; 32])
         .err()
         .expect("original refusal");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert_eq!(
         provider
             .historical_record(record.lane, record.incarnation)
             .err()
             .unwrap()
-            .kind(),
+            .io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert!(
@@ -358,7 +358,7 @@ fn historical_lane_authority_rejects_changed_complete_creation_write_root() {
         .historical_record(record.lane, record.incarnation)
         .err()
         .expect("complete creation root must match original R");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.io_kind(), io::ErrorKind::InvalidData);
     assert!(provider.scan.lock().is_none());
     assert_eq!(budget.reserved_bytes(), before);
     std::fs::write(&path, original).unwrap();
@@ -384,7 +384,7 @@ fn historical_lane_authority_rechecks_original_publication_after_refused_scan() 
             .historical_record(record.lane, record.incarnation)
             .err()
             .unwrap()
-            .kind(),
+            .io_kind(),
         io::ErrorKind::WouldBlock
     );
     budget.set_limit_bytes(limit);
@@ -394,7 +394,7 @@ fn historical_lane_authority_rechecks_original_publication_after_refused_scan() 
         .historical_record(record.lane, record.incarnation)
         .err()
         .expect("captured publication is stale");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert!(error.to_string().contains("publication changed"));
     assert!(provider.scan.lock().is_none());
     assert_eq!(budget.reserved_bytes(), before);

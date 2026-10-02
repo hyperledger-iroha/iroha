@@ -9,10 +9,10 @@
 
 use super::F;
 
-pub(super) const WIDTH: usize = 64;
-pub(super) const CONSTRAINTS: usize = WIDTH;
+pub(in super::super) const WIDTH: usize = 64;
+pub(in super::super) const CONSTRAINTS: usize = WIDTH;
 
-pub(super) fn witness(bits: &[F], leading: bool) -> [F; WIDTH] {
+pub(in super::super) fn witness(bits: &[F], leading: bool) -> [F; WIDTH] {
     let mut previous = F::ONE;
     std::array::from_fn(|index| {
         let bit = bits[if leading { WIDTH - 1 - index } else { index }];
@@ -21,7 +21,7 @@ pub(super) fn witness(bits: &[F], leading: bool) -> [F; WIDTH] {
     })
 }
 
-pub(super) fn append_residues(out: &mut Vec<F>, prefixes: &[F], bits: &[F], leading: F) {
+pub(in super::super) fn append_residues(out: &mut Vec<F>, prefixes: &[F], bits: &[F], leading: F) {
     let mut previous = F::ONE;
     for index in 0..WIDTH {
         let bit = F::ONE

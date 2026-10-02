@@ -36,7 +36,9 @@ fn npos_override_transactions_publish_expected_schedule() {
     let Parameter::Custom(custom) = set_param.inner() else {
         panic!("expected custom parameter payload");
     };
-    let Some(npos) = SumeragiNposParameters::from_custom_parameter(custom) else {
+    let Some(npos) = SumeragiNposParameters::from_custom_parameter(custom)
+        .expect("valid fixture NPoS parameters")
+    else {
         panic!("expected sumeragi_npos_parameters payload");
     };
     assert_eq!(npos.max_validators(), 4);

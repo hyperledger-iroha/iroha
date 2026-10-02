@@ -367,8 +367,14 @@ impl NodeHandle {
 ///
 /// # Errors
 /// Missing, duplicate or malformed signed scope metadata. No global fallback is permitted.
-pub fn root_instance(genesis: &SignedBlock, chain_id: &str) -> Result<Hash32, String> {
-    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)?
+pub fn root_instance(
+    genesis: &SignedBlock,
+    chain_id: &str,
+) -> Result<Hash32, crate::execution_attempt::ExecutionAttemptError<String>> {
+    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)
+        .map_err(|error| {
+            crate::execution_attempt::genesis_read_attempt_error(error, |error| error.to_string())
+        })?
         .sumeragi_context
         .root_scope
         .instance_id(
@@ -376,12 +382,17 @@ pub fn root_instance(genesis: &SignedBlock, chain_id: &str) -> Result<Hash32, St
             iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
             chain_id,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+        })
 }
 
 /// Why the instance could not start.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
+    /// Startup could not complete under the original local capacity owner.
+    #[error("native availability startup deferred: {0}")]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// Genesis or replay failed.
     #[error(transparent)]
     Startup(#[from] StartupError),
@@ -405,6 +416,17 @@ pub enum NodeError {
     /// The driver did not start.
     #[error("driver: {0}")]
     Driver(String),
+}
+
+fn node_policy_error(error: crate::execution_attempt::ExecutionAttemptError<String>) -> NodeError {
+    match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
+            NodeError::Input(message)
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            NodeError::Deferred(reason)
+        }
+    }
 }
 
 /// Start the node's Sumeragi instance: [`prepare`], then [`Prepared::start`].
@@ -513,8 +535,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                     ));
                 }
                 let fingerprint =
-                    consensus_configuration_fingerprint(&block).map_err(NodeError::Input)?;
-                let instance = root_instance(&block, &chain_id).map_err(NodeError::Input)?;
+                    consensus_configuration_fingerprint(&block).map_err(node_policy_error)?;
+                let instance = root_instance(&block, &chain_id).map_err(node_policy_error)?;
                 (
                     startup::apply_genesis(
                         &state,
@@ -530,8 +552,8 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             None => {
                 let genesis = genesis.ok_or(NodeError::NoGenesis)?;
                 let fingerprint =
-                    consensus_configuration_fingerprint(&genesis).map_err(NodeError::Input)?;
-                let instance = root_instance(&genesis, &chain_id).map_err(NodeError::Input)?;
+                    consensus_configuration_fingerprint(&genesis).map_err(node_policy_error)?;
+                let instance = root_instance(&genesis, &chain_id).map_err(node_policy_error)?;
                 (
                     startup::apply_genesis(
                         &state,
@@ -564,7 +586,14 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             instance,
             Arc::clone(&crypto),
         )
-        .map_err(|error| NodeError::Input(error.to_string()))?,
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                NodeError::Deferred(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                NodeError::Input(error.to_string())
+            }
+        })?,
     );
     let availability_verifier = Arc::new(super::attestation::NativePastaVerifier::new(
         instance,
@@ -1477,7 +1506,8 @@ mod tests {
             )
             .build_raw()
             .expect("genesis manifest")
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let genesis = manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(

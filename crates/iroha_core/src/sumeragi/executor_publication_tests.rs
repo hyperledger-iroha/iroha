@@ -110,6 +110,7 @@ fn with_worker_from(
             let mut worker = Worker {
                 payload_build: None,
                 routing_refusal: None,
+                payload_refusal: None,
                 context: &context,
                 state: &context.state,
                 applied: context.applied,
@@ -165,7 +166,9 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
                     block.payload().as_slice()
                 ))
                 .unwrap_err(),
-                payload::PayloadError::DecodeResource
+                payload::PayloadError::DecodeResource(
+                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+                )
             );
             let outcome = norito::with_decode_limits_scope(limits, || worker.execute(&block, hash));
             assert!(
@@ -200,6 +203,149 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
             "execution has not published"
         );
     });
+}
+
+#[test]
+fn original_staking_payload_worker_retains_pool_refusal_and_exact_queued_retry() {
+    with_worker_from(
+        || {
+            use iroha_data_model::parameter::{
+                Parameter,
+                system::{SumeragiConsensusMode, SumeragiNposParameters},
+            };
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            config.consensus_mode = SumeragiConsensusMode::Npos;
+            config.genesis_parameters.push(Parameter::Custom(
+                SumeragiNposParameters {
+                    slashing_delay_blocks: 1,
+                    ..SumeragiNposParameters::default()
+                }
+                .into_custom_parameter(),
+            ));
+            CertifiedTestChain::start(config).expect("actual four-validator NPoS genesis")
+        },
+        ConsensusMode::Npos,
+        |chain, worker, _blocks, events| {
+            use crate::state::EvidencePreparationError;
+            use std::{future::Future, pin::pin, task::Context};
+            let transaction = chain.tick(2_000);
+            let original_hash = transaction.hash_as_entrypoint();
+            let (_, time) =
+                iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(2_001));
+            let queue = Arc::new(Queue::test(
+                iroha_config::parameters::actual::Queue::default(),
+                &time,
+            ));
+            let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
+                transaction,
+                &chain.network_id(),
+                Duration::from_secs(1),
+                chain.state().view().world().parameters().transaction(),
+                &iroha_config::parameters::actual::Crypto::default(),
+                &time,
+            )
+            .unwrap();
+            queue.push(accepted, chain.state().view()).unwrap();
+            worker.queue = Some(Arc::clone(&queue));
+            let (due, requested_bytes) =
+                super::super::penalties::pending_payload_penalty_fixture(worker.state);
+            let original = worker
+                .state
+                .world
+                .consensus_evidence
+                .view()
+                .get(&due)
+                .cloned()
+                .unwrap();
+            let budget = worker.state.evidence_preparation_budget();
+            let occupied_bytes = budget.limit_bytes() - requested_bytes + 1;
+            let blocking_owner = budget.try_reserve_bytes(occupied_bytes).unwrap();
+            let header = iroha_data_model::block::BlockHeader::new(
+                std::num::NonZeroU64::new(2).unwrap(),
+                None,
+                None,
+                2_001,
+                0,
+            );
+            let original_error = super::super::penalties::PenaltyApplier::new(worker.state, None)
+                .derive_npos_consensus_effects(&header)
+                .unwrap_err();
+            let EvidencePreparationError::Admission(original_allocation) = original_error
+                .downcast_ref::<EvidencePreparationError>()
+                .unwrap()
+            else {
+                panic!("the original evidence pool must refuse its actual due-entry backing");
+            };
+            let original_refusal: crate::execution_attempt::ExecutionDeferred =
+                original_allocation.clone().into();
+            assert!(matches!(
+                worker.build(2, 0, 1 << 20),
+                Err(PublicationError::Retryable(_))
+            ));
+            assert_eq!(
+                worker.routing_refusal.as_ref(),
+                Some(&original_refusal),
+                "the payload worker retains the same evidence-pool release owner"
+            );
+            assert!(matches!(
+                worker.payload_refusal.as_ref(),
+                Some(payload::PayloadError::StakingPreparation(refusal))
+                    if Some(refusal) == original_error.downcast_ref::<EvidencePreparationError>()
+            ));
+            let iroha_allocation::AllocationRefusal::Capacity { release, .. } = worker
+                .routing_refusal
+                .as_ref()
+                .unwrap()
+                .allocation_refusal()
+                .unwrap()
+            else {
+                panic!("the original occupied pool remains retryable");
+            };
+            let mut release = pin!(release.clone().wait_for_release());
+            let mut context = Context::from_waker(std::task::Waker::noop());
+            assert!(release.as_mut().poll(&mut context).is_pending());
+            assert_eq!(budget.reserved_bytes(), occupied_bytes);
+            assert_eq!(queue.queued_len(), 1);
+            assert!(queue.contains_entrypoint_hash(original_hash));
+            assert_eq!(
+                worker.state.world.consensus_evidence.view().get(&due),
+                Some(&original)
+            );
+            assert_eq!(worker.state.view().height(), 1);
+            assert!(worker.payload_build.is_none());
+            assert!(worker.last_built.is_none());
+            assert!(worker.live.is_none());
+            assert!(worker.finishing.is_none());
+            assert!(worker.pending_commit.is_none());
+            assert!(worker.recovery.is_none());
+            assert!(events.try_recv().is_err());
+            drop(blocking_owner);
+            assert!(release.as_mut().poll(&mut context).is_ready());
+            let (Some(bytes), false) = worker.build(2, 0, 1 << 20).unwrap() else {
+                panic!("the exact original queued work retries after the original release");
+            };
+            assert!(worker.routing_refusal.is_none());
+            assert!(worker.payload_refusal.is_none());
+            let proposal = payload::decode(bytes.as_slice()).unwrap();
+            assert_eq!(
+                proposal.external_entrypoints_slice()[0].hash(),
+                original_hash
+            );
+            assert!(
+                matches!(proposal.npos_consensus_effects().unwrap().penalty_actions.as_slice(),
+                [iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(mark)] if mark.evidence_key == due && mark.height == 2)
+            );
+            assert_eq!(queue.queued_len(), 1);
+            assert!(queue.contains_entrypoint_hash(original_hash));
+            assert_eq!(
+                worker.state.world.consensus_evidence.view().get(&due),
+                Some(&original)
+            );
+            assert_eq!(worker.state.view().height(), 1);
+            assert_eq!(budget.reserved_bytes(), 0);
+            assert!(events.try_recv().is_err());
+        },
+    );
 }
 
 #[test]
@@ -882,7 +1028,13 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
                 .any(|op| matches!(op, Op::Exec(ExecOp::Append(_))))
         );
         blocks.append(&block, &qc).unwrap();
-        kernel.complete(0, Completion::Exec(ExecDone::Appended(true)));
+        kernel.complete(
+            0,
+            Completion::Exec(ExecDone::Appended {
+                durable: true,
+                deferred: None,
+            }),
+        );
         assert!(
             kernel
                 .poll(0)
@@ -1917,7 +2069,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             let read_capacity = before_read + table_total + witness_len;
             budget.set_limit_bytes(read_capacity);
             assert_eq!(
-                blocks.certified(10).unwrap_err().kind(),
+                blocks.certified(10).unwrap_err().io_kind(),
                 std::io::ErrorKind::WouldBlock
             );
             let observation = blocks.pending_certificate_read_for_test().unwrap();
@@ -1928,7 +2080,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
                 .expect("original witness backing awaits control");
             assert_eq!(budget.reserved_bytes(), read_capacity);
             assert_eq!(
-                blocks.certified(10).unwrap_err().kind(),
+                blocks.certified(10).unwrap_err().io_kind(),
                 std::io::ErrorKind::WouldBlock
             );
             assert_eq!(
@@ -1938,7 +2090,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             assert_eq!(budget.reserved_bytes(), read_capacity);
             // Another request cannot discard the original source or either retained buffer.
             assert_eq!(
-                blocks.certified(9).unwrap_err().kind(),
+                blocks.certified(9).unwrap_err().io_kind(),
                 std::io::ErrorKind::WouldBlock
             );
             assert_eq!(
@@ -2409,4 +2561,112 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
         assert_eq!(worker.state.view().height(), 1);
         assert!(events.try_recv().is_err());
     });
+}
+
+#[test]
+fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry() {
+    with_worker_from(
+        || {
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            config
+                .genesis_parameters
+                .push(iroha_data_model::parameter::Parameter::Custom(
+                    iroha_data_model::sumeragi_lanes::SumeragiLanePolicy::for_chain(
+                        iroha_data_model::parameter::system::SumeragiParameters::default(),
+                        iroha_sumeragi::availability::recommended_data_availability_layout(),
+                    )
+                    .into_custom_parameter(),
+                ));
+            CertifiedTestChain::start(config).expect("original signed lane policy")
+        },
+        ConsensusMode::Permissioned,
+        |chain, worker, _blocks, events| {
+            let transaction = chain.tick(2_000);
+            let hash = transaction.hash_as_entrypoint();
+            let (_, time) =
+                iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(2_001));
+            let queue = Arc::new(Queue::test(
+                iroha_config::parameters::actual::Queue::default(),
+                &time,
+            ));
+            let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
+                transaction,
+                &chain.network_id(),
+                Duration::from_secs(1),
+                chain.state().view().world().parameters().transaction(),
+                &iroha_config::parameters::actual::Crypto::default(),
+                &time,
+            )
+            .unwrap();
+            queue.push(accepted, chain.state().view()).unwrap();
+            worker.queue = Some(Arc::clone(&queue));
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+            let original = norito::with_decode_limits_scope(limits, || {
+                super::super::lanes::lane_policy(worker.state.view().world()).unwrap_err()
+            });
+            assert_eq!(
+                original.reason(),
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+            );
+            assert!(original.allocation_refusal().is_none());
+            let policy_id = iroha_data_model::sumeragi_lanes::SumeragiLanePolicy::parameter_id();
+            let original_policy = worker
+                .state
+                .view()
+                .world()
+                .parameters()
+                .custom()
+                .get(&policy_id)
+                .unwrap()
+                .payload()
+                .get()
+                .to_owned();
+            let budget = worker.state.ivm_execution_budget();
+            let charged = budget.reserved_bytes();
+            assert!(matches!(
+                norito::with_decode_limits_scope(limits, || worker.build(2, 0, 1 << 20)),
+                Err(PublicationError::Retryable(_))
+            ));
+            assert_eq!(
+                worker.routing_refusal.as_ref(),
+                Some(&original),
+                "the actual merge proposal must retain the original policy owner before diagnostics"
+            );
+            assert!(worker.payload_build.is_none());
+            assert!(worker.last_built.is_none());
+            assert!(worker.live.is_none());
+            assert!(worker.recovery.is_none());
+            assert!(worker.results.is_empty());
+            assert!(worker.pending_commit.is_none());
+            assert!(events.try_recv().is_err());
+            assert_eq!(queue.queued_len(), 1);
+            assert_eq!(budget.reserved_bytes(), charged);
+            assert_eq!(
+                worker
+                    .state
+                    .view()
+                    .world()
+                    .parameters()
+                    .custom()
+                    .get(&policy_id)
+                    .unwrap()
+                    .payload()
+                    .get(),
+                &original_policy
+            );
+            let (payload, _) = worker.build(2, 0, 1 << 20).unwrap();
+            let payload = payload.expect("same queued original retries after caller scope removal");
+            let block = super::super::payload::decode(payload.as_slice()).unwrap();
+            assert!(
+                block
+                    .external_entrypoints_slice()
+                    .iter()
+                    .any(|entry| entry.hash() == hash)
+            );
+            assert!(worker.routing_refusal.is_none());
+            assert_eq!(queue.queued_len(), 1);
+            assert!(events.try_recv().is_err());
+            assert_eq!(worker.state.view().height(), 1);
+        },
+    );
 }

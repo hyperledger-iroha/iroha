@@ -2038,3 +2038,140 @@ fn verified_tip_is_exactly_the_independently_retained_certified_execution() {
         next.commitment()
     );
 }
+
+#[test]
+fn original_genesis_policy_decode_refusal_preserves_exact_source_and_retry() {
+    use iroha_data_model::sumeragi_finality::GenesisReadError;
+    let chain = Chain::constant(4, 1);
+    let original = chain.anchor.genesis.encode_wire().unwrap();
+    let original_proof = norito::encode_canonical(chain.proof(1)).unwrap();
+    let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let producer =
+        norito::with_decode_limits_scope(no_allocation, || genesis_epoch(&chain.anchor.genesis))
+            .unwrap_err();
+    assert!(
+        matches!(
+            producer,
+            GenesisReadError::Json(norito::json::Error::DecodeResourceLimit)
+        ),
+        "{producer:?}"
+    );
+    let error = norito::with_decode_limits_scope(no_allocation, || {
+        FinalityVerifier::from_genesis(&chain.anchor, chain.proof(1))
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FinalityError::Genesis(GenesisReadError::Json(
+                norito::json::Error::DecodeResourceLimit
+            ))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(chain.anchor.genesis.encode_wire().unwrap(), original);
+    assert_eq!(
+        norito::encode_canonical(chain.proof(1)).unwrap(),
+        original_proof
+    );
+    let expected = chain.verifier();
+    let checkpoint = expected.checkpoint().clone();
+    let refusal = norito::with_decode_limits_scope(no_allocation, || {
+        FinalityVerifier::from_checkpoint(
+            checkpoint.clone(),
+            chain.anchor.network_id,
+            &chain.anchor.chain_id,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            refusal,
+            FinalityError::DecodeResource(
+                norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+            ) if attempted > 0
+        ),
+        "{refusal:?}"
+    );
+    let retried = FinalityVerifier::from_checkpoint(
+        checkpoint.clone(),
+        chain.anchor.network_id,
+        &chain.anchor.chain_id,
+    )
+    .unwrap();
+    assert_eq!(retried.checkpoint(), &checkpoint);
+    assert_eq!(chain.verifier().checkpoint(), &checkpoint);
+}
+
+#[test]
+fn checkpoint_npos_refusal_follows_a_completed_original_binary_read() {
+    use iroha_data_model::sumeragi_finality::GenesisReadError;
+    let chain = Chain::constant(4, 1);
+    let expected = chain.verifier();
+    let checkpoint = expected.checkpoint().clone();
+    let original = checkpoint.encode_canonical().unwrap();
+    let wire = chain
+        .anchor
+        .genesis
+        .canonical_resultless_proposal()
+        .unwrap()
+        .encode_wire()
+        .unwrap();
+    let ceiling = 8 * 1024 * 1024;
+    let limits =
+        |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
+    let decode = || {
+        norito::with_decode_limits_scope(norito::canonical_decode_limits(wire.len()), || {
+            decode_versioned_signed_block(&wire)
+        })
+    };
+    let original_binary_cost = norito::with_decode_limits_scope(limits(ceiling), || {
+        let decoded = decode().unwrap();
+        assert_eq!(decoded.hash(), chain.anchor.genesis.hash());
+        let norito::Error::TotalAllocationExceeded { attempted, limit } =
+            norito::core::reserve_decode_allocation(ceiling + 1).unwrap_err()
+        else {
+            panic!("non-charging cumulative allocation observation");
+        };
+        assert_eq!(limit, u64::try_from(ceiling).unwrap());
+        usize::try_from(attempted).unwrap() - ceiling - 1
+    });
+    assert!(original_binary_cost > 0);
+    norito::with_decode_limits_scope(limits(original_binary_cost), || {
+        let decoded = decode().expect("entire original binary frame fits before policy");
+        assert_eq!(decoded.hash(), chain.anchor.genesis.hash());
+        let error = genesis_epoch(&decoded).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GenesisReadError::Json(norito::json::Error::DecodeResourceLimit)
+            ),
+            "{error:?}"
+        );
+    });
+    let error = norito::with_decode_limits_scope(limits(original_binary_cost), || {
+        FinalityVerifier::from_checkpoint(
+            checkpoint.clone(),
+            chain.anchor.network_id,
+            &chain.anchor.chain_id,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FinalityError::Genesis(GenesisReadError::Json(
+                norito::json::Error::DecodeResourceLimit
+            ))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+    let retried = FinalityVerifier::from_checkpoint(
+        checkpoint.clone(),
+        chain.anchor.network_id,
+        &chain.anchor.chain_id,
+    )
+    .unwrap();
+    assert_eq!(retried.checkpoint(), &checkpoint);
+}

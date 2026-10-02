@@ -4,6 +4,18 @@ import kotlin.test.*
 import kotlinx.coroutines.runBlocking
 /** TEST ONLY scripted transport tests sequence/retry. No fixture manufactures a Native owner. */
 class KagemushaOrdinaryMintFundingV1Test {
+ @Test fun packagedFundingProviderRetainsSoleActualWalletJniOwner() {
+  val loader=KagemushaCoreCoordinatorBridgeV1::class.java.classLoader
+  val providers=java.util.ServiceLoader.load(KagemushaOrdinaryMintFundingNativeOwnerV1::class.java,loader).iterator()
+  assertTrue(providers.hasNext(),"The actual wallet funding provider must be packaged")
+  val provider=providers.next()
+  assertFalse(providers.hasNext(),"The wallet must package exactly one funding provider")
+  assertEquals(KagemushaOrdinaryMintFundingNativeProviderV1::class.java,provider.javaClass)
+  assertSame(loader,provider.javaClass.classLoader)
+  val funding=provider.fundingEndpoint()
+  assertSame(KagemushaOrdinaryRuntimeJniV1,funding)
+  assertSame(funding,provider.completedMetadataEndpoint())
+ }
  private class Native(var stage:Int=0):OrdinaryMintFundingWorkflowNativeV1 {
   val phases=mutableListOf<Int>();var closed=false;var approvals=0;var proofCalls=0;var current=true;var final=false
   override fun requireOpen(){check(!closed)};override fun revoke(){closed=true}

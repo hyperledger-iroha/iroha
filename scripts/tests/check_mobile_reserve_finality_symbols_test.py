@@ -135,6 +135,18 @@ check_binary_symbols test-only-library test-only-inventory "$2"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("is missing " + missing, result.stderr)
 
+    def test_ordinary_native_lifecycle_endpoints_are_required_on_both_platforms(self) -> None:
+        for mode in ("apple", "elf"):
+            for missing in (
+                "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+                "connect_norito_kagemusha_ordinary_current_control_v1",
+                "connect_norito_kagemusha_ordinary_outgoing_v1",
+            ):
+                with self.subTest(mode=mode, missing=missing):
+                    result = self.check(mode, missing=missing)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("is missing " + missing, result.stderr)
+
     def test_unexpected_kagemusha_export_is_rejected_on_both_platforms(self) -> None:
         for mode in ("apple", "elf"):
             with self.subTest(mode=mode):

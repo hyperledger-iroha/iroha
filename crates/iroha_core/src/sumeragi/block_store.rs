@@ -10,6 +10,7 @@ use super::{
     body_read::{BodyReadError, BodyReadJob, BodyReader},
     driver::{SharedCrypto, serve, traits::BlockStore},
 };
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::kura::Kura;
 use iroha_allocation::AllocationBudget;
 #[cfg(test)]
@@ -175,7 +176,10 @@ impl KuraBlockStore {
     ///
     /// # Errors
     /// Corruption, invalid authority or I/O. WouldBlock retains the same original read owner.
-    pub fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+    pub fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         let mut slot = self
             .read
             .try_lock()
@@ -185,7 +189,7 @@ impl KuraBlockStore {
             match slot.as_mut().expect("existing original read").poll() {
                 Ok(_) => *slot = None,
                 Err(error) => {
-                    if error.kind() != io::ErrorKind::WouldBlock {
+                    if error.io_kind() != io::ErrorKind::WouldBlock {
                         *slot = None;
                     }
                     return Err(error);
@@ -215,7 +219,7 @@ impl KuraBlockStore {
                 Ok(Some(value))
             }
             Err(error) => {
-                if error.kind() != io::ErrorKind::WouldBlock {
+                if error.io_kind() != io::ErrorKind::WouldBlock {
                     *slot = None;
                 }
                 Err(error)
@@ -239,7 +243,7 @@ impl KuraBlockStore {
     ///
     /// # Errors
     /// Same errors and retained refusal semantics as committed_body.
-    pub fn certified(&self, height: u64) -> io::Result<Option<(BlockHeader, Qc)>> {
+    pub fn certified(&self, height: u64) -> Result<Option<(BlockHeader, Qc)>, Attempt<io::Error>> {
         Ok(self
             .committed_body(height)?
             .map(|(body, qc)| (body.header().clone(), qc)))
@@ -248,21 +252,21 @@ impl KuraBlockStore {
     ///
     /// # Errors
     /// Corruption, I/O, authority or resource refusal.
-    pub fn header(&self, height: u64) -> io::Result<Option<BlockHeader>> {
+    pub fn header(&self, height: u64) -> Result<Option<BlockHeader>, Attempt<io::Error>> {
         Ok(self.certified(height)?.map(|(header, _)| header))
     }
     /// The committed tip above genesis.
     ///
     /// # Errors
     /// Corruption, I/O, authority or resource refusal.
-    pub fn tip(&self) -> io::Result<Option<SyncEntry>> {
+    pub fn tip(&self) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         self.entry(self.height())
     }
     /// The last count authenticated headers, oldest first.
     ///
     /// # Errors
     /// Missing committed slots or any read failure.
-    pub fn recent_headers(&self, count: u64) -> io::Result<Vec<BlockHeader>> {
+    pub fn recent_headers(&self, count: u64) -> Result<Vec<BlockHeader>, Attempt<io::Error>> {
         let tip = self.height();
         let first = tip
             .saturating_sub(count)
@@ -271,7 +275,7 @@ impl KuraBlockStore {
         (first..=tip)
             .map(|height| {
                 self.header(height)?
-                    .ok_or_else(|| invalid("missing committed header"))
+                    .ok_or_else(|| invalid("missing committed header").into())
             })
             .collect()
     }
@@ -284,7 +288,7 @@ impl KuraBlockStore {
         from_height: u64,
         max_count: u16,
         max_bytes: u32,
-    ) -> io::Result<Vec<SyncEntry>> {
+    ) -> Result<Vec<SyncEntry>, Attempt<io::Error>> {
         serve::entries(self, from_height, max_count, max_bytes)
     }
 }
@@ -301,7 +305,7 @@ impl BodyReader for KuraBlockStore {
     ) -> Result<Box<dyn BodyReadJob>, BodyReadError> {
         let independent = self
             .availability_source(source.height(), source.block_hash())
-            .map_err(BodyReadError::Io)?
+            .map_err(BodyReadError::from_attempt)?
             .ok_or_else(|| BodyReadError::Io(busy("historical body authority unavailable")))?;
         if source != independent {
             return Err(BodyReadError::Io(invalid(
@@ -320,7 +324,10 @@ impl BodyReader for KuraBlockStore {
     }
 }
 impl BlockStore for KuraBlockStore {
-    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+    fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         Self::committed_body(self, height)
     }
     fn height(&self) -> u64 {
@@ -332,10 +339,10 @@ impl BlockStore for KuraBlockStore {
         &self,
         height: u64,
         hash: Hash32,
-    ) -> io::Result<Option<AvailabilitySource>> {
+    ) -> Result<Option<AvailabilitySource>, Attempt<io::Error>> {
         resolve_source(&*self.schedule, self.schedule.instance(), height, hash)
     }
-    fn entry(&self, height: u64) -> io::Result<Option<SyncEntry>> {
+    fn entry(&self, height: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         Ok(self
             .committed_body(height)?
             .map(|(body, commit_qc)| SyncEntry {
@@ -346,7 +353,7 @@ impl BlockStore for KuraBlockStore {
                 commit_qc,
             }))
     }
-    fn append(&self, body: &AvailableBody, qc: &Qc) -> io::Result<()> {
+    fn append(&self, body: &AvailableBody, qc: &Qc) -> Result<(), Attempt<io::Error>> {
         self.write(body, qc)
     }
 }

@@ -46,10 +46,10 @@ pub(super) fn validate(file: &File, private: bool) -> io::Result<()> {
         }
         return Err(error);
     }
-    validate_acl(Acl(pointer), private)
+    validate_acl(&Acl(pointer), private)
 }
 
-fn validate_acl(acl: Acl, private: bool) -> io::Result<()> {
+fn validate_acl(acl: &Acl, private: bool) -> io::Result<()> {
     // SAFETY: acl owns a complete native ACL allocation.
     unsafe {
         success(acl_valid(acl.0))?;
@@ -95,11 +95,13 @@ fn validate_acl(acl: Acl, private: bool) -> io::Result<()> {
     }
 }
 
-/// Import only a complete bounded Darwin kauth_filesec returned by the same metadata request.
+/// Import only a complete bounded Darwin `kauth_filesec` returned by the same metadata request.
 pub(super) fn validate_native_private(bytes: &[u8]) -> io::Result<()> {
     // sys/kauth.h: magic, two GUIDs, entry count, flags, then 24-byte kauth_ace entries.
     const PREFIX: usize = 44;
     const MAX_ENTRIES: usize = 128;
+    #[repr(C, align(8))]
+    struct NativeFilesec([u8; PREFIX + 24 * MAX_ENTRIES]);
     if bytes.len() < PREFIX
         || u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) != 0x012c_c16d
     {
@@ -117,8 +119,6 @@ pub(super) fn validate_native_private(bytes: &[u8]) -> io::Result<()> {
     if count > MAX_ENTRIES || bytes.len() != PREFIX + 24 * count {
         return Err(super::invalid("invalid native ACL entry extent"));
     }
-    #[repr(C, align(8))]
-    struct NativeFilesec([u8; PREFIX + 24 * MAX_ENTRIES]);
     let mut aligned = NativeFilesec([0; PREFIX + 24 * MAX_ENTRIES]);
     aligned.0[..bytes.len()].copy_from_slice(bytes);
     // SAFETY: checked the native magic/count and complete finite extent before passing the
@@ -127,7 +127,7 @@ pub(super) fn validate_native_private(bytes: &[u8]) -> io::Result<()> {
     if pointer.is_null() {
         return Err(io::Error::last_os_error());
     }
-    validate_acl(Acl(pointer), true)
+    validate_acl(&Acl(pointer), true)
 }
 
 #[cfg(test)]

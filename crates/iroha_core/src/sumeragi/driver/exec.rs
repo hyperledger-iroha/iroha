@@ -118,7 +118,12 @@ pub enum ExecDone {
     /// `Prepare`: the local commitment (`None`: not `Valid`), or a local failure.
     Prepared(Result<Option<Hash32>, PublicationError>),
     /// `Append`: whether the block is durable in the block store.
-    Appended(bool),
+    Appended {
+        /// Whether the original block is durable.
+        durable: bool,
+        /// Exact local refusal when the historical authority read did not finish.
+        deferred: Option<crate::execution_attempt::ExecutionDeferred>,
+    },
     /// `Commit`: the original atomic epoch/configuration output, or a local failure.
     Committed(Result<Box<AppliedConfig>, PublicationError>),
     /// Independent exact control response; no empty fallback on local failure.
@@ -201,6 +206,7 @@ pub struct ExecSched {
     stage: Stage,
     /// The head commit is durable in the block store (a re-prepare skips the append).
     appended: bool,
+    append_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
     build: Option<BuildRequest>,
     control_build: Option<ControlBuild>,
     control_round: Option<(u64, u64)>,
@@ -235,6 +241,7 @@ impl ExecSched {
             commits: VecDeque::new(),
             stage: Stage::Fresh,
             appended: false,
+            append_refusal: None,
             build: None,
             control_build: None,
             control_round: None,
@@ -688,8 +695,14 @@ impl ExecSched {
                     }
                 }
             }
-            (Running::Append, ExecDone::Appended(ok)) => {
-                if ok {
+            (Running::Append, ExecDone::Appended { durable, deferred }) => {
+                self.append_refusal = if cfg!(all(test, sumeragi_core_mutation = "HC47")) {
+                    None
+                } else {
+                    deferred
+                };
+                if durable {
+                    self.append_refusal = None;
                     self.failures = 0;
                     self.retry_at = None;
                     self.appended = true;
@@ -888,5 +901,76 @@ impl ExecSched {
             + usize::from(self.control_build.is_some())
             + usize::from(self.control_drive.is_some())
             + self.control_inbox.len()
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    //! The sole append slot retains its original commit and capacity owner through retry.
+    use super::*;
+    use crate::sumeragi::driver::tests::{block, commit_qc};
+
+    #[test]
+    fn append_refusal_keeps_original_commit_and_release_owner_until_durable() {
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let held = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let body = block(1, Hash32::ZERO, Hash32::ZERO, vec![1]);
+        let result = Hash32([9; 32]);
+        let qc = commit_qc(&body, result);
+        let mut scheduler = ExecSched::new(0, Backoff::default());
+        scheduler.commit(body, qc);
+        let Some(ExecOp::Prepare(original)) = scheduler.next(0) else {
+            panic!("prepare original")
+        };
+        scheduler.done(0, ExecDone::Prepared(Ok(Some(result))));
+        let Some(ExecOp::Append(append)) = scheduler.next(0) else {
+            panic!("append original")
+        };
+        assert!(Arc::ptr_eq(&original, &append));
+        scheduler.done(
+            0,
+            ExecDone::Appended {
+                durable: false,
+                deferred: Some(refusal.clone().into()),
+            },
+        );
+        assert_eq!(
+            scheduler
+                .append_refusal
+                .as_ref()
+                .unwrap()
+                .allocation_refusal(),
+            Some(&refusal)
+        );
+        assert_eq!(scheduler.applied(), 0);
+        assert!(scheduler.take_events().is_empty());
+        assert!(scheduler.next(0).is_none());
+        drop(held);
+        let Some(ExecOp::Append(retry)) = scheduler.next(scheduler.wakeup()) else {
+            panic!("retry same append")
+        };
+        assert!(Arc::ptr_eq(&original, &retry));
+        assert_eq!(
+            scheduler
+                .append_refusal
+                .as_ref()
+                .unwrap()
+                .allocation_refusal(),
+            Some(&refusal)
+        );
+        scheduler.done(
+            scheduler.wakeup(),
+            ExecDone::Appended {
+                durable: true,
+                deferred: None,
+            },
+        );
+        assert!(scheduler.append_refusal.is_none());
+        let Some(ExecOp::Commit(commit)) = scheduler.next(u64::MAX) else {
+            panic!("commit only after durability")
+        };
+        assert!(Arc::ptr_eq(&original, &commit));
+        assert_eq!(scheduler.applied(), 0);
     }
 }

@@ -149,6 +149,7 @@ final class KagemushaOrdinaryIncomingFrameV1Tests: XCTestCase {
       throw KagemushaCoreCoordinatorErrorV1.unavailable
     }
     func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invokeIncoming(request: Data) throws -> Data {
       invocations += 1
       if let failure { throw failure }

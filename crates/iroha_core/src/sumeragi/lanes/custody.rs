@@ -17,6 +17,7 @@ use iroha_data_model::{
 use iroha_model_base::topology::LaneId;
 use mv::storage::StorageReadOnly;
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::state::{WorldReadOnly, nexus_staking_authority_lane_at_height};
 
 /// Deterministic defects in original lane custody; fixed-size errors need no allocation.
@@ -203,8 +204,10 @@ pub(super) fn prepare_retirement(
     state: &mut SumeragiLaneState,
     world: &impl WorldReadOnly,
     height: u64,
-) -> Result<(), CustodyViolation> {
-    let parameters = world.sumeragi_npos_parameters();
+) -> Result<(), Attempt<CustodyViolation>> {
+    let parameters = world
+        .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(|_| CustodyViolation::MissingPolicy))?;
     for obligation in &mut state.custody {
         obligation
             .validate()
@@ -226,7 +229,7 @@ pub(super) fn prepare_retirement(
                 || (record.merged.height == obligation.merged.height
                     && record.merged != obligation.merged)
             {
-                return Err(CustodyViolation::Frontier);
+                return Err(CustodyViolation::Frontier.into());
             }
             // The lane step has already applied this carrier's merges. Retain its final exact
             // frontier before retirement removes the live routing record in the same step.
@@ -249,12 +252,21 @@ pub(super) fn prepare_retirement(
 }
 
 /// Creation can wait for custody capacity; existing lane close/retirement remains executable.
-pub(super) fn creation_capacity(state: &SumeragiLaneState, world: &impl WorldReadOnly) -> usize {
-    if world.sumeragi_npos_parameters().is_some() {
-        MAX_LANE_CUSTODY_OBLIGATIONS.saturating_sub(state.custody.len())
-    } else {
-        usize::MAX
-    }
+pub(super) fn creation_capacity(
+    state: &SumeragiLaneState,
+    world: &impl WorldReadOnly,
+) -> Result<usize, Attempt<CustodyViolation>> {
+    Ok(
+        if world
+            .sumeragi_npos_parameters()
+            .map_err(|error| error.map_rejection(|_| CustodyViolation::MissingPolicy))?
+            .is_some()
+        {
+            MAX_LANE_CUSTODY_OBLIGATIONS.saturating_sub(state.custody.len())
+        } else {
+            usize::MAX
+        },
+    )
 }
 
 /// Install each creation's original binding exactly once after deterministic lane selection.
@@ -267,8 +279,11 @@ pub(super) fn pin_created(
     policy: Option<&SumeragiLanePolicy>,
     height: u64,
     budget: &AllocationBudget,
-) -> Result<(), CustodyError> {
-    let Some(parameters) = world.sumeragi_npos_parameters() else {
+) -> Result<(), Attempt<CustodyError>> {
+    let Some(parameters) = world.sumeragi_npos_parameters().map_err(|error| {
+        error.map_rejection(|_| CustodyError::Invalid(CustodyViolation::MissingPolicy))
+    })?
+    else {
         // Permissioned chains have no signed monetary evidence horizon; existing native
         // forensic verification remains possible but creation cannot manufacture stake policy.
         return Ok(());
@@ -283,10 +298,10 @@ pub(super) fn pin_created(
             .iter()
             .any(|row| row.incarnation == record.incarnation)
         {
-            return Err(CustodyViolation::DuplicateCreation.into());
+            return Err(CustodyError::Invalid(CustodyViolation::DuplicateCreation).into());
         }
         if state.custody.len() >= MAX_LANE_CUSTODY_OBLIGATIONS {
-            return Err(CustodyViolation::Capacity.into());
+            return Err(CustodyError::Invalid(CustodyViolation::Capacity).into());
         }
         let obligation = SumeragiLaneCustody {
             lane: record.lane,
@@ -301,7 +316,7 @@ pub(super) fn pin_created(
             created_at: record.created_at,
             merged: record.merged,
             signer_count: u32::try_from(record.committee.len())
-                .map_err(|_| CustodyViolation::Committee)?,
+                .map_err(|_| CustodyError::Invalid(CustodyViolation::Committee))?,
             signers: pin_signers(
                 world,
                 nexus,
@@ -315,7 +330,7 @@ pub(super) fn pin_created(
         };
         obligation
             .validate()
-            .map_err(|_| CustodyViolation::Obligation)?;
+            .map_err(|_| CustodyError::Invalid(CustodyViolation::Obligation))?;
         state
             .custody
             .try_reserve_exact(1)
@@ -332,10 +347,25 @@ pub(crate) fn retains_registration(
     world: &impl WorldReadOnly,
     record: &PublicLaneValidatorRecord,
     height: u64,
+) -> Result<bool, Attempt<String>> {
+    let parameters = world.sumeragi_npos_parameters()?;
+    Ok(retains_registration_with_parameters(
+        world,
+        record,
+        height,
+        parameters.as_ref(),
+    ))
+}
+
+/// Use one already decoded original policy for a complete retained-custody scan.
+pub(crate) fn retains_registration_with_parameters(
+    world: &impl WorldReadOnly,
+    record: &PublicLaneValidatorRecord,
+    height: u64,
+    parameters: Option<&iroha_data_model::parameter::system::SumeragiNposParameters>,
 ) -> bool {
-    let parameters = world.sumeragi_npos_parameters();
     world.sumeragi_lanes().custody.iter().any(|obligation| {
-        (effective_retains_at(obligation, parameters.as_ref(), height)
+        (effective_retains_at(obligation, parameters, height)
             || has_pending_evidence(world, obligation))
             && obligation.signers.as_slice().iter().any(|entry| {
                 let binding = &entry.binding;

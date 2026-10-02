@@ -133,10 +133,8 @@ pub(crate) async fn handler(
                 .with_native_provider_admission_snapshot_v1(&tip, provider, &budget, |originals| {
                     let payload = ProviderDiscoveryProofRefV1::new(
                         originals.world,
-                        originals.council_head,
-                        originals.council_predecessor,
-                        originals.provider_head,
-                        originals.provider_predecessor,
+                        (originals.council_head, originals.council_predecessor),
+                        (originals.provider_head, originals.provider_predecessor),
                         originals.owner,
                         &advert,
                         originals.stream_token,

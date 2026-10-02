@@ -1,5 +1,7 @@
 //! Real paired-key and threshold-share tests for frozen committee preparation.
 
+#[path = "tests/generation.rs"]
+mod generation;
 #[path = "tests/incumbent.rs"]
 mod incumbent;
 #[path = "tests/liability.rs"]
@@ -595,3 +597,6 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
     let released = prepare_staking_obligations(&fixture.world.view(), &boundary).unwrap();
     assert_eq!(released.validators[0].1.deactivation_height, Some(21));
 }
+
+#[path = "tests/refusal.rs"]
+mod refusal;

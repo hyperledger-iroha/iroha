@@ -6340,7 +6340,12 @@ impl Executor {
         host.set_crypto_config(Arc::clone(&state_transaction.crypto));
         host.set_zk_config(&state_transaction.zk);
         host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_state(state_transaction);
+        host.set_vrf_epoch_seeds_from_state(state_transaction)
+            .map_err(|error| {
+                state_transaction.attempt_error_to_validation_fail(
+                    error.map_rejection(ValidationFail::InternalError),
+                )
+            })?;
         host.set_query_state(state_transaction);
         host.set_contract_runtime_context(contract_runtime_context.clone());
         host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -7256,7 +7261,12 @@ impl Executor {
                         host.set_public_inputs_from_parameters(
                             state_transaction.world.parameters.get(),
                         );
-                        host.set_vrf_epoch_seeds_from_state(state_transaction);
+                        host.set_vrf_epoch_seeds_from_state(state_transaction)
+                            .map_err(|error| {
+                                state_transaction.attempt_error_to_validation_fail(
+                                    error.map_rejection(ValidationFail::InternalError),
+                                )
+                            })?;
                         host.set_query_state(state_transaction);
                         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
                         crate::pipeline::overlay::apply_streaming_metadata(
@@ -7471,7 +7481,12 @@ impl Executor {
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_state(state_transaction);
+                host.set_vrf_epoch_seeds_from_state(state_transaction)
+                    .map_err(|error| {
+                        state_transaction.attempt_error_to_validation_fail(
+                            error.map_rejection(ValidationFail::InternalError),
+                        )
+                    })?;
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -14596,6 +14611,7 @@ mod tests {
         let mut parameters = state_transaction
             .world
             .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
             .unwrap_or_default();
         parameters.xor_asset_definition_id = fee_asset.clone();
         state_transaction.world.parameters.get_mut().set_parameter(

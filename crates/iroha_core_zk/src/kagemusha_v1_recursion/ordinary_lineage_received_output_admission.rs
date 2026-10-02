@@ -42,7 +42,7 @@ impl KagemushaVerifiedOrdinaryReceivedCashOutputV1 {
     pub(crate) fn request(&self) -> &KagemushaOrdinaryPaymentRequestV1 {
         &self.request
     }
-    /// Complete same384-byte encrypted envelope, never plaintext or an imported key.
+    /// Complete canonical encrypted envelope, never plaintext or an imported key.
     pub(crate) fn encrypted_credit(&self) -> &[u8] {
         &self.encrypted_credit
     }

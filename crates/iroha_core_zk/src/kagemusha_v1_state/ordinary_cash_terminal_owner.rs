@@ -1757,19 +1757,28 @@ mod tests {
 }
 
 impl KagemushaNativeOrdinaryCashOwnerV1 {
-    pub(super) fn retained_outgoing_terminal_challenge(&self,
+    pub(super) fn retained_outgoing_terminal_challenge(
+        &self,
         candidate: &KagemushaAuthenticatedOrdinaryCashCandidateV1,
         guard: &KagemushaAuthenticatedOrdinaryPreparationGuardV1,
     ) -> Result<Option<KagemushaAppOperationApprovalChallengeV1>, KagemushaStateErrorV1> {
         self.require_current_financial_control()?;
-        let Some(pending) = self.terminal.as_ref().and_then(|t| t.pending.as_ref()) else { return Ok(None); };
+        let Some(pending) = self.terminal.as_ref().and_then(|t| t.pending.as_ref()) else {
+            return Ok(None);
+        };
         let preparation = self.captured_preparation()?;
         candidate.recheck_preparation_selection(&preparation, guard)?;
-        pending.candidate.recheck_preparation_selection(&preparation, &pending.guard)?;
+        pending
+            .candidate
+            .recheck_preparation_selection(&preparation, &pending.guard)?;
         if candidate.prepared_record() != pending.candidate.prepared_record()
             || candidate.proof() != pending.candidate.proof()
-            || candidate.private_checkpoint_original() != pending.candidate.private_checkpoint_original()
-            || guard.original() != pending.guard.original() { return Err(KagemushaStateErrorV1::SnapshotIntegrity); }
+            || candidate.private_checkpoint_original()
+                != pending.candidate.private_checkpoint_original()
+            || guard.original() != pending.guard.original()
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         let (challenge, _, _, _) = self.outgoing_terminal_platform_state()?;
         Ok(Some(challenge))
     }
@@ -1784,19 +1793,43 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         Ok(floor)
     }
 
-    pub(super) fn outgoing_terminal_platform_state(&self) -> Result<(
-        KagemushaAppOperationApprovalChallengeV1, bool, Option<Vec<u8>>, bool,
-    ), KagemushaStateErrorV1> {
+    pub(super) fn outgoing_terminal_platform_state(
+        &self,
+    ) -> Result<
+        (
+            KagemushaAppOperationApprovalChallengeV1,
+            bool,
+            Option<Vec<u8>>,
+            bool,
+        ),
+        KagemushaStateErrorV1,
+    > {
         let pending = self.terminal_pending()?;
         if pending.captured.is_some() {
-            self.captured_terminal()?.recheck_selected_originals_and_current_custody()?;
-        } else { self.require_live_terminal(pending.originals.intent.native_operation_id)?; }
+            self.captured_terminal()?
+                .recheck_selected_originals_and_current_custody()?;
+        } else {
+            self.require_live_terminal(pending.originals.intent.native_operation_id)?;
+        }
         let challenge = pending.originals.challenge;
         if challenge.purpose != KagemushaAppOperationApprovalPurposeV1::MonetaryTransition {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
-        let original = pending.captured.as_ref().map(|(_,a)| a.original().to_vec())
-            .or_else(|| pending.retained.as_ref().map(|(_,a)| a.original().to_vec()));
-        Ok((challenge, pending.fenced, original, pending.captured.is_some()))
+        let original = pending
+            .captured
+            .as_ref()
+            .map(|(_, a)| a.original().to_vec())
+            .or_else(|| {
+                pending
+                    .retained
+                    .as_ref()
+                    .map(|(_, a)| a.original().to_vec())
+            });
+        Ok((
+            challenge,
+            pending.fenced,
+            original,
+            pending.captured.is_some(),
+        ))
     }
 }

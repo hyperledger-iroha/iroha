@@ -61,16 +61,14 @@ fn verify_typed_signature_for_signer<T: Encode>(
     signer: &PublicKey,
     payload: &T,
 ) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
+    // The shared admission relation borrows the existing signature. Parsing into an
+    // owned Signature here would reserve and copy bytes only to discard them before
+    // verification, turning a local decoder refusal into a bad-signature verdict.
+    iroha_crypto::verify_signature_for_admission(
+        signature,
+        signer,
+        iroha_crypto::HashOf::new(payload).as_ref(),
+    )
 }
 #[model]
 mod model {

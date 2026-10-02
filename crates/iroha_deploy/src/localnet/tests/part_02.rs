@@ -1055,7 +1055,10 @@ fn npos_localnet_keeps_payload_for_fast_block_cadence() {
     let npos = params
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()
+        .expect("valid fixture NPoS parameters")
+        .flatten()
         .expect("npos parameters must be present");
     assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
 }

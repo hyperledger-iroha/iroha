@@ -11814,6 +11814,21 @@ pub mod isi {
             Ok(())
         }
     }
+    fn committee_attempt_instruction_error(
+        state: &mut StateTransaction<'_, '_>,
+        error: crate::execution_attempt::ExecutionAttemptError<InstructionExecutionError>,
+    ) -> InstructionExecutionError {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                if !cfg!(all(test, sumeragi_core_mutation = "HC48")) {
+                    let _ = state.defer_execution(reason);
+                }
+                threshold_key_lifecycle_error_v1("local committee read did not complete")
+            }
+        }
+    }
+
     fn threshold_key_lifecycle_error_v1(message: &'static str) -> InstructionExecutionError {
         InstructionExecutionError::InvariantViolation(message.into())
     }
@@ -11881,10 +11896,14 @@ pub mod isi {
                     let record = norito::decode_canonical::<
                         FinalizedGlobalThresholdBeaconKeySessionRecordV1,
                     >(&certificate.public_state)
-                    .map_err(|_| {
-                        threshold_key_lifecycle_error_v1(
-                            "global-beacon public key session is not canonical",
-                        )
+                    .map_err(|error| {
+                        let error =
+                            crate::execution_attempt::norito_decode_attempt_error(error, |_| {
+                                threshold_key_lifecycle_error_v1(
+                                    "global-beacon public key session is not canonical",
+                                )
+                            });
+                        committee_attempt_instruction_error(state_transaction, error)
                     })?;
                     record.validate().map_err(|_| {
                         threshold_key_lifecycle_error_v1(
@@ -11920,7 +11939,12 @@ pub mod isi {
                             &ordered_roster,
                         )
                         .map_err(|error| {
-                            InstructionExecutionError::InvariantViolation(error.into())
+                            committee_attempt_instruction_error(
+                                state_transaction,
+                                error.map_rejection(|error| {
+                                    InstructionExecutionError::InvariantViolation(error.into())
+                                }),
+                            )
                         })?;
                     // Finish every fallible check before changing the original overlay.
                     // Only bootstrap may activate here; successor activation is an
@@ -11948,10 +11972,14 @@ pub mod isi {
                     let public_state = norito::decode_canonical::<TleKeySessionPublicStateV1>(
                         &certificate.public_state,
                     )
-                    .map_err(|_| {
-                        threshold_key_lifecycle_error_v1(
-                            "Parliament TLE public key session is not canonical",
-                        )
+                    .map_err(|error| {
+                        let error =
+                            crate::execution_attempt::norito_decode_attempt_error(error, |_| {
+                                threshold_key_lifecycle_error_v1(
+                                    "Parliament TLE public key session is not canonical",
+                                )
+                            });
+                        committee_attempt_instruction_error(state_transaction, error)
                     })?;
                     public_state.clone().validate().map_err(|_| {
                         threshold_key_lifecycle_error_v1(
@@ -17880,6 +17908,11 @@ pub mod isi {
                 if state_transaction
                     .world
                     .sumeragi_npos_parameters()
+                    .map_err(|error| {
+                        state_transaction.attempt_error_to_instruction_error(error.map_rejection(
+                            |message| InstructionExecutionError::InvariantViolation(message.into()),
+                        ))
+                    })?
                     .is_some_and(|params| &params.xor_asset_definition_id == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -18306,6 +18339,17 @@ pub mod isi {
                     && state_transaction
                         .world
                         .sumeragi_npos_parameters()
+                        .map_err(|error| match error {
+                            crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
+                                invalid_smart_contract_parameter(&message)
+                            }
+                            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                                let _ = state_transaction.defer_execution(reason);
+                                invalid_smart_contract_parameter(
+                                    "local NPoS policy read did not complete",
+                                )
+                            }
+                        })?
                         .is_some_and(|npos| npos.epoch_length_blocks() != *epoch)
                 {
                     return Err(invalid_smart_contract_parameter(
@@ -18349,14 +18393,26 @@ pub mod isi {
                         return state_transaction
                             .apply_validator_committee_operation(_authority, operation)
                             .map_err(|error| {
-                                InstructionExecutionError::InvariantViolation(error.into())
+                                committee_attempt_instruction_error(
+                                    state_transaction,
+                                    error.map_rejection(|error| {
+                                        InstructionExecutionError::InvariantViolation(error.into())
+                                    }),
+                                )
                             });
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        return Err(invalid_smart_contract_parameter(format!(
-                            "invalid validator committee command: {error}"
-                        )));
+                        let error =
+                            crate::execution_attempt::json_decode_attempt_error(error, |error| {
+                                invalid_smart_contract_parameter(format!(
+                                    "invalid validator committee command: {error}"
+                                ))
+                            });
+                        return Err(committee_attempt_instruction_error(
+                            state_transaction,
+                            error,
+                        ));
                     }
                 }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
@@ -18601,6 +18657,10 @@ pub mod isi {
                                     .get(next.id())
                                 {
                                     let previous = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(previous_custom)
+                                        .map_err(|error| match crate::execution_attempt::json_decode_attempt_error(error, |error| invalid_smart_contract_parameter(&error.to_string())) {
+                                            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                                            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => { let _ = state_transaction.defer_execution(reason); invalid_smart_contract_parameter("local NPoS policy read did not complete") },
+                                        })?
                                         .ok_or_else(|| {
                                             InstructionExecutionError::InvalidParameter(
                                                 InvalidParameterError::SmartContract(
@@ -32975,7 +33035,7 @@ seiyaku GovernanceLifecycle {
                     "network XOR and NPoS authority must be installed by authenticated genesis");
             }
             let stx = state_block.transaction();
-            assert!(stx.world.sumeragi_npos_parameters().is_none(),
+            assert!(stx.world.sumeragi_npos_parameters().expect("original policy decoder completes").is_none(),
                 "rejected installation must leave no currency pin after transaction rollback");
         });
         world_test!(set_parameter_keeps_network_xor_identity_immutable {
@@ -32992,7 +33052,7 @@ seiyaku GovernanceLifecycle {
             let error = SetParameter::new(Parameter::Custom(replacement.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "network currency substitution must reject");
             assert_contains!(format!("{error:?}"), "xor_asset_definition_id is immutable", "exact currency pin must persist");
-            assert_eq!(stx.world.sumeragi_npos_parameters(), Some(initial));
+            assert_eq!(stx.world.sumeragi_npos_parameters().unwrap(), Some(initial));
         });
         world_test!(set_parameter_keeps_npos_evidence_horizon_immutable {
             blank_state_transaction!(state, block, state_block, stx);
@@ -33007,7 +33067,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("installed NPoS parameters decode")
                     .evidence_horizon_blocks,
                 100
@@ -33034,7 +33094,7 @@ seiyaku GovernanceLifecycle {
             }
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("rejected replacement must preserve installed parameters")
                     .evidence_horizon_blocks,
                 100
@@ -33061,7 +33121,7 @@ seiyaku GovernanceLifecycle {
             }
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("rejected increase must preserve installed parameters")
                     .evidence_horizon_blocks,
                 100
@@ -33106,7 +33166,7 @@ seiyaku GovernanceLifecycle {
             }
             let installed = stx
                 .world
-                .sumeragi_npos_parameters()
+                .sumeragi_npos_parameters().expect("original policy decoder completes")
                 .expect("rejected replacement must preserve installed parameters");
             assert_eq!(installed.evidence_horizon_blocks, 2);
             assert_eq!(installed.slashing_delay_blocks, 2);
@@ -33132,7 +33192,7 @@ seiyaku GovernanceLifecycle {
             }
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("rejected increase must preserve installed parameters")
                     .slashing_delay_blocks,
                 2
@@ -33163,7 +33223,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("idempotently reinstalled NPoS parameters decode"),
                 parameters
             );
@@ -33222,7 +33282,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(
                 stx.world
-                    .sumeragi_npos_parameters()
+                    .sumeragi_npos_parameters().expect("original policy decoder completes")
                     .expect("installed NPoS parameters decode")
                     .epoch_length_blocks,
                 installed_epoch_length

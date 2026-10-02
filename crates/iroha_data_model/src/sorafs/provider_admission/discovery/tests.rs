@@ -237,10 +237,8 @@ fn current_council_and_genesis_heads_verify_and_roundtrip_without_response_selec
         let verified = verify(&proof, provider, &block).unwrap();
         let borrowed = ProviderDiscoveryProofRefV1::new(
             &proof.world,
-            &proof.council.head,
-            proof.council.predecessor.as_ref(),
-            &proof.provider.head,
-            proof.provider.predecessor.as_ref(),
+            (&proof.council.head, proof.council.predecessor.as_ref()),
+            (&proof.provider.head, proof.provider.predecessor.as_ref()),
             &proof.owner,
             &proof.advert,
             proof.stream_token.as_ref().map(|p| (&p.head, &p.record)),
@@ -418,10 +416,8 @@ fn exact_native_renewal_predecessor_and_borrowed_optional_frame_are_authenticate
     );
     let borrowed = ProviderDiscoveryProofRefV1::new(
         &proof.world,
-        &proof.council.head,
-        proof.council.predecessor.as_ref(),
-        &proof.provider.head,
-        proof.provider.predecessor.as_ref(),
+        (&proof.council.head, proof.council.predecessor.as_ref()),
+        (&proof.provider.head, proof.provider.predecessor.as_ref()),
         &proof.owner,
         &proof.advert,
         proof.stream_token.as_ref().map(|p| (&p.head, &p.record)),

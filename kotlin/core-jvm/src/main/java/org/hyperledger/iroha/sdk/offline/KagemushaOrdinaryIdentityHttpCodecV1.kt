@@ -100,11 +100,44 @@ object KagemushaOrdinaryIdentityHttpCodecV1 {
         require(attempt.size == 32 && attempt.any { it != 0.toByte() })
         return rawAttestationRequestId(sha("iroha:kagemusha:v1:ordinary-app-certificate-http\u0000".toByteArray(Charsets.US_ASCII) + attempt))
     }
-    fun retailStartBody(signedC: ByteArray, credential: ByteArray): ByteArray {
+    /** Strict complete Native body correlation. This never constructs missing originals. */
+    fun requireRetailStartOriginal(raw: ByteArray, signedC: ByteArray, credential: ByteArray): ByteArray {
         KagemushaOrdinaryAppEnrollmentPreparationV1.parseOriginal(signedC)
         require(credential.size in 1..16 * 1024)
-        return JsonEncoder.encode(linkedMapOf("signed_preparation_base64" to base64(signedC),
-            "app_certificate_base64" to base64(credential))).toByteArray(Charsets.UTF_8)
+        val fields = objectFields(raw)
+        exact(fields, "wallet", "signed_preparation_base64", "raw_admission_original_base64",
+            "platform_original_base64", "core_possession_original_base64", "app_certificate_base64", "selected_integrity")
+        val wallet = string(fields, "wallet")
+        require(wallet.toByteArray(Charsets.UTF_8).size in 1..4096)
+        // Canonical account/C binding is checked by the genuine Model-backed Native exporter.
+        // This detached DATA checker retains text and grants no admitted owner or account.
+        require(wallet.all { it.code in 0x21..0x7e })
+        same(unbase64(string(fields, "signed_preparation_base64"), 515), signedC)
+        unbase64(string(fields, "raw_admission_original_base64"), 314)
+        boundedBase64(string(fields, "platform_original_base64"), 128 * 1024)
+        boundedBase64(string(fields, "core_possession_original_base64"), 5120)
+        same(boundedBase64(string(fields, "app_certificate_base64"), 16 * 1024), credential)
+        require(fields["selected_integrity"] == null)
+        return raw.copyOf()
+    }
+    /** Assemble only complete Native phase15 chunks. No caller field or digest recreates an original. */
+    fun retailStartOriginalChunks(chunks: List<List<ByteArray>>, signedC: ByteArray,
+        credential: ByteArray, scope: ByteArray, credentialDigest: ByteArray, nativeTicket: ByteArray): ByteArray {
+        require(chunks.size in 1..4 && scope.size == 32 && credentialDigest.size == 32)
+        val first = chunks.first()
+        chunks.forEachIndexed { index, fields ->
+            val request = listOf(KagemushaCoreCoordinatorFrameV1.u32(15), nativeTicket.copyOf(),
+                KagemushaCoreCoordinatorFrameV1.u32(index))
+            KagemushaAppOwnedHardwareFrameV1.requireRequest(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION, request)
+            KagemushaAppOwnedHardwareFrameV1.requireResponse(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION, request, fields)
+            same(fields[2], first[2]); same(fields[3], first[3]); same(fields[4], scope); same(fields[5], credentialDigest)
+        }
+        val total = ByteBuffer.wrap(first[3]).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+        require(chunks.size == (total + 65535) / 65536)
+        val body = ByteArray(total)
+        chunks.forEachIndexed { index, fields -> fields[1].copyInto(body, index * 65536) }
+        same(sha(body), first[2])
+        return requireRetailStartOriginal(body, signedC, credential)
     }
     /** Public response correlation only; Native phase9 separately admits the full FI challenge. */
     fun retailStartResponse(raw: ByteArray, signedC: ByteArray): List<ByteArray> {

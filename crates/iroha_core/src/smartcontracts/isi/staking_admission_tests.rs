@@ -59,6 +59,7 @@ fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
     assert_eq!(
         stx.world
             .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
             .expect("retained epoch policy")
             .epoch_length_blocks
             .get(),
@@ -110,6 +111,7 @@ fn signed_candidate(
         key_height,
         stx.world
             .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
             .expect("NPoS schedule")
             .epoch_length_blocks
             .get(),

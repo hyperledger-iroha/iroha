@@ -31,12 +31,12 @@
 // memory, host/state, private execution, call ownership and terminal relations exist.
 
 mod absolute;
-mod bit_count;
+pub(super) mod bit_count;
 mod ceiling;
 mod division;
 mod gcd;
 mod mean;
-mod multiply;
+pub(super) mod multiply;
 mod square_root;
 
 use ivm::{

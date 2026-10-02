@@ -1,0 +1,21 @@
+[package]
+name = "iroha_petal"
+description = "Petal Stream: the Sakura-storm optical transport for animated offline payload handoff."
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
+hex = { workspace = true, features = ["alloc"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }

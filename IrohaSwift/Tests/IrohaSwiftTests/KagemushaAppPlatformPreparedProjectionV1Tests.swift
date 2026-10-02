@@ -6,7 +6,7 @@ import XCTest
 /// Untrusted grammar and scripted transport tests. No sample authenticates native/FI authority.
 final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
   func testC451PreparationRejectsRetiredLayoutAndSubstitutedNativeScope() throws {
-    let f = try preparation()
+    let f = try ordinaryPreparationFields(preparation())
     let p = try KagemushaAppPlatformPreparedProjectionV1(nativeFields: f,
       approvalID: digest(0x11), enrollmentChallengeHash: nil)
     XCTAssertEqual(p.platform, 4); XCTAssertEqual(p.appleCounterFloor, 7)
@@ -736,9 +736,9 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
       XCTAssertThrowsError(try KagemushaAppPlatformFrameV1.validateRequest(.appOperationApproval, bad))
     }
     XCTAssertThrowsError(try KagemushaAppPlatformFrameV1.validateRequest(.appEnrollmentPossession, [u32(8), id]))
-    var cash = f; cash[13][331] = 1; cash[13][444] = 1
-    let start = KagemushaAppApprovalSigningProjectionV1.signingDomain.count + 8
-    cash[1].replaceSubrange((start + 195)..<(start + 227), with: Data(SHA256.hash(data: cash[13])))
+    var cash = f; cash[13][444] = 1
+    cash = ordinaryPreparationFields(cash)
+    XCTAssertEqual(cash[1].count, 325); XCTAssertEqual(cash[13].count, 460)
     XCTAssertNoThrow(try KagemushaAppPlatformPreparedProjectionV1.validateApprovalTransport(cash, operationID: id))
     XCTAssertThrowsError(try KagemushaAppPlatformPreparedProjectionV1.validateBootstrapTransport(cash, operationID: id))
     try bridge.close()
@@ -1049,6 +1049,7 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
     func install(storagePath: Data) throws {}
     func open(storagePath: Data) throws -> UInt64 { 1 }
     func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws { XCTAssertEqual(handle, 1); closeCalls += 1 }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
@@ -1143,6 +1144,20 @@ final class KagemushaAppPlatformPreparedProjectionV1Tests: XCTestCase {
       return try KagemushaCoreCoordinatorFrameV1.encodeResponse(.appOperationApproval,
         requestFrame: request, fields: bootstrapResponseOverrides[phase] ?? response)
     }
+  }
+
+  /// TEST ONLY current purpose2 Send projection. Shape correlation cannot create Native custody.
+  /// Preserve the exact C/key/scope and financial sequence from the synthetic terminal fixture;
+  /// prepare W contains no candidate/body commitment and has its separate ten-second interval.
+  private func ordinaryPreparationFields(_ original: [Data]) -> [Data] {
+    var fields = original
+    let start = KagemushaAppApprovalSigningProjectionV1.signingDomain.count + 8
+    fields[13][331] = 2
+    fields[13].replaceSubrange(364..<428, with: Data(repeating: 0, count: 64))
+    fields[1][start + 2] = 2
+    fields[1].replaceSubrange((start + 195)..<(start + 227), with: Data(SHA256.hash(data: fields[13])))
+    fields[1].replaceSubrange((start + 267)..<(start + 275), with: u64(11_000))
+    return fields
   }
 
   private func preparation() throws -> [Data] {

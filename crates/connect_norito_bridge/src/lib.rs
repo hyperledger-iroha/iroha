@@ -195,6 +195,8 @@ pub use kagemusha_core_coordinator_v1::{
 };
 pub use kagemusha_core_coordinator_v1::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryRuntimeStartupV1,
+    KagemushaNativeOrdinaryFiHttpKeyLoanV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
     KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
     KagemushaOrdinaryNativeIntegrityRefreshRequestV1,
     KagemushaOrdinaryNativeIntegrityRefreshResponseV1, KagemushaOrdinaryNativeStartupRequestV1,

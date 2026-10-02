@@ -2,250 +2,429 @@
 title: Petal Stream Transport
 ---
 
+Petal Stream is the animated optical transport of Iroha. A sender shows a sequence of square
+frames; a phone camera reads them; a payload (for KAGEMUSHA, an `IPM1` peer message of up to
+about 10 KB) is reassembled on the other side. It is the "Sakura-storm" alternative to a stream
+of QR codes: it needs no standard QR scanner, but it is built so that a plain camera of an old
+phone can read it.
+
+This document is normative for the wire format, the frame geometry and the receiver rules. The
+reference implementation is the Rust crate `crates/iroha_petal`; the golden vectors in
+`fixtures/petal/` are the cross-SDK conformance suite (§10). Where prose and code disagree, the
+code and the fixtures win and this document is wrong.
+
 ## 1. Overview
 
-Petal Stream is an optional, custom optical transport for offline payloads. It reuses the
-`QrStreamFrame` bytes produced by the existing QR stream encoder but renders them as a
-stylized optical frame instead of a rigid QR grid. Petal Stream **requires a custom
-scanner** on each platform; standard QR scanners will not decode it.
+A frame is a black square carrying four kinds of marks. Three of them carry data, one locates
+the code:
 
-## 2. Frame header (PS1)
-
-Each Petal Stream frame carries a short header before the payload bytes:
-
-| Field | Size | Notes |
+| Mark | What it is | Role |
 | --- | --- | --- |
-| magic | 2 bytes | ASCII `PS` (`0x50 0x53`) |
-| version | 1 byte | `1` |
-| payload_len | 2 bytes | Little-endian payload length in bytes |
-| payload_crc32 | 4 bytes | CRC32 of payload bytes (same CRC32 as QR stream) |
+| **Sakura finders** | Four solid five-petal blossoms in the canvas corners | Locate the code in a camera frame and give the perspective. |
+| **天 tile field** | 256 tiles in a `天`-shaped mask of a 20×20 lattice | Each tile's **light/dark polarity** is one bit (lane `P`); the **katakana glyph** drawn in it is four bits (lane `K`). The mask is mirror-symmetric left/right and not top/bottom, so it also tells a decoder which way is up. |
+| **Three dotted rings** | 80, 92 and 104 dot slots at radii 360, 410 and 460 | Which slots are lit carries 240 bits (lane `D`). Fixed *gates* at 3, 6 and 9 o'clock (none at 12) are always lit. |
 
-The payload bytes are the raw `QrStreamFrame::encode()` output.
+Each lane is exactly one Reed–Solomon codeword over GF(256), so the lanes fail independently:
 
-## 3. Grid layout
+* lane `D` (big isolated dots) is the most robust and survives defocus that would defeat any QR code;
+* lane `P` (tile polarity) is next;
+* lane `K` (the katakana) is the high-rate "turbo" lane: it needs a reasonably sharp camera (blur up to about σ 1.5 px at 720p).
 
-Frames are mapped into a square grid of `grid_size × grid_size` cells.
+Every lane carries fountain-coded payload atoms, so **any one readable lane is useful by itself**
+and the stream completes from whatever mixture of lanes and frames the camera manages to read.
+Lost, torn or blended frames cost time, never correctness.
 
-- **Border (dark):** the outermost ring of cells is always `1` (dark).
-- **Anchors:** 3×3 blocks inside the border are reserved for calibration:
-  - Top-left and bottom-left anchors are **dark** (`1`).
-  - Top-right and bottom-right anchors are **light** (`0`).
-- **Data cells:** all remaining cells are filled row-major (x then y) with the header
-  bits followed by payload bits (MSB-first per byte).
-- **Stream sizing:** choose a single `grid_size` for the whole stream based on the
-  largest frame so scanners do not have to rescale between frames. The reference
-  encoder uses the canonical size ladder `33..69` in steps of 4 (see
-  `PETAL_STREAM_GRID_SIZES`).
-- **Katakana presets:** `--channel katakana-base94` accepts
-  `--katakana-preset balanced|distance-safe` when `--grid-size 0` lets the CLI
-  choose geometry automatically. `balanced` is the default and prefers grid size
-  `41` or larger; `distance-safe` prefers grid size `33` or larger for larger
-  per-cell boxes at longer camera distances. An explicit `--grid-size` always
-  overrides the preset floor.
+Petal Stream replaces the retired binary-grid prototype (`PS1` over `QrStreamFrame` bytes). It
+does not carry `QrStreamFrame` or `IRQR` frames: it is a complete transport with its own framing,
+forward error correction and payload integrity check. KAGEMUSHA payloads use the `kind` byte of
+§5.4 with the same values as `IrohaPeerWireKindV1` (1 request, 2 payment, 3 acknowledgement) and
+carry the encoded `IPM1` message as the payload.
 
-If the header + payload bits exceed capacity, the encoder must choose a larger grid size
-or fail.
+## 2. Frame geometry (normative)
 
-## 4. Decoding and calibration
+All coordinates are *design units* on a square canvas of 1024 units, origin at the top-left, `y`
+growing downward. A renderer scales the canvas to any pixel size (recommended at least 512 px; 768–1080 px
+on phones). Angles are measured from the positive `x` axis and grow clockwise on the screen.
 
-The decoder assumes the Petal Stream frame fills a square crop (similar to QR scanning).
+### 2.1 Palette
 
-1. Convert the crop to luminance.
-2. Sample each cell by averaging a small sub-grid of pixels.
-3. Compute `dark_avg` from the dark anchors and `light_avg` from the light anchors.
-4. Classify each cell as `dark` if `sample < (dark_avg + light_avg) / 2`.
-5. Reconstruct header + payload bytes; verify the CRC32 before accepting.
+| Name | RGB |
+| --- | --- |
+| background | `(0, 0, 0)` |
+| light (tile fill, finders) | `(250, 235, 244)` |
+| pink (dots, glyphs on dark tiles) | `(245, 175, 208)` |
+| ink (glyphs on light tiles) | `(20, 4, 14)` |
 
-If CRC fails, the frame should be rejected and the QR stream assembler can recover using
-parity frames.
+Decoders assume these luminance relations: ink ≈ 0.04 and pink ≈ 0.83 of the light fill. Do not
+re-theme frames that are meant to be scanned.
 
-If the grid size is not known ahead of time, attempt the canonical size ladder and
-accept the first size that yields a valid header + CRC.
+### 2.2 Finders
 
-## 5. Animation guidance
+Centres, clockwise from the top-left: `(72, 72)`, `(952, 72)`, `(952, 952)`, `(72, 952)`.
+A finder is the union of a centre disc of radius 12 and five petal discs of radius 26 whose
+centres lie 34 units from the finder centre at angles `-90° + 72°·k` (`k = 0..4`, the first petal points up),
+drawn in the light colour. A notch of radius 6 centred 60 units from the finder centre along each
+petal axis is cut out of the petal tips. The notches are cosmetic: a decoder may only rely on the
+finder being one large, isolated, roughly round blob of diameter 120 units. Keep every other bright
+object at least one finder diameter away from the finders (hide status bars and similar UI).
 
-The `sora-temple` renderer keeps all payload bits in Petal grid cells, and adds
-data-derived ornamentation:
+### 2.3 Tiles and the `天` mask
 
-- Data cells are rendered as katakana tiles (iroha ordering, including archaic forms).
-- The central SORA logo silhouette (`天`) is composed from high-density data tiles.
-- Three concentric ring bands are dotted with redundant, data-driven symbols.
-- Anchor cells remain high-contrast for threshold calibration.
+The lattice has 20 columns and 20 rows; cell `(col, row)` spans
+`[222 + 29·col, 222 + 29·(col+1))` horizontally and likewise vertically. A tile is a 25×25 square
+(corner radius 3) centred in its cell, leaving a 4-unit gutter. The glyph box is a 23×23 square
+centred in the tile. The data tiles are the `#` cells of this mask, listed row 0 (top) first:
 
-Use luminance contrast (not hue alone) for the decode-critical layers so camera color
-pipelines do not collapse bit separation.
-
-## 6. CLI status
-
-The implemented commands in the current CLI are:
-
-- `encode` for deterministic PNG output of the decode-critical binary Petal
-  grid or deterministic Katakana-base94 command tiles plus `manifest.json`.
-  Feature-gated GIF output for both channels, including bounded multi-frame
-  animation via `--animation-frames`, is also available when `iroha_cli` is
-  built with `--features offline-visual-codecs`.
-- `eval-capture` for replaying binary-grid or Katakana-base94 PNG frames, plus
-  GIF manifests when built with `--features offline-visual-codecs`, through the
-  deterministic Petal decoder. It can optionally apply deterministic capture
-  perturbation and gate on a basis-point or decimal success ratio.
-- `simulate-realtime` for replaying binary-grid or Katakana-base94 PNG frames,
-  plus feature-gated GIF manifests, in deterministic loop order, optionally
-  applying deterministic capture perturbation, and writing the first recovered
-  payload.
-- `score-styles`, which exercises the deterministic Petal capture scorer for
-  binary-grid or Katakana-base94 style candidates.
-
-Implemented binary-grid PNG `encode` example:
-
-```bash
-iroha offline petal encode --input payload.bin --output ./petal_out --format png --style sora-temple --channel binary-grid --dimension 1024 --animation-frames 1
+```
+....############....
+...##############...
+..################..
+.##################.
+###..............###
+###..............###
+#########..#########
+#########..#########
+###..............###
+###..............###
+########....########
+########....########
+#######......#######
+#######..##..#######
+######..####..######
+#####...####...#####
+.###...######...###.
+..###.########.###..
+......########......
+.....##########.....
 ```
 
-The encode manifest uses schema `iroha.offline.petal.encode.v1` and records the
-input path, output directory, payload size, format, style, channel, Katakana
-preset when applicable, fps, animation frame count, dimension,
-requested/resolved grid options, rendered file paths, and each file's encoded
-frame count. For PNG, `--animation-frames <n>` writes `n` deterministic PNG
-files named `frame_0000.png`, `frame_0001.png`, and so on.
-`--animation-frames` must be in `1..=120`.
+There are exactly 256 data tiles, numbered `0..255` in row-major order of the `#` cells.
 
-Feature-gated GIF `encode` example:
+A **light** tile is drawn as the tile square filled with the light colour and the glyph in ink. A
+**dark** tile has no fill (it is the black background) and the glyph is drawn in pink.
 
-```bash
-cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input payload.bin --output ./petal_out --format gif --style sora-temple --channel binary-grid --dimension 1024 --fps 24 --animation-frames 24
+### 2.4 Katakana glyphs
+
+Lane `K` uses sixteen katakana, a subset of the Iroha ordering chosen for mutual distinguishability
+under blur. Symbol `0` is the first: **イ ロ ハ ニ ヘ ト ワ カ レ ム ノ ケ ア ヒ ス ン**.
+
+Each glyph is a set of stroke polylines on a 32×32 grid (`y` down), drawn with round caps and joins
+and a stroke width of 6.5 grid units, scaled into the 23-unit glyph box. The polylines and the derived
+8×8 coverage templates that decoders match against are in `fixtures/petal/petal_stream_v1.json`
+(`glyphs.strokes`, `glyphs.templates`) and are generated from `crates/iroha_petal/src/glyphs.rs`.
+The template bytes are the matching contract; the polylines are the rendering contract.
+
+### 2.5 Rings, gates and guards
+
+Ring `r ∈ {0, 1, 2}` has radius `360, 410, 460` and `N_r = 80, 92, 104` slots; slot `k` is centred at
+angle `2π·k / N_r`, so slot 0 is at 3 o'clock, slot `N_r/4` at 6 o'clock, slot `N_r/2` at 9 o'clock.
+A lit slot is a pink dot of radius 11.
+
+Three gates are always lit, with these dot counts for rings `(0, 1, 2)`:
+
+| Gate | Base slot `b` | Dots on rings 0, 1, 2 |
+| --- | --- | --- |
+| right (3 o'clock) | `0` | 1, 1, 3 |
+| bottom (6 o'clock) | `N_r/4` | 2, 2, 2 |
+| left (9 o'clock) | `N_r/2` | 1, 2, 2 |
+
+One dot occupies slot `b`; two dots occupy `b, b+1`; three dots occupy `b-1, b, b+1` (indices modulo
+`N_r`). The slot on either side of a gate group is a *guard* and is always dark. There is no gate at
+12 o'clock. The 16 gate dots, 18 guards and the remaining 242 slots partition the 276 slots; the
+first 240 remaining slots in flat order (ring 0 slots ascending, then ring 1, then ring 2) are the
+**data slots**, numbered `0..239`; the last two remaining slots are spare and dark.
+
+## 3. Lanes (normative)
+
+### 3.1 Cells to bytes
+
+* **Lane `P`**, 32 bytes: bit `t` is `1` iff tile `t` is light. Byte `j` holds tiles `8j … 8j+7`, most
+  significant bit first.
+* **Lane `K`**, 128 bytes: tile `t` holds glyph symbol `g_t ∈ 0..15`. Byte `j` is `(g_{2j} << 4) | g_{2j+1}`.
+* **Lane `D`**, 30 bytes: bit `b` is `1` iff data slot `b` is lit. Byte `j` holds bits `8j … 8j+7`, MSB first.
+
+### 3.2 Codewords
+
+The transmitted bytes of a lane are `RS(data ‖ parity) XOR whitening`.
+
+| Lane | Codeword | Data | Parity | Corrects |
+| --- | --- | --- | --- | --- |
+| `P` | 32 B | 19 B | 13 B | 6 wrong bytes, or 13 erased |
+| `K` | 128 B | 83 B | 45 B | 22 wrong bytes, or 45 erased |
+| `D` | 30 B | 19 B | 11 B | 5 wrong bytes, or 11 erased |
+
+**Reed–Solomon.** GF(256) with primitive polynomial `x⁸+x⁴+x³+x²+1` (`0x11D`), `α = 2`. The generator is
+`∏_{i=0}^{nsym-1}(x − αⁱ)` (first root `α⁰`), the code is systematic with the data bytes first and the
+highest-degree coefficient first (the same field and conventions as QR Code). Decoders must support
+errors and erasures (`2·errors + erasures ≤ nsym`) and must verify that the corrected word has zero
+syndromes before accepting it.
+
+**Whitening.** A fixed pseudo-random byte string is XORed over the codeword so that every frame is
+statistically balanced whatever the payload is. The generator is xorshift32 (`x ^= x << 13; x ^= x >> 17;
+x ^= x << 5`, a zero seed becomes `0xDEADBEEF`); each output byte is the top byte (`x >> 24`) of the state
+after an update. Seeds: `P = 0x50455441`, `K = 0x4B414E41`, `D = 0x444F5453`. The first
+`word length` bytes of the sequence are used; the sequences are in the fixture.
+
+## 4. Atoms and the fountain code (normative)
+
+A payload of `len` bytes (1 ≤ `len` ≤ 2²⁴−1) is cut into `K = ⌈len / 16⌉` **source atoms** of 16 bytes
+(the last zero padded). The code is a rateless random linear code over GF(2). Encoded atom `id`
+(`u32`):
+
+* `id < K`: source atom `id` (systematic);
+* otherwise the XOR of the source atoms selected by a pseudo-random mask:
+
+  ```
+  mix32(x): x ^= x >> 16; x *= 0x85EBCA6B; x ^= x >> 13; x *= 0xC2B2AE35; x ^= x >> 16   (u32)
+  seed     = mix32((id * 0x9E3779B1) ^ crc ^ 0xA5A5A5A5)
+  word[w]  = mix32(seed + (w + 1) * 0x9E3779B9)            (all arithmetic modulo 2³²)
+  ```
+
+  Mask bit `j` is bit `j mod 32` of `word[⌊j/32⌋]`; bits `≥ K` are cleared; an all-zero mask is
+  replaced by the single bit `id mod K`. `crc` is the payload CRC-32C (§5.1). The mixer must not be
+  replaced by a GF(2)-linear generator such as xorshift: all masks would then lie in a subspace of
+  dimension ≤ 32 and the code could never complete for `K > 32`.
+
+A receiver recovers the payload by Gaussian elimination over GF(2) once it holds `K` linearly
+independent atoms; about `K + 2` random atoms suffice. Verification is by the payload CRC-32C.
+
+## 5. Stream layer (normative)
+
+### 5.1 Identity
+
+`crc` is CRC-32C (Castagnoli, reflected, init and final xor `0xFFFFFFFF`) of the payload. The one-byte
+`tag` is `crc & 0xFF`. `kind` is an application byte (0 = unspecified).
+
+### 5.2 Frames and atom ids
+
+Frames carry a 16-bit counter `f` (wrapping). Frame `f` carries atoms in this order: lane `P` one atom, lane `D` one
+atom (omitted on beacon frames, which are those with `f mod 4 = 0`), lane `K` five atoms. Atom ids are contiguous over the atoms
+actually sent: the first atom of frame `f` has id `7·f − ⌈f / 4⌉`. (65536 is divisible by 4, so ids repeat
+cleanly when the counter wraps.)
+
+### 5.3 Lane data layouts (big-endian)
+
+Every lane starts with a 3-byte header `tag:u8, frame:u16`. Then:
+
+* lane `P`: one atom (16 B) → 19 B;
+* lane `K`: five atoms (80 B) → 83 B;
+* lane `D`, non-beacon frame: one atom → 19 B;
+* lane `D`, beacon frame (`f mod 4 = 0`): `version:u8 (=0x10), kind:u8, len:u24, crc:u32` followed by 7 zero bytes → 19 B.
+
+`version` = `0x10` means format version 1, layout profile 0; anything else is rejected.
+
+### 5.4 Sender
+
+Send frames `f = f₀, f₀+1, …` at 6–12 frames per second (8 is the default). The sender repeats until the
+user stops it; the first `⌈K/6.75⌉` frames carry every source atom once and the rest are repair atoms. There is no
+back-channel; if the receiver needs an acknowledgement it uses its own stream.
+
+### 5.5 Receiver (assembler)
+
+* A beacon locks the receiver to a stream `(kind, len, crc)`; lane headers carry only the tag. A
+  different beacon replaces the active stream only after two consecutive sightings.
+* Atoms that arrive before the first beacon are buffered (bounded, default 128) and replayed once
+  the stream is known; atoms whose tag differs from the active stream are ignored.
+* Beacons with `len = 0` or above the receiver's limit (default 65 536 bytes) are ignored. Memory and
+  work are bounded by that limit (`K ≤ 4096` at the default).
+* When the payload is solved its CRC-32C must match the beacon; if it does not, the elimination state
+  is discarded and counted as an integrity failure while the stream continues.
+* Only lane `D` carries the beacon, so a receiver needs to read lane `D` of at least one beacon frame to start; atoms read
+  earlier are buffered, not lost. In every simulated condition lane `D` was the most robust lane.
+* A completed stream is delivered exactly once; further frames of the same stream are ignored.
+* Sessions forget a partial stream after an idle timeout (default 30 s) or an absolute timeout (default 180 s).
+
+## 6. Rendering
+
+Any 2D API may draw a frame as long as geometry, polarity and colours match §2. The reference software
+renderer (`render.rs`) shades each sample in this order: finders, tiles (rounded tile square, then the glyph
+bitmap), ring dots, background, with 2×2 or 3×3 supersampling. SDKs additionally expose a platform-neutral
+*draw list* (finders, tiles with glyph index and polarity, glyph polylines, lit dots) so a native canvas can
+play a stream without per-pixel work.
+
+Display guidance: full screen brightness, a black surround, the whole square visible, no overlays within
+one finder diameter of the finders, animation at 8 fps. Do not exceed one third of the camera frame rate:
+frames shown for less than three camera frames are frequently blended or torn and are lost.
+
+## 7. Decoding
+
+A conforming decoder takes an 8-bit luma plane (the Y plane of an NV21/YUV camera frame, or luminance
+computed as `(299R + 587G + 114B + 500) / 1000`) and must: locate the four finders, find the pose, resolve
+orientation (four rotations, optionally mirrored), read the lanes and Reed–Solomon-decode them. It must never
+report a lane whose Reed–Solomon check failed, and it must reject garbage (noise, blank frames) without crashing.
+
+The reference algorithm, which the golden captures are calibrated to:
+
+1. **Finders.** Adaptive threshold against the local mean (integral image; window radius `clamp(short side / 8, 12, 64)`).
+   With `range = max(P99.5 − P2, 8)` over the luma percentiles, a pixel is lit when it exceeds the local mean by
+   `max(s·range, 5)` and also exceeds `P2 + 0.2·range`; try sensitivities `s = 0.12, 0.22, 0.34` in turn.
+   Label 4-connected components. A finder candidate is a component with `size ≥ 14 px` (larger bounding-box side), area ≥ 100,
+   fill (area / bounding box) 0.45–0.90 and principal-axis ratio ≥ 0.5, with no *other component of substance* (area ≥ 8 and
+   at least 1.5 % of the candidate's area) whose centroid lies within 0.8 × its size. Keep candidates of at least 0.55 × the
+   largest candidate; order them by size, largest first (ties in discovery order), and combine at most the first ten. Accept a
+   combination of four that forms a convex quadrilateral with similar sizes (largest/smallest ≤ 1.9, longest/shortest side ≤ 2.6,
+   mean side / mean size between 4.8 and 10.5) and take the one with the lowest score
+   `(size ratio − 1) + (side ratio − 1) + |mean side / mean size − 7.33| / 7.33`. If nothing qualifies, retry with all
+   candidates. Refine the four centres with an intensity-weighted centroid inside the blob.
+2. **Pose.** Homography from the four finder centres to the canonical corners, for each of 4 rotations (and 4 mirrored).
+   Reference levels come from the finders (lit) and the black areas inward of them (dark).
+3. **Orientation.** Score each hypothesis by the mean normalised sample of the gate dots minus that of the guards. Try lane `D`
+   under the best three hypotheses whose score is at least 0.2; otherwise try the tile lanes (step 5) under the best four and
+   accept the first hypothesis under which lane `P` or lane `K` decodes.
+4. **Dots.** Sample each data slot (the mean of five points, the centre and four at ±3.5 units), normalise with the local
+   lit/dark levels, and threshold per ring at the midpoint of that ring's gate and guard samples when they are more than 0.2
+   apart (0.5 otherwise).
+5. **Tiles.** For each tile sample an 8×8 patch over the glyph box (each cell is the mean of four bilinear samples at ±¼ cell)
+   in luma levels. Two readings of the patches are defined; each picks, for every tile, the best of 32 hypotheses (polarity ×
+   glyph) by sum of squared error against templates blurred with σ ∈ {0, 0.5, 0.8, 1.1, 1.5} template cells (the σ with the
+   lowest total error wins):
+   * *Level read.* Normalise every cell as `(v − dark) / (lit − dark)` with the lit/dark levels interpolated bilinearly between
+     the four finders, and compare with the templates as drawn (ink 0.04, pink 0.83 of the light fill).
+   * *Normalised read.* Used only for a lane that the level read could not decode. Rescale every patch so that its own 10th
+     percentile (index 6 of the 64 sorted cells) becomes 0 and its 90th percentile (index 57) becomes 1, with a span of at least
+     1 level, clamped to [−0.25, 1.25]; rescale every template the same way (span at least 0.001). The finder levels are not used,
+     so over-exposure, veiling light, glare, shadows and gradients cancel. A tile whose span is below 0.25 × the median span of
+     all 256 tiles is unreadable: its confidence is zero, which makes it the first erasure.
+
+   Words for lanes `P` and `K` come from the level read; any lane that does not decode is retried with the words of the
+   normalised read.
+6. **Reed–Solomon with erasures.** Rank bytes by confidence, least confident first, with ties in position order (a stable sort:
+   the weak tiles of step 5 all have confidence 0), and retry with 0, ⅛, ¼, ⅓ and ½ of the parity bytes as erasures (integer
+   division: lane `D` 0, 1, 2, 3, 5; lane `P` 0, 1, 3, 4, 6; lane `K` 0, 5, 11, 15, 22), and for lane `K` only also ⅔ (30).
+   Lanes `D` and `P` stop at ½: with 11 and 13 parity bytes, a further erasure step leaves so few spare ones that it lets wrong
+   codewords through (§11).
+
+The constants above are what the ports use; they may be tuned together with the fixtures. Decoding is not bit-reproducible
+across platforms (it uses the platform's `sin`, `cos`, `exp` and `atan2`, and `f32` slot centres): conformance means the
+golden captures decode to the recorded lanes, never that two platforms produce identical floating-point intermediates.
+
+## 8. Qualification
+
+All numbers below are from the camera simulator in `crates/iroha_petal/src/sim.rs`
+(perspective and rotation, lens distortion, area integration, defocus blur, bloom, auto-exposure clipping,
+ambient light and gradients, vignetting, sensor noise, sharpening, 8-bit quantisation, frame blending and tearing).
+They are evidence from a model, **not** device measurements. Pixels per tile are given for the code filling about
+80 % of the short side; a modern phone at 1080p is about 22 px/tile, a 720p preview about 15, a 480p preview about 9.
+
+Per-frame decode rates (60 random poses per row, rotation 0–360°, tilt up to 12° unless stated):
+
+| Condition | Any lane | `P` | `K` | `D` |
+| --- | --- | --- | --- | --- |
+| modern 720p, σ 0.7 px | 100 % | 100 % | 100 % | 100 % |
+| legacy 720p, σ 1.3 px, noise 6, tilt 12°, barrel distortion | 100 % | 100 % | 100 % | 100 % |
+| 720p blur σ 1.0 / 1.4 / 1.8 / 2.2 px | 100 % | 100 % | 100 / 100 / 53 / 0 % | 100 % |
+| 720p defocus σ 2.6 / 3.2 / 4.0 px | 100 % | 100 % | 0 % | 100 % |
+| 720p noise 13 levels | 100 % | 100 % | 100 % | 100 % |
+| 720p tilt ≤ 25° / 35° / 45° | 100 / 100 / 92 % | same | 100 / 98 / 88 % | same |
+| 480p, 6.7–9.1 px/tile, σ 1.2 px | 100 % | 100 % | 0 % | 100 % |
+| 480p, 9.7–9.8 px/tile, σ 1.2 px | 100 % | 100 % | 37–40 % | 100 % |
+| 480p defocus σ 2.6 / 3.2 px | 100 % | 100 / 68 % | 0 % | 100 % |
+| harshest preset (480p, σ 1.7, tilt, bloom, ambient 10 %, barrel) | 100 % | 97 % | 0 % | 100 % |
+
+Light and motion that are not nominal (`stress` example, 40 poses per cell; each cell lists a modern 720p / a legacy 720p /
+the harshest 480p camera; light levels are fractions of the lit level; hand shake is a linear blur of the given length):
+
+| Condition | `P` | `K` | `D` |
+| --- | --- | --- | --- |
+| veiling light 0.35 / 0.5 | 100 / 100 / 0 % | 100 / 98–100 / 0 % | 100 / 100 / 100 % |
+| auto-exposure gain 1.5× / 2× too high | 100 / 98–100 / 0 % | 100 / 78–100 / 0 % | 100 / 100 / 100 % |
+| auto-exposure gain 3× too high | 100 / 12 / 0 % | 100 / 0 / 0 % | 100 / 100 / 100 % |
+| illumination gradient equal to the lit level | 100 / 100 / 0 % | 100 / 90 / 0 % | 100 / 100 / 2 % |
+| glare 0.5 × lit, σ 120 px | 100 / 98 / 2 % | 100 / 100 / 0 % | 98 / 98 / 88 % |
+| glare 1.0 × lit, σ 120 px | 92 / 45 / 0 % | 92 / 42 / 0 % | 70 / 50 / 8 % |
+| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 10 % | 100 / 98 / 0 % | 100 / 100 / 100 % |
+| banding 50 % deep, 80 px period | 20 / 2 / 0 % | 8 / 0 / 0 % | 98 / 88 / 12 % |
+| hand shake 4 px | 100 / 100 / 85 % | 60 / 12 / 0 % | 100 / 100 / 100 % |
+| hand shake 9 px | 100 / 100 / 30 % | 0 / 0 / 0 % | 100 / 100 / 100 % |
+
+The tile lanes survive the lighting problems that old cameras actually have because of the normalised read of §7 step 5:
+without it the same legacy camera loses `P` at 2× over-exposure (4 % of frames) and `K` at 1.5× (0 %). Three limits remain.
+A 480p preview reads only lane `D` as soon as the light is not nominal (its tiles are 9 px wide and blurred into each other):
+that is why `D` is designed to work alone. A deep glare or wide, deep banding defeats every lane in the frames it covers: that
+is why the stream is rateless and frames are shown for several camera frames. Hand shake costs lane `K` first (it is gone at
+9 px of blur) while `P` and `D` hold at 720p.
+
+End to end (`stream_sim`: 8 fps animation, 30 fps camera, 1/60 s exposure with blending/tearing, random pose, 8 trials per
+camera) for the largest canonical KAGEMUSHA payment, 7 552 bytes: **8.6 s** with a modern or legacy camera (lane `K` readable in
+95–96 % of frames), **12 s** on average with a soft 720p camera (σ 1.8 px, lane `K` in 47 % of frames, 17 s at the 90th
+percentile) and **34–38 s** when only lanes `P` and `D` are readable (480p). A 2 KB payload takes 2.2 s, 3.2 s and 9–12 s
+respectively. With the camera 2× over-exposed or under veiling light of 0.35 a legacy camera still needs 8.6 s; without the
+normalised read of §7 step 5 it needed 72 s and 32 s. Completion was 100 % and no wrong payload was ever delivered. At
+1280×720 the reference decoder needs about 10 ms per frame; ports are expected to stay within a factor of 20.
+
+What this does and does not establish: it shows the format and decoder degrade gracefully — the lane that fails first is the
+katakana lane, then polarity, then the dots — and that localisation does not depend on the content. It does not replace
+physical qualification on the approved device list (autofocus behaviour, rolling shutter, OLED PWM flicker,
+screen glare and real ISP sharpening are only modelled). The device protocol is: show the stream at 8 fps at maximum brightness, hold the
+phone 20–30 cm away, record time-to-complete over 20 runs per device and distance, and file the lane statistics from `ScanStats`.
+
+Scanner guidance that follows from the lighting rows: a phone camera left on automatic exposure over-exposes a mostly black
+screen, so a scanner should use exposure compensation of about −1 EV (−2 EV on old cameras) where the camera API offers it, or lock
+exposure once the finders are seen, and should discourage glare by asking the user to tilt the screen. The decoder tolerates
+what is left over; it should not be asked to.
+
+Run the evidence yourself:
+
+```
+cargo run --release -p iroha_petal --example qualify -- 60          # per-frame matrix
+cargo run --release -p iroha_petal --example stress -- 40           # lighting stress matrix
+cargo run --release -p iroha_petal --example stream_sim -- 12 7552 8 # end to end
+iroha offline petal simulate --camera legacy --bytes 7552 --fps 8   # same, through the CLI
 ```
 
-Without `offline-visual-codecs`, `--format gif` fails before rendering and tells
-the operator which feature to enable. With the feature enabled, GIF output is a
-single animated file whose manifest entry records `encoded_frame_count`.
+## 9. CLI
 
-Feature-gated Katakana base94 GIF example:
-
-```bash
-cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input payload.bin --output ./petal_out --format gif --channel katakana-base94 --style sora-temple-command --dimension 1024 --fps 24 --animation-frames 24
+```
+iroha offline petal encode   --input payload.bin --output out/ --kind 2 [--frames N] [--size 1024] [--fps 8] [--format png|gif]
+iroha offline petal decode   --input-dir out/ --output payload.out
+iroha offline petal inspect  --input out/frame_0000.png
+iroha offline petal simulate --camera modern|legacy|soft|worst --bytes 7552 --fps 8 --trials 4
 ```
 
-Implemented Katakana base94 PNG example:
+`encode` writes `frame_0000.png …` (or one looping `stream.gif` with the `offline-visual-codecs` feature) and
+`manifest.json` (`iroha.offline.petal.encode.v1`). `decode` reads PNG frames in file-name order from a
+directory — frames extracted from a screen recording work. `inspect` prints which lanes decode, the orientation and
+the beacon of one frame.
 
-```bash
-iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --style sora-temple-command --dimension 1024 --katakana-preset distance-safe
-```
+## 10. Fixtures and conformance
 
-The current Katakana renderer writes RGB PNG/GIF command tiles while preserving
-the decode-critical luminance value at each sampled cell center and leaving
-calibration cells solid. This lets `eval-capture` and `simulate-realtime` use
-the same sample decoder as the binary-grid channel for PNG and feature-gated
-GIF manifests. Use `--katakana-preset balanced` or omit the flag for ordinary
-camera distances; use `--katakana-preset distance-safe` with a larger
-`--dimension` for longer-distance validation. Passing `--grid-size <n>` keeps
-that exact grid size and records the requested/resolved value in the manifest.
+* `fixtures/petal/petal_stream_v1.json` — constants, layout tables, glyph strokes and templates, CRC-32C, xorshift32/`mix32`,
+  whitening, Reed–Solomon vectors, fountain masks, the atom-id schedule, and for three streams (`tiny`, `one-pass`, `wrap`) the
+  lane data, transmitted words, glyph string and lit-dot list of every listed frame. Encoders must reproduce all of it bit for bit.
+* `fixtures/petal/petal_captures_v1.json` — nine degraded camera luma planes (zlib + base64, row-major 8-bit) with `must_decode`
+  lanes, the lanes the reference decoder reads (`reference_decoded`), the expected lane data, a `mirrored` flag, and two
+  negatives. A decoder must read the required lanes, must never return a lane with wrong data, must reject the negatives, and
+  conforming ports reproduce `reference_decoded` exactly. Three captures exist for the normalised tile read of §7: an
+  over-exposed frame, a frame under veiling light, and a frame with a shadow band across the code.
+* Regenerate with `cargo run -p iroha_petal --example gen_fixtures -- fixtures/petal/petal_stream_v1.json` and
+  `cargo run --release -p iroha_petal --example gen_captures -- fixtures/petal/petal_captures_v1.json`; `cargo test -p iroha_petal`
+  fails if the files and the reference drift apart.
 
-Implemented binary-grid `eval-capture` example:
+Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`IrohaSwift`), Kotlin/Java (`kotlin/core-jvm`,
+`kotlin/client-android`), JavaScript (`javascript/iroha_js`), Python (`python/iroha_petal`), C# (`csharp`).
 
-```bash
-iroha offline petal eval-capture --input-dir ./petal_out/png --channel binary-grid --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
-```
+## 11. Security considerations
 
-The current `eval-capture` path finds the encode `manifest.json`, samples each
-PNG frame or feature-gated GIF internal frame at deterministic cell centers,
-decodes the Petal frame, and fails if the success ratio drops below
-`--min-success-ratio` or `--min-success-ratio-bps`. It reports both executed
-attempts (`attempts`) and total scheduled attempts (`planned_attempts`) plus
-`aborted_early=true` when the remaining frames can no longer satisfy the gate.
-Manifest-free directories are supported only for PNG frames and only when
-`--grid-size` is supplied.
+* Frames are untrusted input. Decoders bound their work (`max_pixels` 12 MP, payload limit, bounded buffers) and never panic
+  on malformed images; garbage fixtures are part of the suite.
+* Reed–Solomon decoding with erasures can accept a word that is not a transmission: measured on uniformly random words, one
+  decoding of a lane accepts 0.015 % of lane `D`, under 0.001 % of lane `P` and none of lane `K`. (Lane `D` used to try a
+  seventh erasure and lane `P` an eighth; the first accepted 0.4 % of random words and cost five wrong lanes in 2 900 simulated
+  harsh frames, the second two wrong lanes in 600 banded 480p frames. After the caps there were none, for 0.65 % fewer `D` and
+  0.15 % fewer `P` lanes read.) The stream layer absorbs what is left: lane headers carry the stream
+  tag (a stranger passes with probability 1/256) and the payload CRC-32C is verified before delivery, so a false accept costs at
+  most an integrity reset, never a wrong payload.
+* The payload CRC-32C and the Reed–Solomon codes detect corruption, not forgery. A screen in front of the camera can always show
+  garbage or a different stream; the application must authenticate the payload (KAGEMUSHA messages carry their own proofs and
+  signatures) and must not treat a completed Petal stream as authentic.
+* A visible stream is readable by anyone who films it. Encrypt payloads that must stay private before streaming them.
+* A stream that never completes (jamming) only wastes the user's time; sessions time out.
 
-Perturbed binary-grid `eval-capture` example:
+## 12. Open work
 
-```bash
-iroha offline petal eval-capture --input-dir ./petal_out/png --channel binary-grid --profile default --perturb-capture --capture-seed 42 --capture-attempts 12 --min-success-ratio-bps 9500 --output-report ./petal_out/capture_eval_perturbed.json
-```
-
-With `--perturb-capture`, the sampled binary grid is re-rendered through the
-same deterministic capture profile used by `score-styles`. The report records
-`perturb_capture=true`, `capture_seed`, `capture_attempts_per_frame`, and the
-effective capture profile. Profile override flags (`--capture-attempts`,
-`--capture-dark-luma`, `--capture-light-luma`, and
-`--capture-luminance-jitter`) fail closed unless `--perturb-capture` is present.
-Additional deterministic cell-grid perturbation flags are available under
-`--perturb-capture`:
-
-- `--capture-downscale-cells <1..=8>` averages sampled cells into square blocks
-  before decoding to simulate a lower effective camera resolution.
-- `--capture-blur-radius <0..=4>` applies deterministic box blur over sampled
-  cells before decoding.
-- `--capture-motion-blur-cells <0..=8>` applies deterministic horizontal motion
-  blur over sampled cells before decoding.
-- `--capture-noise-amplitude <0..=64>` adds deterministic seeded per-cell sensor
-  noise before decoding.
-- `--capture-exposure-offset <-255..=255>` shifts sampled luminance with
-  saturating bounds before decoding.
-
-These values are recorded in the JSON report and also apply to Katakana-base94
-PNG/GIF replay because the renderer preserves decode-critical center luminance.
-Renderer-specific Katakana style scoring beyond the current binary-grid style
-sets remains planned.
-
-Implemented PNG/GIF `simulate-realtime` example:
-
-```bash
-iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel binary-grid --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
-```
-
-The current `simulate-realtime` path replays rendered binary-grid or
-Katakana-base94 PNG frames, plus feature-gated GIF internal frames, in manifest
-order with deterministic looped playback via `--realtime-loops <n>`.
-It reports `loop_index` and `source_index` per attempt, records the first
-successful source frame, and writes `--output-payload` only after a frame decodes
-successfully.
-When `--perturb-capture` is enabled, realtime attempts expand to
-`loop * source frame * capture attempt`; the report adds
-`capture_attempt_index` and records the first successful capture-attempt index.
-For distance-safe Katakana validation, encode with `--katakana-preset
-distance-safe` and keep `--dimension` large enough that realtime results reflect
-the larger-box operating point.
-
-Implemented `score-styles` example (repeatable style ranking report):
-
-```bash
-iroha offline petal score-styles --input payload.bin --output-report ./petal_out/style_score.json --profile default --fps 24 --target-effective-bps 3000
-```
-
-`score-styles` is implemented as the core deterministic capture/report gate for
-the published `sora-temple-default` style set. The report includes the selected
-profile, channel, Katakana preset when applicable, seed, requested and resolved
-grid options, per-style channel/preset metadata, per-style capture profile,
-capture attempts/successes, `capture_success_ratio_bps`,
-`effective_payload_bytes_per_second`, `effective_payload_bits_per_second`,
-`throughput_score_bps`, `overall_score_bps`, and `recommended_style`. The
-`--target-effective-bps` threshold is evaluated in bits per second; the byte/sec
-field is included for operator readability.
-
-Use `--style-set sora-temple-expanded` to score the default `sora-temple`
-candidate plus the deterministic `sora-temple-high-contrast` hardening
-candidate. The high-contrast candidate preserves the capture-attempt and jitter
-settings while widening the dark/light luminance separation with saturating
-bounds. If both candidates tie, the report keeps `sora-temple` as the
-recommendation for the default baseline; under a collapsed low-contrast profile
-such as `dark_luma=128`, `light_luma=129`, `luminance_jitter=0`, the expanded
-set recommends `sora-temple-high-contrast`.
-
-For Katakana-base94 scoring, pass `--channel katakana-base94`. The default
-candidate becomes `sora-temple-command`, `--katakana-preset` resolves the same
-balanced or distance-safe grid floors used by `encode`, and
-`--style-set sora-temple-expanded` adds
-`sora-temple-command-high-contrast`. Under the same collapsed low-contrast
-profile, the Katakana expanded set recommends the high-contrast command
-candidate while preserving deterministic sample-decoder behavior.
-
-The default deterministic CLI baseline for the `sora-temple-capture-baseline`
-payload is `recommended_style=sora-temple`, 12/12 successful decode attempts
-(`capture_success_ratio_bps=10000`), `requested_grid_size=0`,
-`resolved_grid_size=33`, `effective_payload_bits_per_second=5376`, and
-`overall_score_bps=10000` against the `9500` capture gate and `3000` bps
-throughput gate. The low-contrast adversarial profile (`dark_luma=128`,
-`light_luma=129`) is pinned at 0/4 successful attempts so the gate fails closed
-when luminance separation collapses.
-
-For operator-facing QR transport presets (`ecc`/dimension/fps) in noisy camera conditions, see
-`specs/offline_qr_operator_runbook.md`.
+* TODO: physical-device qualification of the matrices in §8, including the OLED/PWM and rolling-shutter effects, and of the
+  exposure-compensation guidance.
+* TODO: accept three visible finders when one is glared out or outside the frame.
+* TODO: pose tracking between frames to skip the finder search on slow devices.
+* TODO: a denser layout profile (the beacon `version` byte reserves the profile nibble) for cameras that resolve
+  more than 22 px per tile.

@@ -579,6 +579,8 @@ fn validate_alias_auto_renew_config(
 /// Exact persisted configuration with clean runtime state is a no-op even when
 /// replay carries the previous revision. A changed configuration, disable, or
 /// reset of retry/suspension state requires `Apply` and an exact live revision.
+/// After rekey, even identical configuration must explicitly adopt the current
+/// lease owner; the prior owner's debit authorization is never a no-op.
 ///
 /// # Errors
 ///
@@ -600,7 +602,11 @@ pub fn classify_alias_auto_renew(
     }
     let current =
         crate::sns::alias_auto_renew_state(world, &operation.target).map_err(sns_error)?;
-    if let Some(current) = current.as_ref()
+    // The current authenticated lease owner can adopt a stale configuration
+    // only through the exact revision CAS below. Rekey is not an implicit debit
+    // authorization for the new account.
+    if cfg!(all(test, sumeragi_core_mutation = "HC42"))
+        && let Some(current) = current.as_ref()
         && current.owner != record.owner
     {
         return Err(AliasSetupError::new(
@@ -614,7 +620,8 @@ pub fn classify_alias_auto_renew(
     let exact_clean_state = current
         .as_ref()
         .map_or(operation.config.is_none(), |current| {
-            current.config == operation.config
+            current.owner == record.owner
+                && current.config == operation.config
                 && current.failure_count == 0
                 && current.next_retry_at_ms.is_none()
                 && current.suspended_reason.is_none()

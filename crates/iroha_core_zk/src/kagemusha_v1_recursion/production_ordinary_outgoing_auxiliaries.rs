@@ -15,8 +15,7 @@ use super::production_ordinary_state::bootstrap_inputs::{
 use super::*;
 use crate::kagemusha_v1_recursion::{
     KagemushaAuthenticatedOrdinaryPreparationGuardV1,
-    KagemushaMintFinalityHelperVerificationRequestV1,
-    KagemushaPreparedIntentCommitmentsV1,
+    KagemushaMintFinalityHelperVerificationRequestV1, KagemushaPreparedIntentCommitmentsV1,
     ordinary_guard_verifier::{OrdinaryGuardProofWireV1, public_column},
     ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
 };

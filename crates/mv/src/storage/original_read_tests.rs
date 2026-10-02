@@ -143,3 +143,76 @@ fn committed_map_readers_do_not_acquire_or_retain_the_physical_writers() {
     assert!(storage.revert.try_write().is_some());
     assert_eq!(captured.current().get(&1).unwrap().as_ptr(), pointer);
 }
+
+#[test]
+fn nonblocking_original_maps_preserve_both_roots_and_reject_stale_or_foreign_owner() {
+    let source: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
+    let other: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
+    let mut write = source.block();
+    write.insert(1, 11);
+    write.commit();
+    let retained = source.try_committed_view_nonblocking().unwrap();
+    assert_eq!(retained.current().get(&1), Some(&11));
+    assert_eq!(retained.undo().get(&1), Some(&Some(10)));
+    assert!(retained.try_matches_current(&source).unwrap());
+    assert!(!retained.try_matches_current(&other).unwrap());
+    source.block().commit();
+    assert!(!retained.try_matches_current(&source).unwrap());
+    assert_eq!(retained.current().get(&1), Some(&11));
+    assert_eq!(retained.undo().get(&1), Some(&Some(10)));
+}
+
+#[test]
+fn nonblocking_original_maps_preserve_publication_mutex_busy_release() {
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+    let source: Storage<_, _> = [(1_u64, 10_u64)].into_iter().collect();
+    let original = source.publication.try_capture_reads(|| true).unwrap();
+    let Ok(guard) = original.try_prepare_current::<Infallible>(&source.publication) else {
+        panic!("available original publication")
+    };
+    let Err(PublicationPreparationError::Busy(release)) = source.try_committed_view_nonblocking()
+    else {
+        panic!("publication lock must refuse immediately")
+    };
+    let mut wait = pin!(release.wait_for_release());
+    let mut cx = Context::from_waker(Waker::noop());
+    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+    drop(guard);
+    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Ready(()));
+    assert!(source.try_committed_view_nonblocking().is_ok());
+}
+
+#[test]
+fn committed_readonly_interface_uses_the_same_retained_current_generation() {
+    let source: Storage<_, _> = [(1_u64, 10_u64), (2, 20), (3, 30)].into_iter().collect();
+    let retained = source.try_committed_view_nonblocking().unwrap();
+    let mut changed = source.block();
+    changed.remove(1);
+    changed.insert(2, 99);
+    changed.insert(4, 40);
+    changed.commit();
+    assert_eq!(StorageReadOnly::get(&retained, &2), Some(&20));
+    assert_eq!(
+        StorageReadOnly::get_key_value(&retained, &2),
+        Some((&2, &20))
+    );
+    assert_eq!(StorageReadOnly::first_key_value(&retained), Some((&1, &10)));
+    assert_eq!(StorageReadOnly::last_key_value(&retained), Some((&3, &30)));
+    assert_eq!(StorageReadOnly::len(&retained), 3);
+    assert!(!StorageReadOnly::is_empty(&retained));
+    let mut all = StorageReadOnly::iter(&retained);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.next(), Some((&1, &10)));
+    assert_eq!(all.next_back(), Some((&3, &30)));
+    assert_eq!(all.next(), Some((&2, &20)));
+    assert_eq!(all.next(), None);
+    let mut range = StorageReadOnly::range(&retained, 2..=3);
+    assert_eq!(range.next(), Some((&2, &20)));
+    assert_eq!(range.next_back(), Some((&3, &30)));
+    assert_eq!(range.next(), None);
+    assert!(!retained.try_matches_current(&source).unwrap());
+}

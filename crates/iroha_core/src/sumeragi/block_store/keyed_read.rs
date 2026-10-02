@@ -95,7 +95,7 @@ impl BodyReadJob for KeyedRead {
                         Ok(source) => source,
                         Err(error) => {
                             self.phase = Phase::Decoded(decoded);
-                            return Err(BodyReadError::Io(error));
+                            return Err(BodyReadError::from_attempt(error));
                         }
                     };
                     if actual.instance() != self.source.instance()
@@ -141,13 +141,9 @@ impl BodyReadJob for KeyedRead {
                     Ok(_) => return Ok(BodyReadPoll::Absent),
                     Err((job, error)) => {
                         self.phase = Phase::VerifyingOther(job);
-                        if error.is_local_refusal() {
-                            return Err(BodyReadError::Io(io::ErrorKind::WouldBlock.into()));
-                        }
-                        return Err(BodyReadError::Io(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("stored availability restoration: {error:?}"),
-                        )));
+                        return Err(BodyReadError::from_attempt(
+                            super::super::storage_attempt::restoration(error),
+                        ));
                     }
                 },
                 Phase::Consumed => return Err(BodyReadError::Completed),

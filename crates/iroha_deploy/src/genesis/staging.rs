@@ -107,9 +107,9 @@ pub fn configured_npos_bootstrap_stake_asset_id(
     let pinned = parameters
         .custom()
         .get(&iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id())
-        .and_then(
-            iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter,
-        )
+        .map(iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| eyre!("NPoS bootstrap requires the committed XOR asset identity"))?
         .xor_asset_definition_id;
     let stake_asset_id = if let Some(config) = config {
@@ -229,7 +229,7 @@ pub fn bind_and_sign_staged_sumeragi_context(
     parameters.execution_policy_hash = execution_policy_hash.into();
     let bound_manifest = genesis
         .with_sumeragi_context_parameters(parameters)
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     let proposal = build_signed_genesis(
         bound_manifest.clone(),
         genesis_key_pair,
@@ -464,7 +464,7 @@ fn staged_sumeragi_context_hashes_on_bounded_stack(
     // thread-local I105 discriminant.
     let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
     let provisional = build_signed_genesis(
-        genesis.clone().with_consensus_meta(),
+        genesis.clone().with_consensus_meta()?,
         genesis_key_pair,
         da_proof_policies.cloned(),
         confidential_policy_hash,
@@ -885,7 +885,8 @@ mod tests {
                 .build_raw()
                 .expect("complete generic four-validator genesis")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-                .with_consensus_meta();
+                .with_consensus_meta()
+                .expect("valid fixture consensus parameters");
         let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &genesis_key_pair,

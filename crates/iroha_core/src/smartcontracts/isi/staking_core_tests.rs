@@ -266,7 +266,11 @@ fn set_test_npos_penalty_windows(
     evidence_horizon_blocks: u64,
     slashing_delay_blocks: u64,
 ) {
-    let mut parameters = stx.world.sumeragi_npos_parameters().unwrap_or_default();
+    let mut parameters = stx
+        .world
+        .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
+        .unwrap_or_default();
     parameters.evidence_horizon_blocks = evidence_horizon_blocks;
     parameters.slashing_delay_blocks = slashing_delay_blocks;
     parameters
@@ -281,6 +285,7 @@ fn set_fixture_xor_identity(stx: &mut StateTransaction<'_, '_>, asset: &AssetDef
     let parameters = stx
         .world
         .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
         .expect("fixture committed parameters");
     assert_eq!(
         asset, &parameters.xor_asset_definition_id,
@@ -316,6 +321,7 @@ fn configure_reward_fixture(
     let asset_def_id = stx
         .world
         .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
         .expect("fixture committed NPoS parameters")
         .xor_asset_definition_id;
     Register::asset_definition({
@@ -413,6 +419,7 @@ fn prepare_accounts(
     let asset_def_id = stx
         .world
         .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
         .expect("fixture committed NPoS parameters")
         .xor_asset_definition_id;
     Register::asset_definition({
@@ -526,7 +533,12 @@ fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
         .get_mut()
         .custom
         .remove(&SumeragiNposParameters::parameter_id());
-    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    assert!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
+            .is_none()
+    );
     effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1)
         .expect("initial genesis is its own exact one-height monetary authority");
     for expiry in [0, 2, u64::MAX] {
@@ -594,7 +606,12 @@ fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custo
         .custom
         .remove(&SumeragiNposParameters::parameter_id())
         .expect("fixture pins the actual network XOR definition");
-    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    assert!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
+            .is_none()
+    );
     let lane = LaneId::SINGLE;
     let source = AssetId::new(definition.clone(), validator.clone());
     let destination = AssetId::new(definition, escrow);
@@ -736,6 +753,7 @@ fn genesis_staking_requires_committed_xor_and_preserves_exact_transfer_and_custo
     assert_eq!(
         stx.world
             .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
             .unwrap()
             .xor_asset_definition_id,
         SumeragiNposParameters::default().xor_asset_definition_id

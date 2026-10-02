@@ -294,7 +294,9 @@ fn funded_boundary_keeps_genuine_result_witness_until_receipt_drop() {
     let tampered = changed_qc(&original, |qc| qc.attestation_witness = None);
     assert!(matches!(
         prefix.push_prepared(read(tampered, &budget)),
-        Err(ChainReadError::Certificate { .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { .. }
+        ))
     ));
     assert_eq!(prefix.prefix.tip.height(), 9);
     let (receipt, _) = prefix

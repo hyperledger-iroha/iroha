@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import hashlib
 import hmac
 import re
@@ -21,7 +23,7 @@ SOURCE_PATHS = ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_clean
  'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs',
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs',
  'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs',
- 'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs',
+ 'crates/iroha_torii/src/openapi/tests/retail_fee_contract.rs',
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs',
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs',
  'crates/iroha_torii/src/openapi/tests/prepared_account_contracts.rs',
@@ -257,7 +259,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                    'musubi_crypto_text_schemas_do_not_impose_single_key_size_limits',
                                                                    'musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types',
                                                                    'musubi_chunker_text_bounds_match_the_wire_type',
-                                                                   'multisig_propose_schema_exposes_optional_validation_fee_bindings_as_strings',
+                                                                   'multisig_propose_schema_binds_complete_native_retail_assessment',
                                                                    'multisig_cancel_response_requires_typed_fee_payment_property',
                                                                    'multisig_propose_instruction_schema_matches_native_norito_json',
                                                                    'generated_operations_declare_tool_effects',
@@ -291,7 +293,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                     'protected_contract_identity_openapi_is_signed_and_exact',
                                                                     'multisig_read_auth_contract_is_path_specific',
                                                                     'scoped_artifact_openapi_binds_network_full_dataspace_and_content'),
- 'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs': ('hijiri_validation_fee_quote_contract_is_native_bounded_and_authenticated',),
+ 'crates/iroha_torii/src/openapi/tests/retail_fee_contract.rs': ('retail_validation_fee_api_contract_has_calendar_rates_and_authenticated_reads',),
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': ('iso20022_operations_require_fresh_operator_signatures',
                                                            'iso20022_openapi_documents_party_scope_durable_admission_and_signed_xml',
                                                            'iso20022_v2_status_and_audit_responses_are_exact_and_bounded'),
@@ -383,11 +385,11 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
 ATTRIBUTE_SIGNATURE = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
  'crates/iroha_torii/src/openapi.rs': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
  'crates/iroha_torii/src/openapi/tests.rs': 'fd68bfc0a7fd23918b87ee9eaecc2bc14ec8c1009091e451d1a12c0d8ba3e41c',
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 'aba62dbf9b4549579d1940c2ddf57632fe0ddd483c730853c32e69c728b3fbab',
+ 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 'afd54a58437a53ff56657fba610c58a1552124c71494ee2657a6c185b6d02411',
  'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 'e9c818b7a47d03eeafa5846b96838acaca60a99594e6b125d8bc564f7d1e5d1a',
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': '32dc22a816d915f8cc2dd33fc257a38306ba0061f330594d4287a45ddc604ad6',
  'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 'c7a4d2c750f2df0bc55fcf6390ed29eef60cd2362f6cfc34e97f0933358c8554',
- 'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs': '61f9b333943bab13defdf1e7454e88f819cc5c4e206890bfaac9aa2da3054cf4',
+ 'crates/iroha_torii/src/openapi/tests/retail_fee_contract.rs': '1b46a214f2d8db475f194c3652c131f3dfee789f919c7d905e84400400d7c275',
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': 'b1b49d0c5d309eb98a9db7bcba90c415ad86ed10d41fb55fd9216bbf7fb2cd12',
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': 'a0721c177ae54f8127c3f74c46c2435970238f7e49c3d1fc1d0149dfea3280e7',
  'crates/iroha_torii/src/openapi/tests/prepared_account_contracts.rs': 'c67c92d10270de49b0a2c592728382b8c8e6f4a717803e74ac4e57f501bb8152',
@@ -499,6 +501,157 @@ def _test_inventory_and_signature(source: str) -> tuple[tuple[str, ...], str]:
     return tuple(names), digest
 
 
+OPENAPI_AUTHORITIES = (
+    "artifacts/openapi/torii.json",
+    "crates/iroha_torii/assets/openapi/torii.json",
+    "artifacts/openapi/versions/current/torii.json",
+)
+RETAIL_FEE_OPERATIONS = (
+    ("/v1/validation-fee/quote", "post", "quote", "RetailFeeQuoteResponseV1"),
+    ("/v1/validation-fee/accounts/{account_id}/status", "get", "status", "RetailFeeStatusResponseV1"),
+    ("/v1/validation-fee/accounts/{account_id}/receipts", "get", "receipts", "RetailFeeReceiptsResponseV1"),
+    ("/v1/validation-fee/accounts/{account_id}/statement", "post", "statement", "RetailFeeStatementResponseV1"),
+    ("/v1/validation-fee/accounts/{account_id}/statement/head", "get", "statement_head", "RetailFeeCurrentHeadResponseV1"),
+)
+
+
+def _validate_retail_fee_openapi(document: dict) -> None:
+    """Check signed assessment, calendar and proof owners without refreshing pins."""
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise ContractAssetError(message)
+
+    paths = document["paths"]
+    schemas = document["components"]["schemas"]
+    require("/v1/validation-fee/hijiri/quote" not in paths, "retired quote route")
+    for name in (
+        "ValidationFeeHijiriQuoteRequestV1",
+        "ValidationFeeHijiriQuoteResponseV1",
+        "GovernanceParliamentProposalPayloadValidationFeePayoutRecipientV1",
+    ):
+        require(name not in schemas, "retired schema")
+    for path, method, suffix, response in RETAIL_FEE_OPERATIONS:
+        operation = paths[path][method]
+        route_id = "validation_fee.retail." + suffix
+        require(operation["x-iroha-operation"] == route_id, "operation owner")
+        require(operation["x-iroha-route-auth"] == {
+            "schemaVersion": 1,
+            "stableRouteId": route_id,
+            "authentication": "canonical_account_signature",
+            "admission": "authenticated_account",
+        }, "authentication owner")
+        require(operation["x-iroha-tool-effect"] == "read", "read operation")
+        require(operation["security"] == [
+            {"IrohaCanonicalAccount": [], "IrohaCanonicalNonce": [], "IrohaCanonicalSignature": [], "IrohaCanonicalTimestampMs": []},
+            {"IrohaCanonicalWitness": []},
+        ], "authentication alternatives")
+        require(operation["x-iroha-canonical-auth-v1"]["body_hash_bound"] is True, "signed body")
+        require(operation["x-iroha-canonical-auth-v1"]["exact_request_target"] is True, "signed target")
+        responses = operation["responses"]
+        require(responses["200"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/" + response,
+        }, "response owner")
+        require(responses["200"]["headers"]["Cache-Control"]["schema"]["const"] == "private, no-store", "private response")
+        require(responses["401"]["headers"]["x-iroha-reject-code"]["schema"]["enum"] == ["canonical_authentication_required"], "missing authentication")
+        require(responses["403"]["headers"]["x-iroha-reject-code"]["schema"]["enum"] == ["retail_fee_account_mismatch"], "wallet authorization")
+    assessment = schemas["RetailFeeAssessmentV1"]
+    require(set(assessment["properties"]) == {
+        "account_id", "retail_enrolled", "billing_month_start_ms", "policy_revision",
+        "payments_used_before", "qualifying_payments", "fee_minor", "state_commitment",
+        "intent_hash", "expires_at_ms",
+    }, "complete assessment")
+    require(set(assessment["required"]) == set(assessment["properties"]), "assessment required fields")
+    require(assessment["additionalProperties"] is False, "assessment closed layout")
+    for field in ("state_commitment", "intent_hash"):
+        require(assessment["properties"][field]["type"] == "string", "fixed bytes JSON type")
+        require(assessment["properties"][field]["pattern"] == "^[0-9A-F]{64}$", "fixed bytes canonical form")
+    request = schemas["MultisigProposeRequest"]
+    require(request["properties"]["validation_fee_assessment"] == {"oneOf": [
+        {"$ref": "#/components/schemas/RetailFeeAssessmentV1"}, {"type": "null"},
+    ]}, "complete optional assessment")
+    require("validation_fee_assessment" not in request["required"], "optional assessment input")
+    require(not set(request["properties"]) & {
+        "validation_fee_policy_version", "validation_fee_policy_hash", "validation_fee_hijiri_fee_quote_hash",
+        "validation_fee_instruction_index", "validation_fee_transfer_entry_index",
+    }, "retired positional fee input")
+    policy = schemas["GovernanceParliamentProposalPayloadValidationFeePolicyV1"]
+    require(set(policy["properties"]) == {
+        "schema_version", "network_id", "policy_version", "previous_policy_hash", "ds_asset_id", "ds_scale",
+        "retail_schedule", "effective_from_ms", "notice_published_at_ms", "fee", "treasury_account_id",
+        "charging_mode", "exemption_classes", "reward_custody",
+    }, "calendar policy fields")
+    require(set(policy["required"]) == set(policy["properties"]), "calendar policy required fields")
+    mode = schemas["GovernanceParliamentProposalPayloadValidationFeeChargingModeV1"]
+    require(mode["properties"]["charging_mode"]["const"] == "RETAIL_MONTHLY_ALLOWANCE" and mode["properties"]["value"]["type"] == "null" and set(mode["required"]) == {"charging_mode", "value"} and mode["additionalProperties"] is False, "sole charging mode")
+    require("enum" not in policy["properties"]["fee"], "institutional price is governed")
+    schedule = schemas["RetailFeeScheduleV1"]["properties"]
+    require(schedule["maintenance_tiers"]["minItems"] == 1 and schedule["maintenance_tiers"]["maxItems"] == 32, "bounded tariff tiers")
+    conversion = schemas["GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1"]
+    require(set(conversion["properties"]) == {
+        "contract_address", "code_hash", "entrypoint", "treasury_account_id", "ds_asset_id", "xor_asset_id",
+        "pool_contract_address", "pool_code_hash", "pool_vault_account_id", "reward_pool_account_id", "reference_feed_id",
+        "reference_feed_config_version", "reference_provider_accounts", "max_sbd_per_attempt_minor", "max_sbd_per_day_minor",
+        "min_interval_ms", "max_source_age_ms", "max_slippage_bps", "validator_lane_id", "min_reward_claim_xor_minor",
+    }, "independent conversion fields")
+    require(set(conversion["required"]) == set(conversion["properties"]), "conversion required fields")
+    require(conversion["properties"]["max_slippage_bps"]["maximum"] == 9999, "strict slippage bound")
+    providers = conversion["properties"]["reference_provider_accounts"]
+    require(providers["minItems"] == providers["maxItems"] == 5 and providers["uniqueItems"] is True, "provider quorum")
+    quote = paths["/v1/validation-fee/quote"]["post"]
+    require(quote["requestBody"]["x-iroha-max-bytes"] == 256 * 1024, "quote body bound")
+    require(schemas["RetailFeeQuoteRequestV1"]["properties"]["transfers"]["maxItems"] == 1000, "payment intent bound")
+    statement = paths["/v1/validation-fee/accounts/{account_id}/statement"]["post"]
+    require(statement["requestBody"]["x-iroha-max-bytes"] == 16 * 1024, "statement request bound")
+    require(statement["responses"]["200"]["x-iroha-max-bytes"] == 1024 * 1024, "statement response bound")
+    for field in ("state_commitment", "intent_hash"):
+        require(field in assessment["required"], "assessment commitment binding")
+    for schema, field in (("RetailFeeCurrentHeadResponseV1", "finality_proof"),):
+        require(schemas[schema]["properties"][field] == {"$ref": "#/components/schemas/SumeragiFinalityProof"}, "native finality owner")
+    receipts = schemas["RetailFeeReceiptsResponseV1"]["properties"]
+    require(receipts["finality_proofs"]["items"] == {"$ref": "#/components/schemas/SumeragiFinalityProof"}, "receipt finality owner")
+    require(receipts["receipt_proofs"]["items"] == {"$ref": "#/components/schemas/RetailFeeEvidenceRecordProofV1"}, "native receipt membership owner")
+    record = schemas["RetailFeeEvidenceRecordV1"]["properties"]
+    require(record["payload"]["properties"]["kind"]["const"] == "RetailReceipt", "matching receipt payload")
+    require(record["payload"]["properties"]["value"] == {"$ref": "#/components/schemas/RetailFeeReceiptV1"}, "complete native receipt")
+    for schema, field in (("FeeEvidenceWitnessProofV1", "siblings"), ("RetailFeeCurrentHeadProofV1", "head_siblings")):
+        proof = schemas[schema]["properties"][field]
+        require(proof["minItems"] == proof["maxItems"] == 256 and proof["items"] == {"$ref": "#/components/schemas/Hash"}, "complete sparse proof")
+
+
+
+MULTISIG_MUTATION_DTOS = (
+    ("MultisigProposeRequest", "MultisigProposeDtoV1"),
+    ("MultisigApproveRequest", "MultisigApproveDto"),
+    ("MultisigCancelRequest", "MultisigCancelRequestDto"),
+    ("MultisigContractCallProposeRequest", "MultisigContractCallProposeDto"),
+    ("MultisigContractCallApproveRequest", "MultisigContractCallApproveDto"),
+)
+
+
+def _validate_multisig_mutation_schemas(document: dict) -> None:
+    """Keep each closed draft DTO under one owner instead of closed allOf branches."""
+    for name, _ in MULTISIG_MUTATION_DTOS:
+        schema = document["components"]["schemas"][name]
+        if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+            raise ContractAssetError("closed flattened multisig request")
+        properties = schema["properties"]
+        if "multisig_account_id" not in schema["required"]:
+            raise ContractAssetError("canonical draft authority required")
+        if properties["multisig_account_id"] != {"$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"}:
+            raise ContractAssetError("canonical draft authority schema")
+        if properties["multisig_account_alias"].get("type") != "null":
+            raise ContractAssetError("unsigned alias draft forbidden")
+        for field in ("public_key_hex", "signature_b64", "creation_time_ms"):
+            if properties[field].get("oneOf", [])[-1:] != [{"type": "null"}]:
+                raise ContractAssetError("optional DTO null representation")
+        if name.startswith("MultisigContractCall"):
+            if not {"contract_alias", "entrypoint", "payload"} <= set(schema["required"]):
+                raise ContractAssetError("complete exact contract target")
+            if "contract_address" in properties or properties["payload"].get("type") != "object":
+                raise ContractAssetError("canonical contract alias and object payload")
+
+
+
 class LargeStaticContractAssetTests(unittest.TestCase):
     def test_assets_are_pinned_strict_and_fully_consumed(self) -> None:
         consumers = {path: (ROOT / path).read_text(encoding="utf-8") for path in SOURCE_PATHS}
@@ -556,6 +709,205 @@ class LargeStaticContractAssetTests(unittest.TestCase):
             self.assertNotIn(forbidden, combined)
         self.assertGreaterEqual(combined.count("assert!("), 300)
         self.assertGreaterEqual(combined.count("assert_eq!("), 300)
+
+    def test_retail_fee_authorities_bind_current_native_schema_and_routes(self) -> None:
+        payloads = [(ROOT / path).read_bytes() for path in OPENAPI_AUTHORITIES]
+        self.assertTrue(all(payload == payloads[0] for payload in payloads))
+        _validate_retail_fee_openapi(json.loads(payloads[0]))
+        mount = (ROOT / "crates/iroha_torii/src/lib.rs").read_text()
+        runtime = (ROOT / "crates/iroha_torii/src/validation_fee_api.rs").read_text()
+        self.assertIn("VALIDATION_FEE_RETAIL_QUOTE => canonical_account_post", mount)
+        self.assertIn("VALIDATION_FEE_RETAIL_STATEMENT => canonical_account_post", mount)
+        self.assertIn("proof.record.payload", runtime)
+        self.assertIn("FeeEvidencePayloadV1::RetailReceipt", runtime)
+        self.assertIn("proof.verify(root)", runtime)
+        self.assertIn("page.verify(&request.cursor)", runtime)
+
+    def test_multisig_propose_schema_accepts_complete_current_inputs_and_rejects_retired_forms(self) -> None:
+        from jsonschema import Draft202012Validator
+        document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
+        validator = Draft202012Validator({
+            "$ref": "#/components/schemas/MultisigProposeRequest",
+            "components": document["components"],
+        })
+        # Structural JSON controls only. Native account parsing, instruction
+        # decoding, signatures, state and execution admission remain required.
+        request = {
+            "multisig_account_id": "canonical-account-id",
+            "signer_account_id": "canonical-signer-id",
+            "fee_payment": {"payer": "authority", "value": {"charge_limits": [], "gas_limit": 1000}},
+            "instructions": ["AQ=="],
+        }
+        self.assertTrue(validator.is_valid(request))
+        optional_nulls = {name: None for name in (
+            "multisig_account_alias", "public_key_hex", "signature_b64", "creation_time_ms", "memo", "validation_fee_assessment",
+        )}
+        self.assertTrue(validator.is_valid(request | optional_nulls))
+        assessment = {
+            "account_id": request["multisig_account_id"], "retail_enrolled": True,
+            "billing_month_start_ms": 1, "policy_revision": 1, "payments_used_before": 0,
+            "qualifying_payments": 1, "fee_minor": 0, "state_commitment": "01" * 32,
+            "intent_hash": "03" * 32, "expires_at_ms": 2,
+        }
+        self.assertTrue(validator.is_valid(request | {"validation_fee_assessment": assessment}))
+        for name in ("state_commitment", "intent_hash", "policy_revision", "expires_at_ms"):
+            partial = dict(assessment); del partial[name]
+            with self.subTest(missing=name):
+                self.assertFalse(validator.is_valid(request | {"validation_fee_assessment": partial}))
+        for field in (
+            "validation_fee_policy_version", "validation_fee_policy_hash", "validation_fee_hijiri_fee_quote_hash",
+            "validation_fee_instruction_index", "validation_fee_transfer_entry_index", "unexpected",
+        ):
+            with self.subTest(retired=field):
+                self.assertFalse(validator.is_valid(request | {field: "1"}))
+        self.assertFalse(validator.is_valid(request | {"multisig_account_alias": "treasury@universal"}))
+        self.assertFalse(validator.is_valid(request | {"multisig_account_id": None}))
+        missing_id = dict(request); del missing_id["multisig_account_id"]
+        self.assertFalse(validator.is_valid(missing_id))
+
+    def test_retail_fee_schema_authority_mutations_are_rejected(self) -> None:
+        document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
+        path = "/v1/validation-fee/quote"
+        mutations = (
+            ("retired route", ("paths", "/v1/validation-fee/hijiri/quote"), {}),
+            ("unsigned principal", ("paths", path, "post", "security"), [{}]),
+            ("unsigned body", ("paths", path, "post", "x-iroha-canonical-auth-v1", "body_hash_bound"), False),
+            ("changed wallet error", ("paths", path, "post", "responses", "403", "headers", "x-iroha-reject-code", "schema", "enum"), ["other_account"]),
+            ("unbounded request", ("paths", path, "post", "requestBody", "x-iroha-max-bytes"), 256 * 1024 + 1),
+            ("missing signed intent", ("components", "schemas", "RetailFeeAssessmentV1", "required"), ["account_id"]),
+            ("array hash alias", ("components", "schemas", "RetailFeeAssessmentV1", "properties", "intent_hash", "type"), "array"),
+            ("retired positional field", ("components", "schemas", "MultisigProposeRequest", "properties", "validation_fee_policy_hash"), {"type": "string"}),
+            ("retired height tariff", ("components", "schemas", "GovernanceParliamentProposalPayloadValidationFeePolicyV1", "properties", "effective_from_height"), {"type": "integer"}),
+            ("retired recipients", ("components", "schemas", "GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1", "properties", "recipients"), {"type": "array"}),
+            ("full-loss conversion boundary", ("components", "schemas", "GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1", "properties", "max_slippage_bps", "maximum"), 10000),
+            ("insufficient provider quorum", ("components", "schemas", "GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1", "properties", "reference_provider_accounts", "minItems"), 4),
+            ("missing native finality", ("components", "schemas", "RetailFeeCurrentHeadResponseV1", "properties", "finality_proof"), {"$ref": "#/components/schemas/JsonValue"}),
+            ("unrelated record", ("components", "schemas", "RetailFeeEvidenceRecordV1", "properties", "payload", "properties", "kind", "const"), "RewardClaim"),
+            ("truncated sparse proof", ("components", "schemas", "RetailFeeCurrentHeadProofV1", "properties", "head_siblings", "minItems"), 255),
+        )
+        for name, keys, value in mutations:
+            changed = copy.deepcopy(document)
+            target = changed
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+            with self.subTest(mutation=name), self.assertRaises(ContractAssetError):
+                _validate_retail_fee_openapi(changed)
+
+    def test_all_five_multisig_request_schemas_match_current_flattened_dtos(self) -> None:
+        from jsonschema import Draft202012Validator
+        document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
+        _validate_multisig_mutation_schemas(document)
+        source = (ROOT / "crates/iroha_torii/src/routing.rs").read_text()
+        carrier_body = re.search(r"pub struct MultisigAccountSelectorDto \{(.*?)\n\}", source, re.S).group(1)
+        carrier_fields = set(re.findall(r"pub (\w+):", carrier_body))
+        for name, dto in MULTISIG_MUTATION_DTOS:
+            schema = document["components"]["schemas"][name]
+            body = re.search(r"pub struct " + dto + r" \{(.*?)\n\}", source, re.S).group(1)
+            fields = set(re.findall(r"pub (\w+):", body))
+            with self.subTest(schema=name):
+                self.assertEqual(set(schema["properties"]), (fields - {"selector"}) | carrier_fields)
+                self.assertIn("#[norito(flatten)]", body)
+                self.assertNotIn("contract_address", body)
+                Draft202012Validator.check_schema(schema)
+        for handler in (
+            "handle_post_multisig_propose", "handle_post_multisig_approve", "handle_post_multisig_cancel",
+            "handle_post_contract_call_multisig_propose", "handle_post_contract_call_multisig_approve",
+        ):
+            body = source.split("pub async fn " + handler + "(", 1)[1].split("pub async fn ", 1)[0]
+            with self.subTest(handler=handler):
+                self.assertIn("reject_unverified_multisig_alias_selector(&selector)?", body)
+        self.assertIn("exactly one of proposal_id or instructions_hash must be set", source)
+        self.assertIn("exact_target.contract_alias != contract_alias", source)
+        self.assertIn("exact_target.contract_entrypoint != entrypoint", source)
+        self.assertIn("exact_target.payload != payload", source)
+
+    def test_multisig_requests_accept_current_optional_json_and_reject_ambiguous_authority(self) -> None:
+        from jsonschema import Draft202012Validator
+        document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
+        # These are structural JSON probes. Native AccountId/instruction parsing,
+        # detached signatures, live spec/state and monetary admission still run.
+        base = {
+            "multisig_account_id": "canonical-account-id", "signer_account_id": "canonical-signer-id",
+            "fee_payment": {"payer": "authority", "value": {"charge_limits": [], "gas_limit": 1000}},
+        }
+        for name, _ in MULTISIG_MUTATION_DTOS:
+            validator = Draft202012Validator({"$ref": "#/components/schemas/" + name, "components": document["components"]})
+            request = copy.deepcopy(base)
+            selector = name in ("MultisigApproveRequest", "MultisigCancelRequest", "MultisigContractCallApproveRequest")
+            contract_call = name.startswith("MultisigContractCall")
+            optional = ["multisig_account_alias", "public_key_hex", "signature_b64", "creation_time_ms"]
+            if name == "MultisigProposeRequest":
+                request["instructions"] = ["AQ=="]
+                optional += ["memo", "validation_fee_assessment"]
+            if selector:
+                request["proposal_id"] = "ab" * 32
+                optional += ["instructions_hash"]
+            if contract_call:
+                request.update(contract_alias="router::universal", entrypoint="ping", payload={"amount": 1})
+            with self.subTest(schema=name):
+                self.assertTrue(validator.is_valid(request))
+                self.assertTrue(validator.is_valid(request | {field: None for field in optional}))
+                self.assertTrue(validator.is_valid(request | {"public_key_hex": "01" * 32, "signature_b64": "AQ=="}))
+                for field in ("unexpected", "private_key", "contract_address"):
+                    self.assertFalse(validator.is_valid(request | {field: "retired-or-private"}), field)
+                for field, value in (("multisig_account_id", None), ("multisig_account_id", " spaced id"),
+                                     ("multisig_account_alias", "treasury@universal"), ("creation_time_ms", -1),
+                                     ("creation_time_ms", 2 ** 64)):
+                    self.assertFalse(validator.is_valid(request | {field: value}), (field, value))
+                for field in ("public_key_hex", "signature_b64"):
+                    self.assertFalse(validator.is_valid(request | {field: "non-null-without-pair"}), field)
+                    other = "signature_b64" if field == "public_key_hex" else "public_key_hex"
+                    self.assertFalse(validator.is_valid(request | {field: "x", other: None}), field)
+                missing = dict(request); del missing["multisig_account_id"]
+                self.assertFalse(validator.is_valid(missing))
+                alias_only = dict(missing); alias_only["multisig_account_alias"] = "treasury@universal"
+                self.assertFalse(validator.is_valid(alias_only))
+                if selector:
+                    by_hash = dict(request); del by_hash["proposal_id"]; by_hash["instructions_hash"] = "cd" * 32
+                    self.assertTrue(validator.is_valid(by_hash))
+                    self.assertTrue(validator.is_valid(by_hash | {"proposal_id": None}))
+                    self.assertFalse(validator.is_valid(request | {"instructions_hash": request["proposal_id"]}))
+                    self.assertFalse(validator.is_valid(request | {"instructions_hash": "cd" * 32}))
+                    for value in (None, "", "AB" * 32, " " + "ab" * 32, "ab" * 31):
+                        self.assertFalse(validator.is_valid(request | {"proposal_id": value}), value)
+                    absent = dict(request); del absent["proposal_id"]
+                    self.assertFalse(validator.is_valid(absent))
+                if contract_call:
+                    for field in ("contract_alias", "entrypoint", "payload"):
+                        missing = dict(request); del missing[field]
+                        self.assertFalse(validator.is_valid(missing), field)
+                        self.assertFalse(validator.is_valid(request | {field: None}), field)
+                    self.assertFalse(validator.is_valid(request | {"payload": []}))
+                    self.assertFalse(validator.is_valid(request | {"payload": "opaque"}))
+                    if name == "MultisigContractCallProposeRequest":
+                        no_gas = copy.deepcopy(request); no_gas["fee_payment"]["value"]["gas_limit"] = None
+                        self.assertFalse(validator.is_valid(no_gas))
+        # Signed read schemas retain their separate, permission-checked alias
+        # selection surface; changing draft composition must not retire it.
+        for name in ("MultisigAccountSelector", "MultisigSpecRequest", "MultisigProposalsQueryRequest"):
+            validator = Draft202012Validator({"$ref": "#/components/schemas/" + name, "components": document["components"]})
+            self.assertTrue(validator.is_valid({"multisig_account_alias": "treasury@universal"}))
+
+    def test_multisig_request_schema_authority_mutations_are_rejected(self) -> None:
+        document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
+        for name, _ in MULTISIG_MUTATION_DTOS:
+            for mutation in ("open", "missing-canonical", "alias-draft", "null-option"):
+                changed = copy.deepcopy(document); schema = changed["components"]["schemas"][name]
+                if mutation == "open": schema["additionalProperties"] = True
+                elif mutation == "missing-canonical": schema["required"].remove("multisig_account_id")
+                elif mutation == "alias-draft": schema["properties"]["multisig_account_alias"] = {"type": "string"}
+                else: schema["properties"]["creation_time_ms"]["oneOf"].pop()
+                with self.subTest(schema=name, mutation=mutation), self.assertRaises(ContractAssetError):
+                    _validate_multisig_mutation_schemas(changed)
+            if name.startswith("MultisigContractCall"):
+                for mutation in ("missing-target", "retired-address", "opaque-payload"):
+                    changed = copy.deepcopy(document); schema = changed["components"]["schemas"][name]
+                    if mutation == "missing-target": schema["required"].remove("contract_alias")
+                    elif mutation == "retired-address": schema["properties"]["contract_address"] = {"type": "string"}
+                    else: schema["properties"]["payload"]["type"] = "string"
+                    with self.subTest(schema=name, mutation=mutation), self.assertRaises(ContractAssetError):
+                        _validate_multisig_mutation_schemas(changed)
 
 
 

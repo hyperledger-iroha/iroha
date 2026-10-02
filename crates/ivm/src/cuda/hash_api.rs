@@ -24,11 +24,11 @@ static KECCAK: PtxArtifact = PtxArtifact::new(
     },
 );
 
-fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Option<HostOutput<T>> {
+fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Result<HostOutput<T>, CudaFailure> {
     match result {
         Ok(output) => {
             super::imp::record_completed_cuda_dispatch();
-            Some(output)
+            Ok(output)
         }
         Err(error) => {
             if !matches!(
@@ -37,12 +37,12 @@ fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Option<HostOutput<
             ) {
                 crate::cuda_dispatch::quarantine_current_kernel();
             }
-            None
+            Err(error)
         }
     }
 }
 
-fn sha256_staging(state: &[u32; 8], block: &[u8; 64]) -> Option<HostOutput<u32>> {
+fn sha256_staging(state: &[u32; 8], block: &[u8; 64]) -> Result<HostOutput<u32>, CudaFailure> {
     complete(crate::cuda_dispatch::with_selected(
         Kernel::Sha256,
         SHA256,
@@ -50,9 +50,9 @@ fn sha256_staging(state: &[u32; 8], block: &[u8; 64]) -> Option<HostOutput<u32>>
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
             unsafe { launch::sha256_output(device, SHA256, state, block) }
         },
-    )?)
+    ))
 }
-fn keccak_staging(state: &[u64; 25]) -> Option<HostOutput<u64>> {
+fn keccak_staging(state: &[u64; 25]) -> Result<HostOutput<u64>, CudaFailure> {
     complete(crate::cuda_dispatch::with_selected(
         Kernel::Keccak,
         KECCAK,
@@ -60,7 +60,7 @@ fn keccak_staging(state: &[u64; 25]) -> Option<HostOutput<u64>> {
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
             unsafe { launch::keccak_output(device, KECCAK, state) }
         },
-    )?)
+    ))
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
@@ -71,7 +71,7 @@ pub(super) fn admit(kernel: Kernel) -> bool {
     };
     crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
-            return false;
+            return Err(CudaFailure::Busy);
         };
         match kernel {
             Kernel::Sha256 => {
@@ -85,15 +85,15 @@ pub(super) fn admit(kernel: Kernel) -> bool {
                 block[63] = 24;
                 let mut expected = initial;
                 crate::sha256_ref::sha256_compress_scalar_ref(&mut expected, &block);
-                sha256_staging(&initial, &block).is_some_and(|output| output.as_slice() == expected)
+                sha256_staging(&initial, &block).map(|output| output.as_slice() == expected)
             }
             Kernel::Keccak => {
                 let initial = std::array::from_fn(|index| index as u64 * 0x0101_0101_0101_0101);
                 let mut expected = initial;
                 crate::sha3::keccak_f1600_impl(&mut expected);
-                keccak_staging(&initial).is_some_and(|output| output.as_slice() == expected)
+                keccak_staging(&initial).map(|output| output.as_slice() == expected)
             }
-            _ => false,
+            _ => Ok(false),
         }
     })
 }
@@ -105,7 +105,7 @@ pub fn sha256_compress_cuda(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
         if !super::imp::ensure_cuda_kernel(Kernel::Sha256) {
             return false;
         }
-        let Some(output) = sha256_staging(state, block) else {
+        let Ok(output) = sha256_staging(state, block) else {
             return false;
         };
         if output.len() != state.len() {
@@ -124,7 +124,7 @@ pub fn keccak_f1600_cuda(state: &mut [u64; 25]) -> bool {
         if !super::imp::ensure_cuda_kernel(Kernel::Keccak) {
             return false;
         }
-        let Some(output) = keccak_staging(state) else {
+        let Ok(output) = keccak_staging(state) else {
             return false;
         };
         if output.len() != state.len() {

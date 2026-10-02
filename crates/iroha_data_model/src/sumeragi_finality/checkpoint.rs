@@ -273,12 +273,13 @@ impl SumeragiFinalityVerifier {
     ///
     /// # Errors
     /// Bounds, network/chain/genesis mismatch, discontinuous commitments, substituted tip,
-    /// committee, invalid proof of possession or failed certificate authentication.
+    /// committee, invalid proof of possession or failed certificate authentication. Original
+    /// genesis decoder resource fields are retained for the caller's locality classification.
     pub fn from_trusted_checkpoint(
         checkpoint: &SumeragiFinalityCheckpoint,
         network: &NetworkId,
         chain_id: &str,
-    ) -> Result<Self, FinalityError> {
+    ) -> Result<Self, super::FinalityReadError> {
         checkpoint.validate_bounds()?;
         need(
             checkpoint.network_id == *network && checkpoint.chain_id == chain_id,
@@ -288,7 +289,12 @@ impl SumeragiFinalityVerifier {
             norito::canonical_decode_limits(checkpoint.genesis_wire.len()),
             || decode_versioned_signed_block(&checkpoint.genesis_wire),
         )
-        .map_err(malformed)?;
+        .map_err(|error| match error {
+            iroha_version::error::Error::NoritoResourceLimit(resource) => {
+                super::FinalityReadError::DecodeResource(resource)
+            }
+            invalid => super::FinalityReadError::Invalid(malformed(invalid)),
+        })?;
         need(
             genesis.header().is_genesis()
                 && genesis.hash().as_ref() == network.as_bytes()

@@ -12,7 +12,7 @@ pub(super) fn validate_plan_context(
     state_transaction: &StateTransaction<'_, '_>,
     network_scope: &PublicLaneMonetaryScopeV1,
     valid_until_height: u64,
-) -> Result<(), Error> {
+) -> Result<(), Attempt<Error>> {
     let scope_matches = match network_scope {
         PublicLaneMonetaryScopeV1::Genesis => {
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()
@@ -22,10 +22,11 @@ pub(super) fn validate_plan_context(
         }
     };
     if !scope_matches {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "staking monetary plan does not match this authenticated genesis or network scope"
                 .into(),
-        ));
+        ))
+        .into());
     }
     let height = state_transaction.block_height();
     if matches!(network_scope, PublicLaneMonetaryScopeV1::Genesis) {
@@ -33,15 +34,17 @@ pub(super) fn validate_plan_context(
         // precondition. Its one-block lifetime does not depend on an election
         // schedule, which Permissioned genesis must not contain.
         if height != 1 || valid_until_height != 1 {
-            return Err(Error::InvariantViolation(
+            return Err((Error::InvariantViolation(
                 "genesis staking monetary plan must expire at the genesis height one".into(),
-            ));
+            ))
+            .into());
         }
         return Ok(());
     }
     let parameters = state_transaction
         .world
         .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(|message| Error::InvariantViolation(message.into())))?
         .ok_or_else(|| {
             Error::InvariantViolation(
                 "staking monetary plans require committed NPoS epoch parameters".into(),
@@ -58,10 +61,11 @@ pub(super) fn validate_plan_context(
             Error::InvariantViolation("staking monetary plan validity height overflow".into())
         })?;
     if valid_until_height < height || valid_until_height > latest {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "staking monetary plan must expire within the current committed epoch-length window"
                 .into(),
-        ));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -74,7 +78,7 @@ pub(super) fn verify_transfer_plan(
     destination_asset: &AssetId,
     amount: &Quantity,
     precondition: &PublicLaneMonetaryPreconditionV1,
-) -> Result<(), Error> {
+) -> Result<(), Attempt<Error>> {
     validate_plan_context(
         state_transaction,
         &plan.network_scope,
@@ -86,10 +90,11 @@ pub(super) fn verify_transfer_plan(
         || &plan.amount != amount
         || &plan.precondition != precondition
     {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "staking monetary plan does not match its exact current transfer and custody state"
                 .into(),
-        ));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -113,16 +118,17 @@ pub(super) fn prepare_reward_claim(
     lane_id: LaneId,
     recipient: &AccountId,
     plan: &PublicLaneRewardClaimPlanV1,
-) -> Result<PreparedRewardClaim, Error> {
+) -> Result<PreparedRewardClaim, Attempt<Error>> {
     validate_plan_context(
         state_transaction,
         &plan.network_scope,
         plan.valid_until_height,
     )?;
     if !plan.has_canonical_shape(recipient) {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "reward claim plan is not bounded and canonical".into(),
-        ));
+        ))
+        .into());
     }
     let prepared = evaluate_reward_claim(
         &state_transaction.world,
@@ -138,9 +144,9 @@ pub(super) fn prepare_reward_claim(
             .find(|(asset, _, _)| asset == &source.source_asset)
             .map_or_else(Quantity::zero, |(_, _, amount)| amount.clone());
         if source.payout != expected {
-            return Err(Error::InvariantViolation(
+            return Err((Error::InvariantViolation(
                 "reward claim payout does not match its exact accrued entitlement and dust threshold".into(),
-            ));
+            )).into());
         }
     }
     Ok(prepared)
@@ -302,7 +308,8 @@ pub(super) fn execute_reward_claim(
         instruction.lane_id,
         &instruction.account,
         &instruction.claim_plan,
-    )?;
+    )
+    .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     let binding = norito::encode_canonical(&instruction).map_err(|error| {
         Error::InvariantViolation(format!("reward claim monetary binding failed: {error}").into())
     })?;

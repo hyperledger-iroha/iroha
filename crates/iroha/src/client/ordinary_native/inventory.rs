@@ -769,6 +769,26 @@ impl KagemushaAdmittedOrdinaryNativeInventoryV1 {
             .map_err(|_| eyre!("Native Node Mint full request rejected"))?,
         )
     }
+    /// Retain the exact FI HTTPS origin and external path prefix from this genuine signed
+    /// inventory. The existing canonical directory parser supplies the grammar; no caller
+    /// URL, response origin, alias or independent normalization selects this routing DATA.
+    /// Reading it admits neither a token/session nor current KYC or a financial capability.
+    /// # Errors
+    /// Refuses changed installed originals or an invalid canonical signed HTTPS directory.
+    pub fn fi_http_endpoint_originals(&self) -> Result<(String, String)> {
+        self.recheck()?;
+        let endpoint = super::endpoint::require_https_directory_base(
+            &self.body.fi_current_control_endpoint,
+        )?;
+        let origin = endpoint.origin().ascii_serialization();
+        let prefix = endpoint.path().strip_suffix('/')
+            .ok_or_else(|| eyre!("Native signed FI directory rejected"))?
+            .to_owned();
+        ensure!(format!("{origin}{prefix}/") == self.body.fi_current_control_endpoint,
+            "Native FI routing differs from signed original");
+        self.recheck()?;
+        Ok((origin, prefix))
+    }
     /// Exact current-control endpoint pin; reading it neither asserts live KYC nor non-revocation.
     #[must_use]
     pub fn fi_current_control_endpoint(&self) -> &str {

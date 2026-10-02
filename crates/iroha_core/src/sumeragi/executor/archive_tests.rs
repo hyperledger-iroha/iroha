@@ -213,6 +213,7 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
     Worker {
         payload_build: None,
         routing_refusal: None,
+        payload_refusal: None,
         context,
         state: &context.state,
         applied: context.applied,

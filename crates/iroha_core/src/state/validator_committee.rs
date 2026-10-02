@@ -4,6 +4,7 @@ use super::{
     BlockHashRead, GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly,
     StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key,
 };
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1,
@@ -73,7 +74,7 @@ struct StakingBoundaryUpdates {
 fn prepare_staking_obligations(
     world: &impl WorldReadOnly,
     boundary: &iroha_data_model::sumeragi::epoch::ValidatorEpochBoundaryV1,
-) -> Result<StakingBoundaryUpdates, String> {
+) -> Result<StakingBoundaryUpdates, Attempt<String>> {
     let mut updates = StakingBoundaryUpdates {
         validators: Vec::new(),
         shares: Vec::new(),
@@ -82,7 +83,7 @@ fn prepare_staking_obligations(
         return Ok(updates);
     }
     let parameters = world
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .ok_or("staking boundary lacks signed NPoS parameters")?;
     let outcome = &boundary.next.authorization;
     let mut obligations = std::collections::BTreeMap::<PeerId, u64>::new();
@@ -107,13 +108,14 @@ fn prepare_staking_obligations(
         .filter(|(key, _)| key.0 == LaneId::SINGLE)
     {
         if !public_lane_validator_record_matches_key(key, record) {
-            return Err("committee custody has a noncanonical validator owner".to_owned());
+            return Err(("committee custody has a noncanonical validator owner".to_owned()).into());
         }
         let through = obligations.get(&record.peer_id).copied();
         if let Some(through) = through {
             if record.deactivation_height.is_some_and(|end| end <= through) {
                 return Err(
-                    "committee decision retains an already ended validator tenure".to_owned(),
+                    ("committee decision retains an already ended validator tenure".to_owned())
+                        .into(),
                 );
             }
             let release = through
@@ -293,6 +295,13 @@ fn validate_current_beacon(
         .get(&session_id)
         .ok_or("committee authorization lacks its exact beacon session")?;
     record.validate().map_err(|error| error.to_string())?;
+    // The same ordered BLS roster may serve several generations. Its actual DKG
+    // transcript must name the generation authorized at this restore cut.
+    if !cfg!(all(test, sumeragi_core_mutation = "HC54"))
+        && record.session.adaptive_dkg.session.authority_generation != authority.generation
+    {
+        return Err("active beacon differs from the authorized signing generation".to_owned());
+    }
     if record.session.network_id != authority.network_id
         || transcript_hash.is_some_and(|hash| hash != record.session.transcript_hash)
         || record
@@ -561,11 +570,16 @@ pub(crate) fn current_authority(
         KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityEpochAuthorizationV1,
     ),
-    String,
+    Attempt<String>,
 > {
     let height = u64::try_from(state.height()).map_err(|_| "committed height overflows")?;
-    let block = crate::sumeragi::certified_chain::committed_block(state, height)
-        .map_err(|error| error.to_string())?;
+    let block =
+        crate::sumeragi::certified_chain::committed_block(state, height).map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC48")) {
+                return Attempt::Rejected(error.to_string());
+            }
+            error.map_rejection(|error| error.to_string())
+        })?;
     let outcome = &block.commitment().schedule;
     outcome.validate().map_err(|error| error.to_string())?;
     let context = outcome
@@ -595,7 +609,7 @@ pub(crate) fn validate_beacon_finalization(
     state: &StateTransaction<'_, '_>,
     record: &crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     authorizing_roster: &[PeerId],
-) -> Result<bool, String> {
+) -> Result<bool, Attempt<String>> {
     let (authority, authorization) = current_authority(state)?;
     validate_beacon_preparation(
         &state.world,
@@ -605,6 +619,7 @@ pub(crate) fn validate_beacon_finalization(
         record,
         authorizing_roster,
     )
+    .map_err(Attempt::Rejected)
 }
 
 fn validate_beacon_preparation(
@@ -640,6 +655,13 @@ fn validate_beacon_preparation(
             return Err(
                 "only the authenticated genesis authority may bootstrap a beacon".to_owned(),
             );
+        }
+        // A genuine transcript for another generation is not bootstrap custody,
+        // even when every participant and public possession proof is valid.
+        if !cfg!(all(test, sumeragi_core_mutation = "HC54"))
+            && record.session.adaptive_dkg.session.authority_generation != authority.generation
+        {
+            return Err("bootstrap beacon differs from the genesis signing generation".to_owned());
         }
         authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)
             .map_err(|error| error.to_string())?;
@@ -695,7 +717,7 @@ impl StateBlock<'_> {
     pub(crate) fn finalize_validator_committee_boundary(
         &mut self,
         frozen: &crate::sumeragi::epoch_election::FrozenEpochBoundary,
-    ) -> Result<(), String> {
+    ) -> Result<(), Attempt<String>> {
         let context = frozen.current();
         let boundary = frozen.boundary();
         boundary.validate_against(context)?;
@@ -703,7 +725,9 @@ impl StateBlock<'_> {
         if boundary.height != self._curr_block.height().get()
             || context.network_id != self.network_id
         {
-            return Err("committee boundary belongs to another execution context".to_owned());
+            return Err(
+                ("committee boundary belongs to another execution context".to_owned()).into(),
+            );
         }
         let anchor_index = boundary
             .height
@@ -720,7 +744,9 @@ impl StateBlock<'_> {
                 .epoch
                 != *context
         {
-            return Err("frozen boundary source differs from the original State cut".into());
+            return Err(
+                ("frozen boundary source differs from the original State cut".to_owned()).into(),
+            );
         }
         // The sealed capability proved all target custody and preparation readiness before B
         // transactions. Mandatory authorized slashing remains an execution effect; transaction
@@ -738,7 +764,7 @@ impl StateBlock<'_> {
                     .cloned()
                     .ok_or("boundary decision lacks its frozen committee attempt")?;
                 if transition.outcome.is_some() {
-                    return Err("committee attempt is already terminal".to_owned());
+                    return Err(("committee attempt is already terminal".to_owned()).into());
                 }
                 transition
                     .preparation
@@ -754,22 +780,23 @@ impl StateBlock<'_> {
                     if credentials.authority != snapshot.authority
                         || transition.preparation.committee != snapshot.committee
                     {
-                        return Err(
+                        return Err((
                             "activation substitutes the frozen committee or its exact credentials"
-                                .to_owned(),
-                        );
+                                .to_owned()
+                        ).into());
                     }
                     let BeaconEpochBindingV1::Installed(previous) = context.authorization.beacon
                     else {
                         return Err(
-                            "committee activation requires an installed incumbent beacon"
-                                .to_owned(),
+                            ("committee activation requires an installed incumbent beacon"
+                                .to_owned())
+                            .into(),
                         );
                     };
                     if self.world.active_global_beacon_key_session() != Some(previous.session_id) {
-                        return Err(
-                            "committee activation lost the exact incumbent beacon".to_owned()
-                        );
+                        return Err(("committee activation lost the exact incumbent beacon"
+                            .to_owned())
+                        .into());
                     }
                     let mut old = self
                         .world
@@ -787,9 +814,9 @@ impl StateBlock<'_> {
                         || next.activated_at_height.is_some()
                         || next.retired_at_height.is_some()
                     {
-                        return Err(
-                            "committee activation beacon credentials have changed".to_owned()
-                        );
+                        return Err(("committee activation beacon credentials have changed"
+                            .to_owned())
+                        .into());
                     }
                     old.retire(outcome.first_height)
                         .map_err(|error| error.to_string())?;
@@ -806,11 +833,13 @@ impl StateBlock<'_> {
                     .get(&snapshot.authorization.epoch)
                     .is_some()
                 {
-                    return Err("retention must cancel the exact frozen attempt".to_owned());
+                    return Err(
+                        ("retention must cancel the exact frozen attempt".to_owned()).into(),
+                    );
                 }
             }
             KagemushaMintFinalityEpochDecisionV1::Genesis => {
-                return Err("boundary cannot reset scheduling authorization".to_owned());
+                return Err(("boundary cannot reset scheduling authorization".to_owned()).into());
             }
         }
         let future = boundary
@@ -833,7 +862,9 @@ impl StateBlock<'_> {
                             .is_some()
                     {
                         return Err(
-                            "future committee attempts cannot be replaced or reanchored".to_owned()
+                            ("future committee attempts cannot be replaced or reanchored"
+                                .to_owned())
+                            .into(),
                         );
                     }
                     let transition = ValidatorCommitteeTransitionV1 {
@@ -993,7 +1024,7 @@ impl StateTransaction<'_, '_> {
         &mut self,
         owner: &AccountId,
         operation: ValidatorCommitteeOperationV1,
-    ) -> Result<(), String> {
+    ) -> Result<(), Attempt<String>> {
         let (incumbent, authorization) = current_authority(self)?;
         let next_generation = incumbent
             .generation
@@ -1006,7 +1037,7 @@ impl StateTransaction<'_, '_> {
                     || candidate.generation != next_generation
                     || !owns_validator(&self.world, owner, &candidate.keys.validator)
                 {
-                    return Err("candidate publication lacks the exact current owner, network or next generation".to_owned());
+                    return Err("candidate publication lacks the exact current owner, network or next generation".to_owned().into());
                 }
                 let key = ValidatorCandidateKeysV1::key_id(
                     candidate.network_id,
@@ -1030,7 +1061,8 @@ impl StateTransaction<'_, '_> {
                 {
                     return Err(
                         "candidate key publication replays or duplicates an existing key"
-                            .to_owned(),
+                            .to_owned()
+                            .into(),
                     );
                 }
                 self.world.validator_candidate_keys.insert(key, candidate);
@@ -1044,7 +1076,8 @@ impl StateTransaction<'_, '_> {
                 if transition.credentials.is_some() || !transition.readiness.is_empty() {
                     return Err(
                         "prepared credentials cannot be replaced within a frozen attempt"
-                            .to_owned(),
+                            .to_owned()
+                            .into(),
                     );
                 }
                 if !transition
@@ -1054,7 +1087,9 @@ impl StateTransaction<'_, '_> {
                     .any(|voter| owns_validator(&self.world, owner, &voter.validator))
                 {
                     return Err(
-                        "preparing credentials requires an exact target validator owner".to_owned(),
+                        "preparing credentials requires an exact target validator owner"
+                            .to_owned()
+                            .into(),
                     );
                 }
                 let beacon = self
@@ -1063,7 +1098,9 @@ impl StateTransaction<'_, '_> {
                     .get(&command.credentials.beacon.session_id)
                     .ok_or("target beacon session is absent")?;
                 if beacon.activated_at_height.is_some() || beacon.retired_at_height.is_some() {
-                    return Err("target beacon session has already been consumed".to_owned());
+                    return Err("target beacon session has already been consumed"
+                        .to_owned()
+                        .into());
                 }
                 transition.credentials = Some(command.credentials);
                 verify_progress(&self.world, &transition)?;
@@ -1085,9 +1122,9 @@ impl StateTransaction<'_, '_> {
                     .get(index)
                     .ok_or("invalid target seat")?;
                 if !owns_validator(&self.world, owner, &seat.validator) {
-                    return Err(
-                        "seat readiness requires that exact target validator owner".to_owned()
-                    );
+                    return Err("seat readiness requires that exact target validator owner"
+                        .to_owned()
+                        .into());
                 }
                 let insertion = transition
                     .readiness

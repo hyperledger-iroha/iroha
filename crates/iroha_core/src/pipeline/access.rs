@@ -634,11 +634,13 @@ where
                 }
                 if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
                     let mut set = tx_gas_limit(tx)
+                        .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
                         .and_then(|gas_limit| {
                             if contract.code_hash() != identity.code_hash {
                                 return Err(
                                     "deployed contract bytecode no longer matches its live binding"
-                                        .to_owned(),
+                                        .to_owned()
+                                        .into(),
                                 );
                             }
                             let authorization =
@@ -770,6 +772,7 @@ where
             let (set, source) = match (ivm_strategy, state_ro) {
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let mut set = tx_gas_limit(tx)
+                        .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
                         .and_then(|gas_limit| {
                             let artifact_id = super::overlay::routed_artifact_id(
                                 view,
@@ -2183,7 +2186,7 @@ fn derive_from_ivm_dynamic<R>(
     state_ro: &R,
     gas_limit: u64,
     artifact_id: ContractArtifactId,
-) -> Result<AccessSet, String>
+) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     R: StateReadOnly + QueryStateSource,
 {
@@ -2200,7 +2203,9 @@ where
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(bytecode))
             .map_err(|error| format!("failed to prepare raw contract artifact: {error}"))?;
         if prepared.code_hash() != identity.code_hash {
-            return Err("raw contract bytecode no longer matches its live binding".to_owned());
+            return Err(
+                ("raw contract bytecode no longer matches its live binding".to_owned()).into(),
+            );
         }
         Some(
             crate::executor::authorize_prepared_raw_contract_selector(
@@ -2238,7 +2243,7 @@ fn derive_from_prepared_ivm_dynamic<R>(
     state_ro: &R,
     gas_limit: u64,
     artifact_id: ContractArtifactId,
-) -> Result<AccessSet, String>
+) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     R: StateReadOnly + QueryStateSource,
 {
@@ -2295,7 +2300,7 @@ fn derive_from_ivm_dynamic_with_context<R>(
     contract_call_context: Option<ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
-) -> Result<AccessSet, String>
+) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     R: StateReadOnly + QueryStateSource,
 {
@@ -2313,7 +2318,7 @@ fn derive_from_prepared_ivm_dynamic_with_context<R>(
     contract_call_context: Option<ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
-) -> Result<AccessSet, String>
+) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     R: StateReadOnly + QueryStateSource,
 {
@@ -2331,7 +2336,7 @@ fn derive_from_ivm_dynamic_with_source<R>(
     contract_call_context: Option<ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
-) -> Result<AccessSet, String>
+) -> Result<AccessSet, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     R: StateReadOnly + QueryStateSource,
 {
@@ -2346,8 +2351,9 @@ where
                     || authorization.permission != context.entrypoint_permission
                 {
                     return Err(
-                        "contract prepass authorization does not match the selected entrypoint"
-                            .to_owned(),
+                        ("contract prepass authorization does not match the selected entrypoint"
+                            .to_owned())
+                        .into(),
                     );
                 }
                 authorization
@@ -2356,14 +2362,16 @@ where
             }
             (Some(_), None) => {
                 return Err(
-                    "contract entrypoint prepass requires an authorized live contract binding"
-                        .to_owned(),
+                    ("contract entrypoint prepass requires an authorized live contract binding"
+                        .to_owned())
+                    .into(),
                 );
             }
             (None, Some(_)) => {
                 return Err(
-                    "legacy IVM prepass must not carry contract entrypoint authorization"
-                        .to_owned(),
+                    ("legacy IVM prepass must not carry contract entrypoint authorization"
+                        .to_owned())
+                    .into(),
                 );
             }
             (None, None) => {}
@@ -2403,7 +2411,7 @@ where
     host.set_crypto_config(state_ro.crypto());
     host.set_zk_config(state_ro.zk());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
-    host.set_vrf_epoch_seeds_from_state(state_ro);
+    host.set_vrf_epoch_seeds_from_state(state_ro)?;
     host.set_query_state(state_ro);
     host.set_chain_id(state_ro.chain_id());
     if let Some(authorization) = contract_call_context
@@ -2999,6 +3007,7 @@ mod tests {
                 ivm::contract_code_hash(&generic_state_get_test_program()),
             ),
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("generic prepass must reject contract-owned durable-state access");
         assert!(
             error.contains("not allowed in a generic IVM program"),
@@ -3025,6 +3034,7 @@ mod tests {
                 TEST_GAS_LIMIT,
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, ivm::contract_code_hash(&halt)),
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("generic prepass must reject contract provenance metadata");
             assert!(
                 error.contains("generic IVM programs cannot carry") && error.contains(reserved_key),
@@ -3176,6 +3186,7 @@ mod tests {
             TEST_GAS_LIMIT,
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, ivm::contract_code_hash(&artifact)),
         )
+        .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("selected raw contract entrypoints require a live instance identity");
         assert!(
             error.contains("requires a live contract_address or contract_alias binding"),
@@ -4101,6 +4112,7 @@ seiyaku DynamicAccessCounter {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let error =
             derive_from_ivm_dynamic_with_context(&program, &alice, None, &view, TEST_GAS_LIMIT)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("access planning must use the live smart-contract heap ceiling");
         assert!(
             error.to_ascii_lowercase().contains("out of memory"),

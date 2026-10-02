@@ -686,9 +686,17 @@ mod tests {
 
         // Synthetic codec maintenance data; no ledger state or finality authority.
         assert!(!request.transfers.is_empty() && request.transfers.len() <= 1_000);
-        assert!(request.transfers.iter().all(|leg| leg.amount_minor_units > 0));
+        assert!(
+            request
+                .transfers
+                .iter()
+                .all(|leg| leg.amount_minor_units > 0)
+        );
         assert_eq!(assessment.account_id, request.account_id);
-        assert_eq!(assessment.qualifying_payments, request.qualifying_payments());
+        assert_eq!(
+            assessment.qualifying_payments,
+            request.qualifying_payments()
+        );
         let (start, end) = honiara_month_bounds(assessment.billing_month_start_ms).unwrap();
         assert_eq!(start, assessment.billing_month_start_ms);
         assert!(assessment.policy_revision > 0);
@@ -744,7 +752,10 @@ mod tests {
         println!("ASSESSMENT_HEX={}", generated.assessment_hex);
         println!("ASSESSMENT_CANON_HEX={}", generated.assessment_hex);
         // Capture this exact serialized object for both managed fixture copies.
-        println!("FIXTURE_JSON={}", norito::json::to_json(&generated).unwrap());
+        println!(
+            "FIXTURE_JSON={}",
+            norito::json::to_json(&generated).unwrap()
+        );
     }
     #[test]
     fn javascript_quote_and_marker_match_native_norito() {
@@ -771,7 +782,10 @@ mod tests {
             hex::encode(fixture.request.intent_hash().unwrap()),
             fixture.intent_hash_hex
         );
-        assert_eq!(assessment.intent_hash, fixture.request.intent_hash().unwrap());
+        assert_eq!(
+            assessment.intent_hash,
+            fixture.request.intent_hash().unwrap()
+        );
         let assessment_hex = hex::encode(norito::encode_canonical(&assessment).unwrap());
         assert_eq!(assessment_hex, fixture.assessment_hex);
         assert_eq!(

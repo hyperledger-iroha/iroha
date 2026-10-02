@@ -91,10 +91,8 @@ fn provider_snapshot_publishes_original_current_heads_and_refuses_an_obsolete_cu
                 assert!(originals.council_predecessor.is_none());
                 let response = ProviderDiscoveryProofRefV1::new(
                     originals.world,
-                    originals.council_head,
-                    originals.council_predecessor,
-                    originals.provider_head,
-                    originals.provider_predecessor,
+                    (originals.council_head, originals.council_predecessor),
+                    (originals.provider_head, originals.provider_predecessor),
                     originals.owner,
                     &advert,
                     originals.stream_token,

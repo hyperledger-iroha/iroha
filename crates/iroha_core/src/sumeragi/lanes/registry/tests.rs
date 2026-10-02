@@ -1,6 +1,67 @@
 //! Actual model/BLS controls for retained registry ownership and fallible merge reads.
 
 use super::*;
+
+#[test]
+fn original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry() {
+    use crate::{state::StateReadOnly, sumeragi::runtime_availability::NativeLaneStoreAuthorities};
+    use std::{future::Future, pin::pin, task::Context};
+    let (chain, record, _epoch) =
+        crate::sumeragi::runtime_availability::tests::npos_fixed_lane_chain_at(4);
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let ceiling = budget.limit_bytes();
+    for height in 1..=4 {
+        chain
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(height).unwrap())
+            .unwrap();
+    }
+    let crypto = Arc::new(crate::sumeragi::crypto::BlsCrypto::new());
+    let authorities = Arc::new(NativeLaneStoreAuthorities::new(
+        Arc::clone(state),
+        Arc::clone(&crypto),
+    ));
+    let stores = LaneStores::new(
+        chain.kura().store_root().join("lanes"),
+        *state.network_id_ref(),
+        state.chain_id_ref().to_string(),
+        crypto,
+        budget.clone(),
+        authorities,
+    );
+    let occupied = budget
+        .try_reserve_bytes(ceiling - budget.reserved_bytes())
+        .unwrap();
+    let error = stores.tip(record.lane, &record.incarnation).unwrap_err();
+    let Attempt::Deferred(original) = &error else {
+        panic!("original native authority was erased: {error:?}")
+    };
+    let original = original.clone();
+    let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+        original.allocation_refusal()
+    else {
+        panic!("actual original archive capacity")
+    };
+    let mut wait = pin!(release.clone().wait_for_release());
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(
+        matches!(crate::block::BlockValidationError::from(crate::sumeragi::lanes::merge::MergeError::Storage(error)), crate::block::BlockValidationError::ExecutionDeferred(retained) if retained == original)
+    );
+    assert_eq!(budget.reserved_bytes(), ceiling);
+    drop(occupied);
+    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert_eq!(
+        stores.tip(record.lane, &record.incarnation).unwrap(),
+        Some(0)
+    );
+    assert_eq!(budget.limit_bytes(), ceiling);
+    drop(stores);
+    assert_eq!(budget.reserved_bytes(), baseline);
+}
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{
     crypto::KeyPairSigner,
     lanes::{LaneBatch, record::tests::fixture},
@@ -32,7 +93,7 @@ impl AvailabilitySchedule for Schedule {
     fn instance(&self) -> Hash32 {
         self.instance
     }
-    fn height_config(&self, _: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, _: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         Ok(Some(self.config.clone()))
     }
 }
@@ -57,7 +118,10 @@ impl LaneStoreAuthorities for DisjointAuthorities {
         lane: LaneId,
         incarnation: &[u8; 32],
         instance: Hash32,
-    ) -> io::Result<Option<LaneStoreAuthority>> {
+    ) -> Result<
+        Option<LaneStoreAuthority>,
+        crate::execution_attempt::ExecutionAttemptError<io::Error>,
+    > {
         if lane == self.other_lane && *incarnation == self.other_incarnation {
             assert_eq!(instance, self.other.instance);
             return Ok(Some(LaneStoreAuthority {
@@ -74,7 +138,10 @@ impl LaneStoreAuthorities for Authorities {
         lane: LaneId,
         incarnation: &[u8; 32],
         instance: Hash32,
-    ) -> io::Result<Option<LaneStoreAuthority>> {
+    ) -> Result<
+        Option<LaneStoreAuthority>,
+        crate::execution_attempt::ExecutionAttemptError<io::Error>,
+    > {
         assert_eq!(lane, LANE);
         assert_eq!(*incarnation, INCARNATION);
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -82,10 +149,9 @@ impl LaneStoreAuthorities for Authorities {
             return Ok(None);
         }
         if self.corrupt.load(Ordering::SeqCst) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "bad authenticated activation",
-            ));
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidData, "bad authenticated activation").into(),
+            );
         }
         // A separate test deliberately supplies a foreign schedule; registry must refuse it.
         assert_ne!(instance, Hash32::ZERO);
@@ -293,9 +359,9 @@ fn authenticated_registry_batch_decode_refusal_is_retryable_not_byzantine() {
         "the exact original batch transaction destination must be refused"
     );
     let error = outcome.expect_err("local decoder refusal is never a Byzantine verdict");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert!(
-        error.get_ref().is_none(),
+        matches!(error, Attempt::Deferred(_)),
         "refusal must not box a replacement diagnostic"
     );
     let (body_pointer, signers_pointer) = {
@@ -362,8 +428,8 @@ fn authenticated_registry_batch_decode_refusal_is_retryable_not_byzantine() {
             || f.stores.block(LANE, &INCARNATION, height),
         )
         .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(error.get_ref().is_none());
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+        assert!(matches!(error, Attempt::Deferred(_)));
         let slot = store.batch_read.lock();
         let read = slot.as_ref().unwrap();
         assert_eq!(read.body.header().height, 1);
@@ -446,13 +512,13 @@ fn unresolved_corrupt_and_foreign_authority_never_become_an_empty_store() {
             .wait_for(LANE, &INCARNATION, 1, Duration::ZERO)
             .unwrap_err(),
     ] {
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     }
     assert!(f.stores.stores.lock().is_empty());
     f.authorities.missing.store(false, Ordering::SeqCst);
     f.authorities.corrupt.store(true, Ordering::SeqCst);
     assert_eq!(
-        f.stores.tip(LANE, &INCARNATION).unwrap_err().kind(),
+        f.stores.tip(LANE, &INCARNATION).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     let provider = Arc::new(Authorities {
@@ -466,7 +532,7 @@ fn unresolved_corrupt_and_foreign_authority_never_become_an_empty_store() {
     });
     f.stores.authorities = provider;
     assert_eq!(
-        f.stores.tip(LANE, &INCARNATION).unwrap_err().kind(),
+        f.stores.tip(LANE, &INCARNATION).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert!(!f.path().exists());
@@ -481,7 +547,7 @@ fn registry_retains_opening_lock_and_exact_charges_across_refusal() {
     let baseline = f.stores.budget.reserved_bytes();
     f.stores.budget.set_limit_bytes(baseline + raw);
     assert_eq!(
-        f.stores.store(LANE, &INCARNATION).unwrap_err().kind(),
+        f.stores.store(LANE, &INCARNATION).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(f.stores.budget.reserved_bytes(), baseline + raw);
@@ -492,7 +558,7 @@ fn registry_retains_opening_lock_and_exact_charges_across_refusal() {
     let calls = f.authorities.calls.load(Ordering::SeqCst);
     f.authorities.corrupt.store(true, Ordering::SeqCst);
     assert_eq!(
-        f.stores.tip(LANE, &INCARNATION).unwrap_err().kind(),
+        f.stores.tip(LANE, &INCARNATION).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(f.stores.budget.reserved_bytes(), baseline + raw);
@@ -534,7 +600,7 @@ fn retired_failed_openings_release_original_funding_and_lock_but_keep_replay_fra
             f.stores
                 .runtime_store(LANE, &INCARNATION)
                 .unwrap_err()
-                .kind(),
+                .io_kind(),
             io::ErrorKind::WouldBlock
         );
         let mut lanes = f.lane_state();
@@ -556,7 +622,7 @@ fn retired_failed_openings_release_original_funding_and_lock_but_keep_replay_fra
         // A historical reader reopening this retired incarnation owns its retry. Later
         // runner reconciliations must not discard its funded prefix or exclusive lock.
         assert_eq!(
-            f.stores.store(LANE, &INCARNATION).unwrap_err().kind(),
+            f.stores.store(LANE, &INCARNATION).unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         f.stores.release_retired(&lanes);
@@ -625,14 +691,14 @@ fn storage_corruption_is_repeated_error_not_missing_block_or_recovered_tip() {
     fs::write(f.path(), bytes).unwrap();
     for _ in 0..2 {
         assert_eq!(
-            f.stores.block(LANE, &INCARNATION, 1).unwrap_err().kind(),
+            f.stores.block(LANE, &INCARNATION, 1).unwrap_err().io_kind(),
             io::ErrorKind::InvalidData
         );
     }
     f.stores.release(LANE, &INCARNATION);
     for _ in 0..2 {
         assert_eq!(
-            f.stores.tip(LANE, &INCARNATION).unwrap_err().kind(),
+            f.stores.tip(LANE, &INCARNATION).unwrap_err().io_kind(),
             io::ErrorKind::InvalidData
         );
     }

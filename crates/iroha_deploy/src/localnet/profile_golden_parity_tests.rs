@@ -536,7 +536,10 @@ fn sora_nexus_v1_genesis_recipe_matches_kagami_taira_genesis() {
     let npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()
+        .expect("valid fixture NPoS parameters")
+        .flatten()
         .expect("signed NPoS parameters");
     assert_eq!(
         npos.epoch_length_blocks().get(),

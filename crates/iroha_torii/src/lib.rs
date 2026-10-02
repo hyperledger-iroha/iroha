@@ -38250,19 +38250,16 @@ impl Torii {
         );
     }
     #[cfg(not(feature = "app_api"))]
-    fn add_alias_routes(&self, _builder: &mut RouterBuilder) {
-        let _ = self;
-    }
+    fn add_alias_routes(_builder: &mut RouterBuilder) {}
     #[cfg(feature = "app_api")]
-    fn add_alias_routes(&self, builder: &mut RouterBuilder) {
-        let _ = self;
+    fn add_alias_routes(builder: &mut RouterBuilder) {
         mount_catalog_route_rows!(
             builder, aliases;
             SETUP_PLAN => limited_canonical_signature_post(handler_alias_setup_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             LEASE_RENEW_PLAN => limited_canonical_signature_post(handler_alias_lease_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             AUTO_RENEW_PLAN => limited_canonical_signature_post(handler_alias_auto_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RESOLVE => limited_optional_canonical_signature_post(handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            RESOLVE_INDEX => limited_optional_canonical_signature_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE_INDEX => limited_canonical_signature_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             BY_ACCOUNT => limited_optional_canonical_signature_post(handler_public_alias_lookup_by_account, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_LOOKUP => limited_canonical_signature_post(handler_retail_recipient_lookup, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_ROUTE => limited_canonical_signature_post(handler_retail_recipient_route, EXACT_ALIAS_READ_MAX_BODY_BYTES);
@@ -42486,7 +42483,7 @@ impl Torii {
         self.add_telemetry_routes(&mut builder);
         self.add_core_info_routes(&mut builder);
         self.add_operator_auth_routes(&mut builder);
-        self.add_alias_routes(&mut builder);
+        Self::add_alias_routes(&mut builder);
         self.add_fee_routes(&mut builder);
         self.add_time_routes(&mut builder);
         self.add_schema_routes(&mut builder);

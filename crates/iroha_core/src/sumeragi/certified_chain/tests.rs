@@ -146,11 +146,15 @@ fn uncommitted_heights_are_not_read() {
     for height in [0, 6, u64::MAX] {
         assert_eq!(
             committed_block(&view, height).err(),
-            Some(ChainReadError::NotCommitted { height })
+            Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::NotCommitted { height }
+            ))
         );
         assert_eq!(
             reader.certified(height).err(),
-            Some(ChainReadError::NotCommitted { height })
+            Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::NotCommitted { height }
+            ))
         );
     }
     assert_eq!(
@@ -170,7 +174,9 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     let bare = Arc::new(original.as_ref().clone().with_commit_certificate(None));
     assert_eq!(
         read_frame(bare, 3).err(),
-        Some(ChainReadError::MissingCertificate { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::MissingCertificate { height: 3 }
+        ))
     );
     // A header for another payload.
     let wrong_payload = with_parts(&original, |header, _, _| {
@@ -178,13 +184,17 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     });
     assert_eq!(
         read_frame(wrong_payload, 3).err(),
-        Some(ChainReadError::HeaderMismatch { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::HeaderMismatch { height: 3 }
+        ))
     );
     // A header of another height.
     let wrong_height = with_parts(&original, |header, _, _| header.height = 4);
     assert_eq!(
         read_frame(wrong_height, 3).err(),
-        Some(ChainReadError::HeaderMismatch { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::HeaderMismatch { height: 3 }
+        ))
     );
     // A result preimage that commits another executed block.
     let wrong_wire = with_parts(&original, |_, _, preimage| {
@@ -194,13 +204,17 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     });
     assert_eq!(
         read_frame(wrong_wire, 3).err(),
-        Some(ChainReadError::ExecutionMismatch { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::ExecutionMismatch { height: 3 }
+        ))
     );
     // Garbage in the preimage or header.
     let garbage = with_parts(&original, |_, _, preimage| *preimage = vec![1, 2, 3]);
     assert!(matches!(
         read_frame(garbage, 3),
-        Err(ChainReadError::Malformed { height: 3, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Malformed { height: 3, .. }
+        ))
     ));
     // Genesis must carry the result-only certificate.
     let genesis = frame(&chain, 1);
@@ -215,7 +229,9 @@ fn frames_without_a_matching_header_preimage_or_certificate_are_refused() {
     )));
     assert!(matches!(
         read_frame(headed, 1),
-        Err(ChainReadError::Malformed { height: 1, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Malformed { height: 1, .. }
+        ))
     ));
 }
 
@@ -238,13 +254,17 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     });
     assert_eq!(
         certify(other_result).err(),
-        Some(ChainReadError::ResultMismatch { height: 4 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::ResultMismatch { height: 4 }
+        ))
     );
     // A header whose hash is not the certified block hash.
     let other_header = with_parts(&original, |header, _, _| header.origin_view = 3);
     assert_eq!(
         certify(other_header).err(),
-        Some(ChainReadError::HeaderMismatch { height: 4 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::HeaderMismatch { height: 4 }
+        ))
     );
     // A Prepare certificate, or a flag that differs from the header's.
     let edits: [fn(&mut BlockHeader, &mut Qc, &mut Vec<u8>); 2] = [
@@ -254,14 +274,18 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     for edit in edits {
         assert_eq!(
             certify(with_parts(&original, edit)).err(),
-            Some(ChainReadError::HeaderMismatch { height: 4 })
+            Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::HeaderMismatch { height: 4 }
+            ))
         );
     }
     // Another instance.
     let other_instance = with_parts(&original, |_, qc, _| qc.instance = Hash32([5; 32]));
     assert_eq!(
         certify(other_instance).err(),
-        Some(ChainReadError::WrongInstance { height: 4 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::WrongInstance { height: 4 }
+        ))
     );
     // Below the quorum, or a forged aggregate.
     let (header, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
@@ -269,25 +293,31 @@ fn certificates_that_do_not_certify_the_stored_block_are_refused() {
     let below = with_parts(&original, |_, qc, _| *qc = below);
     assert_eq!(
         certify(below).err(),
-        Some(ChainReadError::Certificate {
-            height: 4,
-            error: CertError::TooFewSigners
-        })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate {
+                height: 4,
+                error: CertError::TooFewSigners
+            }
+        ))
     );
     // More signatures cannot widen the protocol's exact finality authority either.
     let all = chain.commit_qc(4, qc.block_hash, qc.result, qc.attest, Signers::All);
     let all = with_parts(&original, |_, qc, _| *qc = all);
     assert_eq!(
         certify(all).err(),
-        Some(ChainReadError::Certificate {
-            height: 4,
-            error: CertError::TooManySigners
-        })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate {
+                height: 4,
+                error: CertError::TooManySigners
+            }
+        ))
     );
     let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[5] ^= 1);
     assert!(matches!(
         certify(forged),
-        Err(ChainReadError::Certificate { height: 4, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { height: 4, .. }
+        ))
     ));
     assert_eq!(header.height, 4);
 }
@@ -410,7 +440,9 @@ fn a_view_of_another_network_is_refused() {
     );
     assert_eq!(
         CertifiedChain::new(&view).err(),
-        Some(ChainReadError::ForeignGenesis)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::ForeignGenesis
+        ))
     );
     // A view whose journal names another block at a height does not read Kura's.
     let mut other = State::new_with_chain_and_network_id_for_testing(
@@ -489,7 +521,9 @@ fn genesis_signature_is_verified_even_when_its_header_hash_matches_the_view() {
         let state = state_with_history(&[Arc::new(block)]);
         assert!(matches!(
             CertifiedChain::new(&state.view()),
-            Err(ChainReadError::ForeignGenesis)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::ForeignGenesis
+            ))
         ));
     }
 }
@@ -534,7 +568,9 @@ fn genesis_payload_is_bound_to_its_signed_header_before_authority_is_read() {
         let state = state_with_history(&[Arc::new(block)]);
         assert!(matches!(
             CertifiedChain::new(&state.view()),
-            Err(ChainReadError::ForeignGenesis)
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::ForeignGenesis
+            ))
         ));
     }
     let view = chain.state().view();
@@ -613,10 +649,12 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
     let native = CertifiedChain::new(&view).unwrap();
     assert!(matches!(
         native.certified(2),
-        Err(ChainReadError::Certificate {
-            error: CertError::BadAttestation,
-            ..
-        })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate {
+                error: CertError::BadAttestation,
+                ..
+            }
+        ))
     ));
     struct ExplicitFixtureVerifier;
     impl AttestationVerifier for ExplicitFixtureVerifier {
@@ -643,10 +681,12 @@ fn installing_an_attestation_verifier_rechecks_the_previously_verified_prefix() 
     let full = reader.with_attestation_verifier(&NoAttestation);
     assert!(matches!(
         full.certified(3),
-        Err(ChainReadError::Certificate {
-            height: 2,
-            error: CertError::BadAttestation,
-        })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate {
+                height: 2,
+                error: CertError::BadAttestation,
+            }
+        ))
     ));
 }
 
@@ -667,11 +707,15 @@ fn pinned_prefix_uses_the_exact_cut_without_a_world_authority() {
     // Kura also holds heights four and five, but they are outside this restoration cut.
     assert_eq!(
         reader.certified(4).err(),
-        Some(ChainReadError::NotCommitted { height: 4 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotCommitted { height: 4 }
+        ))
     );
     assert_eq!(
         reader.committed(0).err(),
-        Some(ChainReadError::NotCommitted { height: 0 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotCommitted { height: 0 }
+        ))
     );
     assert!(matches!(reader.source, ChainSource::Pinned { .. }));
     let prefix = reader.prefix.lock();
@@ -690,38 +734,50 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
         .collect::<Vec<_>>();
     assert_eq!(
         CertifiedChain::from_pinned(&chain_id, &network, &[], chain.kura()).err(),
-        Some(ChainReadError::NotCommitted { height: 1 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotCommitted { height: 1 }
+        ))
     );
     let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"not the pinned block"));
     let foreign = NetworkId::from_genesis_hash(wrong_hash);
     assert_eq!(
         CertifiedChain::from_pinned(&chain_id, &foreign, &hashes, chain.kura()).err(),
-        Some(ChainReadError::ForeignGenesis)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::ForeignGenesis
+        ))
     );
     let absent = Kura::blank_kura_for_testing();
     assert_eq!(
         CertifiedChain::from_pinned(&chain_id, &network, &hashes, &absent).err(),
-        Some(ChainReadError::NotInView { height: 1 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotInView { height: 1 }
+        ))
     );
     let mut changed = hashes.clone();
     changed[0] = wrong_hash;
     assert_eq!(
         CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).err(),
-        Some(ChainReadError::NotInView { height: 1 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotInView { height: 1 }
+        ))
     );
     let mut changed = hashes.clone();
     changed[2] = wrong_hash;
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &changed, chain.kura()).unwrap();
     assert_eq!(
         reader.certified(3).err(),
-        Some(ChainReadError::NotInView { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotInView { height: 3 }
+        ))
     );
     let wrong_chain = ChainId::from("another-configured-consensus-instance");
     let reader =
         CertifiedChain::from_pinned(&wrong_chain, &network, &hashes, chain.kura()).unwrap();
     assert_eq!(
         reader.certified(2).err(),
-        Some(ChainReadError::WrongInstance { height: 2 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::WrongInstance { height: 2 }
+        ))
     );
     chain
         .kura()
@@ -730,7 +786,9 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
     assert_eq!(
         reader.certified(3).err(),
-        Some(ChainReadError::NotInView { height: 3 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotInView { height: 3 }
+        ))
     );
 }
 
@@ -766,7 +824,9 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura).unwrap();
     assert_eq!(
         reader.certified(2).err(),
-        Some(ChainReadError::Discontinuous { height: 2 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Discontinuous { height: 2 }
+        ))
     );
 }
 
@@ -802,7 +862,9 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
     assert_eq!(reads[2].commitment(), chain.committed(3).commitment());
     assert_eq!(
         reader.certified(4).err(),
-        Some(ChainReadError::NotCommitted { height: 4 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotCommitted { height: 4 }
+        ))
     );
     assert!(CertifiedChain::from_frames(&chain_id, &network, &hashes[..2], &frames).is_err());
     assert!(CertifiedChain::from_frames(&chain_id, &network, &[], &[]).is_err());
@@ -810,20 +872,26 @@ fn borrowed_native_frames_use_the_same_verifier_and_exact_cut() {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
     assert_eq!(
         CertifiedChain::from_frames(&chain_id, &foreign, &hashes, &frames).err(),
-        Some(ChainReadError::ForeignGenesis)
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::ForeignGenesis
+        ))
     );
     let other_chain = ChainId::from("foreign-instance");
     let reader = CertifiedChain::from_frames(&other_chain, &network, &hashes, &frames).unwrap();
     assert_eq!(
         reader.certified(3).err(),
-        Some(ChainReadError::WrongInstance { height: 2 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::WrongInstance { height: 2 }
+        ))
     );
     let mut reordered = frames.clone();
     reordered.swap(1, 2);
     let reader = CertifiedChain::from_frames(&chain_id, &network, &hashes, &reordered).unwrap();
     assert_eq!(
         reader.certified(2).err(),
-        Some(ChainReadError::NotInView { height: 2 })
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::NotInView { height: 2 }
+        ))
     );
 }
 

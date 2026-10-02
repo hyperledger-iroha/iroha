@@ -43261,8 +43261,20 @@ pub async fn handle_v1_sumeragi_lanes(
     Ok(crate::utils::respond_with_format(lanes, format))
 }
 fn sumeragi_npos_diagnostics(
-    params: &iroha_data_model::parameter::system::SumeragiNposParameters,
-) -> Result<SumeragiNposDiagnostics> {
+    world: &impl iroha_core::state::WorldReadOnly,
+) -> Result<Option<SumeragiNposDiagnostics>> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    let Some(params) = world
+        .sumeragi_npos_parameters()
+        .map_err(|error| match error {
+            ExecutionAttemptError::Deferred(_) => history_capacity_error(),
+            ExecutionAttemptError::Rejected(message) => {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+            }
+        })?
+    else {
+        return Ok(None);
+    };
     let diagnostics = SumeragiNposDiagnostics {
         epoch_length_blocks: params.epoch_length_blocks(),
         epoch_seed: params.epoch_seed(),
@@ -43272,8 +43284,11 @@ fn sumeragi_npos_diagnostics(
             reason.to_owned(),
         ))
     })?;
-    Ok(diagnostics)
+    Ok(Some(diagnostics))
 }
+#[cfg(test)]
+#[path = "routing/npos_diagnostics_tests.rs"]
+mod npos_diagnostics_tests;
 /// GET `/v1/sumeragi/diagnostics` — non-authoritative operator and lane diagnostics.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_diagnostics(
@@ -43293,10 +43308,7 @@ pub async fn handle_v1_sumeragi_diagnostics(
         durable_queue.refresh_pressure_budget_from_block_time(state.sumeragi_block_cadence());
     let snapshot = iroha_core::status::snapshot();
     let world = state.world_view();
-    let npos = world
-        .sumeragi_npos_parameters()
-        .map(|params| sumeragi_npos_diagnostics(&params))
-        .transpose()?;
+    let npos = sumeragi_npos_diagnostics(&world)?;
     drop(world);
     let lane_governance = snapshot
         .lane_governance

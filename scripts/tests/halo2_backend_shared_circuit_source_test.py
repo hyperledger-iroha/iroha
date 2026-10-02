@@ -10,6 +10,8 @@ retain every assertion while allowing comment/formatting edits. The reviewed
 inventory replaces removed runtime-key cache and toy authorization fixtures with
 packaged-key cache reuse, Kaigi authorization, and final confidential transfer
 acceptance plus rejection under the retired backend label.
+Halo2 and Pasta IPA are mandatory; the guard rejects their retired backend
+feature gates while retaining the developer-only fixture selection.
 The circuit-cache confusion control uses two distinct shared test circuits;
 the preverification fixture uses the admitted Kaigi usage schema after IVM
 replay-binding retirement.
@@ -24,7 +26,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from zk_source_tokens import token_hash
+from zk_source_tokens import rust_tokens, token_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +57,7 @@ SHARDS = (
         ),
         opening_lines=1_710,
         code_sha256=(
-            "54bb48e9b64836235210ea2a900b3eea8c3b40ade6942d19b5318a0c12e829e9"
+            "9a79edabecf3f307df915207cc7225cf5507974aa8eaaa10715b8b55c5099507"
         ),
         preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
@@ -121,7 +123,7 @@ SHARDS = (
         ),
         opening_lines=1_904,
         code_sha256=(
-            "2015073787262c35f9d304502906bff71fddb622f7d846ca672fb3a26e9579c2"
+            "18f9bebc5d55647caccd02678d18940bccd1b23a90a4fcd317b150fde94b8387"
         ),
         preimage_tests=(
             "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical",
@@ -352,6 +354,13 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
             raise GuardError(f"shared circuit contract drifted for {name}")
 
     for shard, source in zip(SHARDS, shard_sources):
+        tokens = rust_tokens(source)
+        for feature in ('"zk-halo2"', '"zk-halo2-ipa"'):
+            if any(
+                tokens[index : index + 3] == ("feature", "=", feature)
+                for index in range(len(tokens) - 2)
+            ):
+                raise GuardError("retired Halo2 backend feature gate")
         if token_hash(source) != shard.code_sha256:
             raise GuardError(f"current code/assertion contract drifted for {shard.path}")
 
@@ -375,6 +384,25 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
     def test_whitespace_growth_preserves_shared_circuit_contract(self) -> None:
         changed = tuple(source + "\n" * 20_000 for source in self.sources)
         _validate_sources(changed, self.zk_source)
+
+    def test_retired_backend_feature_gates_fail_closed(self) -> None:
+        for index, source in enumerate(self.sources):
+            test = SHARDS[index].tests[0]
+            marker = f"#[test]\nfn {test}("
+            self.assertEqual(source.count(marker), 1)
+            for feature in ("zk-halo2", "zk-halo2-ipa"):
+                for gate in (
+                    f'#[cfg(feature = "{feature}")]\n',
+                    f'#[cfg(all(feature = "halo2-dev-tests", feature = "{feature}"))]\n',
+                ):
+                    with self.subTest(shard=index, feature=feature, gate=gate):
+                        changed = list(self.sources)
+                        changed[index] = source.replace(marker, gate + marker, 1)
+                        with self.assertRaisesRegex(GuardError, "retired Halo2 backend"):
+                            _validate_sources(tuple(changed), self.zk_source)
+                changed = list(self.sources)
+                changed[index] = f'// #[cfg(feature = "{feature}")]\n' + source
+                _validate_sources(tuple(changed), self.zk_source)
 
     def test_mutations_fail_closed(self) -> None:
         mutations: list[tuple[tuple[str, str], str]] = []

@@ -1,0 +1,195 @@
+namespace Hyperledger.Iroha.Petal;
+
+/// <summary>Limits of a scan session.</summary>
+public sealed record PetalScanLimits
+{
+    private readonly TimeSpan idleTimeout = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan absoluteTimeout = TimeSpan.FromSeconds(180);
+    private readonly PetalAssemblerLimits assembler = PetalAssemblerLimits.Default;
+    private readonly PetalDecodeOptions decode = PetalDecodeOptions.Default;
+
+    /// <summary>The reference defaults: 30 s idle, 180 s absolute, default assembler and decoder.</summary>
+    public static PetalScanLimits Default { get; } = new();
+
+    /// <summary>Forget a half-received stream after this long without progress (whole milliseconds).</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan IdleTimeout
+    {
+        get => idleTimeout;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            idleTimeout = value;
+        }
+    }
+
+    /// <summary>Forget a stream that has not finished this long after it started (whole milliseconds).</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan AbsoluteTimeout
+    {
+        get => absoluteTimeout;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            absoluteTimeout = value;
+        }
+    }
+
+    /// <summary>Assembler memory and size limits.</summary>
+    public PetalAssemblerLimits Assembler
+    {
+        get => assembler;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            assembler = value;
+        }
+    }
+
+    /// <summary>Image decoder options.</summary>
+    public PetalDecodeOptions Decode
+    {
+        get => decode;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            decode = value;
+        }
+    }
+}
+
+/// <summary>Counters for diagnostics and UI hints.</summary>
+/// <param name="Frames">Camera frames offered.</param>
+/// <param name="Located">Frames in which a code was located, whether or not a lane could be read.</param>
+/// <param name="Readable">Frames in which at least one lane decoded.</param>
+/// <param name="LaneP">Lane <c>P</c> successes.</param>
+/// <param name="LaneK">Lane <c>K</c> successes.</param>
+/// <param name="LaneD">Lane <c>D</c> successes.</param>
+public readonly record struct PetalScanStats(uint Frames, uint Located, uint Readable, uint LaneP, uint LaneK, uint LaneD);
+
+/// <summary>The result of offering one camera frame.</summary>
+public sealed class PetalScanOutcome
+{
+    internal PetalScanOutcome(PetalDecodeError? error, string lanes, PetalProgress progress, PetalCompletedPayload? completed)
+    {
+        Error = error;
+        Lanes = lanes;
+        Progress = progress;
+        Completed = completed;
+    }
+
+    /// <summary>
+    /// Why the frame produced nothing, when it did not.
+    /// <see cref="PetalDecodeError.NoOrientation"/> means a code was located but no
+    /// lane could be read (too far, too blurry).
+    /// </summary>
+    public PetalDecodeError? Error { get; }
+
+    /// <summary>Lanes that decoded, as letters from <c>"PKD"</c>.</summary>
+    public string Lanes { get; }
+
+    /// <summary>Receive progress after this frame.</summary>
+    public PetalProgress Progress { get; }
+
+    /// <summary>The finished payload, delivered exactly once.</summary>
+    public PetalCompletedPayload? Completed { get; }
+}
+
+/// <summary>
+/// The receive-side object an app holds while its camera is open: decodes
+/// camera frames and reassembles the stream they carry.
+/// </summary>
+/// <remarks>
+/// A half-received stream is forgotten after <see cref="PetalScanLimits.IdleTimeout"/>
+/// without new independent atoms, or <see cref="PetalScanLimits.AbsoluteTimeout"/>
+/// after it started. Instances are not thread-safe; see
+/// <see cref="PetalCameraAnalyzer"/> for a camera-callback wrapper.
+/// </remarks>
+public sealed class PetalScanSession
+{
+    private readonly PetalStreamAssembler assembler;
+    private long? startedMs;
+    private long progressMs;
+    private int lastRank;
+    private uint frames;
+    private uint located;
+    private uint readable;
+    private uint laneP;
+    private uint laneK;
+    private uint laneD;
+
+    /// <summary>Creates a session.</summary>
+    /// <param name="limits">Limits; <see cref="PetalScanLimits.Default"/> when omitted.</param>
+    public PetalScanSession(PetalScanLimits? limits = null)
+    {
+        Limits = limits ?? PetalScanLimits.Default;
+        assembler = new PetalStreamAssembler(Limits.Assembler);
+    }
+
+    /// <summary>The limits in force.</summary>
+    public PetalScanLimits Limits { get; }
+
+    /// <summary>Diagnostic counters.</summary>
+    public PetalScanStats Stats => new(frames, located, readable, laneP, laneK, laneD);
+
+    /// <summary>Current progress.</summary>
+    public PetalProgress Progress => assembler.Progress;
+
+    /// <summary>Drops all partial state (counters are kept).</summary>
+    public void Reset()
+    {
+        assembler.Reset();
+        startedMs = null;
+        lastRank = 0;
+    }
+
+    /// <summary>Offers one camera luma plane captured at monotonic time <paramref name="nowMilliseconds"/>.</summary>
+    /// <param name="image">The luma plane.</param>
+    /// <param name="nowMilliseconds">Monotonic capture time in milliseconds (for example <see cref="Environment.TickCount64"/>).</param>
+    /// <returns>What this frame contributed.</returns>
+    public PetalScanOutcome Push(PetalLuma image, long nowMilliseconds)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (startedMs is { } start
+            && (Elapsed(nowMilliseconds, progressMs) > WholeMilliseconds(Limits.IdleTimeout)
+                || Elapsed(nowMilliseconds, start) > WholeMilliseconds(Limits.AbsoluteTimeout)))
+        {
+            Reset();
+        }
+
+        frames++;
+        var result = PetalDecoder.Decode(image, Limits.Decode);
+        var lanes = result.Success ? Absorb(result.Frame) : string.Empty;
+        if (result.Error is not (PetalDecodeError.NoFinders or PetalDecodeError.UnsupportedImage))
+            located++;
+        var progress = assembler.Progress;
+        if (progress.Rank > lastRank || (progress.Meta is not null && startedMs is null))
+        {
+            progressMs = nowMilliseconds;
+            startedMs ??= nowMilliseconds;
+        }
+
+        lastRank = progress.Rank;
+        return new PetalScanOutcome(result.Error, lanes, progress, assembler.TakeCompleted());
+    }
+
+    private string Absorb(PetalDecodedFrame frame)
+    {
+        if (frame.P is not null)
+            laneP++;
+        if (frame.K is not null)
+            laneK++;
+        if (frame.D is not null)
+            laneD++;
+        var lanes = frame.Lanes;
+        if (lanes.Length > 0)
+            readable++;
+        frame.Feed(assembler);
+        return lanes;
+    }
+
+    /// <summary>Saturating <c>now - since</c> (Rust <c>u64::saturating_sub</c>).</summary>
+    private static ulong Elapsed(long now, long since) => now <= since ? 0 : unchecked((ulong)now - (ulong)since);
+
+    private static ulong WholeMilliseconds(TimeSpan timeout) => (ulong)(timeout.Ticks / TimeSpan.TicksPerMillisecond);
+}

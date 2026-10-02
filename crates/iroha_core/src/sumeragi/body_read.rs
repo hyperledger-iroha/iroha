@@ -1,5 +1,6 @@
 //! Object-safe, source-bound storage reads handed to the availability restoration worker.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{io, path::Path};
 
 use iroha_allocation::AllocationBudget;
@@ -51,6 +52,8 @@ pub enum BodyReadPoll {
 pub enum BodyReadError {
     /// Filesystem refusal or a malformed physical source.
     Io(io::Error),
+    /// Original historical authority read did not finish; retry the same source and pool.
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// Canonical Norito decoding rejected the complete stored record.
     Decode(norito::Error),
     /// A decoded semantic byte domain rejected its size or allocation source.
@@ -62,15 +65,34 @@ pub enum BodyReadError {
 }
 
 impl BodyReadError {
+    pub(super) fn into_attempt(self) -> Attempt<io::Error> {
+        match self {
+            Self::Io(error) => Attempt::Rejected(error),
+            Self::Deferred(reason) => Attempt::Deferred(reason),
+            Self::Admission(error) => super::storage_attempt::byte(error),
+            Self::Decode(error) => io::Error::new(io::ErrorKind::InvalidData, error).into(),
+            error => io::Error::new(io::ErrorKind::InvalidData, error).into(),
+        }
+    }
+
+    pub(super) fn from_attempt(error: Attempt<io::Error>) -> Self {
+        match error {
+            Attempt::Rejected(error) => Self::Io(error),
+            Attempt::Deferred(reason) => Self::Deferred(reason),
+        }
+    }
+
     /// Preserve physical decoder refusal as local I/O progress without allocating a diagnostic.
     /// Deterministic wire and decode-limit errors retain their original terminal typed cause.
     pub(super) fn from_decode(error: norito::Error) -> Self {
-        if matches!(&error, norito::Error::AllocationFailed { .. })
-            && !cfg!(all(test, sumeragi_core_mutation = "HC25"))
+        if cfg!(all(test, sumeragi_core_mutation = "HC25"))
+            && matches!(&error, norito::Error::AllocationFailed { .. })
         {
-            Self::Io(io::ErrorKind::WouldBlock.into())
-        } else {
-            Self::Decode(error)
+            return Self::Decode(error);
+        }
+        match crate::execution_attempt::norito_decode_attempt_error(error, std::convert::identity) {
+            Attempt::Deferred(reason) => Self::Deferred(reason),
+            Attempt::Rejected(error) => Self::Decode(error),
         }
     }
 }
@@ -79,6 +101,7 @@ impl std::fmt::Display for BodyReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "body read: {error}"),
+            Self::Deferred(reason) => write!(f, "body authority deferred: {reason}"),
             Self::Decode(error) => write!(f, "body record: {error}"),
             Self::Admission(error) => write!(f, "body record owner: {error}"),
             Self::ForeignBudget => f.write_str("body read retry uses a foreign allocation pool"),
@@ -91,6 +114,7 @@ impl std::error::Error for BodyReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
+            Self::Deferred(reason) => Some(reason),
             Self::Decode(error) => Some(error),
             Self::Admission(error) => Some(error),
             Self::ForeignBudget | Self::Completed => None,
@@ -191,11 +215,14 @@ mod decode_refusal_tests {
     #[test]
     fn physical_decode_refusal_is_operational_but_declared_limits_remain_terminal() {
         let error = BodyReadError::from_decode(norito::Error::AllocationFailed { bytes: 123 });
-        let BodyReadError::Io(error) = error else {
+        let BodyReadError::Deferred(error) = error else {
             panic!("physical allocator refusal remains retryable");
         };
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(error.get_ref().is_none());
+        assert_eq!(
+            error.reason(),
+            ivm::error::ExecutionDeferral::AllocationUnavailable
+        );
+        assert!(error.allocation_refusal().is_none());
         for error in [
             norito::Error::LengthMismatch,
             norito::Error::SchemaMismatch,

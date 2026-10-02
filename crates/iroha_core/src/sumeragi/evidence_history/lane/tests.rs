@@ -26,7 +26,11 @@ use std::{sync::Arc, time::Duration};
 #[derive(Default)]
 struct OriginalFrames(parking_lot::RwLock<Vec<CommittedLaneBlock>>);
 impl LaneBlockSource for OriginalFrames {
-    fn tip(&self, lane: LaneId, _: &[u8; 32]) -> io::Result<Option<u64>> {
+    fn tip(
+        &self,
+        lane: LaneId,
+        _: &[u8; 32],
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<io::Error>> {
         assert_eq!(lane, LaneId::new(7));
         Ok(Some(self.0.read().len() as u64))
     }
@@ -35,7 +39,10 @@ impl LaneBlockSource for OriginalFrames {
         lane: LaneId,
         _: &[u8; 32],
         height: u64,
-    ) -> io::Result<Option<CommittedLaneBlock>> {
+    ) -> Result<
+        Option<CommittedLaneBlock>,
+        crate::execution_attempt::ExecutionAttemptError<io::Error>,
+    > {
         assert_eq!(lane, LaneId::new(7));
         Ok(self
             .0
@@ -49,7 +56,7 @@ impl LaneBlockSource for OriginalFrames {
         incarnation: &[u8; 32],
         height: u64,
         _: Duration,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<io::Error>> {
         Ok(self
             .tip(lane, incarnation)?
             .is_some_and(|tip| tip >= height))
@@ -307,8 +314,11 @@ fn lane_proof_replays_complete_anchored_demotion_history_and_original_pool_after
     let held = budget.reserved_bytes();
     budget.set_limit_bytes(held);
     let error = reader.poll().unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.get_ref().is_none());
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+    assert!(matches!(
+        error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+    ));
     assert_eq!(reader.cursor.next_height(), Some(5));
     assert_eq!(
         std::ptr::from_ref(reader.cursor.config().epoch.as_ref()),
@@ -350,7 +360,7 @@ fn lane_proof_refuses_uncovered_parent_and_missing_original_ancestry_without_adv
     let (context, error) = LaneProofRead::new(context, 5)
         .err()
         .expect("uncovered parent");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.io_kind(), io::ErrorKind::InvalidData);
     assert_eq!(
         std::ptr::from_ref(context.authority.config().epoch.as_ref()),
         pointer
@@ -364,7 +374,10 @@ fn lane_proof_refuses_uncovered_parent_and_missing_original_ancestry_without_adv
     std::fs::remove_file(path).unwrap();
     let mut reader =
         LaneProofRead::new(context, 3).unwrap_or_else(|_| panic!("covered original parent"));
-    assert_eq!(reader.poll().unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        reader.poll().unwrap_err().io_kind(),
+        io::ErrorKind::NotFound
+    );
     assert_eq!(reader.cursor.next_height(), Some(3));
     assert!(reader.verify(&vote_pair(&reader, 3)).is_err());
     assert!(
@@ -531,7 +544,7 @@ fn lane_proof_rejects_valid_same_height_certificate_on_an_unmerged_branch() {
     let mut replacement = PreparedLaneWrite::new(authored.body, qc);
     std::fs::write(path, replacement.prepare(&reader.budget).unwrap()).unwrap();
     assert_eq!(
-        reader.poll().unwrap_err().kind(),
+        reader.poll().unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(reader.cursor.next_frontier().unwrap(), expected);
@@ -557,13 +570,13 @@ fn retained_lane_evidence_read_preserves_original_capture_across_open_failure_an
     std::fs::rename(&path, &held).unwrap();
     let error = reader.poll(&proof).unwrap_err();
     assert!(
-        matches!(error, NativeEvidenceError::Source(ref error) if error.kind() == io::ErrorKind::NotFound)
+        matches!(error, NativeEvidenceError::Source(ref error) if error.io_kind() == io::ErrorKind::NotFound)
     );
     std::fs::rename(&held, &path).unwrap();
     budget.set_limit_bytes(baseline);
     let error = reader.poll(&proof).unwrap_err();
     assert!(
-        matches!(error, NativeEvidenceError::Source(ref error) if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none())
+        matches!(error, NativeEvidenceError::Source(ref error) if error.io_kind() == io::ErrorKind::WouldBlock && matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)))
     );
     budget.set_limit_bytes(1 << 30);
     let verified = reader.poll(&proof).unwrap();
@@ -641,7 +654,7 @@ fn admission_owner_keeps_native_height_separate_and_original_history_job_on_refu
     };
     history_pool.set_limit_bytes(history_before);
     assert!(
-        matches!(read.complete(), Err(EvidenceAdmissionError::Source(ref error)) if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none())
+        matches!(read.complete(), Err(EvidenceAdmissionError::Source(ref error)) if error.io_kind() == io::ErrorKind::WouldBlock && matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)))
     );
     assert!(read.matches(generation, carrier, std::slice::from_ref(&proof)));
     history_pool.set_limit_bytes(1 << 30);
@@ -686,7 +699,7 @@ fn state_admission_cache_retains_lane_jobs_until_retry_and_refunds_original_pool
     assert!(
         matches!(prepare_admissions(state, generation, carrier, std::slice::from_ref(&proof)),
         Err(crate::sumeragi::evidence::EvidenceAdmissionError::Source(ref error))
-        if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none())
+        if error.io_kind() == io::ErrorKind::WouldBlock && matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)))
     );
     let waiting = state.evidence_preparation_budget().reserved_bytes();
     assert!(
@@ -788,7 +801,7 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
     budget.set_limit_bytes(base);
     assert!(
         matches!(evidence::validate_persisted_records(chain.state()),
-        Err(evidence::EvidenceAdmissionError::Source(ref error)) if error.kind() == io::ErrorKind::WouldBlock)
+        Err(evidence::EvidenceAdmissionError::Source(ref error)) if error.io_kind() == io::ErrorKind::WouldBlock)
     );
     budget.set_limit_bytes(1 << 30);
     evidence::validate_persisted_records(chain.state()).unwrap();
@@ -802,6 +815,7 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
         .view()
         .world()
         .sumeragi_npos_parameters()
+        .expect("original policy decoder completes")
         .unwrap()
         .slashing_delay_blocks();
     let due = carrier + delay;
@@ -1292,7 +1306,7 @@ fn terminal_lane_source_failure_cannot_pin_competing_original_admission_forever(
     let baseline = state.ivm_execution_budget().reserved_bytes();
     let preparation = state.evidence_preparation_budget().reserved_bytes();
     assert!(matches!(prepare_admissions(state, generation, 5, &[proof]),
-        Err(EvidenceAdmissionError::Source(error)) if error.kind() == io::ErrorKind::NotFound));
+        Err(EvidenceAdmissionError::Source(error)) if error.io_kind() == io::ErrorKind::NotFound));
     let admitted = prepare_admissions(state, generation, 5, &[root])
         .expect("terminal lane storage failure cannot retain the same-cut admission slot");
     assert_eq!(admitted.as_slice().len(), 1);
@@ -1387,8 +1401,11 @@ fn original_lane_context_retains_custody_on_native_constructor_decode_refusal() 
                 .expect("field ceiling refuses original custody inspection")
         },
     );
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.get_ref().is_none());
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+    assert!(matches!(
+        error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+    ));
     assert_eq!(context.scope, expected_scope);
     assert_eq!(context.original_tip, expected_tip);
     assert!(context.budget.same_pool(&budget));
@@ -1416,7 +1433,7 @@ fn original_lane_verification_defers_typed_custody_decode_refusal() {
         || {
             assert!(
                 matches!(reader.verify(&proof), Err(super::super::NativeEvidenceError::Source(error))
-            if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none())
+            if error.io_kind() == io::ErrorKind::WouldBlock && matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)))
             )
         },
     );
@@ -1424,4 +1441,83 @@ fn original_lane_verification_defers_typed_custody_decode_refusal() {
     assert!(reader.verify(&proof).is_ok());
     drop(reader);
     assert_eq!(budget.reserved_bytes(), baseline);
+}
+
+#[test]
+fn original_lane_observer_late_policy_refusal_retains_observation_and_retries() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    use crate::sumeragi::evidence;
+    let (chain, _guard) = anchored_chain(7);
+    let mut reader = LaneProofRead::new(capture(&chain), 3)
+        .unwrap_or_else(|_| panic!("original native coverage"));
+    reader.poll().unwrap();
+    let native = vote_pair(&reader, 3);
+    let scope = reader.scope;
+    drop(reader);
+    let state = chain.state();
+    assert!(evidence::observe_lane(state, scope.lane, scope.incarnation, &native).unwrap());
+    let original = iroha_data_model::block::consensus::Evidence::from_native(&native).unwrap();
+    let reserved = state.evidence_preparation_budget().reserved_bytes();
+    let ceiling = 1024 * 1024;
+    let limits =
+        |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
+    let policy_bytes = norito::with_decode_limits_scope(limits(ceiling), || {
+        assert!(
+            state
+                .view()
+                .world()
+                .sumeragi_npos_parameters()
+                .unwrap()
+                .is_some()
+        );
+        let norito::Error::TotalAllocationExceeded { attempted, limit } =
+            norito::core::reserve_decode_allocation(ceiling + 1).unwrap_err()
+        else {
+            panic!("non-charging allocation probe");
+        };
+        assert_eq!(limit, u64::try_from(ceiling).unwrap());
+        usize::try_from(attempted).unwrap() - ceiling - 1
+    });
+    assert!(policy_bytes > 0);
+    norito::with_decode_limits_scope(limits(policy_bytes), || {
+        assert!(
+            state
+                .view()
+                .world()
+                .sumeragi_npos_parameters()
+                .unwrap()
+                .is_some()
+        );
+    });
+    // Scope admission consumes exactly one original policy read. The existing
+    // retained collection requires a second read before pruning any entry.
+    let error = norito::with_decode_limits_scope(limits(policy_bytes), || {
+        evidence::observe_lane(state, scope.lane, scope.incarnation, &native)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            evidence::EvidenceAdmissionError::Policy(ExecutionAttemptError::Deferred(_))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        state.evidence_preparation_budget().reserved_bytes(),
+        reserved
+    );
+    assert!(!evidence::observe_lane(state, scope.lane, scope.incarnation, &native).unwrap());
+    assert_eq!(
+        state.evidence_preparation_budget().reserved_bytes(),
+        reserved
+    );
+    assert_eq!(
+        iroha_data_model::block::consensus::Evidence::from_native(&native).unwrap(),
+        original
+    );
+    let carrier = state.view().height() as u64 + 1;
+    assert_eq!(
+        evidence::pending_evidence_admissions(state, carrier, state.state_view_generation()),
+        [original]
+    );
 }

@@ -401,25 +401,49 @@ fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materializatio
     let original = block
         .verified_fastpq_source_inventory_for_capture()
         .unwrap();
+    // A legitimate independent budget can materialize and publish its usage
+    // before any State custody failure has been observed.
+    let mut successful = block.fastpq_source_statement_budget(limits()).unwrap();
+    successful
+        .prepare(&block, &archive)
+        .unwrap()
+        .materialize(&block)
+        .unwrap();
+    assert!(successful.committed_usage().is_some());
     let mut owner = block.fastpq_source_statement_budget(limits()).unwrap();
-    let attempt = owner.prepare(&block, &archive).unwrap();
     let calls = quantity_materializer_invocations_for_testing();
-    // Equal public content in another allocation is not the original State owner.
-    block.fastpq_source_inventory = Some(Ok(Arc::new((*original).clone())));
+    let replacement = Arc::new((*original).clone());
+    assert_eq!(replacement.as_ref(), original.as_ref());
+    assert!(!Arc::ptr_eq(&replacement, &original));
+    // Keep State authentic while testing the reservation's own allocation
+    // check, then restore that local owner without poisoning the quota seal.
+    owner.inventory = Arc::clone(&replacement);
+    assert_eq!(
+        owner.prepare(&block, &archive).unwrap_err(),
+        "FASTPQ source reservation inventory owner changed"
+    );
+    assert_eq!(owner.committed_usage(), None);
+    assert_eq!(quantity_materializer_invocations_for_testing(), calls);
+    owner.inventory = Arc::clone(&original);
+    let attempt = owner.prepare(&block, &archive).unwrap();
+
+    // Equal public content in another allocation is not the original State
+    // owner. Its quota seal rejects before materialization and fails closed.
+    block.fastpq_source_inventory = Some(Ok(replacement));
     assert_eq!(
         attempt.materialize(&block).unwrap_err(),
-        "FASTPQ source reservation inventory owner changed"
+        "FASTPQ source quota ownership changed after inventory finalization"
     );
     assert_eq!(owner.committed_usage(), None);
     assert!(owner.prepare(&block, &archive).is_err());
     assert_eq!(quantity_materializer_invocations_for_testing(), calls);
     block.fastpq_source_inventory = Some(Ok(original));
-    owner
-        .prepare(&block, &archive)
-        .unwrap()
-        .materialize(&block)
-        .unwrap();
-    assert!(owner.committed_usage().is_some());
+    assert_eq!(
+        owner.prepare(&block, &archive).unwrap_err(),
+        "FASTPQ source quota ownership changed after inventory finalization"
+    );
+    assert_eq!(owner.committed_usage(), None);
+    assert_eq!(quantity_materializer_invocations_for_testing(), calls);
 }
 
 #[test]

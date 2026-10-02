@@ -149,7 +149,7 @@ impl AdmissionRead {
             || view.chain_id() != state.chain_id_ref()
         {
             return Err(EvidenceAdmissionError::Source(
-                std::io::ErrorKind::InvalidInput.into(),
+                std::io::Error::from(std::io::ErrorKind::InvalidInput).into(),
             ));
         }
         if proofs.len() > MAX_EVIDENCE_ADMISSIONS_PER_BLOCK {
@@ -204,7 +204,7 @@ impl AdmissionRead {
         let mut retained_count = 0;
         let mut retained_bytes = 0;
         for (key, record) in view.world().consensus_evidence().iter() {
-            let retained = !committed_evidence_record_is_prunable(view.world(), record, carrier);
+            let retained = !committed_evidence_record_is_prunable(view.world(), record, carrier)?;
             if retained {
                 retained_count += 1;
                 retained_bytes += evidence_encoded_len(&record.evidence);
@@ -232,7 +232,7 @@ impl AdmissionRead {
         for proof in proofs {
             let parameters = view
                 .world()
-                .sumeragi_npos_parameters()
+                .sumeragi_npos_parameters()?
                 .filter(|parameters| parameters.evidence_horizon_blocks() > 0)
                 .ok_or_else(|| invalid("evidence requires a signed positive NPoS horizon"))?;
             let key = evidence_key(proof);
@@ -428,15 +428,17 @@ pub(super) fn retryable(error: &EvidenceAdmissionError) -> bool {
         );
     }
     match error {
+        EvidenceAdmissionError::Policy(crate::execution_attempt::ExecutionAttemptError::Deferred(_)) => true,
         EvidenceAdmissionError::Source(error) => matches!(
-            error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            error.io_kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
         ),
-        EvidenceAdmissionError::History(
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Deferred(_)) => true,
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
             QueryExecutionFail::GasBudgetExceeded | QueryExecutionFail::CapacityLimit
             // Kura still returns Option for this body read. Absence at a committed hash
             // is pending, never evidence of corruption or a reason to blame the proof.
             | QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable { .. })
-        ) => true,
+        )) => true,
         EvidenceAdmissionError::Preparation(
             EvidencePreparationError::Admission(AllocationRefusal::Capacity { .. } | AllocationRefusal::ExceedsLimit { .. })
             | EvidencePreparationError::Allocator { .. }

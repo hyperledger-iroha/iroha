@@ -1,4 +1,40 @@
 #[tokio::test]
+async fn alias_routes_mount_with_required_index_authentication() {
+    use tower::ServiceExt as _;
+
+    let app =
+        crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::default());
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(route_catalog::aliases::ROUTES),
+        compiled_route_features(),
+    )
+    .expect("alias route descriptors are valid");
+    // Use the actual production registration; a duplicate test router would
+    // miss an authentication-policy mismatch that prevents Torii startup.
+    Torii::add_alias_routes(&mut builder);
+    let (router, _) = builder
+        .finish()
+        .expect("every alias route must mount with its declared authentication");
+    let router = router.with_state(app);
+    for body in [r#"{"index":0}"#, "malformed"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(route_catalog::aliases::RESOLVE_INDEX.path())
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
 async fn alias_resolve_index_rejects_unsigned_request() {
     let keypair = checked_torii_test_ed25519_keypair(
         0x0a,

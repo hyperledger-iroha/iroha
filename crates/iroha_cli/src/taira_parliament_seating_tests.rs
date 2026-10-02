@@ -712,6 +712,7 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
         .with_chain_discriminant(TAIRA_CHAIN_DISCRIMINANT)
         .with_consensus_mode(iroha::data_model::parameter::system::SumeragiConsensusMode::Npos)
         .with_consensus_meta()
+        .expect("valid fixture consensus parameters")
 }
 
 #[cfg(unix)]

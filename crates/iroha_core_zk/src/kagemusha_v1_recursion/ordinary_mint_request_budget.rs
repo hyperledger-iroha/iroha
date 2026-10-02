@@ -106,7 +106,7 @@ pub fn ordinary_mint_request_byte_budget_v1(
     let ph = initial_kagemusha_ep_accumulator_v1(m.ep_parameters).map_err(|e| e.to_string())?;
     let request = KagemushaOrdinaryTopUpRequestV1 {
         version: 1,
-        encrypted_credit: vec![0; 384],
+        encrypted_credit: vec![0; KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1],
         authorization: KagemushaOrdinaryMintAuthorizationV1 {
             version: 1,
             statement,

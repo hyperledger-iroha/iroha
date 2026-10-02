@@ -117,7 +117,7 @@ impl Drop for CancelAdmissionOnDrop {
 }
 
 /// A search either produces a credential or yields spare capacity to a primary.
-pub(crate) enum SoranetOutboundWorkOutcome<T> {
+pub enum SoranetOutboundWorkOutcome<T> {
     /// A complete credential produced under the unchanged puzzle policy.
     Completed(T),
     /// A spare search stopped at a checkpoint to admit another primary.
@@ -125,7 +125,7 @@ pub(crate) enum SoranetOutboundWorkOutcome<T> {
 }
 
 /// Cooperative cancellation and primary priority at cryptographic checkpoints.
-pub(crate) struct SoranetOutboundWorkControl {
+pub struct SoranetOutboundWorkControl {
     cancellation: SoranetAdmissionCancellation,
     admission: Arc<SoranetPuzzleWorkAdmission>,
     speculative: bool,
@@ -234,7 +234,7 @@ where
 /// queues its primary. Every blocking job retains the original permit and
 /// admission owner until it actually exits, including after a winner or timeout.
 /// `make_work` must create an independent search, never clone an RNG stream.
-pub(crate) async fn run_soranet_outbound_search<T, F, W>(
+pub async fn run_soranet_outbound_search<T, F, W>(
     admission: Arc<SoranetPuzzleWorkAdmission>,
     mut make_work: F,
 ) -> Result<T, Error>

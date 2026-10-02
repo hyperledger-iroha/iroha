@@ -1,6 +1,7 @@
 //! Real BLS lane store custody, retained opening and no-clobber publication regressions.
 
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{crypto::KeyPairSigner, lanes::record::tests::fixture, records::FsStep};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_sumeragi::{
@@ -78,9 +79,9 @@ fn read_only_frame_inspection_retains_original_funding_across_refusal() {
     .unwrap();
     for _ in 0..2 {
         let error = read.poll().unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
         assert!(
-            error.get_ref().is_none(),
+            matches!(error, Attempt::Deferred(_)),
             "lane refusal must not allocate a diagnostic"
         );
         assert_eq!(budget.reserved_bytes(), length);
@@ -124,14 +125,17 @@ fn read_only_frame_inspection_rejects_wrong_height_and_historical_instance() {
             Arc::new(NoAttestation),
         )
         .unwrap();
-        assert_eq!(read.poll().unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            read.poll().unwrap_err().io_kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }
 impl AvailabilitySchedule for Schedule {
     fn instance(&self) -> Hash32 {
         self.instance
     }
-    fn height_config(&self, _: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, _: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         Ok(Some(self.config.clone()))
     }
 }
@@ -221,7 +225,7 @@ fn original_publication_retry_is_exact_but_durable_equivalent_quorum_preserves_o
         .as_ptr();
     let other = alternative(&qc, &*crypto);
     assert_eq!(
-        store.append(&body, &other).unwrap_err().kind(),
+        store.append(&body, &other).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(fs::read(&path).unwrap(), original);
@@ -274,10 +278,10 @@ fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
     )
     .unwrap();
     let (start, error) = start.complete().err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert_eq!(budget.reserved_bytes(), raw);
     let (start, error) = start.complete().err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
     assert_eq!(budget.reserved_bytes(), raw);
     assert!(
         FileLaneBlockStore::begin_open(
@@ -298,12 +302,12 @@ fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
     assert_eq!(budget.reserved_bytes(), 0);
     budget.set_limit_bytes(raw);
     assert_eq!(
-        store.entry(1).unwrap_err().kind(),
+        store.entry(1).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(budget.reserved_bytes(), raw);
     assert_eq!(
-        store.entry(1).unwrap_err().kind(),
+        store.entry(1).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(budget.reserved_bytes(), raw);
@@ -333,11 +337,11 @@ fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
     bytes[last] ^= 1;
     fs::write(&path, &bytes).unwrap();
     assert_eq!(
-        store.entry(1).unwrap_err().kind(),
+        store.entry(1).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(
-        store.entry(1).unwrap_err().kind(),
+        store.entry(1).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     drop(store);
@@ -351,9 +355,9 @@ fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
     )
     .unwrap();
     let (start, e) = start.complete().err().unwrap();
-    assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
     let (_, e) = start.complete().err().unwrap();
-    assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -381,9 +385,9 @@ fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_v
         )
         .unwrap();
         let (start, e) = start.complete().err().unwrap();
-        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
         let (_, e) = start.complete().err().unwrap();
-        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
     }
 }
 
@@ -687,7 +691,7 @@ fn committed_body_preserves_authentication_and_original_pool_ownership() {
     wrong_result.result = Hash32([0x33; 32]);
     let wrong_result = alternative(&wrong_result, &*store.crypto);
     assert_eq!(
-        store.append(&body, &wrong_result).unwrap_err().kind(),
+        store.append(&body, &wrong_result).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert!(
@@ -768,7 +772,7 @@ fn append_rejects_body_from_another_committee_even_with_a_valid_store_commit_qc(
         store
             .append(&body, &qc)
             .expect_err("foreign verified context must not become durable")
-            .kind(),
+            .io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(store.height(), 0);
@@ -849,14 +853,14 @@ fn cancelled_lane_read_finishes_original_custody_before_a_different_height() {
         let raw = usize::try_from(fs::metadata(path).unwrap().len()).unwrap();
         budget.set_limit_bytes(raw);
         assert_eq!(
-            store.committed_body(1).unwrap_err().kind(),
+            store.committed_body(1).unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         assert_eq!(budget.reserved_bytes(), raw);
         // The worker can cancel height one while this store still owns its refused read.
         // New metadata and payload requests must preserve that owner until it completes.
         assert_eq!(
-            store.entry(2).unwrap_err().kind(),
+            store.entry(2).unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);
@@ -864,7 +868,7 @@ fn cancelled_lane_read_finishes_original_custody_before_a_different_height() {
         budget.set_limit_bytes(1 << 25);
         if invalid_certificate {
             assert_eq!(
-                store.committed_body(2).unwrap_err().kind(),
+                store.committed_body(2).unwrap_err().io_kind(),
                 io::ErrorKind::InvalidData
             );
             assert_eq!(store.state.lock().read.as_ref().unwrap().height, 1);

@@ -118,6 +118,7 @@ final class KagemushaNativeCompletedAppKeyOriginalV1Tests: XCTestCase {
       unrelatedCalls += 1
       throw KagemushaCoreCoordinatorErrorV1.unavailable
     }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invokeIncoming(request: Data) throws -> Data {
       unrelatedCalls += 1
       throw KagemushaCoreCoordinatorErrorV1.unavailable

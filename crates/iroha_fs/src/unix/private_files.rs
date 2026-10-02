@@ -98,7 +98,7 @@ impl Directory {
             private: true,
             writable: true,
             read_only: false,
-            publishable: true,
+            publication: PublicationAuthority::ExclusiveCreation,
         };
         retained.revalidate()?;
         retained.file.sync_all()?;
@@ -117,7 +117,7 @@ impl Directory {
 
 impl RetainedFile {
     pub(crate) fn seal_read_only(mut self) -> io::Result<Self> {
-        if !self.publishable || !self.writable {
+        if self.publication != PublicationAuthority::ExclusiveCreation || !self.writable {
             return Err(denied("only a newly created writer may be sealed"));
         }
         self.revalidate()?;
@@ -134,7 +134,10 @@ impl RetainedFile {
     }
 
     pub(crate) fn publish_new_name(mut self, name: &OsStr) -> io::Result<Self> {
-        if !self.publishable || self.writable || !self.read_only {
+        if self.publication != PublicationAuthority::ExclusiveCreation
+            || self.writable
+            || !self.read_only
+        {
             return Err(denied(
                 "publication requires a newly created strictly sealed file",
             ));
@@ -146,7 +149,7 @@ impl RetainedFile {
             self.name.to_str().ok_or_else(changed)?,
             name,
         )?;
-        self.name = name.to_owned();
+        name.clone_into(&mut self.name);
         let after = validate_file(&self.file, true)?;
         // Rename may change ctime, but must preserve every other recorded content/custody field.
         if before.dev() != after.dev()
@@ -162,7 +165,7 @@ impl RetainedFile {
             return Err(changed());
         }
         self.before = after;
-        self.publishable = false;
+        self.publication = PublicationAuthority::None;
         self.directory.sync()?;
         self.revalidate()?;
         Ok(self)

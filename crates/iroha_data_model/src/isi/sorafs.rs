@@ -2412,7 +2412,8 @@ mod tests {
             por_recorder_authority: owner(),
             dispute_recorder_authority: owner(),
             token_recorder_authority: owner(),
-            stream_token_delivery: Default::default(),
+            stream_token_delivery:
+                crate::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryTemplateV1::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }

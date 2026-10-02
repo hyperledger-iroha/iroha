@@ -27,7 +27,7 @@ pub enum KagemushaOrdinaryEnrollmentHttpStageV1 {
     RawAttestation,
     /// Original platform possession and requested credential.
     Certificate,
-    /// Full C/credential followed by the retained FI account challenge.
+    /// Complete retained enrollment originals followed by the FI account challenge.
     Start,
     /// Exact wallet Ed64 followed by the retained FI certificate.
     Finish,
@@ -136,12 +136,38 @@ record! {
     }
 }
 record! {
-    /// Start binds the full original C and actual app credential; no owner or challenge DTO.
+    /// Complete original selected Integrity pair. Initial Start requires an explicit null:
+    /// no refresh owner exists before the original FI enrollment has completed.
+    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryStartIntegrityHttpV1")]
+    KagemushaOrdinaryStartIntegrityHttpV1 {
+        /// Original selected Integrity challenge, never an approved projection.
+        challenge: String,
+        /// Original selected Integrity lease, never a provider verdict.
+        lease: String,
+    }
+}
+record! {
+    /// Sole complete-original initial FI Start DATA. All seven fields are required.
+    /// Decoding this carrier supplies no platform, issuer, current or monetary authority.
+    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryRetailStartHttpRequestV1")]
     KagemushaOrdinaryRetailStartHttpRequestV1 {
+        /// Canonical actual Native-selected wallet account, distinct from the FI signatory.
+        wallet: String,
         /// Complete original signed C515.
         signed_preparation_base64: String,
+        /// Complete original signed raw314.
+        raw_admission_original_base64: String,
+        /// Complete canonical ordered original platform container.
+        platform_original_base64: String,
+        /// Complete canonical E archive, including the actual platform possession original.
+        core_possession_original_base64: String,
         /// Complete original canonical app credential.
         app_certificate_base64: String,
+        /// Explicit null for initial Start; absence or caller-selected refresh originals refuse.
+        #[norito(required)]
+        selected_integrity: Option<KagemushaOrdinaryStartIntegrityHttpV1>,
     }
 }
 record! {
@@ -163,7 +189,7 @@ pub enum KagemushaOrdinaryEnrollmentHttpRequestV1 {
     RawAttestation(KagemushaOrdinaryRawAttestationHttpRequestV1),
     /// Original platform possession carrier.
     Certificate(KagemushaOrdinaryCredentialHttpRequestV1),
-    /// Original C/credential carrier.
+    /// Complete seven-field retained-original carrier.
     Start(KagemushaOrdinaryRetailStartHttpRequestV1),
     /// Original wallet signature carrier.
     Finish(KagemushaOrdinaryRetailFinishHttpRequestV1),
@@ -177,7 +203,7 @@ fn hash(original: &[u8]) -> [u8; 32] {
 }
 #[cfg(test)]
 fn hex(original: &[u8]) -> String {
-    original.iter().map(|b| format!("{b:02x}")).collect()
+    hex::encode(original)
 }
 fn hex32(value: &str) -> Result<[u8; 32]> {
     let raw = value.as_bytes();
@@ -413,26 +439,134 @@ impl KagemushaOrdinaryEnrollmentHttpRequestV1 {
                     return reject();
                 }
             }
-            Self::Start(v) => {
-                let c = preparation(&v.signed_preparation_base64)?;
-                let original = base64(&v.app_certificate_base64, 16 * 1024, None)?;
-                let credential =
-                    KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&original)?;
-                if credential.subject.enrollment_id != c.challenge.enrollment_id
-                    || credential.subject.enrollment_challenge_digest
-                        != c.challenge.attestation_challenge()?
-                    || credential.subject.financial_authority_commitment
-                        != c.challenge.financial_authority_commitment
-                {
-                    return reject();
-                }
-            }
+            Self::Start(v) => v.validate_original_data()?,
             Self::Finish(v) => {
                 hex32(&v.challenge_id)?;
                 base64(&v.account_signature_base64, 64, Some(64))?;
             }
         }
         Ok(())
+    }
+}
+
+impl KagemushaOrdinaryRetailStartHttpRequestV1 {
+    fn validate_original_data(&self) -> Result<()> {
+        if self.wallet.is_empty() || self.wallet.len() > 4096 || self.selected_integrity.is_some() {
+            return reject();
+        }
+        let account = AccountId::parse_encoded(&self.wallet).map_err(|e| e.to_string())?;
+        let c = preparation(&self.signed_preparation_base64)?;
+        if account.canonical_i105().map_err(|e| e.to_string())? != self.wallet
+            || kagemusha_ordinary_app_account_binding_v1(&account) != c.challenge.account_binding
+        {
+            return reject();
+        }
+        let raw_bytes = base64(&self.raw_admission_original_base64, 314, Some(314))?;
+        let raw = KagemushaRawAppAttestationAdmissionV1::from_transport_bytes(&raw_bytes)?;
+        let platform_bytes = base64(
+            &self.platform_original_base64,
+            KAGEMUSHA_ORDINARY_ENROLLMENT_HTTP_RAW_MAX_BYTES_V1,
+            None,
+        )?;
+        let platform =
+            KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(&platform_bytes)?;
+        let e_bytes = base64(
+            &self.core_possession_original_base64,
+            KAGEMUSHA_APP_ENROLLMENT_POSSESSION_MAX_BYTES_V1 + 1024,
+            None,
+        )?;
+        let e = KagemushaAppEnrollmentPossessionV1::decode_canonical_exact(&e_bytes)?;
+        let credential_bytes = base64(&self.app_certificate_base64, 16 * 1024, None)?;
+        let credential =
+            KagemushaOrdinaryAppCredentialV1::decode_canonical_exact(&credential_bytes)?;
+        let c = &c.challenge;
+        let r = &raw.subject;
+        let s = &credential.subject;
+        let original_e = KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
+            c,
+            &r.app_public_key,
+            hash(&platform_bytes),
+        )?;
+        let possession = match &e.evidence {
+            KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der }
+                if c.platform_class == KagemushaHardwarePlatformClassV1::AndroidKeyMint
+                    && (8..=72).contains(&signature_der.len()) =>
+            {
+                signature_der.as_slice()
+            }
+            KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion }
+                if c.platform_class == KagemushaHardwarePlatformClassV1::AppleAppAttest
+                    && (37..=KAGEMUSHA_APP_ENROLLMENT_POSSESSION_MAX_BYTES_V1)
+                        .contains(&raw_assertion.len()) =>
+            {
+                raw_assertion.as_slice()
+            }
+            _ => return reject(),
+        };
+        if platform.platform_class() != c.platform_class
+            || r.platform_class != c.platform_class
+            || r.enrollment_challenge_digest != c.attestation_challenge()?
+            || r.authority_policy_digest != c.app_authority_policy_digest
+            || r.raw_platform_evidence_digest != hash(&platform_bytes)
+            || r.issued_at_ms != c.issued_at_ms
+            || r.expires_at_ms != c.expires_at_ms
+            || e.challenge != original_e
+            || s.platform_class != c.platform_class
+            || s.enrollment_id != c.enrollment_id
+            || s.client_nonce != c.client_nonce
+            || s.server_nonce != c.server_nonce
+            || s.account_binding != c.account_binding
+            || s.network_id != c.network_id
+            || s.lane_id != c.lane_id
+            || s.release_id != c.release_id
+            || s.hardware_profile_id != c.hardware_profile_id
+            || s.suite_id != c.suite_id
+            || s.trust_policy_digest != c.trust_policy_digest
+            || s.app_authority_policy_digest != c.app_authority_policy_digest
+            || s.policy_epoch != c.policy_epoch
+            || s.hardware_epoch != c.hardware_epoch
+            || s.enrollment_challenge_digest != c.attestation_challenge()?
+            || s.financial_authority_commitment != c.financial_authority_commitment
+            || s.app_public_key != r.app_public_key
+            || s.attested_key_id != r.attested_key_id
+            || s.security_level != r.security_level
+            || s.app_signing_identity_digest != r.app_signing_identity_digest
+            || s.platform_evidence_digest
+                != kagemusha_ordinary_app_enrollment_evidence_digest_v1(
+                    &platform_bytes,
+                    possession,
+                )?
+        {
+            return reject();
+        }
+        Ok(())
+    }
+    /// Bounded canonical Norito DATA roundtrip of the same seven complete originals.
+    /// # Errors
+    /// Refuses malformed joined originals or a full canonical frame above the HTTP bound.
+    pub fn canonical_norito_bytes(&self) -> Result<Vec<u8>> {
+        self.validate_original_data()?;
+        encode(self)?;
+        let size = norito::canonical_frame_len(self).map_err(|e| e.to_string())?;
+        if size > KAGEMUSHA_ORDINARY_ENROLLMENT_HTTP_MAX_BYTES_V1 {
+            return reject();
+        }
+        norito::encode_canonical(self).map_err(|e| e.to_string())
+    }
+    /// Exact bounded canonical Norito intake; no authority is granted by decoding.
+    /// # Errors
+    /// Refuses overflow, unknown fields, a tail or a noncanonical complete-original join.
+    pub fn decode_canonical_norito_exact(original: &[u8]) -> Result<Self> {
+        bounded(original)?;
+        let value: Self = norito::decode_canonical_with_limits(
+            original,
+            norito::canonical_decode_limits(original.len()),
+        )
+        .map_err(|e| e.to_string())?;
+        if value.canonical_norito_bytes()? != original {
+            return reject();
+        }
+        Ok(value)
     }
 }
 

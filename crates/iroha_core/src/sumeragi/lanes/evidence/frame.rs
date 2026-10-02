@@ -4,6 +4,7 @@
 //! caller chooses a hash beneath an independently authenticated global frontier. Header/QC
 //! metadata and BLS caches remain separate resource-accounting obligations.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::{borrow::Borrow, io, path::PathBuf};
 
 use iroha_allocation::{AllocationBudget, RetainedPayload};
@@ -14,12 +15,9 @@ use iroha_sumeragi::{
     types::{Hash32, HeightConfig},
 };
 
-use crate::sumeragi::{
-    body_read::BodyReadError,
-    lanes::{
-        record::LaneRecord,
-        store::read::{ReadRecord, RecordPoll},
-    },
+use crate::sumeragi::lanes::{
+    record::LaneRecord,
+    store::read::{ReadRecord, RecordPoll},
 };
 
 /// Move-only original configuration; no public extraction or metadata clone detaches its ledger.
@@ -42,7 +40,10 @@ impl FundedLaneSource {
         budget: &AllocationBudget,
     ) -> Result<Self, (RetainedPayload<HeightConfig>, io::Error)> {
         if !config.belongs_to(budget) || !config.get().epoch.contains(height) {
-            return Err((config, io::ErrorKind::InvalidInput.into()));
+            return Err((
+                config,
+                std::io::Error::from(std::io::ErrorKind::InvalidInput).into(),
+            ));
         }
         // SAFETY: AvailabilitySource adds only fixed scalar identity. Its private config is
         // exactly the moved original config; no allocation is cloned, exported or replaced.
@@ -101,26 +102,26 @@ impl FundedLaneFrameRead {
         &mut self,
         budget: &AllocationBudget,
         crypto: &dyn Crypto,
-    ) -> io::Result<FundedLaneBody> {
+    ) -> Result<FundedLaneBody, Attempt<io::Error>> {
         if !self.budget.same_pool(budget)
             || self
                 .source
                 .as_ref()
                 .is_some_and(|source| !source.belongs_to(budget))
         {
-            return Err(io::ErrorKind::InvalidInput.into());
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput).into());
         }
         // A stricter caller-owned Norito scope is not a fact about the durable frame.
         // Keep the same read owner for retry after that scope ends; intrinsic canonical
         // limits without an outer scope still report invalid storage material.
-        let outer_decode_scope = norito::core::decode_limits_active();
+
         loop {
             match std::mem::replace(&mut self.stage, Stage::Consumed) {
                 Stage::Unopened => match ReadRecord::open(&self.path, budget.clone()) {
                     Ok(read) => self.stage = Stage::Reading(read),
                     Err(error) => {
                         self.stage = Stage::Unopened;
-                        return Err(error);
+                        return Err(error.into());
                     }
                 },
                 Stage::Reading(mut read) => match read.poll(budget) {
@@ -128,19 +129,13 @@ impl FundedLaneFrameRead {
                     outcome => {
                         self.stage = Stage::Reading(read);
                         return Err(match outcome {
-                            Ok(RecordPoll::Absent) => io::ErrorKind::NotFound.into(),
-                            Ok(RecordPoll::Pending(_)) => io::ErrorKind::WouldBlock.into(),
-                            Err(BodyReadError::Io(error)) => error,
-                            Err(BodyReadError::Decode(error))
-                                if matches!(error, norito::Error::AllocationFailed { .. })
-                                    || (outer_decode_scope && error.is_decode_resource_limit()) =>
-                            {
-                                io::ErrorKind::WouldBlock.into()
+                            Ok(RecordPoll::Absent) => {
+                                std::io::Error::from(std::io::ErrorKind::NotFound).into()
                             }
-                            Err(BodyReadError::Admission(error)) if error.is_local_refusal() => {
-                                io::ErrorKind::WouldBlock.into()
+                            Ok(RecordPoll::Pending(error)) => {
+                                crate::sumeragi::storage_attempt::byte(error)
                             }
-                            Err(error) => io::Error::new(io::ErrorKind::InvalidData, error),
+                            Err(error) => error.into_attempt(),
                             Ok(RecordPoll::Ready(_)) => unreachable!(),
                         });
                     }
@@ -168,7 +163,7 @@ impl FundedLaneFrameRead {
                         );
                     if !valid {
                         self.stage = Stage::Decoded(record);
-                        return Err(io::ErrorKind::InvalidData.into());
+                        return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
                     }
                     let source = self
                         .source
@@ -181,16 +176,12 @@ impl FundedLaneFrameRead {
                     Ok(body) => return Ok(FundedLaneBody { body, qc }),
                     Err((restoration, error)) => {
                         self.stage = Stage::Restoring(restoration, qc);
-                        if error.is_local_refusal() {
-                            return Err(io::ErrorKind::WouldBlock.into());
-                        }
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("original lane availability restoration: {error:?}"),
-                        ));
+                        return Err(crate::sumeragi::storage_attempt::restoration(error));
                     }
                 },
-                Stage::Consumed => return Err(io::ErrorKind::InvalidInput.into()),
+                Stage::Consumed => {
+                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput).into());
+                }
             }
         }
     }

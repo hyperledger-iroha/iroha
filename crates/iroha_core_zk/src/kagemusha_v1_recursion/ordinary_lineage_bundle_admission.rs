@@ -53,7 +53,7 @@ pub enum KagemushaOrdinaryLineageOutgoingOriginalsV1 {
         request: Box<KagemushaOrdinaryPaymentRequestV1>,
         /// Actual pre-candidate output.
         output: KagemushaOrdinaryPaymentOutputV1,
-        /// Complete canonical ciphertext envelope;384 bytes remains the transport capacity.
+        /// Complete canonical ciphertext envelope within the 384-byte transport capacity.
         encrypted_credit: Vec<u8>,
         /// Original preparation interval; signed observations are authenticated by the service owner.
         preparation_clock: KagemushaOrdinaryCashClockContextV1,
@@ -660,6 +660,10 @@ pub(crate) fn require_ordinary_incoming_predecessor_v1(
     append_history(&mut ep, &before.proof.ep_history)?;
     verify_state_histories(&material, &before.proof, &eq, &ep)
 }
+
+#[cfg(test)]
+#[path = "ordinary_lineage_bundle_admission_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod canonical_ciphertext_tests {

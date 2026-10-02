@@ -60,7 +60,8 @@ fn current_providers_keep_exact_order_without_result_or_completion_heap_storage(
         let view = world.view();
         let location = view.musubi_archive_locations().get(&key).unwrap();
         let providers =
-            current_location_providers(location, &view).expect("current exact evidence");
+            observe_musubi_helper_without_heap(|| current_location_providers(location, &view))
+                .expect("current exact evidence");
         assert_eq!(&*providers, location.providers.as_slice());
         assert_eq!(
             providers.into_iter().collect::<Vec<_>>(),
@@ -108,7 +109,11 @@ fn current_providers_reject_missing_duplicate_and_oversized_completion_sets() {
         world
             .replication_orders
             .insert(location.replication_order, order);
-        assert!(current_location_providers(&location, &world.view()).is_none());
+        let view = world.view();
+        assert!(
+            observe_musubi_helper_without_heap(|| current_location_providers(&location, &view))
+                .is_none()
+        );
     }
 }
 
@@ -175,5 +180,24 @@ fn current_providers_keep_missing_reverse_and_retired_location_semantics() {
             .is_empty()
     );
     location.state = MusubiArchiveLocationStateV1::Retired;
-    assert!(current_location_providers(&location, &world.view()).is_none());
+    let view = world.view();
+    assert!(
+        observe_musubi_helper_without_heap(|| current_location_providers(&location, &view))
+            .is_none()
+    );
+}
+
+#[test]
+fn current_provider_complete_helper_has_no_cold_thread_heap_storage() {
+    let (world, key) = current_provider_fixture(2);
+    std::thread::spawn(move || {
+        let view = world.view();
+        let location = view.musubi_archive_locations().get(&key).unwrap();
+        let providers =
+            observe_musubi_helper_without_heap(|| current_location_providers(location, &view))
+                .unwrap();
+        assert_eq!(&*providers, location.providers.as_slice());
+    })
+    .join()
+    .unwrap();
 }

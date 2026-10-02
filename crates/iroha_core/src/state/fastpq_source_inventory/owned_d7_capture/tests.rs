@@ -290,19 +290,36 @@ fn retained_context_rejects_equal_inventory_reallocated_under_another_owner() {
     block
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
-    let (_, _, context) = block
+    let (_, _, mut context) = block
         .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
         .unwrap()
         .into_parts();
+    let original = Arc::clone(&context.inventory);
     let replacement = Arc::new(context.inventory().clone());
     assert_eq!(replacement.as_ref(), context.inventory());
-    block.fastpq_source_inventory = Some(Ok(replacement));
+    assert!(!Arc::ptr_eq(&replacement, &original));
+    // Changing only the retained context still exercises its own allocation
+    // check while the State quota seal remains valid and unpoisoned.
+    context.inventory = Arc::clone(&replacement);
     assert_eq!(
         context.verify_current(&block).unwrap_err(),
         "FASTPQ prepared D7 inventory owner changed"
     );
-    block.fastpq_source_inventory = Some(Ok(Arc::clone(&context.inventory)));
+    context.inventory = Arc::clone(&original);
     assert!(context.verify_current(&block).is_ok());
+
+    // Replacing State's original inventory is rejected earlier by the retained
+    // quota seal. Restoring the allocation cannot clear its observed failure.
+    block.fastpq_source_inventory = Some(Ok(replacement));
+    assert_eq!(
+        context.verify_current(&block).unwrap_err(),
+        "FASTPQ source quota ownership changed after inventory finalization"
+    );
+    block.fastpq_source_inventory = Some(Ok(original));
+    assert_eq!(
+        context.verify_current(&block).unwrap_err(),
+        "FASTPQ source quota ownership changed after inventory finalization"
+    );
 }
 
 #[test]

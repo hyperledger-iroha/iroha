@@ -232,6 +232,12 @@ pub enum FinalityError {
     /// Native structural, cryptographic, schedule or exact-decision verification failed.
     #[error("native finality: {0}")]
     Native(#[from] NativeFinalityError),
+    /// Original signed genesis could not be read; local decoder refusal stays typed.
+    #[error("native genesis read: {0}")]
+    Genesis(#[from] iroha_data_model::sumeragi_finality::GenesisReadError),
+    /// Original checkpoint decoder fields; the caller owns retry and format-limit policy.
+    #[error("native checkpoint decoder resource: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
     /// A zero challenge permits replay.
     #[error("the attestation challenge must be nonzero")]
     ZeroChallenge,
@@ -271,6 +277,17 @@ pub enum FinalityError {
     /// An untrusted transport failed.
     #[error("finality source: {0}")]
     Source(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for FinalityError {
+    fn from(error: iroha_data_model::sumeragi_finality::FinalityReadError) -> Self {
+        use iroha_data_model::sumeragi_finality::FinalityReadError;
+        match error {
+            FinalityReadError::Invalid(error) => Self::Native(error),
+            FinalityReadError::Genesis(error) => Self::Genesis(error),
+            FinalityReadError::DecodeResource(resource) => Self::DecodeResource(resource),
+        }
+    }
 }
 
 impl FinalityError {

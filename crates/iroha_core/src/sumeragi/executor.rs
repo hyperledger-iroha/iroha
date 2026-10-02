@@ -760,8 +760,10 @@ struct GlobalPayloadBuild {
 
 struct Worker<'s> {
     payload_build: Option<GlobalPayloadBuild>,
-    /// Exact latest local routing refusal, kept outside deterministic verdicts.
+    /// Exact latest unfinished local execution refusal, kept outside deterministic verdicts.
     routing_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
+    /// Original payload preparation refusal, including State lock and pool release observations.
+    payload_refusal: Option<payload::PayloadError>,
     context: &'s ExecutorContext,
     state: &'s State,
     applied: (u64, Hash32),
@@ -795,6 +797,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
     let mut worker = Worker {
         payload_build: None,
         routing_refusal: None,
+        payload_refusal: None,
         context,
         state: &state,
         applied: context.applied,
@@ -1113,15 +1116,21 @@ impl<'s> Worker<'s> {
             // Its overlay is gone; a later `prepare` executes again.
             self.results.remove(&previous.block_hash);
         }
+        // A fresh attempt explicitly abandons the prior local refusal; completed verdicts own none.
+        self.routing_refusal = None;
         let height = block.header().height;
         let iroha_block = match payload::decode(block.payload().as_slice()) {
             Ok(block) => block,
-            Err(error @ payload::PayloadError::DecodeResource)
+            Err(payload::PayloadError::DecodeResource(reason))
                 if !cfg!(all(test, sumeragi_core_mutation = "HC8")) =>
             {
-                // The caller retains the original available owner. Failed is retried and
-                // never enters the deterministic negative-result cache.
-                return ExecOutcome::Failed(error.to_string());
+                // Keep the typed refusal with the unchanged available owner before formatting.
+                // Failed remains retryable and never enters the deterministic negative-result cache.
+                let message = reason.to_string();
+                if !cfg!(all(test, sumeragi_core_mutation = "HC45")) {
+                    self.routing_refusal = Some(reason);
+                }
+                return ExecOutcome::Failed(message);
             }
             Err(error) => return invalid(height, &error),
         };
@@ -1180,9 +1189,13 @@ impl<'s> Worker<'s> {
             }
             Err(error @ lanes::merge::MergeError::Invalid(_)) => return invalid(height, &error),
             Err(lanes::merge::MergeError::Storage(error)) => {
+                if let crate::execution_attempt::ExecutionAttemptError::Deferred(original) = &error
+                {
+                    self.routing_refusal = Some(original.clone());
+                }
                 let reason = format!("lane storage during execution: {error}");
                 if !matches!(
-                    error.kind(),
+                    error.io_kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                 ) {
                     self.recovery = Some(reason.clone());
@@ -1217,6 +1230,11 @@ impl<'s> Worker<'s> {
         let (valid, mut overlay) = match validated.unpack(|event| events.push(event.into())) {
             Ok(executed) => executed,
             Err((_, error)) => {
+                if !cfg!(all(test, sumeragi_core_mutation = "HC44"))
+                    && let BlockValidationError::ExecutionDeferred(reason) = error.as_ref()
+                {
+                    self.routing_refusal = Some(reason.clone());
+                }
                 // Native validation attaches a rejection only after checking the original
                 // header/payload source. Local refusals and unbound sources attach none.
                 // Rejection is an observation, not a committed transaction outcome.
@@ -1244,7 +1262,15 @@ impl<'s> Worker<'s> {
         }
         let inputs = match overlay.take_sumeragi_execution_inputs() {
             Ok(inputs) => inputs,
-            Err(error) => return classify(height, &BlockValidationError::from(error)),
+            Err(error) => {
+                let error = BlockValidationError::from(error);
+                if !cfg!(all(test, sumeragi_core_mutation = "HC44"))
+                    && let BlockValidationError::ExecutionDeferred(reason) = &error
+                {
+                    self.routing_refusal = Some(reason.clone());
+                }
+                return classify(height, &error);
+            }
         };
         let applied_config = match inputs.get().schedule.applied_config() {
             Ok(config) => config,
@@ -1644,7 +1670,18 @@ impl<'s> Worker<'s> {
                     | PublicationPhase::Published { qc: original, .. } if original == qc)
         });
         if !authenticated {
-            self.verify_prepared_certificate(block, qc)?;
+            match self.verify_prepared_certificate(block, qc) {
+                Ok(()) => self.routing_refusal = None,
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error)) => {
+                    return Err(error);
+                }
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
+                    if !cfg!(all(test, sumeragi_core_mutation = "HC44")) {
+                        self.routing_refusal = Some(reason.clone());
+                    }
+                    return Err(reason.to_string());
+                }
+            }
         }
         let reusable = self
             .live
@@ -2107,6 +2144,8 @@ impl<'s> Worker<'s> {
         if self.payload_build.is_some() {
             return self.finish_payload_build();
         }
+        // A fresh attempt reacquires from the same committed parent and queued work.
+        self.payload_refusal = None;
         let Some(parent) = self.state.view().latest_block() else {
             return Ok((None, false));
         };
@@ -2124,14 +2163,14 @@ impl<'s> Worker<'s> {
             match lanes::merge::propose(&self.state.view(), &*self.context.lane_blocks, height) {
                 Ok(merges) => merges,
                 Err(error) => {
-                    if let Some(reason) = error.get_ref().and_then(|source| {
-                        source.downcast_ref::<crate::execution_attempt::ExecutionDeferred>()
-                    }) {
+                    if let crate::execution_attempt::ExecutionAttemptError::Deferred(reason) =
+                        &error
+                    {
                         self.routing_refusal = Some(reason.clone());
                     }
                     let reason = format!("lane storage during payload selection: {error}");
                     if matches!(
-                        error.kind(),
+                        error.io_kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                     ) {
                         return Err(PublicationError::Retryable(reason));
@@ -2178,6 +2217,19 @@ impl<'s> Worker<'s> {
                         return Err(PublicationError::Retryable(message));
                     }
                     Err(error) => {
+                        match &error {
+                            payload::PayloadError::StakingPreparation(
+                                crate::state::EvidencePreparationError::Admission(refusal),
+                            ) => {
+                                self.routing_refusal = Some(refusal.clone().into());
+                                self.payload_refusal = Some(error.clone());
+                            }
+                            payload::PayloadError::StakingPreparation(_)
+                            | payload::PayloadError::StakingAdmission(_) => {
+                                self.payload_refusal = Some(error.clone());
+                            }
+                            _ => {}
+                        }
                         iroha_logger::warn!(height, %error, "sumeragi: payload assembly failed");
                         return Err(PublicationError::Retryable(format!(
                             "payload assembly: {error}"
@@ -2480,6 +2532,10 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "executor_validation_refusal_tests.rs"]
+mod validation_refusal_tests;
+
+#[cfg(test)]
 mod archive_tests;
 #[cfg(test)]
 #[path = "executor_publication_tests.rs"]
@@ -2520,3 +2576,7 @@ mod native_execution_authorization_tests {
         assert!(token.for_state(&foreign).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "executor_payload_refusal_tests.rs"]
+mod payload_refusal_tests;

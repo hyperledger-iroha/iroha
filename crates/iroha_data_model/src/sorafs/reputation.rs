@@ -3153,7 +3153,8 @@ mod tests {
             por_recorder_authority: account(1),
             dispute_recorder_authority: account(2),
             token_recorder_authority: account(3),
-            stream_token_delivery: Default::default(),
+            stream_token_delivery:
+                crate::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryTemplateV1::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
@@ -3406,10 +3407,15 @@ mod tests {
     #[test]
     #[ignore = "explicit maintenance command prints current reputation event-id projection frames"]
     fn print_reputation_event_id_identity_fixture() {
-        assert!(cfg!(feature = "governance"), "capture requires governance");
-        assert!(cfg!(feature = "http"), "capture requires HTTP");
+        let profile = [
+            cfg!(feature = "governance"),
+            cfg!(feature = "http"),
+            cfg!(feature = "ids_projection"),
+        ];
+        assert!(profile[0], "capture requires governance");
+        assert!(profile[1], "capture requires HTTP");
         assert!(
-            !cfg!(feature = "ids_projection"),
+            !profile[2],
             "capture requires the concrete identity profile"
         );
         let fixture = norito::json!({

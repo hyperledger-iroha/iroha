@@ -13,6 +13,7 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_allocation::AllocationBudget;
 
 #[path = "deserialize_world_musubi_revisions.rs"]
@@ -81,15 +82,15 @@ pub(super) fn validate_musubi_live_projections(
 /// The publication owner calls this after its last deterministic World write;
 /// restore calls it separately for the current and rollback-visible cuts.
 pub(in crate::state) fn validate_musubi_live_projection_cut(
-    world: &impl WorldReadOnly,
+    world: &impl MusubiSourceReadOnly,
     execution_budget: &AllocationBudget,
 ) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
     validate_musubi_live_attestation_cut(world)?;
     // Storage iterators expose canonical archive/location key order and retain
     // their cursor inline. The prior exact-source check covers every location,
     // including retired rows, so this single cursor cannot hide orphan rows.
-    let mut locations = world.musubi_archive_locations().iter().peekable();
-    for (archive_id, archive) in world.musubi_archives().iter() {
+    let mut locations = world.source_musubi_archive_locations().iter().peekable();
+    for (archive_id, archive) in world.source_musubi_archives().iter() {
         archive
             .validate()
             .map_err(|error| ProjectionRejection::new(ProjectionTable::Archives, error.reason()))?;
@@ -192,7 +193,7 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
                 iroha_data_model::musubi::MusubiStorageAvailabilityV1::Unavailable
             };
         let projection = world
-            .musubi_archive_availability()
+            .source_musubi_archive_availability()
             .get(archive_id)
             .ok_or_else(|| {
                 ProjectionRejection::new(
@@ -211,9 +212,9 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
             .into());
         }
     }
-    for (archive_id, projection) in world.musubi_archive_availability().iter() {
+    for (archive_id, projection) in world.source_musubi_archive_availability().iter() {
         if archive_id != &projection.archive_id
-            || world.musubi_archives().get(archive_id).is_none()
+            || world.source_musubi_archives().get(archive_id).is_none()
             || projection.validate().is_err()
         {
             return Err(ProjectionRejection::new(
@@ -223,7 +224,7 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
             .into());
         }
     }
-    for (_, row) in world.musubi_resolver_index().iter() {
+    for (_, row) in world.source_musubi_resolver_index().iter() {
         if row.index_revision < row.selection.storage.index_revision {
             return Err(ProjectionRejection::new(
                 ProjectionTable::ResolverIndex,
@@ -237,14 +238,14 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
 
 /// Keep the exact provider evidence needed by availability on the same World cut.
 fn validate_musubi_live_attestation_cut(
-    world: &impl WorldReadOnly,
+    world: &impl MusubiSourceReadOnly,
 ) -> Result<(), ProjectionRejection> {
-    for (key, record) in world.musubi_provider_bundle_attestations().iter() {
+    for (key, record) in world.source_musubi_provider_bundle_attestations().iter() {
         record.validate().map_err(|error| {
             ProjectionRejection::new(ProjectionTable::ProviderBundleAttestations, error.reason())
         })?;
         let archive = world
-            .musubi_archives()
+            .source_musubi_archives()
             .get(&key.archive_id)
             .ok_or_else(|| {
                 ProjectionRejection::new(
@@ -269,12 +270,12 @@ fn validate_musubi_live_attestation_cut(
             ));
         }
     }
-    for (key, location) in world.musubi_archive_locations().iter() {
+    for (key, location) in world.source_musubi_archive_locations().iter() {
         location.validate().map_err(|error| {
             ProjectionRejection::new(ProjectionTable::ArchiveLocations, error.reason())
         })?;
         let archive = world
-            .musubi_archives()
+            .source_musubi_archives()
             .get(&location.archive_id)
             .ok_or_else(|| {
                 ProjectionRejection::new(
@@ -301,7 +302,7 @@ fn validate_musubi_live_attestation_cut(
                 provider_id: *provider_id,
             };
             let record = world
-                .musubi_provider_bundle_attestations()
+                .source_musubi_provider_bundle_attestations()
                 .get(&attestation_key)
                 .ok_or_else(|| {
                     ProjectionRejection::new(

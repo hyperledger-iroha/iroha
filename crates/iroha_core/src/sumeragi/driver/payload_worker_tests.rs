@@ -1,4 +1,5 @@
 //! Worker controls using actual signed authoring, coded rows and production file storage.
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{
     bodies::{BodyLimits, FileBodyStore},
     body_read::{BodyReadError, BodyReadJob, BodyReadPoll, BodyReader},
@@ -73,10 +74,13 @@ impl BodyReader for Blocks {
     }
 }
 impl BlockStore for Blocks {
-    fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+    fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         use super::acquisition::{StoredAcquisition, StoredProgress};
         if self.unavailable.load(Ordering::SeqCst) {
-            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            return Err(io::Error::from(io::ErrorKind::WouldBlock).into());
         }
         let Some(stored) = &self.stored else {
             return Ok(None);
@@ -104,20 +108,26 @@ impl BlockStore for Blocks {
                 *pending = None;
                 Ok(None)
             }
-            Ok(StoredProgress::Pending(_)) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
-            Err(error) => Err(io::Error::other(format!("{error:?}"))),
+            Ok(StoredProgress::Pending(_)) => {
+                Err(io::Error::from(io::ErrorKind::WouldBlock).into())
+            }
+            Err(error) => Err(io::Error::other(format!("{error:?}")).into()),
         }
     }
     fn height(&self) -> u64 {
         0
     }
-    fn entry(&self, _: u64) -> io::Result<Option<SyncEntry>> {
+    fn entry(&self, _: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         Ok(None)
     }
-    fn availability_source(&self, h: u64, hash: Hash32) -> io::Result<Option<AvailabilitySource>> {
+    fn availability_source(
+        &self,
+        h: u64,
+        hash: Hash32,
+    ) -> Result<Option<AvailabilitySource>, Attempt<io::Error>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.unavailable.load(Ordering::SeqCst) {
-            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            return Err(io::Error::from(io::ErrorKind::WouldBlock).into());
         }
         Ok(Some(
             AvailabilitySource::new(
@@ -129,7 +139,7 @@ impl BlockStore for Blocks {
             .unwrap(),
         ))
     }
-    fn append(&self, _: &AvailableBody, _: &Qc) -> io::Result<()> {
+    fn append(&self, _: &AvailableBody, _: &Qc) -> Result<(), Attempt<io::Error>> {
         unreachable!()
     }
 }

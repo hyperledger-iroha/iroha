@@ -41,7 +41,7 @@ pub(super) fn boundary_inputs<'a>(
     policy: &'a ValidatorElectionPolicyV1,
     height: u64,
     original_budget: &AllocationBudget,
-) -> Result<Option<BoundaryInputs<'a>>, BoundaryCaptureError> {
+) -> Result<Option<BoundaryInputs<'a>>, Attempt<BoundaryCaptureError>> {
     current.validate()?;
     if height != current.authorization.last_height {
         return Ok(None);
@@ -51,6 +51,7 @@ pub(super) fn boundary_inputs<'a>(
     }
     let parameters = world
         .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(BoundaryCaptureError::Invalid))?
         .ok_or("boundary lacks signed NPoS parameters")?;
     policy.validate()?;
     if policy.xor_asset_definition_id != parameters.xor_asset_definition_id

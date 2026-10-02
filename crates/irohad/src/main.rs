@@ -466,7 +466,8 @@ mod handshake_payload_tests {
         ))
         .build_raw()
         .expect("build complete handshake metadata test genesis")
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -11396,6 +11397,7 @@ mod tests {
             // the final proposal must commit to the policy installed in State.
             genesis
                 .with_consensus_meta()
+                .expect("valid fixture consensus parameters")
                 .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
                     genesis_authority,
                     Some(iroha_core::da::proof_policy_bundle(
@@ -11574,7 +11576,7 @@ mod tests {
             ))
             .build_raw()
             .expect("build complete crypto-mismatch genesis manifest")
-            .with_consensus_meta();
+            .with_consensus_meta()?;
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
             let mut instructions = Vec::new();
             for tx in genesis_block.0.external_transactions() {
@@ -12163,7 +12165,7 @@ mod tests {
             )
             .build_raw()
             .expect("build complete permissioned genesis manifest")
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .build_and_sign(&genesis_keys)?;
             let npos_genesis = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
@@ -12175,7 +12177,7 @@ mod tests {
             .build_raw()
             .expect("build complete NPoS genesis manifest")
             .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
@@ -12204,7 +12206,7 @@ mod tests {
             )
             .build_raw()
             .expect("build complete fingerprint-mismatch genesis manifest")
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;

@@ -743,29 +743,49 @@ fn set_parameter_explicit_json_roundtrips_through_both_native_encodings() {
 
 #[test]
 fn validation_fee_policy_requires_the_exact_public_instruction_box_frame() {
-    use iroha_data_model::validation_fee::ValidationFeeChargingMode;
+    use iroha_data_model::{
+        smart_contract::ContractAddress,
+        validation_fee::{
+            RetailFeeScheduleV1, VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS,
+            ValidationFeeChargingMode, ValidationFeeRewardCustodyV1,
+        },
+    };
 
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])),
+    );
+    let contract_address =
+        ContractAddress::derive(&network_id, &account(), 42, DataSpaceId::UNIVERSAL)
+            .expect("fixture treasury contract");
+    let ds_asset_id: iroha_data_model::asset::AssetDefinitionId =
+        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
     let typed = ProposeValidationFeePolicy {
         policy: ValidationFeePolicyV1 {
             schema_version: 1,
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])),
-            ),
+            network_id,
             policy_version: 1,
             previous_policy_hash: None,
-            ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ds_asset_id: ds_asset_id.clone(),
             ds_scale: 2,
+            retail_schedule: RetailFeeScheduleV1::default(),
+            effective_from_ms: 1_793_451_600_000,
+            notice_published_at_ms: 1_790_859_600_000,
             fee: "0.1".parse().unwrap(),
-            treasury_account_id: account(),
-            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 121_100,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            treasury_account_id: contract_address.subject_id(),
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+            exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
+            reward_custody: ValidationFeeRewardCustodyV1 {
+                treasury_account_id: contract_address.subject_id(),
+                contract_address,
+                ds_asset_id,
+                xor_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap(),
+                reward_pool_account_id: account(),
+                validator_lane_id: iroha_model_base::topology::LaneId::SINGLE,
+            },
         },
-        payout_lifecycle_proposal_id: None,
     };
+    assert_eq!(typed.policy.policy_invariant_error(), None);
     let boxed = InstructionBox::from(typed.clone());
     let frame = norito::encode_canonical(&boxed).unwrap();
     let json = decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX).unwrap();

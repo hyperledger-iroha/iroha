@@ -971,7 +971,7 @@ impl<T> norito::json::JsonSerialize for SelectorTuple<T> {
                 SelectorMode::Full => "Full",
                 SelectorMode::IdsOnly => "IdsOnly",
             };
-            return norito::json::write_json_string_to(mode, out);
+            norito::json::write_json_string_to(mode, out)
         }
         #[cfg(not(feature = "ids_projection"))]
         {

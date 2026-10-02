@@ -497,24 +497,24 @@ fn lane_terminal_replay_fence_uses_immutable_retirement_deadline_and_original_in
         penalty_status: EvidencePenaltyStatus::Applied { height: 23 },
     };
     assert!(
-        !committed_evidence_record_is_prunable(&world, &record, u64::MAX),
+        !committed_evidence_record_is_prunable(&world, &record, u64::MAX).unwrap(),
         "live lanes retain replay fences"
     );
     world.sumeragi_lanes.get_mut().custody[0].retired_at = Some(20);
     for native in [1, u64::MAX] {
         record.attribution.height = native;
         assert!(
-            !committed_evidence_record_is_prunable(&world, &record, 27),
+            !committed_evidence_record_is_prunable(&world, &record, 27).unwrap(),
             "inclusive deadline"
         );
-        assert!(committed_evidence_record_is_prunable(&world, &record, 28));
+        assert!(committed_evidence_record_is_prunable(&world, &record, 28).unwrap());
     }
     record.penalty_status = EvidencePenaltyStatus::Pending;
-    assert!(!committed_evidence_record_is_prunable(&world, &record, 28));
+    assert!(!committed_evidence_record_is_prunable(&world, &record, 28).unwrap());
     record.penalty_status = EvidencePenaltyStatus::Applied { height: 23 };
     let retained = world.sumeragi_lanes.get_mut().custody.pop().unwrap();
     assert!(
-        !committed_evidence_record_is_prunable(&world, &record, 28),
+        !committed_evidence_record_is_prunable(&world, &record, 28).unwrap(),
         "missing original row proves no closure"
     );
     for replacement in [
@@ -540,17 +540,13 @@ fn lane_terminal_replay_fence_uses_immutable_retirement_deadline_and_original_in
         },
     ] {
         world.sumeragi_lanes.get_mut().custody.push(replacement);
-        assert!(!committed_evidence_record_is_prunable(
-            &world,
-            &record,
-            u64::MAX
-        ));
+        assert!(!committed_evidence_record_is_prunable(&world, &record, u64::MAX).unwrap());
         world.sumeragi_lanes.get_mut().custody.clear();
     }
     world.sumeragi_lanes.get_mut().custody.push(retained);
     record.recorded_at_height = 21;
     assert!(
-        !committed_evidence_record_is_prunable(&world, &record, 28),
+        !committed_evidence_record_is_prunable(&world, &record, 28).unwrap(),
         "original carrier-parent binding"
     );
 }
@@ -558,7 +554,7 @@ fn lane_terminal_replay_fence_uses_immutable_retirement_deadline_and_original_in
 #[test]
 fn retained_lane_read_refusal_is_local_preparation_and_cannot_blame_signed_input() {
     let refusal = classify(EvidenceAdmissionError::Source(
-        std::io::ErrorKind::WouldBlock.into(),
+        std::io::Error::from(std::io::ErrorKind::WouldBlock).into(),
     ));
     assert!(matches!(
         refusal,
@@ -567,12 +563,75 @@ fn retained_lane_read_refusal_is_local_preparation_and_cannot_blame_signed_input
         )
     ));
     let missing = classify(EvidenceAdmissionError::Source(
-        std::io::ErrorKind::NotFound.into(),
+        std::io::Error::from(std::io::ErrorKind::NotFound).into(),
     ));
     assert!(matches!(
         missing,
         crate::block::BlockValidationError::LocalStorageRecoveryRequired { .. }
     ));
+}
+
+#[test]
+fn original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection() {
+    use crate::{
+        execution_attempt::ExecutionAttemptError as Attempt,
+        state::StateReadOnly,
+        sumeragi::runtime_availability::history::{HistoryCapture, HistoryScan},
+    };
+    use std::{future::Future, pin::pin, task::Context};
+    let (chain, record, _epoch) =
+        crate::sumeragi::runtime_availability::tests::npos_fixed_lane_chain_at(4);
+    let state = chain.state();
+    let budget = state.ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let ceiling = budget.limit_bytes();
+    let generation = state.state_view_generation();
+    let view = state.view();
+    let tip = view.native_execution_tip().unwrap();
+    let capture = HistoryCapture::from_view(state, &view, generation)
+        .unwrap()
+        .unwrap();
+    let scope = iroha_data_model::block::consensus::LaneEvidenceScope {
+        lane: record.lane,
+        incarnation: record.incarnation,
+        created_at: record.created_at,
+        admission_parent_height: tip.height(),
+        admission_parent_hash: tip.iroha_hash(),
+        admission_parent_core_hash: tip.core_hash().0,
+        admission_parent_result: tip.result().0,
+    };
+    drop(view);
+    let mut history = HistoryScan::open_for_evidence(capture, scope).unwrap();
+    let occupied = budget
+        .try_reserve_bytes(ceiling - budget.reserved_bytes())
+        .unwrap();
+    let error = history.complete().unwrap_err();
+    let Attempt::Deferred(original) = &error else {
+        panic!("original history was erased: {error:?}")
+    };
+    let original = original.clone();
+    let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+        original.allocation_refusal()
+    else {
+        panic!("actual original archive capacity")
+    };
+    let mut wait = pin!(release.clone().wait_for_release());
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(
+        matches!(classify(EvidenceAdmissionError::Source(error)), crate::block::BlockValidationError::ExecutionDeferred(retained) if retained == original)
+    );
+    drop(occupied);
+    assert!(wait.as_mut().poll(&mut context).is_ready());
+    history.complete().unwrap();
+    let context = history
+        .finish_evidence()
+        .unwrap_or_else(|(_, error)| panic!("{error}"));
+    assert_eq!(context.scope, scope);
+    assert!(context.budget.same_pool(&budget));
+    assert_eq!(budget.limit_bytes(), ceiling);
+    drop(context);
+    assert_eq!(budget.reserved_bytes(), baseline);
 }
 
 #[test]
@@ -625,7 +684,7 @@ fn local_lane_observations_use_inclusive_retirement_and_never_a_native_height_cl
         );
     }
     let retained = budget.reserved_bytes();
-    pool.prune(&world, u64::MAX);
+    pool.prune(&world, u64::MAX).unwrap();
     assert_eq!(pool.entries.as_ref().unwrap().as_slice().len(), 2);
     assert_eq!(
         budget.reserved_bytes(),
@@ -633,13 +692,13 @@ fn local_lane_observations_use_inclusive_retirement_and_never_a_native_height_cl
         "live native reports retain original frames"
     );
     world.sumeragi_lanes.get_mut().custody[0].retired_at = Some(20);
-    pool.prune(&world, 27);
+    pool.prune(&world, 27).unwrap();
     assert_eq!(
         pool.entries.as_ref().unwrap().as_slice().len(),
         2,
         "deadline is inclusive"
     );
-    pool.prune(&world, 28);
+    pool.prune(&world, 28).unwrap();
     assert!(pool.entries.as_ref().unwrap().as_slice().is_empty());
     assert_eq!(pool.bytes, 0);
     assert_eq!(
@@ -649,12 +708,20 @@ fn local_lane_observations_use_inclusive_retirement_and_never_a_native_height_cl
     );
     world.sumeragi_lanes.get_mut().custody[0].incarnation = [99; 32];
     assert!(
-        !lane.admits_at(&world, 27),
+        !lane.admits_at(
+            &world,
+            world.sumeragi_npos_parameters().unwrap().as_ref(),
+            27
+        ),
         "recreated routing lane cannot reopen the original incarnation"
     );
     world.sumeragi_lanes.get_mut().custody.clear();
     assert!(
-        !lane.admits_at(&world, 27),
+        !lane.admits_at(
+            &world,
+            world.sumeragi_npos_parameters().unwrap().as_ref(),
+            27
+        ),
         "a reclaimed original row has no admission authority"
     );
     drop(pool);
@@ -668,16 +735,20 @@ fn typed_original_history_budget_refusal_defers_without_storage_recovery() {
     use std::io::ErrorKind;
     let expected_hash = HashOf::from_untyped_unchecked(Hash::new(b"original hash"));
     for error in [
-        EvidenceAdmissionError::History(QueryExecutionFail::GasBudgetExceeded),
-        EvidenceAdmissionError::History(QueryExecutionFail::CapacityLimit),
-        EvidenceAdmissionError::History(QueryExecutionFail::CanonicalHistory(
-            CanonicalHistoryError::BodyUnavailable {
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::GasBudgetExceeded,
+        )),
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::CapacityLimit,
+        )),
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable {
                 height: 2,
                 expected_hash,
-            },
+            }),
         )),
-        EvidenceAdmissionError::Source(ErrorKind::WouldBlock.into()),
-        EvidenceAdmissionError::Source(ErrorKind::Interrupted.into()),
+        EvidenceAdmissionError::Source(std::io::Error::from(ErrorKind::WouldBlock).into()),
+        EvidenceAdmissionError::Source(std::io::Error::from(ErrorKind::Interrupted).into()),
     ] {
         assert!(matches!(
             classify(error),
@@ -687,21 +758,75 @@ fn typed_original_history_budget_refusal_defers_without_storage_recovery() {
         ));
     }
     for error in [
-        EvidenceAdmissionError::History(QueryExecutionFail::Conversion(
-            "invalid certificate".into(),
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::Conversion("invalid certificate".into()),
         )),
-        EvidenceAdmissionError::History(QueryExecutionFail::CanonicalHistory(
-            CanonicalHistoryError::BlockHeightMismatch {
+        EvidenceAdmissionError::History(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BlockHeightMismatch {
                 height: 2,
                 actual_height: 3,
-            },
+            }),
         )),
-        EvidenceAdmissionError::Source(ErrorKind::NotFound.into()),
-        EvidenceAdmissionError::Source(ErrorKind::InvalidData.into()),
+        EvidenceAdmissionError::Source(std::io::Error::from(ErrorKind::NotFound).into()),
+        EvidenceAdmissionError::Source(std::io::Error::from(ErrorKind::InvalidData).into()),
     ] {
         assert!(matches!(
             classify(error),
             BlockValidationError::LocalStorageRecoveryRequired { .. }
         ));
     }
+}
+
+#[test]
+fn original_npos_policy_refusal_cannot_prune_retained_evidence() {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let mut chain = chain();
+    chain.commit(Vec::new());
+    let proof = conflict(&chain, 2);
+    let state = chain.state();
+    assert!(observe(state, &proof).unwrap());
+    let view = state.view();
+    let horizon = view
+        .world()
+        .sumeragi_npos_parameters()
+        .unwrap()
+        .unwrap()
+        .evidence_horizon_blocks();
+    let height = 2 + horizon + 1;
+    let mut pending = state.native_pending_evidence.lock();
+    let original = pending.entries.as_ref().unwrap().as_slice()[0]
+        .frame
+        .as_slice()
+        .to_vec();
+    let pointer = pending.entries.as_ref().unwrap().as_slice()[0]
+        .frame
+        .as_slice()
+        .as_ptr();
+    let bytes = pending.bytes;
+    let reserved = state.evidence_preparation_budget().reserved_bytes();
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || pending.prune(view.world(), height),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            EvidenceAdmissionError::Policy(ExecutionAttemptError::Deferred(_))
+        ),
+        "{error:?}"
+    );
+    let retained = pending.entries.as_ref().unwrap().as_slice();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].frame.as_slice().as_ptr(), pointer);
+    assert_eq!(retained[0].frame.as_slice(), original);
+    assert_eq!(pending.bytes, bytes);
+    assert_eq!(
+        state.evidence_preparation_budget().reserved_bytes(),
+        reserved
+    );
+    pending.prune(view.world(), height).unwrap();
+    assert!(pending.entries.as_ref().unwrap().as_slice().is_empty());
+    assert_eq!(pending.bytes, 0);
+    assert!(state.evidence_preparation_budget().reserved_bytes() < reserved);
 }

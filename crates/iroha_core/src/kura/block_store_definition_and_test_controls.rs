@@ -40,6 +40,41 @@ impl Kura {
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl Kura {
+    /// Forget only a cached body whose exact inline frame remains durably stored.
+    ///
+    /// The next ordinary block read must take the cold-storage path. This hook does
+    /// not alter the durable journals, membership, or transaction-index authority.
+    ///
+    /// # Errors
+    /// Returns an error if the body is not cached, its durable frame is absent or
+    /// evicted, or the resident and durable identities do not agree.
+    pub fn forget_cached_block_for_testing(&self, height: NonZeroUsize) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut data = self.block_data.lock();
+        let height = u64::try_from(height.get())?;
+        let mismatch = || Error::CanonicalBlockWireMismatch { height };
+        let position = usize::try_from(height - 1)?;
+        let (hash, cached) = data.get_mut(position).ok_or_else(mismatch)?;
+        let body = cached.as_ref().ok_or_else(mismatch)?;
+        let mut store = self.block_store.lock();
+        if store.read_exact_durable_index_count()? < height
+            || Self::read_durable_hash_at_height(&mut store, height)? != Some(*hash)
+            || body.hash() != *hash
+        {
+            return Err(mismatch());
+        }
+        let index = store.read_block_index(height - 1)?;
+        if index.is_evicted() || index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(mismatch());
+        }
+        *cached = None;
+        Ok(())
+    }
+
     /// Simulate loss of a canonical body while retaining its exact recovery metadata.
     ///
     /// Unlike normal eviction, this test-only fault may affect unfinished Native

@@ -4,6 +4,8 @@
 //! a ready store. Storage and authority errors remain errors; only an absent committed height
 //! is absent. Runtime supplies independently authenticated historical authority.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
+
 use std::{
     collections::BTreeMap,
     io,
@@ -52,7 +54,7 @@ pub trait LaneStoreAuthorities: Send + Sync {
         lane: LaneId,
         incarnation: &[u8; 32],
         instance: Hash32,
-    ) -> io::Result<Option<LaneStoreAuthority>>;
+    ) -> Result<Option<LaneStoreAuthority>, Attempt<io::Error>>;
 }
 
 // The bool records a lane-runner opening. A historical reopen after retirement is retained
@@ -135,7 +137,7 @@ impl LaneStores {
         &self,
         lane: LaneId,
         incarnation: &[u8; 32],
-    ) -> io::Result<Arc<FileLaneBlockStore>> {
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         self.store_with_runtime_owner(lane, incarnation, false)
     }
 
@@ -145,7 +147,7 @@ impl LaneStores {
         &self,
         lane: LaneId,
         incarnation: &[u8; 32],
-    ) -> io::Result<Arc<FileLaneBlockStore>> {
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         self.store_with_runtime_owner(lane, incarnation, true)
     }
 
@@ -154,7 +156,7 @@ impl LaneStores {
         lane: LaneId,
         incarnation: &[u8; 32],
         runtime_owner: bool,
-    ) -> io::Result<Arc<FileLaneBlockStore>> {
+    ) -> Result<Arc<FileLaneBlockStore>, Attempt<io::Error>> {
         let key = (lane, *incarnation);
         let mut stores = self.stores.lock();
         if let Some(StoreSlot::Ready(store, owned)) = stores.get_mut(&key) {
@@ -179,7 +181,8 @@ impl LaneStores {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "historical lane schedule belongs to another incarnation",
-                    ));
+                    )
+                    .into());
                 }
                 let opening = FileLaneBlockStore::begin_open(
                     &self.root,
@@ -253,7 +256,7 @@ impl LaneStores {
 }
 
 impl LaneBlockSource for LaneStores {
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> io::Result<Option<u64>> {
+    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> Result<Option<u64>, Attempt<io::Error>> {
         self.store(lane, incarnation)
             .map(|store| Some(store.height()))
     }
@@ -263,7 +266,7 @@ impl LaneBlockSource for LaneStores {
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> io::Result<Option<CommittedLaneBlock>> {
+    ) -> Result<Option<CommittedLaneBlock>, Attempt<io::Error>> {
         self.store(lane, incarnation)?.committed_batch(height)
     }
 
@@ -273,7 +276,7 @@ impl LaneBlockSource for LaneStores {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, Attempt<io::Error>> {
         Ok(self.store(lane, incarnation)?.wait_for(height, timeout))
     }
 }

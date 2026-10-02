@@ -202,7 +202,7 @@ where
         )
         .unwrap();
         assert_eq!(
-            key.metadata.permutations[..4]
+            key.metadata().permutations[..4]
                 .iter()
                 .map(|r| r.mode)
                 .collect::<Vec<_>>(),
@@ -211,7 +211,7 @@ where
         let mut consuming = Vec::new();
         pk.write_structured_v1_consuming(&mut consuming).unwrap();
         assert_eq!(consuming, bytes);
-        for column in 0..key.metadata.permutation_columns {
+        for column in 0..key.metadata().permutation_columns {
             let marker = C::Scalar::from(83);
             let mut coefficients = vec![marker; key.rows() + 2];
             let ptr = coefficients.as_ptr();
@@ -257,7 +257,7 @@ where
                 }
             }
         }
-        let r = &key.metadata.permutations[2];
+        let r = &key.metadata().permutations[2];
         let mut changed = bytes.clone();
         changed[r.bitmap.offset as usize] ^= 1;
         let mut output = vec![C::Scalar::ONE; key.rows()];
@@ -288,7 +288,7 @@ where
             );
             assert!(output.iter().all(|v| *v == C::Scalar::ZERO));
         }
-        let sparse = &key.metadata.permutations[1];
+        let sparse = &key.metadata().permutations[1];
         for (at, value) in [
             (sparse.targets.offset, u32::try_from(key.rows()).unwrap()),
             (sparse.targets.offset + 8, 0),

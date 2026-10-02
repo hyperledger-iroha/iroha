@@ -141,8 +141,6 @@ pub mod parliament_types;
 pub mod peer;
 /// Permission token and grant model.
 pub mod permission;
-/// Petal stream framing for offline payload handoff.
-pub mod petal_stream;
 /// Canonical protocol-bound privacy proof and activation types.
 pub mod privacy;
 /// Opaque certified private-root anchors with owner-authorized parent registration.

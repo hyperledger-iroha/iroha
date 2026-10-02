@@ -15,7 +15,7 @@ use iroha_data_model::block::consensus::HeightContextId;
 
 use crate::{
     state::StateReadOnly,
-    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError, QcVerification},
+    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, QcVerification},
 };
 
 /// Runtime evidence that an exact block belonged to the supplied native State view and its
@@ -73,8 +73,12 @@ pub fn verify_signer_finality_v1(
     view: &(impl StateReadOnly + ?Sized),
     height: u64,
     block_hash: [u8; 32],
-) -> Result<VerifiedSignerFinalityV1, SignerFinalityErrorV1> {
-    let chain = CertifiedChain::new(view).map_err(|_| SignerFinalityErrorV1)?;
+) -> Result<
+    VerifiedSignerFinalityV1,
+    crate::execution_attempt::ExecutionAttemptError<SignerFinalityErrorV1>,
+> {
+    let chain = CertifiedChain::new(view)
+        .map_err(|error| error.map_rejection(|_| SignerFinalityErrorV1))?;
     certified_block_v1(&chain, height, block_hash).map(|block| VerifiedSignerFinalityV1 {
         height,
         block_hash,
@@ -91,23 +95,24 @@ pub fn certified_block_v1<V: StateReadOnly + ?Sized>(
     chain: &CertifiedChain<'_, V>,
     height: u64,
     block_hash: [u8; 32],
-) -> Result<CertifiedBlock, SignerFinalityErrorV1> {
+) -> Result<CertifiedBlock, crate::execution_attempt::ExecutionAttemptError<SignerFinalityErrorV1>>
+{
     if block_hash == [0; 32] {
-        return Err(SignerFinalityErrorV1);
+        return Err(SignerFinalityErrorV1.into());
     }
     let block = chain
         .certified(height)
-        .map_err(|_: ChainReadError| SignerFinalityErrorV1)?;
+        .map_err(|error| error.map_rejection(|_| SignerFinalityErrorV1))?;
     if *block.block_hash().as_ref() != block_hash {
-        return Err(SignerFinalityErrorV1);
+        return Err(SignerFinalityErrorV1.into());
     }
     if block.verification() == QcVerification::Genesis {
         let successor_height = height.checked_add(1).ok_or(SignerFinalityErrorV1)?;
         let successor = chain
             .certified(successor_height)
-            .map_err(|_| SignerFinalityErrorV1)?;
+            .map_err(|error| error.map_rejection(|_| SignerFinalityErrorV1))?;
         if successor.verification() != QcVerification::Verified || !successor.extends(&block) {
-            return Err(SignerFinalityErrorV1);
+            return Err(SignerFinalityErrorV1.into());
         }
     }
     Ok(block)

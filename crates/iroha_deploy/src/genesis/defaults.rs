@@ -107,7 +107,7 @@ pub fn generate_default(
     let manifest = builder
         .build_raw()?
         .with_consensus_mode(consensus_mode)
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     manifest.validate_mode_specific_consensus_parameters()?;
     Ok(manifest)
 }

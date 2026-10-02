@@ -1637,6 +1637,9 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
                 Self::ExecutionDeferred(error)
             }
             crate::state::StateBlockStartError::Stage(error) => error,
+            crate::state::StateBlockStartError::Policy(error) => {
+                Self::ExecutionContextInvalid(error)
+            }
         }
     }
 }
@@ -1799,6 +1802,12 @@ impl BlockValidationError {
     /// Keep local autoscale observations out of deterministic block rejection.
     pub(crate) fn from_autoscale_lifecycle_error(error: crate::state::LaneLifecycleError) -> Self {
         use crate::state::LaneLifecycleError;
+        let error = match error {
+            LaneLifecycleError::NposPolicy(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+            ) => return Self::ExecutionDeferred(reason),
+            completed => completed,
+        };
         let reason = format!("failed to evaluate Nexus autoscale: {error}");
         match error {
             LaneLifecycleError::DrainObservation(_)
@@ -1858,6 +1867,21 @@ impl BlockValidationError {
             Self::StateStorageAdmission(local.clone())
         } else if let Some(local) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
             Self::EvidencePreparation(local.clone())
+        } else if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
+            error.downcast_ref::<crate::execution_attempt::ExecutionAttemptError<String>>()
+        {
+            Self::ExecutionDeferred(reason.clone())
+        } else if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
+            error.downcast_ref::<crate::execution_attempt::ExecutionAttemptError<
+                iroha_data_model::isi::error::InstructionExecutionError,
+            >>()
+        {
+            Self::ExecutionDeferred(reason.clone())
+        } else if let Some(crate::sumeragi::evidence::EvidenceAdmissionError::Policy(
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+        )) = error.downcast_ref::<crate::sumeragi::evidence::EvidenceAdmissionError>()
+        {
+            Self::ExecutionDeferred(reason.clone())
         } else {
             Self::NposEffectsInvalid(format!("{stage}: {error}"))
         }
@@ -1869,7 +1893,12 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
         use crate::sumeragi::lanes::merge::MergeError;
         match error {
             MergeError::RoutingDeferred(reason) => Self::ExecutionDeferred(reason),
-            MergeError::Storage(source) => Self::LaneStorage(source),
+            MergeError::Storage(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                local,
+            )) => Self::ExecutionDeferred(local),
+            MergeError::Storage(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                source,
+            )) => Self::LaneStorage(source),
             MergeError::Pending(reason) => Self::LocalStorageRecoveryRequired { reason },
             MergeError::Invalid(reason) => Self::ExecutionContextInvalid(reason),
         }
@@ -1879,6 +1908,24 @@ impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
 #[cfg(test)]
 #[path = "block/lane_storage_error_tests.rs"]
 mod lane_storage_error_tests;
+
+/// Preserve an unfinished history read before projecting only completed schedule failures.
+impl From<crate::execution_attempt::ExecutionAttemptError<crate::sumeragi::schedule::ScheduleError>>
+    for BlockValidationError
+{
+    fn from(
+        error: crate::execution_attempt::ExecutionAttemptError<
+            crate::sumeragi::schedule::ScheduleError,
+        >,
+    ) -> Self {
+        match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                Self::ExecutionDeferred(local)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => Self::from(error),
+        }
+    }
+}
 
 /// Preserve the original epoch-allocation refusal before any diagnostic formatting.
 impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
@@ -7925,7 +7972,13 @@ pub(crate) mod valid {
         fn validation_profiles_always_carry_an_explicit_consensus_mode() {
             use iroha_data_model::block::consensus::ConsensusMode;
             // World/Parameters defaults do not authenticate a consensus mode.
-            assert!(World::new().view().sumeragi_npos_parameters().is_none());
+            assert!(
+                World::new()
+                    .view()
+                    .sumeragi_npos_parameters()
+                    .expect("original policy decoder completes")
+                    .is_none()
+            );
             assert_eq!(
                 ConsensusValidationProfile::SumeragiGenesis {
                     consensus_mode: ConsensusMode::Npos,

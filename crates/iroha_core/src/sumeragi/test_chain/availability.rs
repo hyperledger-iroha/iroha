@@ -1,5 +1,6 @@
 //! Genuine signed availability and cold restoration owned by a certified fixture's State pool.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::io;
 
 use iroha_allocation::ChargedBuffer;
@@ -93,7 +94,10 @@ impl CertifiedTestChain {
     ///
     /// # Errors
     /// Original storage corruption, unresolved authority, I/O or resource refusal.
-    pub fn committed_body(&self, height: u64) -> io::Result<Option<(AvailableBody, Qc)>> {
+    pub fn committed_body(
+        &self,
+        height: u64,
+    ) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         self.blocks.committed_body(height)
     }
 }

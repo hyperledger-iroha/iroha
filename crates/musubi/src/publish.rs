@@ -19,8 +19,9 @@
 //! every retry first queries the exact transaction hash, and an absent transaction is submitted
 //! only while the selected finalized location is byte-identical to the signed floor.
 //!
-//! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other targets fail closed
-//! with the platform's unsupported error before inspecting or creating the selected state path.
+//! Journal and staged-CAR access uses shared native filesystem custody on Unix and Windows.
+//! Retained ancestors, owner-private files, bounded reads and exact object identities protect
+//! recovery; native Windows execution remains part of the separate release qualification.
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 use iroha_data_model::{
     NetworkId,
@@ -52,6 +53,9 @@ use iroha_data_model::{
         TransactionSignature, signed::MultisigSignatures,
     },
 };
+use iroha_fs::{
+    FileIdentity, FileSnapshot, OwnerDirectory, PrivateDirectory, PublishMode, RetainedFile,
+};
 use iroha_model_base::metadata::Metadata;
 use iroha_musubi_service::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
@@ -62,15 +66,11 @@ use norito::{
     codec::{Decode, Encode},
 };
 use sorafs_car::{CarBuildPlan, CarVerifier, ChunkStore};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt as _;
 use std::{
     collections::BTreeMap,
     error::Error,
     fmt, fs,
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Read},
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -157,10 +157,6 @@ const RELEASE_SIGNED_TRANSACTION_DOMAIN: &[u8] = b"iroha.musubi.release-signed-t
 const FINAL_HOME_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-home-release.v1";
 const FINAL_UNIVERSAL_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-universal-release.v1";
 const FINAL_CHECKPOINT_DOMAIN: &[u8] = b"iroha.musubi.final-checkpoint.v1";
-#[cfg(windows)]
-const FILE_SHARE_READ: u32 = 0x0000_0001;
-#[cfg(windows)]
-const FILE_SHARE_WRITE: u32 = 0x0000_0002;
 /// Stable identifier used to make every remote publication transition idempotent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
 pub struct PublicationOperationIdV1([u8; 32]);
@@ -3348,13 +3344,10 @@ impl PublicationStagedCarSourceV1 {
         &self,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> io::Result<MusubiSeedIngressCarPlanV1> {
-        if !cfg!(unix) {
-            return Err(unsupported_publication_filesystem_error());
-        }
         let root = AtomicWriteRoot::new(&self.root)
             .map_err(|_| invalid_plan_source("staged publication plan root is unsafe"))?;
         let bytes = root
-            .load_immutable(
+            .load_private_descriptor_rooted(
                 self.plan_path
                     .strip_prefix(&self.root)
                     .map_err(|_| invalid_plan_source("staged publication plan escaped its root"))?,
@@ -3397,6 +3390,11 @@ impl PublicationStagedCarSourceV1 {
         Ok(plan)
     }
     fn load_car_bytes_for_plan(&self) -> io::Result<Vec<u8>> {
+        if self.expected_size == 0 || self.expected_size > MUSUBI_MAX_CAR_BYTES_V1 {
+            return Err(invalid_plan_source(
+                "staged publication CAR length is outside its bound",
+            ));
+        }
         let size = usize::try_from(self.expected_size).map_err(|_| {
             invalid_plan_source("staged publication CAR length does not fit this platform")
         })?;
@@ -3501,43 +3499,22 @@ fn staged_car_plan_matches_commitment(
 }
 impl PublicationCarSource for PublicationStagedCarSourceV1 {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
-        if !cfg!(unix) {
-            return Err(unsupported_publication_filesystem_error());
+        if self.expected_size == 0 || self.expected_size > MUSUBI_MAX_CAR_BYTES_V1 {
+            return Err(invalid_plan_source(
+                "staged publication CAR length is outside its bound",
+            ));
         }
-        let inspected = fs::symlink_metadata(&self.path)?;
-        if self.expected_size == 0
-            || self.expected_size > MUSUBI_MAX_CAR_BYTES_V1
-            || !metadata_is_safe_regular_file(&inspected)
-            || inspected.len() != self.expected_size
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+        let file = RetainedFile::open_private(&self.path).map_err(car_custody_error)?;
+        let initial = file.snapshot().map_err(car_custody_error)?;
+        if file.file().metadata()?.len() != self.expected_size {
+            return Err(invalid_plan_source(
                 "staged publication CAR is not the expected bounded regular file",
             ));
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(windows)]
-        options.share_mode(FILE_SHARE_READ);
-        set_no_follow_nonblocking(&mut options);
-        let file = options.open(&self.path)?;
-        let opened = file.metadata()?;
-        let linked_after = fs::symlink_metadata(&self.path)?;
-        if !metadata_is_safe_regular_file(&opened)
-            || !metadata_is_safe_regular_file(&linked_after)
-            || !same_file_snapshot(&inspected, &opened)
-            || !same_file_snapshot(&opened, &linked_after)
-            || opened.len() != self.expected_size
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "staged publication CAR changed while it was opened",
-            ));
-        }
+        file.revalidate().map_err(car_custody_error)?;
         Ok(Box::new(StableCarReader {
-            path: self.path.clone(),
             file,
-            initial: opened,
+            initial,
             expected_size: self.expected_size,
             observed: 0,
             complete: false,
@@ -3553,34 +3530,29 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
 fn invalid_plan_source(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
-fn unsupported_publication_filesystem_error() -> io::Error {
-    // TODO: Enable non-Unix publication files only after a safe stable handle-identity,
-    // single-link, and no-follow file-open abstraction is available.
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure Musubi publication filesystem access is unsupported on this platform",
-    )
+fn car_custody_error(error: io::Error) -> io::Error {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput
+    ) {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    } else {
+        error
+    }
 }
 struct StableCarReader {
-    path: PathBuf,
-    file: File,
-    initial: fs::Metadata,
+    file: RetainedFile,
+    initial: FileSnapshot,
     expected_size: u64,
     observed: u64,
     complete: bool,
 }
 impl StableCarReader {
     fn validate_complete_snapshot(&self) -> io::Result<()> {
-        let opened = self.file.metadata()?;
-        let linked = fs::symlink_metadata(&self.path)?;
-        if !metadata_is_safe_regular_file(&opened)
-            || !metadata_is_safe_regular_file(&linked)
-            || !same_file_snapshot(&self.initial, &opened)
-            || !same_file_snapshot(&opened, &linked)
-            || opened.len() != self.expected_size
+        if self.file.snapshot().ok().as_ref() != Some(&self.initial)
+            || self.file.file().metadata()?.len() != self.expected_size
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(invalid_plan_source(
                 "staged publication CAR changed while it was read",
             ));
         }
@@ -3592,7 +3564,9 @@ impl Read for StableCarReader {
         if self.complete || buffer.is_empty() {
             return Ok(0);
         }
-        let read = self.file.read(buffer)?;
+        let remaining = usize::try_from(self.expected_size - self.observed).unwrap_or(usize::MAX);
+        let length = buffer.len().min(remaining);
+        let read = self.file.file_mut().read(&mut buffer[..length])?;
         if read == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -3856,37 +3830,33 @@ pub enum PublicationAdvanceV1 {
 #[derive(Debug)]
 pub struct PublicationJournalStore {
     root: AtomicWriteRoot,
+    directory: PrivateDirectory,
 }
-struct PublicationOperationLockV1 {
+struct PublicationOperationLockV1<'a> {
     file: File,
-    path: PathBuf,
-    identity: fs::Metadata,
-    parent: File,
-    parent_path: PathBuf,
-    parent_identity: fs::Metadata,
+    identity: FileIdentity,
+    directory: &'a PrivateDirectory,
+    name: String,
 }
-impl PublicationOperationLockV1 {
+impl PublicationOperationLockV1<'_> {
     fn validate(&self) -> Result<(), PublicationError> {
+        // Reopen without creation through the retained private parent. This validates the
+        // current ACL/mode and single-link custody in addition to matching the held object.
+        let named = self
+            .directory
+            .open_existing_lock(&self.name)
+            .map_err(journal_custody_error)?;
         let opened = self.file.metadata().map_err(PublicationError::JournalIo)?;
-        let named = fs::symlink_metadata(&self.path).map_err(PublicationError::JournalIo)?;
-        let parent_opened = self
-            .parent
-            .metadata()
-            .map_err(PublicationError::JournalIo)?;
-        let parent_named =
-            fs::symlink_metadata(&self.parent_path).map_err(PublicationError::JournalIo)?;
-        if !operation_lock_metadata_is_safe(&opened, &self.parent_identity)
-            || !operation_lock_metadata_is_safe(&named, &self.parent_identity)
-            || !same_file_snapshot(&self.identity, &opened)
-            || !same_file_snapshot(&opened, &named)
-            || !same_directory(&self.parent_identity, &parent_opened)
-            || !same_directory(&parent_opened, &parent_named)
+        if opened.len() != 0
+            || named.metadata().map_err(PublicationError::JournalIo)?.len() != 0
+            || FileIdentity::of(&self.file).map_err(PublicationError::JournalIo)? != self.identity
+            || FileIdentity::of(&named).map_err(PublicationError::JournalIo)? != self.identity
         {
             return Err(PublicationError::InvalidJournal(
                 "publication operation lock changed identity".to_owned(),
             ));
         }
-        Ok(())
+        self.directory.revalidate().map_err(journal_custody_error)
     }
     fn finish<T>(self, result: Result<T, PublicationError>) -> Result<T, PublicationError> {
         let unlock = File::unlock(&self.file).map_err(PublicationError::JournalIo);
@@ -3901,39 +3871,21 @@ impl PublicationJournalStore {
     ///
     /// # Errors
     ///
-    /// Returns [`PublicationError::JournalWrite`] carrying
-    /// [`crate::atomic_io::AtomicWriteErrorCode::UnsupportedPlatform`] on non-Unix targets before
-    /// inspecting or creating the state root. On Unix, returns a journal error when the state
-    /// root or publication directory cannot be opened, created, synchronized, or proven to be a
-    /// private real directory.
+    /// Returns a journal error when the existing state root or private publication directory
+    /// cannot be opened, created, synchronized, or proven to retain native owner custody.
     pub fn open(user_state_root: &Path) -> Result<Self, PublicationError> {
         let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
-        let journal_directory = root.path().join(JOURNAL_DIRECTORY);
-        let created = match fs::create_dir(&journal_directory) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    fs::set_permissions(&journal_directory, fs::Permissions::from_mode(0o700))
-                        .map_err(PublicationError::JournalIo)?;
-                }
-                true
+        let owner = OwnerDirectory::open(root.path()).map_err(journal_custody_error)?;
+        let directory = match owner.create_private_child(JOURNAL_DIRECTORY) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                PrivateDirectory::open(owner.path().join(JOURNAL_DIRECTORY))
+                    .map_err(journal_custody_error)?
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
-            Err(error) => return Err(PublicationError::JournalIo(error)),
+            Err(error) => return Err(journal_custody_error(error)),
         };
-        let metadata =
-            fs::symlink_metadata(&journal_directory).map_err(PublicationError::JournalIo)?;
-        if !journal_directory_metadata_is_safe(&metadata) {
-            return Err(PublicationError::InvalidJournal(
-                "publication journal directory is not a private real directory".to_owned(),
-            ));
-        }
-        if created {
-            open_read_only_no_follow_nonblocking(root.path())
-                .and_then(|directory| directory.sync_all())
-                .map_err(PublicationError::JournalIo)?;
-        }
-        Ok(Self { root })
+        owner.revalidate().map_err(journal_custody_error)?;
+        Ok(Self { root, directory })
     }
     /// Persist a new operation, or return the identical existing operation idempotently.
     ///
@@ -3969,73 +3921,23 @@ impl PublicationJournalStore {
     ///
     /// # Errors
     ///
-    /// Returns an unsupported journal I/O error on non-Unix targets before path metadata is
-    /// consulted. On Unix, returns not-found, journal I/O, or invalid-journal errors when the
-    /// bounded journal cannot be opened as the same safe file, decoded canonically, or fully
-    /// validated.
+    /// Returns not-found, journal I/O, or invalid-journal errors when the bounded private
+    /// journal cannot be read through retained custody, decoded canonically, or fully validated.
     pub fn load(
         &self,
         operation_id: PublicationOperationIdV1,
     ) -> Result<PublicationJournalV1, PublicationError> {
-        if !cfg!(unix) {
-            return Err(PublicationError::JournalIo(
-                unsupported_publication_filesystem_error(),
-            ));
-        }
-        let relative = journal_relative_path(operation_id);
-        let path = self.root.path().join(relative);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
+        let name = format!("{operation_id}.{JOURNAL_EXTENSION}");
+        #[cfg(all(test, unix))]
+        substitute_publication_read_target_with_fifo_for_test(&self.directory.path().join(&name))
+            .map_err(PublicationError::JournalIo)?;
+        let bytes = match self.directory.read(&name, MAX_JOURNAL_BYTES_USIZE) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(PublicationError::NotFound(operation_id));
             }
-            Err(error) => return Err(PublicationError::JournalIo(error)),
+            Err(error) => return Err(journal_custody_error(error)),
         };
-        if !metadata_is_safe_regular_file(&metadata) || metadata.len() > MAX_JOURNAL_BYTES {
-            return Err(PublicationError::InvalidJournal(
-                "journal is not a bounded regular file".to_owned(),
-            ));
-        }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(windows)]
-        options.share_mode(FILE_SHARE_READ);
-        #[cfg(all(test, unix))]
-        substitute_publication_read_target_with_fifo_for_test(&path)
-            .map_err(PublicationError::JournalIo)?;
-        set_no_follow_nonblocking(&mut options);
-        let mut file = options.open(&path).map_err(PublicationError::JournalIo)?;
-        let opened = file.metadata().map_err(PublicationError::JournalIo)?;
-        if !metadata_is_safe_regular_file(&opened) || !same_file_snapshot(&metadata, &opened) {
-            return Err(PublicationError::InvalidJournal(
-                "journal changed while it was opened".to_owned(),
-            ));
-        }
-        let capacity = usize::try_from(metadata.len()).map_err(|_| {
-            PublicationError::InvalidJournal("journal length does not fit memory".to_owned())
-        })?;
-        let mut bytes = Vec::with_capacity(capacity);
-        file.by_ref()
-            .take(MAX_JOURNAL_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(PublicationError::JournalIo)?;
-        if bytes.len() > MAX_JOURNAL_BYTES_USIZE {
-            return Err(PublicationError::InvalidJournal(
-                "journal grew beyond its fixed size bound while it was read".to_owned(),
-            ));
-        }
-        let opened_after = file.metadata().map_err(PublicationError::JournalIo)?;
-        let linked_after = fs::symlink_metadata(&path).map_err(PublicationError::JournalIo)?;
-        if bytes.len() as u64 != metadata.len()
-            || !metadata_is_safe_regular_file(&opened_after)
-            || !metadata_is_safe_regular_file(&linked_after)
-            || !same_file_snapshot(&metadata, &opened_after)
-            || !same_file_snapshot(&opened_after, &linked_after)
-        {
-            return Err(PublicationError::InvalidJournal(
-                "journal length changed while it was read".to_owned(),
-            ));
-        }
         let journal = decode_publication_journal(&bytes)?;
         if journal.operation_id != operation_id {
             return Err(PublicationError::InvalidJournal(
@@ -4057,9 +3959,13 @@ impl PublicationJournalStore {
                 "journal exceeds its fixed size bound".to_owned(),
             ));
         }
-        self.root
-            .replace(&journal_relative_path(journal.operation_id), &bytes)
-            .map_err(PublicationError::JournalWrite)
+        self.directory
+            .write_atomic(
+                format!("{}.{}", journal.operation_id, JOURNAL_EXTENSION),
+                &bytes,
+                PublishMode::Replace,
+            )
+            .map_err(journal_custody_error)
     }
     fn transition(
         &self,
@@ -4126,75 +4032,15 @@ impl PublicationJournalStore {
     fn lock_operation(
         &self,
         operation_id: PublicationOperationIdV1,
-    ) -> Result<PublicationOperationLockV1, PublicationError> {
-        let parent_path = self.root.path().join(JOURNAL_DIRECTORY);
-        let parent_before =
-            fs::symlink_metadata(&parent_path).map_err(PublicationError::JournalIo)?;
-        if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+    ) -> Result<PublicationOperationLockV1<'_>, PublicationError> {
+        let name = format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}");
+        let file = self
+            .directory
+            .open_lock(&name)
+            .map_err(journal_custody_error)?;
+        if file.metadata().map_err(PublicationError::JournalIo)?.len() != 0 {
             return Err(PublicationError::InvalidJournal(
-                "publication journal directory is not a real directory".to_owned(),
-            ));
-        }
-        let parent = open_read_only_no_follow_nonblocking(&parent_path)
-            .map_err(PublicationError::JournalIo)?;
-        let parent_opened = parent.metadata().map_err(PublicationError::JournalIo)?;
-        let parent_named =
-            fs::symlink_metadata(&parent_path).map_err(PublicationError::JournalIo)?;
-        if !same_directory(&parent_before, &parent_opened)
-            || !same_directory(&parent_opened, &parent_named)
-        {
-            return Err(PublicationError::InvalidJournal(
-                "publication journal directory changed identity".to_owned(),
-            ));
-        }
-        let path = self
-            .root
-            .path()
-            .join(operation_lock_relative_path(operation_id));
-        let before = match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if !operation_lock_metadata_is_safe(&metadata, &parent_opened) {
-                    return Err(PublicationError::InvalidJournal(
-                        "publication operation lock is not a private empty regular file".to_owned(),
-                    ));
-                }
-                Some(metadata)
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(PublicationError::JournalIo(error)),
-        };
-        let (file, created) = match before.as_ref() {
-            Some(_) => (
-                open_existing_operation_lock(&path).map_err(PublicationError::JournalIo)?,
-                false,
-            ),
-            None => match create_operation_lock(&path) {
-                Ok(file) => (file, true),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
-                    open_existing_operation_lock(&path).map_err(PublicationError::JournalIo)?,
-                    false,
-                ),
-                Err(error) => return Err(PublicationError::JournalIo(error)),
-            },
-        };
-        if created {
-            #[cfg(unix)]
-            file.set_permissions(fs::Permissions::from_mode(0o600))
-                .map_err(PublicationError::JournalIo)?;
-            file.sync_all().map_err(PublicationError::JournalIo)?;
-            parent.sync_all().map_err(PublicationError::JournalIo)?;
-        }
-        let opened = file.metadata().map_err(PublicationError::JournalIo)?;
-        let named = fs::symlink_metadata(&path).map_err(PublicationError::JournalIo)?;
-        if !operation_lock_metadata_is_safe(&opened, &parent_opened)
-            || !operation_lock_metadata_is_safe(&named, &parent_opened)
-            || before
-                .as_ref()
-                .is_some_and(|metadata| !same_file_snapshot(metadata, &opened))
-            || !same_file_snapshot(&opened, &named)
-        {
-            return Err(PublicationError::InvalidJournal(
-                "publication operation lock changed while it was opened".to_owned(),
+                "publication operation lock is not a private empty regular file".to_owned(),
             ));
         }
         file.try_lock().map_err(|error| match error {
@@ -4202,12 +4048,10 @@ impl PublicationJournalStore {
             fs::TryLockError::Error(error) => PublicationError::JournalIo(error),
         })?;
         let operation_lock = PublicationOperationLockV1 {
+            identity: FileIdentity::of(&file).map_err(PublicationError::JournalIo)?,
             file,
-            path,
-            identity: opened,
-            parent,
-            parent_path,
-            parent_identity: parent_opened,
+            directory: &self.directory,
+            name,
         };
         operation_lock.validate()?;
         Ok(operation_lock)
@@ -4311,9 +4155,11 @@ fn prepare_release_submission_attempt(
     )))
 }
 include!("publish_engine.rs");
+#[cfg(test)]
 fn journal_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_EXTENSION}"))
 }
+#[cfg(test)]
 fn operation_lock_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}"))
 }
@@ -4370,112 +4216,13 @@ fn archive_location_instruction_digest(instruction: &AddMusubiArchiveLocationV1)
         .expect("typed archive location instruction has a canonical Norito encoding");
     domain_hash(ARCHIVE_LOCATION_INSTRUCTION_DOMAIN, &canonical)
 }
-fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true);
-    set_no_follow_nonblocking(&mut options);
-    #[cfg(windows)]
-    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-    options.open(path)
-}
-fn create_operation_lock(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create_new(true);
-    set_no_follow_nonblocking(&mut options);
-    #[cfg(unix)]
-    options.mode(0o600);
-    #[cfg(windows)]
-    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
-    options.open(path)
-}
-#[cfg(unix)]
-fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, parent: &fs::Metadata) -> bool {
-    metadata_is_safe_regular_file(metadata)
-        && metadata.len() == 0
-        && metadata.permissions().mode() & 0o7777 == 0o600
-        && metadata.uid() == parent.uid()
-}
-#[cfg(not(unix))]
-const fn operation_lock_metadata_is_safe(_metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
-    false
-}
-#[cfg(unix)]
-fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
-    metadata.is_dir()
-        && !metadata.file_type().is_symlink()
-        && metadata.permissions().mode() & 0o7777 == 0o700
-}
-#[cfg(not(unix))]
-const fn journal_directory_metadata_is_safe(_metadata: &fs::Metadata) -> bool {
-    false
-}
-#[cfg(unix)]
-fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    journal_directory_metadata_is_safe(left)
-        && journal_directory_metadata_is_safe(right)
-        && left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.uid() == right.uid()
-}
-#[cfg(not(unix))]
-const fn same_directory(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.is_file()
-            && !metadata.file_type().is_symlink()
-            && metadata_has_one_hard_link(metadata)
+fn journal_custody_error(error: io::Error) -> PublicationError {
+    match error.kind() {
+        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput => {
+            PublicationError::InvalidJournal(format!("unsafe publication journal custody: {error}"))
+        }
+        _ => PublicationError::JournalIo(error),
     }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        false
-    }
-}
-#[cfg(unix)]
-fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    metadata.nlink() == 1
-}
-#[cfg(unix)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.file_type() == right.file_type()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.nlink() == 1
-        && right.nlink() == 1
-}
-#[cfg(not(unix))]
-const fn same_file_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-fn open_read_only_no_follow_nonblocking(path: &Path) -> io::Result<File> {
-    if !cfg!(unix) {
-        let _ = path;
-        return Err(unsupported_publication_filesystem_error());
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_nonblocking(&mut options);
-    options.open(path)
-}
-fn set_no_follow_nonblocking(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        // A substituted FIFO or device must never block before descriptor metadata rejects it.
-        options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
-    }
-    #[cfg(not(unix))]
-    let _ = options;
 }
 #[cfg(all(test, unix))]
 fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Result<()> {
@@ -4502,218 +4249,11 @@ fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Res
         ))
     }
 }
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!("Musubi publication file reads are not qualified for this Android architecture");
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("Musubi publication file reads are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "mips",
-        target_arch = "mips32r6",
-        target_arch = "mips64",
-        target_arch = "mips64r6"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x80
-}
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "sparc", target_arch = "sparc64")
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4000
-}
-#[cfg(any(
-    target_os = "android",
-    all(
-        target_os = "linux",
-        not(any(
-            target_arch = "mips",
-            target_arch = "mips32r6",
-            target_arch = "mips64",
-            target_arch = "mips64r6",
-            target_arch = "sparc",
-            target_arch = "sparc64"
-        ))
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x800
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4
-}
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     include!("publish_fixture_tests.rs");
     include!("publish_backend_test_support.rs");
     include!("publish_recovery_tests.rs");
-}
-#[cfg(all(test, not(unix)))]
-mod unsupported_platform_tests {
-    use super::{
-        PublicationCarSource, PublicationError, PublicationJournalStore, PublicationOperationIdV1,
-        PublicationStagedCarSourceV1,
-    };
-    use crate::atomic_io::AtomicWriteErrorCode;
-    use iroha_data_model::{
-        musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
-    };
-    fn minimal_valid_commitment() -> MusubiArchiveCommitmentV1 {
-        let descriptor = sorafs_car::chunker_registry::default_descriptor();
-        let commitment = MusubiArchiveCommitmentV1 {
-            root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
-            chunker: ChunkerProfileHandle {
-                profile_id: descriptor.id.0,
-                namespace: descriptor.namespace.to_owned(),
-                name: descriptor.name.to_owned(),
-                semver: descriptor.semver.to_owned(),
-                multihash_code: descriptor.multihash_code,
-            },
-            chunk_plan_digest: MusubiContentDigestV1::new([2; 32]),
-            por_root: MusubiContentDigestV1::new([3; 32]),
-            content_length: 1,
-            car_digest: MusubiContentDigestV1::new([4; 32]),
-            car_size: 1,
-            bundle_digest: MusubiContentDigestV1::new([5; 32]),
-            source_tree_digest: MusubiContentDigestV1::new([6; 32]),
-            descriptor_digest: MusubiContentDigestV1::new([7; 32]),
-            file_count: 1,
-            chunk_count: 1,
-        };
-        commitment.validate().expect("minimal commitment");
-        commitment
-    }
-    #[test]
-    fn publication_journal_open_fails_before_inspecting_or_creating_the_root() {
-        let parent = tempfile::tempdir().expect("temporary parent");
-        let requested = parent.path().join("must-remain-absent");
-        let error = PublicationJournalStore::open(&requested)
-            .expect_err("non-Unix publication journal must fail");
-        assert!(matches!(
-            error,
-            PublicationError::JournalWrite(error)
-                if error.code() == AtomicWriteErrorCode::UnsupportedPlatform
-        ));
-        assert!(!requested.exists());
-    }
-    #[test]
-    fn staged_car_and_plan_readers_return_unsupported_before_metadata_io() {
-        let parent = tempfile::tempdir().expect("temporary parent");
-        let requested = parent.path().join("must-remain-absent");
-        let operation_id = "11"
-            .repeat(32)
-            .parse::<PublicationOperationIdV1>()
-            .expect("non-zero operation id");
-        let source = PublicationStagedCarSourceV1::new(&requested, operation_id, 1);
-        let error = match source.open_car() {
-            Err(error) => error,
-            Ok(_) => panic!("non-Unix staged CAR read must fail"),
-        };
-        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-        let error = source
-            .car_plan(&minimal_valid_commitment())
-            .expect_err("non-Unix staged plan read must fail");
-        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-        assert!(!source.path.exists());
-        assert!(!source.plan_path.exists());
-        assert!(!requested.exists());
-    }
 }
 
 #[cfg(test)]

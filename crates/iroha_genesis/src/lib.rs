@@ -442,7 +442,7 @@ fn validate_signed_manifest_binding(
     }
     let expected = manifest
         .clone()
-        .with_consensus_meta()
+        .with_consensus_meta()?
         .parse()
         .wrap_err("expand genesis manifest instructions")?;
     let actual_len = block.external_transactions().len();
@@ -1440,7 +1440,7 @@ impl GenesisSourceTemplate {
             .map_err(|error| eyre!("serialize materialized genesis manifest: {error}"))?;
         let manifest = RawGenesisTransaction::from_json_slice_at_path(&completed, &self.json_path)?;
         manifest.validate_mode_specific_consensus_parameters()?;
-        Ok(manifest.with_consensus_meta())
+        manifest.with_consensus_meta()
     }
 }
 
@@ -1462,11 +1462,9 @@ impl RawGenesisTransaction {
             .custom()
             .get(&SumeragiNposParameters::parameter_id());
         let npos_parameters = npos_parameter
-            .map(|parameter| {
-                SumeragiNposParameters::from_custom_parameter(parameter)
-                    .ok_or_else(|| eyre!("genesis carries malformed `sumeragi_npos_parameters`"))
-            })
-            .transpose()?;
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten();
         match (self.consensus_mode, npos_parameters) {
             (SumeragiConsensusMode::Permissioned, Some(_)) => Err(eyre!(
                 "permissioned genesis must omit `sumeragi_npos_parameters`"
@@ -1679,17 +1677,17 @@ impl RawGenesisTransaction {
     }
     /// Populate consensus metadata fields with defaults and a computed consensus fingerprint.
     ///
-    /// This helper is best-effort and does not alter existing transactions. It derives
-    /// parameters from data-model defaults to produce a stable fingerprint for basic networks.
-    #[must_use]
-    pub fn with_consensus_meta(mut self) -> Self {
+    /// Existing transactions are preserved. Every parameter read must complete before the
+    /// resulting fingerprint can be used by normalization or signing.
+    ///
+    /// # Errors
+    /// Returns the original parameter decoding failure, invalid mode/policy binding, or
+    /// fingerprint construction error. Local decoder failures are not missing metadata.
+    pub fn with_consensus_meta(mut self) -> Result<Self> {
         use iroha_data_model::parameter::system::{
             BlockParameters, SumeragiConsensusMode, SumeragiParameters,
         };
-        let Ok(params) = self.effective_parameters() else {
-            self.consensus_fingerprint = None;
-            return self;
-        };
+        let params = self.effective_parameters()?;
         let sumeragi: SumeragiParameters = params.sumeragi().clone();
         let block: BlockParameters = params.block();
         let custom = params.custom();
@@ -1699,17 +1697,22 @@ impl RawGenesisTransaction {
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos_payload = custom
             .get(&npos_param_id)
-            .and_then(SumeragiNposParameters::from_custom_parameter);
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten();
         // Consensus mode is a first-release signed-genesis choice. Runtime
         // mode staging is unrepresentable, and the mere presence of NPoS
         // tuning data must never infer or flip the live protocol mode.
         let mode = self.consensus_mode;
         let mode = match (mode, npos_payload) {
             (SumeragiConsensusMode::Permissioned, None) => ConsensusGenesisModeParams::Permissioned,
-            (SumeragiConsensusMode::Permissioned, Some(_))
-            | (SumeragiConsensusMode::Npos, None) => {
-                self.consensus_fingerprint = None;
-                return self;
+            (SumeragiConsensusMode::Permissioned, Some(_)) => {
+                return Err(eyre!(
+                    "permissioned genesis must omit `sumeragi_npos_parameters`"
+                ));
+            }
+            (SumeragiConsensusMode::Npos, None) => {
+                return Err(eyre!("NPoS genesis requires `sumeragi_npos_parameters`"));
             }
             (SumeragiConsensusMode::Npos, Some(npos)) => {
                 ConsensusGenesisModeParams::Npos(NposGenesisParams {
@@ -1732,13 +1735,10 @@ impl RawGenesisTransaction {
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
             sumeragi_context: self.sumeragi_context.clone(),
         };
-        let Ok(fp) = compute_consensus_parameters_fingerprint(&dm_params) else {
-            self.consensus_fingerprint = None;
-            return self;
-        };
+        let fp = compute_consensus_parameters_fingerprint(&dm_params)?;
         self.wire_protocol_version = CONSENSUS_PROTOCOL_VERSION;
         self.consensus_fingerprint = Some(ConsensusFingerprint::new(fp));
-        self
+        Ok(self)
     }
     /// Expand the manifest into a normalized, fully-injected representation.
     ///
@@ -1753,7 +1753,7 @@ impl RawGenesisTransaction {
         self.validate_mode_specific_consensus_parameters()?;
         // Always refresh consensus metadata so fingerprints stay aligned with
         // effective parameters after manifest edits.
-        let manifest = self.with_consensus_meta();
+        let manifest = self.with_consensus_meta()?;
         let consensus_mode = manifest.consensus_mode;
         if manifest.wire_protocol_version != CONSENSUS_PROTOCOL_VERSION {
             return Err(eyre!(
@@ -2322,7 +2322,7 @@ impl RawGenesisTransaction {
         // Always recompute generated fields for the live Sumeragi protocol,
         // so stale or externally injected handshake metadata cannot survive
         // into the signed genesis block.
-        let manifest = self.with_consensus_meta();
+        let manifest = self.with_consensus_meta()?;
         manifest
             .crypto
             .validate()
@@ -3229,7 +3229,7 @@ mod tests {
                 )
                 .build_raw_for_test(),
         )
-        .with_consensus_meta();
+        .with_consensus_meta()?;
         assert_eq!(manifest.effective_parameters()?, expected);
         let key = KeyPair::from_seed(vec![0x52; 32], Algorithm::Ed25519);
         let block = manifest
@@ -3284,7 +3284,7 @@ mod tests {
                 ))
                 .build_raw_for_test(),
         )
-        .with_consensus_meta();
+        .with_consensus_meta()?;
         let effective = manifest.effective_parameters()?;
         assert!(effective.transaction.require_height_ttl);
         assert!(effective.transaction.require_sequence);
@@ -3533,10 +3533,10 @@ mod tests {
         let chain = ChainId::from("iroha:test:refresh-consensus-fp");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let expected = manifest
             .clone()
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .consensus_fingerprint
             .clone()
             .expect("expected consensus fingerprint");
@@ -3929,7 +3929,7 @@ mod tests {
                 vec![1, 2, 3, 4],
             )])
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let batches = manifest.parse()?;
         let registers: Vec<_> = batches
             .into_iter()
@@ -3957,7 +3957,8 @@ mod tests {
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .set_topology(vec![GenesisTopologyEntry::from(PeerId::from(peer_pk))])
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let err = manifest.parse().expect_err("missing pop must error");
         assert!(
             err.to_string()
@@ -3971,7 +3972,7 @@ mod tests {
         let chain = ChainId::from("test-consensus-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let batches = manifest.parse()?;
         let mut found = false;
         for instr in batches.into_iter().flatten() {
@@ -4012,7 +4013,8 @@ mod tests {
         ));
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         manifest
             .transactions
             .first_mut()
@@ -4035,7 +4037,7 @@ mod tests {
         let chain = ChainId::from("test-consensus-meta-replace-params");
         let expected_fingerprint = GenesisBuilder::new_without_executor(chain.clone(), ".")
             .build_raw_for_test()
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
             .to_string();
@@ -4061,7 +4063,7 @@ mod tests {
         ));
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let mut parameters = Parameters::default();
         parameters.set_parameter(stale_param);
         manifest
@@ -4099,12 +4101,14 @@ mod tests {
         let chain = ChainId::from("test-consensus-meta-preserve-valid");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
         manifest.wire_protocol_version = 7;
         let expected_fingerprint = manifest
             .clone()
             .with_consensus_meta()
+            .expect("valid fixture consensus parameters")
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
             .to_string();
@@ -4150,7 +4154,8 @@ mod tests {
         let chain = ChainId::from("test-consensus-meta-preserve-external-fingerprint");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let external_fingerprint =
             "0x1111111111111111111111111111111111111111111111111111111111111111";
         let explicit_param = Parameter::Custom(CustomParameter::new(
@@ -4195,12 +4200,12 @@ mod tests {
         let chain = ChainId::from("test-consensus-meta-preserve-valid-params");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
         manifest.wire_protocol_version = 7;
         let expected_fingerprint = manifest
             .clone()
-            .with_consensus_meta()
+            .with_consensus_meta()?
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
             .to_string();
@@ -4269,7 +4274,7 @@ mod tests {
         let chain = ChainId::from("test-confidential-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let batches = manifest.parse()?;
         let mut found = false;
         for instr in batches.into_iter().flatten() {
@@ -4299,7 +4304,7 @@ mod tests {
         let chain = ChainId::from("test-crypto-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let expected_crypto = manifest.crypto().clone();
         let batches = manifest.parse()?;
         let mut found = None;
@@ -4335,7 +4340,8 @@ mod tests {
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .append_parameter(manual_param)
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let err = manifest
             .parse()
             .expect_err("mismatched crypto metadata should be rejected");
@@ -4366,7 +4372,7 @@ mod tests {
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .append_parameter(manual)
             .build_raw_for_test()
-            .with_consensus_meta();
+            .with_consensus_meta()?;
         let batches = manifest.parse()?;
         let count = batches
             .into_iter()

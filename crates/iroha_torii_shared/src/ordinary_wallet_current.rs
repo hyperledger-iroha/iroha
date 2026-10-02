@@ -206,12 +206,12 @@ mod tests {
     use iroha_data_model::{
         account::{AccountDetails, MultisigMember, MultisigPolicy},
         common::Owned,
-        sumeragi::SumeragiStatus,
+        sumeragi::{SumeragiFootprint, SumeragiStatus},
         sumeragi_finality::{
             SumeragiFinalityAttestationBody, test_fixtures::NativeFinalityFixture,
         },
     };
-    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{metadata::Metadata, peer::PeerId};
     use norito::codec::Encode as _;
     fn fixture() -> (
         OrdinaryWalletCurrentRequestV1,
@@ -277,7 +277,7 @@ mod tests {
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: SumeragiFootprint::default(),
             },
             finality_proof: proof,
         };
@@ -285,7 +285,7 @@ mod tests {
             signature: SignatureOf::try_from_hash(node.private_key(), body.signing_hash()).unwrap(),
             body,
         };
-        let value = Owned::new(AccountDetails::new(Default::default(), None, None, vec![]));
+        let value = Owned::new(AccountDetails::new(Metadata::default(), None, None, vec![]));
         let original = OrdinaryWalletCurrentOriginalV1 {
             request: request.clone(),
             attestation,

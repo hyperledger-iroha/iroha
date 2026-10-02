@@ -6,6 +6,7 @@
 //! their original allocation/work owner; these fixed containers do not fund them.
 
 use super::*;
+use crate::state::deserialize::musubi_source_read::MusubiSourceReadOnly;
 use iroha_data_model::sorafs::capacity::ProviderId;
 
 /// Current provider identities with protocol-bounded, allocation-free storage.
@@ -36,20 +37,20 @@ impl IntoIterator for CurrentLocationProviders {
 /// Recheck complete attestation and current SoraFS authority before returning identities.
 pub(crate) fn current_location_providers(
     location: &MusubiArchiveLocationV1,
-    world: &impl WorldReadOnly,
+    world: &impl MusubiSourceReadOnly,
 ) -> Option<CurrentLocationProviders> {
     if location.state == MusubiArchiveLocationStateV1::Retired || location.validate().is_err() {
         return None;
     }
     let key = location.key();
     if !world
-        .musubi_locations_by_pin()
+        .source_musubi_locations_by_pin()
         .get(&location.pin_manifest)
         .is_some_and(|reference| reference.active && reference.location == key)
     {
         return None;
     }
-    let archive = world.musubi_archives().get(&location.archive_id)?;
+    let archive = world.source_musubi_archives().get(&location.archive_id)?;
     archive.validate().ok()?;
     if !matches!(
         validate_replication_order_archive_binding(
@@ -62,7 +63,7 @@ pub(crate) fn current_location_providers(
     ) {
         return None;
     }
-    let pin = world.pin_manifests().get(&location.pin_manifest)?;
+    let pin = world.source_pin_manifests().get(&location.pin_manifest)?;
     if !pin.status.is_active()
         || pin.root_cid != archive.commitment.root_cid
         || pin.chunker != archive.commitment.chunker
@@ -74,7 +75,7 @@ pub(crate) fn current_location_providers(
         return None;
     }
     let order = world
-        .replication_orders()
+        .source_replication_orders()
         .get(&location.replication_order)?;
     if order.manifest_digest != location.pin_manifest
         || order.manifest_root_cid != archive.commitment.root_cid
@@ -114,13 +115,13 @@ pub(crate) fn current_location_providers(
     {
         let reverse_key = MusubiProviderLocationKeyV1::new(*provider, key);
         if world
-            .musubi_locations_by_provider()
+            .source_musubi_locations_by_provider()
             .get(&reverse_key)
             .is_none()
         {
             continue;
         }
-        let Some(owner) = world.provider_owners().get(provider) else {
+        let Some(owner) = world.source_provider_owners().get(provider) else {
             continue;
         };
         // The exact sorted prefix was fully initialized and checked above.

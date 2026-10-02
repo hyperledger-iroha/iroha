@@ -21,8 +21,9 @@ pub mod error {
         NotVersioned,
         /// Norito (de)serialization issue
         NoritoCodec(String),
-        /// Norito decoding exceeded a caller-provided resource ceiling.
-        NoritoResourceLimit,
+        /// Original Norito resource failure, retaining its exact fields for caller classification.
+        /// A global archive or inner format ceiling is not necessarily a local refusal.
+        NoritoResourceLimit(norito::core::DecodeResourceError),
         /// Input version unsupported
         UnsupportedVersion(Box<UnsupportedVersion>),
         /// Buffer is not empty after decoding. Returned by `decode_all_versioned()`
@@ -31,8 +32,8 @@ pub mod error {
     impl From<norito::Error> for Error {
         fn from(x: norito::Error) -> Self {
             use std::string::ToString as _;
-            if x.is_decode_resource_limit() {
-                return Self::NoritoResourceLimit;
+            if let Some(resource) = x.decode_resource_error() {
+                return Self::NoritoResourceLimit(resource);
             }
             Self::NoritoCodec(x.to_string())
         }
@@ -42,7 +43,7 @@ pub mod error {
             let msg = match self {
                 Self::NotVersioned => "Not a versioned object".to_owned(),
                 Self::NoritoCodec(x) => format!("Norito (de)serialization issue: {x}"),
-                Self::NoritoResourceLimit => {
+                Self::NoritoResourceLimit(_) => {
                     "Norito decoding exceeded its resource limit".to_owned()
                 }
                 Self::UnsupportedVersion(v) => {
@@ -54,10 +55,10 @@ pub mod error {
         }
     }
     impl Error {
-        /// Return whether decoding stopped at a caller-provided resource ceiling.
+        /// Return whether decoding reported an original resource failure or format ceiling.
         #[must_use]
         pub const fn is_decode_resource_limit(&self) -> bool {
-            matches!(self, Self::NoritoResourceLimit)
+            matches!(self, Self::NoritoResourceLimit(_))
         }
     }
     /// Result type for versioning
@@ -303,6 +304,82 @@ mod tests {
             limit: 1,
         });
         assert!(error.is_decode_resource_limit());
-        assert!(matches!(error, crate::error::Error::NoritoResourceLimit));
+        assert!(matches!(
+            error,
+            crate::error::Error::NoritoResourceLimit(
+                norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: 2,
+                    limit: 1
+                }
+            )
+        ));
+    }
+}
+
+#[cfg(test)]
+mod resource_provenance_tests {
+    //! A genuine versioned text decode must retain the original budget error fields.
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[norito(decode_from_slice)]
+    struct TextPayload(String);
+    impl Version for TextPayload {
+        fn version(&self) -> u8 {
+            1
+        }
+        fn supported_versions() -> Range<u8> {
+            1..2
+        }
+    }
+
+    #[test]
+    fn original_versioned_allocation_refusal_preserves_fields_and_retries() {
+        let original = TextPayload("original canonical payload".into());
+        let payload = norito::codec::encode_adaptive(&original);
+        let mut wire = vec![1];
+        wire.extend_from_slice(&payload);
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let raw = norito::with_decode_limits_scope(limits, || {
+            norito::codec::decode_exact_from_slice::<TextPayload>(&wire[1..]).unwrap_err()
+        });
+        assert!(matches!(
+            raw,
+            norito::Error::TotalAllocationExceeded { limit: 0, .. }
+        ));
+        let wrapped = norito::with_decode_limits_scope(limits, || {
+            codec::decode_exact_versioned::<TextPayload>(&wire).unwrap_err()
+        });
+        assert_eq!(
+            format!("{wrapped:?}"),
+            format!("NoritoResourceLimit({raw:?})")
+        );
+        let error::Error::NoritoResourceLimit(fields) = wrapped else {
+            panic!("typed original resource")
+        };
+        assert_eq!(Some(fields), raw.decode_resource_error());
+        norito::with_decode_limits_scope(limits, || {
+            assert!(norito::core::decode_error_matches_active_limits(
+                &fields.into()
+            ));
+        });
+        let wider = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 4096, 64);
+        norito::with_decode_limits_scope(wider, || {
+            assert!(
+                !norito::core::decode_error_matches_active_limits(&fields.into()),
+                "a surviving wider caller cannot claim a dropped inner ceiling"
+            );
+        });
+        assert_eq!(
+            codec::decode_exact_versioned::<TextPayload>(&wire).unwrap(),
+            original
+        );
+        let mut malformed = wire;
+        malformed.push(0);
+        assert!(
+            !codec::decode_exact_versioned::<TextPayload>(&malformed)
+                .unwrap_err()
+                .is_decode_resource_limit()
+        );
     }
 }

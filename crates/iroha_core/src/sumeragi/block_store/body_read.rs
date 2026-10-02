@@ -107,7 +107,7 @@ impl StoredBodyRead {
                 "stored certificate does not bind the independently requested body and result",
             )));
         }
-        super::execution::validate(&decoded.source).map_err(BodyReadError::Io)?;
+        super::execution::validate(&decoded.source).map_err(BodyReadError::from_attempt)?;
         Ok(())
     }
 }

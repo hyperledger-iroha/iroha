@@ -321,7 +321,10 @@ impl Host for DriverHost {
                 let result = if ok { Ok(()) } else { Err(write) };
                 Completion::Persisted { seq, result }
             }
-            Done::Written { ok, .. } => Completion::Exec(ExecDone::Appended(ok)),
+            Done::Written { ok, .. } => Completion::Exec(ExecDone::Appended {
+                durable: ok,
+                deferred: None,
+            }),
             Done::Executed { outcome, .. } => Completion::Exec(ExecDone::Executed(outcome)),
             Done::Discarded { .. } => Completion::Exec(ExecDone::Discarded),
             Done::Prepared { result, .. } => Completion::Exec(ExecDone::Prepared(Ok(result))),

@@ -184,6 +184,30 @@ impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
         self.caller.is_poisoned()
     }
 
+    /// Copy the current value while this original physical writer prevents replacement.
+    ///
+    /// No clone, payload allocation, collector registration or publication occurs.
+    /// A Copy value is returned inline; no reference escapes the acquisition.
+    ///
+    /// # Errors
+    /// Refuses a poisoned original writer before reading its payload.
+    pub fn copy_current(&self) -> Result<T, EbrCellWriterAdmissionError<std::convert::Infallible>>
+    where
+        T: Copy,
+    {
+        if self.is_poisoned() {
+            return Err(EbrCellWriterAdmissionError::Poisoned);
+        }
+        // SAFETY: this acquisition holds the original writer and borrows the
+        // cell, preventing active replacement and destruction. No reference
+        // escapes; Copy cannot invoke user cloning or run a destructor.
+        let current = self
+            .caller
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() });
+        Ok(unsafe { current.deref() }.value)
+    }
+
     /// Admit and clone under this original physical owner, without releasing it.
     /// Refusal returns the same acquisition; success returns its exact private
     /// generation separately. Consuming the acquisition ensures a callee panic
@@ -912,6 +936,41 @@ mod tests {
     use std::thread::scope;
 
     #[test]
+    fn original_writer_copy_never_clones_or_publishes_and_preserves_poison() {
+        #[derive(Copy)]
+        struct Inline(u64);
+        #[expect(
+            clippy::non_canonical_clone_impl,
+            reason = "observation must use Copy without dispatching adversarial Clone"
+        )]
+        impl Clone for Inline {
+            fn clone(&self) -> Self {
+                panic!("Copy observation must not clone")
+            }
+        }
+        let cell = EbrCell::new(Inline(37));
+        let original = cell.try_acquire_writer().unwrap();
+        assert_eq!(original.copy_current().unwrap().0, 37);
+        assert!(cell.try_acquire_writer().is_none());
+        drop(original);
+        assert_eq!(
+            cell.try_acquire_writer().unwrap().copy_current().unwrap().0,
+            37
+        );
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = cell.try_acquire_writer().unwrap();
+            panic!("original writer poison");
+        }));
+        let original = cell
+            .try_acquire_writer()
+            .expect("poison retains physical owner");
+        assert!(matches!(
+            original.copy_current(),
+            Err(super::EbrCellWriterAdmissionError::Poisoned)
+        ));
+    }
+
+    #[test]
     fn test_deref_mut() {
         let data: i64 = 0;
         let cc = EbrCell::new(data);
@@ -1193,7 +1252,7 @@ mod tests_linear {
 #[cfg(test)]
 mod staged_commit_tests {
     use super::*;
-    use std::sync::{atomic::AtomicUsize, Arc};
+    use std::sync::{Arc, atomic::AtomicUsize};
     use std::time::{Duration, Instant};
 
     struct Counts {

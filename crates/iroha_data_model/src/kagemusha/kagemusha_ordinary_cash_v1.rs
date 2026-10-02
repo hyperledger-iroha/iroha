@@ -2563,10 +2563,11 @@ impl KagemushaOrdinaryPreparedOutgoingV1 {
     ) -> Result<(), String> {
         self.validate_shape()?;
         transition.validate_shape()?;
+        let lifecycle_differs = self.lifecycle_binding_digest != transition.lifecycle_digest;
         if self.operation != transition.operation
             || self.predecessor_state != transition.predecessor_state
             || self.successor_state != transition.successor_state
-            || self.lifecycle_binding_digest != transition.lifecycle_digest
+            || lifecycle_differs
             || self.request_digest != transition.request_digest
             || self.reservation_digest != transition.reservation_digest
             || self.prepared_transition_binding_digest != transition.binding_digest()?
@@ -2762,10 +2763,11 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
         self.validate_shape()?;
         self.body.validate_against_intent(intent)?;
         self.body.validate_against_prepared(prepared)?;
+        let approval_window_differs = self.approval_issued_at_ms != intent.issued_at_ms
+            || self.approval_expires_at_ms != intent.expires_at_ms;
         if self.sender_credential_digest != intent.sender_credential_digest
             || self.preparation_authorization_digest != prepared.preparation_authorization_digest
-            || self.approval_issued_at_ms != intent.issued_at_ms
-            || self.approval_expires_at_ms != intent.expires_at_ms
+            || approval_window_differs
         {
             return Err("ordinary terminal record original selection differs".into());
         }
@@ -3485,7 +3487,7 @@ mod tests {
         assert_eq!(t.binding_transcript().bytes, expected);
         assert_eq!(expected.len(), 259);
         let p = prepared(2);
-        let mut changed = p.clone();
+        let mut changed = p;
         changed.preparation_authorization_digest[0] ^= 1;
         assert_ne!(
             p.binding_digest().unwrap(),
@@ -3507,75 +3509,92 @@ mod tests {
     }
     #[test]
     fn ordinary_cash_original_intervals_independent_indexes_and_slot_mutations_rejected() {
-        let mut c = clock();
-        c.upper_at_ms = 2000;
-        assert!(c.validate_within_original_window(1000, 2000).is_err());
-        let mut c = clock();
-        c.lower_at_ms = 0;
-        assert!(c.binding_digest().is_err());
-        let mut c = clock();
-        c.lower_at_ms = c.upper_at_ms + 1;
-        assert!(c.binding_digest().is_err());
-        let mut r = request_body();
-        r.clock_context.upper_at_ms = r.expires_at_ms;
-        assert!(r.canonical_signing_bytes().is_err());
-        let mut o = output();
-        o.prepared_at_ms += 1;
-        assert!(o.validate_against_clock(&clock()).is_err());
-        let mut o = output();
-        o.credit_id[0] ^= 1;
-        assert!(o.binding_digest().is_err());
+        let mut clock_context = clock();
+        clock_context.upper_at_ms = 2000;
+        assert!(
+            clock_context
+                .validate_within_original_window(1000, 2000)
+                .is_err()
+        );
+        let mut clock_context = clock();
+        clock_context.lower_at_ms = 0;
+        assert!(clock_context.binding_digest().is_err());
+        let mut clock_context = clock();
+        clock_context.lower_at_ms = clock_context.upper_at_ms + 1;
+        assert!(clock_context.binding_digest().is_err());
+        let mut request_record = request_body();
+        request_record.clock_context.upper_at_ms = request_record.expires_at_ms;
+        assert!(request_record.canonical_signing_bytes().is_err());
+        let mut payment_output = output();
+        payment_output.prepared_at_ms += 1;
+        assert!(payment_output.validate_against_clock(&clock()).is_err());
+        let mut payment_output = output();
+        payment_output.credit_id[0] ^= 1;
+        assert!(payment_output.binding_digest().is_err());
         for operation in [2, 4] {
-            let mut i = intent(operation);
-            i.secure_index_after = i.logical_journal_sequence_after as u128;
-            assert!(i.binding_digest().is_err());
-            let mut i = intent(operation);
-            i.native_nonce = [0; 32];
-            assert!(i.binding_digest().is_err());
-            let mut i = intent(operation);
-            i.expires_at_ms = i.issued_at_ms
+            let mut terminal_intent = intent(operation);
+            terminal_intent.secure_index_after =
+                u128::from(terminal_intent.logical_journal_sequence_after);
+            assert!(terminal_intent.binding_digest().is_err());
+            let mut terminal_intent = intent(operation);
+            terminal_intent.native_nonce = [0; 32];
+            assert!(terminal_intent.binding_digest().is_err());
+            let mut terminal_intent = intent(operation);
+            terminal_intent.expires_at_ms = terminal_intent.issued_at_ms
                 + super::super::KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1
                 + 1;
-            assert!(i.binding_digest().is_err());
-            let mut b = body(operation);
-            b.stream_lengths[0] = KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as u64 + 1;
-            assert!(b.binding_digest().is_err());
-            let mut p = prepared(operation);
-            p.request_digest = if operation == 2 { [0; 32] } else { d(40) };
-            assert!(p.binding_digest().is_err());
-            let mut p = prepared(operation);
-            p.preparation_authorization_digest[31] ^= 1;
+            assert!(terminal_intent.binding_digest().is_err());
+            let mut terminal_body = body(operation);
+            terminal_body.stream_lengths[0] =
+                u64::from(KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1) + 1;
+            assert!(terminal_body.binding_digest().is_err());
+            let mut prepared_outgoing = prepared(operation);
+            prepared_outgoing.request_digest = if operation == 2 { [0; 32] } else { d(40) };
+            assert!(prepared_outgoing.binding_digest().is_err());
+            let mut prepared_outgoing = prepared(operation);
+            prepared_outgoing.preparation_authorization_digest[31] ^= 1;
             assert!(
                 record(operation)
-                    .validate_against_originals(&intent(operation), &p)
+                    .validate_against_originals(&intent(operation), &prepared_outgoing)
                     .is_err()
             );
-            let mut b = body(operation);
-            b.amount += 1;
+            let mut terminal_body = body(operation);
+            terminal_body.amount += 1;
             assert_ne!(
-                b.binding_digest().unwrap(),
+                terminal_body.binding_digest().unwrap(),
                 body(operation).binding_digest().unwrap()
             );
-            let mut b = body(operation);
-            b.native_operation_id[0] ^= 1;
-            assert!(b.validate_against_intent(&intent(operation)).is_err());
-            let mut b = body(operation);
-            b.secure_index_before += 1;
-            b.secure_index_after += 1;
-            assert!(b.validate_against_intent(&intent(operation)).is_err());
-            let mut r = record(operation);
-            r.admission_clock_context.upper_at_ms = r.approval_expires_at_ms;
-            assert!(r.binding_digest().is_err());
-            let mut r = record(operation);
-            r.sender_credential_digest[0] ^= 1;
+            let mut terminal_body = body(operation);
+            terminal_body.native_operation_id[0] ^= 1;
             assert!(
-                r.validate_against_originals(&intent(operation), &prepared(operation))
+                terminal_body
+                    .validate_against_intent(&intent(operation))
                     .is_err()
             );
-            let mut r = record(operation);
-            r.approval_expires_at_ms += 1;
+            let mut terminal_body = body(operation);
+            terminal_body.secure_index_before += 1;
+            terminal_body.secure_index_after += 1;
             assert!(
-                r.validate_against_originals(&intent(operation), &prepared(operation))
+                terminal_body
+                    .validate_against_intent(&intent(operation))
+                    .is_err()
+            );
+            let mut request_record = record(operation);
+            request_record.admission_clock_context.upper_at_ms =
+                request_record.approval_expires_at_ms;
+            assert!(request_record.binding_digest().is_err());
+            let mut request_record = record(operation);
+            request_record.sender_credential_digest[0] ^= 1;
+            assert!(
+                request_record
+                    .validate_against_originals(&intent(operation), &prepared(operation))
+                    .is_err()
+            );
+            let mut request_record = record(operation);
+            request_record.approval_expires_at_ms += 1;
+            assert!(
+                request_record
+                    .validate_against_originals(&intent(operation), &prepared(operation))
                     .is_err()
             );
         }
@@ -3687,7 +3706,7 @@ mod terminal_formula_tests {
         let mut expected = KAGEMUSHA_ORDINARY_TRANSITION_NULLIFIER_DOMAIN_V1.to_vec();
         expected.extend_from_slice(&fields[0]);
         expected.extend_from_slice(&index.to_le_bytes());
-        for field in fields[1..].iter() {
+        for field in &fields[1..] {
             expected.extend_from_slice(field);
         }
         let actual = kagemusha_ordinary_transition_nullifier_v1(
@@ -3716,9 +3735,11 @@ mod terminal_formula_tests {
 
     #[test]
     fn maintained_sealed_stream_commitments_cover_domains_lengths_and_complete_originals() {
+        type StreamDigest = fn(&[u8]) -> Result<[u8; 32], String>;
+
         let transition = KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize;
         let recovery = KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize;
-        let cases: [(&[u8], usize, fn(&[u8]) -> Result<[u8; 32], String>); 2] = [
+        let cases: [(&[u8], usize, StreamDigest); 2] = [
             (
                 KAGEMUSHA_ORDINARY_SEALED_TRANSITION_INPUTS_DOMAIN_V1,
                 transition,
@@ -3734,7 +3755,12 @@ mod terminal_formula_tests {
             assert_eq!(domain.last(), Some(&0));
             for length in [1, 7, 15, 16, 55, 56, 63, 64, 65, maximum] {
                 let raw: Vec<_> = (0..length)
-                    .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+                    .map(|i| {
+                        u8::try_from(i % 256)
+                            .unwrap()
+                            .wrapping_mul(37)
+                            .wrapping_add(11)
+                    })
                     .collect();
                 let mut exact = domain.to_vec();
                 exact.extend((length as u64).to_le_bytes());

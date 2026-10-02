@@ -35,3 +35,9 @@
     private <init>();
     public void consumeOriginal(java.lang.String, byte[]);
 }
+
+# Sole module-safe funding provider. No alternate endpoint/fields constructor is public.
+-keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeOwnerV1
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintFundingNativeProviderV1 {
+    public <init>();
+}

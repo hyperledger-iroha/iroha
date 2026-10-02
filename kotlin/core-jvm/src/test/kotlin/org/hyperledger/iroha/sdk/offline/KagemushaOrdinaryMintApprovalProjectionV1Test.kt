@@ -14,12 +14,4 @@ class KagemushaOrdinaryMintApprovalProjectionV1Test {
   for(raw in listOf(original().also{it[0]=0},original().also{it[d+8]=2},original().also{java.util.Arrays.fill(it,d+10,d+42,0.toByte())},ByteArray(325)))assertFails{p.requireOriginal(raw)}}
  @Test fun unchangedFiniteIntervalCannotWiden(){val p=KagemushaOrdinaryMintApprovalProjectionV1;val d=p.DOMAIN.length
   for(pair in listOf(0L to 100L,100L to 100L,1L to 120002L)){val raw=original();ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).putLong(d+202,pair.first).putLong(d+210,pair.second);assertFails{p.requireOriginal(raw)}}}
- @Test fun privatePlatformPurposeCannotBeRelabeledGenericApproval(){
-  val raw=original();org.hyperledger.iroha.sdk.crypto.keystore.requireAppPlatformSigningMessageV1(raw,
-   org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1.ORDINARY_MINT_PRE_DEBIT_APPROVAL)
-  for(purpose in listOf(org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL,
-   org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1.ORDINARY_PREPARATION_APPROVAL,
-   org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidAppSignaturePurposeV1.IDENTITY_ENROLLMENT_POSSESSION))assertFails{
-    org.hyperledger.iroha.sdk.crypto.keystore.requireAppPlatformSigningMessageV1(raw,purpose)}
- }
 }

@@ -1,11 +1,9 @@
 //! Complete retained Kura authentication: original frame, full QC, and signed body restoration.
 use super::body_read::StoredBodyReadPoll;
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use certificate_read::{CertificateRead, CertificateReadError, DecodedCertificate};
-use iroha_sumeragi::availability::{BodyRestoration, RestorationError};
-#[derive(Debug, thiserror::Error)]
-#[error("availability restoration: {0:?}")]
-struct RestoreFailure(RestorationError);
+use iroha_sumeragi::availability::BodyRestoration;
 
 enum Phase {
     Certificate(CertificateRead),
@@ -53,24 +51,22 @@ impl CommittedRead {
             _ => None,
         }
     }
-    pub(super) fn poll(&mut self) -> io::Result<(AvailableBody, Qc)> {
+    pub(super) fn poll(&mut self) -> Result<(AvailableBody, Qc), Attempt<io::Error>> {
         loop {
             match std::mem::replace(&mut self.phase, Phase::Consumed) {
                 Phase::Certificate(job) => match job.complete(&self.budget) {
                     Ok(decoded) => self.phase = Phase::Decoded(decoded),
                     Err((job, error)) => {
                         self.phase = Phase::Certificate(job);
-                        if matches!(&error, CertificateReadError::Admission(error) if error.is_local_refusal())
-                            || (matches!(
-                                &error,
-                                CertificateReadError::Decode(
-                                    norito::Error::AllocationFailed { .. }
-                                )
-                            ) && !cfg!(all(test, sumeragi_core_mutation = "HC25")))
-                        {
-                            return Err(io::ErrorKind::WouldBlock.into());
-                        }
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+                        return Err(match error {
+                            CertificateReadError::Admission(error) => {
+                                super::super::storage_attempt::byte(error)
+                            }
+                            CertificateReadError::Decode(error) => {
+                                BodyReadError::from_decode(error).into_attempt()
+                            }
+                            error => io::Error::new(io::ErrorKind::InvalidData, error).into(),
+                        });
                     }
                 },
                 Phase::Decoded(decoded) => {
@@ -99,37 +95,28 @@ impl CommittedRead {
                     Ok(StoredBodyReadPoll::Ready(restoration, qc)) => {
                         self.phase = Phase::Restoring(restoration, qc)
                     }
-                    Ok(StoredBodyReadPoll::Pending(_)) => {
+                    Ok(StoredBodyReadPoll::Pending(error)) => {
                         self.phase = Phase::Projecting(job);
-                        return Err(io::ErrorKind::WouldBlock.into());
+                        return Err(super::super::storage_attempt::byte(error));
                     }
                     Ok(StoredBodyReadPoll::Absent) => {
-                        return Err(invalid("retained committed block cannot become absent"));
+                        return Err(invalid("retained committed block cannot become absent").into());
                     }
                     Err(error) => {
                         self.phase = Phase::Projecting(job);
                         // Keep the original operational category and typed cause so the
                         // outer Kura read slot retains this exact owner across local refusal.
-                        return Err(match error {
-                            BodyReadError::Io(error) => error,
-                            error => io::Error::new(io::ErrorKind::InvalidData, error),
-                        });
+                        return Err(error.into_attempt());
                     }
                 },
                 Phase::Restoring(job, qc) => match job.complete(&self.budget, &*self.crypto) {
                     Ok(body) => return Ok((body, qc)),
                     Err((job, error)) => {
                         self.phase = Phase::Restoring(job, qc);
-                        if error.is_local_refusal() {
-                            return Err(io::ErrorKind::WouldBlock.into());
-                        }
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            RestoreFailure(error),
-                        ));
+                        return Err(super::super::storage_attempt::restoration(error));
                     }
                 },
-                Phase::Consumed => return Err(invalid("committed read already consumed")),
+                Phase::Consumed => return Err(invalid("committed read already consumed").into()),
             }
         }
     }
@@ -142,10 +129,10 @@ pub(super) fn certified_source(
     height: u64,
     header: &BlockHeader,
     qc: &Qc,
-) -> io::Result<AvailabilitySource> {
+) -> Result<AvailabilitySource, Attempt<io::Error>> {
     let instance = schedule.instance();
     if header.height != height || header.instance != instance || qc.height != height {
-        return Err(invalid("committed source height or instance mismatch"));
+        return Err(invalid("committed source height or instance mismatch").into());
     }
     let config = schedule
         .height_config(height)?
@@ -155,10 +142,10 @@ pub(super) fn certified_source(
         qc,
         Some(header),
     ) {
-        return Err(invalid("original commit certificate does not verify"));
+        return Err(invalid("original commit certificate does not verify").into());
     }
     AvailabilitySource::new(instance, height, qc.block_hash, config)
-        .map_err(|error| invalid(format!("invalid committed source: {error:?}")))
+        .map_err(|error| invalid(format!("invalid committed source: {error:?}")).into())
 }
 
 #[cfg(test)]

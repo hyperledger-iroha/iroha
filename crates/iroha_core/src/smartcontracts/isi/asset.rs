@@ -4399,7 +4399,8 @@ pub mod isi {
                 &validator,
                 &source_id,
                 &destination_id,
-            )?
+            )
+            .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "staking slash capability does not match retained stake and configured custody"
@@ -7244,6 +7245,55 @@ pub mod isi {
             ),
         )
     }
+    /// Observe only the account-unregistration owner's existing full-balance removal.
+    /// Lifecycle checks and execution authorization remain with that original caller;
+    /// the bounded frame records its purpose and does not grant a new capability.
+    pub(in crate::smartcontracts::isi) fn remove_account_asset_with_quantity_candidate(
+        state: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        asset_id: &AssetId,
+    ) -> Result<Option<iroha_data_model::asset::AssetValue>, Error> {
+        let Some(value) = state.world.assets.get(asset_id).cloned() else {
+            state.world.asset_metadata.remove(asset_id.clone());
+            return Ok(None);
+        };
+        // Preserve the original removal's business-owned amount and checked total.
+        let amount = value.clone().into_inner();
+        let supply_after =
+            state
+                .world
+                .precheck_asset_total_amount_change(asset_id.definition(), &amount, false);
+        let context = quantity_authorization::supply_context(
+            &quantity_authorization::SupplyFrame {
+                mint: false,
+                purpose: "account-unregister-burn",
+                binding: &[],
+                authority,
+                id: asset_id,
+                amount: &amount,
+            },
+            state.quantity_candidate_preimage_limit(),
+        );
+        let prepared = match (state.tx_call_hash, context, &supply_after) {
+            (Some(entry_hash), Some(context), Ok(after)) => state
+                .prepare_quantity_account_removal_candidate(
+                    authority, entry_hash, context, asset_id, &amount, after,
+                ),
+            (_, _, Err(_)) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
+            _ => Err(crate::state::QuantityCaptureIssue::UnsupportedOwner),
+        };
+        state.apply_with_quantity_candidate(prepared, |state| {
+            // Account deletion has always updated total before removing the balance.
+            state.world.apply_prechecked_asset_total_amount_change(
+                asset_id.definition(),
+                &amount,
+                supply_after?,
+                false,
+            );
+            Ok(state.world.remove_asset_and_metadata(asset_id))
+        })
+    }
+
     /// TODO: admit retained retail-policy binding, initial closure capture and original
     /// arithmetic scratch before claiming complete physical capture coverage.
     /// Original business preparation: no capture-only quantity calculation is retained.

@@ -1346,6 +1346,13 @@ mod tests {
             plain.canonical_bytes().unwrap(),
             opening.canonical_bytes().unwrap()
         );
+        // X25519 clamps the low three scalar bits. Change an effective scalar
+        // bit, then independently change the AEAD nonce; both must affect bytes.
+        for index in [1, 32] {
+            let mut changed = entropy;
+            changed[index] ^= 1;
+            assert_ne!(seal(&context, &opening, &changed).unwrap(), original);
+        }
         // Transport padding/truncation is never part of the actual AEAD original.
         let mut padded = original.clone();
         padded.resize(

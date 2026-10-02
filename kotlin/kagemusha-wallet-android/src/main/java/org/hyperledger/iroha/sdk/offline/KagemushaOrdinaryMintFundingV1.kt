@@ -58,12 +58,11 @@ class KagemushaOrdinaryMintFundingV1 internal constructor(private val native:Ord
   override fun revoke(){try{binding.revoke()}finally{io.retire()}}
   override suspend fun invoke(phase:Int,fields:List<ByteArray>):List<ByteArray> = io.call{binding.invoke(KagemushaOrdinaryRuntimeJniV1,phase,fields)}
   override suspend fun recoverPlatformApproval():OrdinaryMintFundingApprovalStepV1=io.call {
-   val retained=binding.invoke(KagemushaOrdinaryRuntimeJniV1,12)
-   val prepared=binding.prepared(KagemushaOrdinaryRuntimeJniV1,KagemushaOrdinaryRuntimeJniV1,retained.subList(1,4))
+   val prepared=binding.recoverNative()
    approval(prepared)
   }
   override suspend fun prepare(amountLE128:ByteArray):OrdinaryMintFundingApprovalStepV1=io.call {
-   val prepared=binding.prepared(KagemushaOrdinaryRuntimeJniV1,KagemushaOrdinaryRuntimeJniV1,binding.invoke(KagemushaOrdinaryRuntimeJniV1,1,listOf(amountLE128)))
+   val prepared=binding.prepareNative(amountLE128)
    approval(prepared)
   }
   private fun approval(prepared:KagemushaNativePreparedOrdinaryMintApprovalV1)=object:OrdinaryMintFundingApprovalStepV1 {

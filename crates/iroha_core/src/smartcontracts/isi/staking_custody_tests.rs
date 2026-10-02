@@ -195,149 +195,183 @@ fn staking_custody_and_rewards_share_one_additive_reserve_floor() {
 
 #[test]
 fn staking_same_account_bond_cannot_reuse_held_custody() {
-    let state = setup_state();
-    let block = new_block();
-    let mut state_block = state.block(block.as_ref().header());
-    // This fixture authenticates the original global genesis before Initial dispatch.
-    // Keep its retained custody on that primary, rather than preloading a secondary
-    // validator before the secondary's native activation exists.
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::{
+        nexus::PublicLaneMonetaryPlanV1, parameter::system::SumeragiConsensusMode,
+    };
+    let validator_key = KeyPair::from_seed(vec![0xD9; 32], Algorithm::Ed25519);
+    let validator = AccountId::new(validator_key.public_key().clone());
     let lane = LaneId::SINGLE;
-    let (validator, asset, before, share_before, nexus) = {
-        let mut stx = state_block.transaction_for_callback_testing();
-        let (validator, _, _, definition) = prepare_accounts(&mut stx);
-        stx.nexus.staking.stake_escrow_account_id = validator.to_string();
-        RegisterPublicLaneValidator {
-            monetary_plan: fixture_registration_plan(
-                &stx,
-                lane,
-                &validator,
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.staking.stake_escrow_account_id = validator.to_string();
+    let definition: AssetDefinitionId = nexus.staking.stake_asset_id.parse().unwrap();
+    let asset = AssetId::new(definition.clone(), validator.clone());
+    let world = World::with_assets(
+        [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&ALICE_ID)],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(validator.clone()).build(&validator),
+        ],
+        [AssetDefinition::numeric(
+            definition,
+            "Staked XOR",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID)],
+        [Asset::new(asset.clone(), Quantity::from(10_000_u64))],
+        [],
+    );
+    let mut validators = (0x61..=0x64)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    let peer = PeerId::new(validators[0].public_key().clone());
+    let mut config = TestChainConfig::new(world, 0);
+    config.validator_keys = Some(validators);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config.nexus = Some(nexus.clone());
+    config.genesis_parameters.push(Parameter::Custom(
+        SumeragiNposParameters::default().into_custom_parameter(),
+    ));
+    config.genesis_instructions.push(
+        RegisterPublicLaneValidator::new(
+            lane,
+            validator.clone(),
+            peer,
+            validator.clone(),
+            Quantity::from(10_000_u64),
+            Metadata::default(),
+            PublicLaneMonetaryPlanV1::genesis_registration(
+                asset.clone(),
+                asset.clone(),
                 Quantity::from(10_000_u64),
             ),
-            lane_id: lane,
-            peer_id: validator_peer_id(&validator),
-            validator: validator.clone(),
-            stake_account: validator.clone(),
-            initial_stake: Quantity::from(10_000_u64),
-            metadata: Metadata::default(),
-        }
-        .execute(&validator, &mut stx)
-        .unwrap();
-        let asset = AssetId::new(definition, validator.clone());
-        let before = stx
-            .world
-            .public_lane_validators
-            .get(&(lane, validator.clone()))
-            .unwrap()
-            .clone();
-        let share_before = stx
-            .world
-            .public_lane_stake_shares
-            .get(&stake_key(lane, &validator, &validator))
-            .unwrap()
-            .clone();
-        let nexus = stx.nexus.clone();
-        stx.apply();
-        (validator, asset, before, share_before, nexus)
+        )
+        .into(),
+    );
+    let chain = CertifiedTestChain::start(config).expect("original signed custody registration");
+    let state = chain.state();
+    let (before, share_before) = {
+        let view = state.view();
+        (
+            view.world()
+                .public_lane_validators()
+                .get(&(lane, validator.clone()))
+                .unwrap()
+                .clone(),
+            view.world()
+                .public_lane_stake_shares()
+                .get(&stake_key(lane, &validator, &validator))
+                .unwrap()
+                .clone(),
+        )
     };
-    state_block.drain_transfer_transcripts();
-    // This first phase is the original direct genesis-height custody component.
-    // Retain its exact pending record/reserves before creating the signed root;
-    // ordinary Initial execution below must not reuse a header-shaped genesis.
-    state_block
-        .commit_world_overlay_for_testing()
-        .expect("retain the exact component custody setup");
-    let state = original_staking_state(state, nexus.clone());
-    let mut state_block = state.block(original_staking_header(&state));
-    let key = (lane, validator.clone());
-    let share_key = stake_key(lane, &validator, &validator);
-    let instruction = {
-        let mut stx = state_block.transaction_for_callback_testing();
-        stx.nexus = nexus.clone();
-        let monetary_plan = fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one());
-        BondPublicLaneStake {
-            monetary_plan,
-            lane_id: lane,
-            validator: validator.clone(),
-            staker: validator.clone(),
-            amount: Quantity::one(),
-            metadata: Metadata::default(),
-        }
-    };
-    {
-        let mut stx =
-            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
-        stx.nexus = nexus.clone();
-        let error = crate::executor::Executor::Initial
-            .execute_instruction(&mut stx, &validator, instruction.clone().into())
-            .unwrap_err();
-        assert!(
-            matches!(
-                &error,
-                iroha_data_model::executor::ValidationFail::InstructionFailed(
-                    Error::InvariantViolation(message)
-                ) if message.contains("unreserved custody")
-            ),
-            "{error:?}"
-        );
-        assert_eq!(
-            stx.world.public_lane_validators.get(&key).unwrap().status,
-            PublicLaneValidatorStatus::Active,
-            "the rejected overlay includes the eligible lifecycle promotion"
-        );
-        // The executor rejects this transaction after its lifecycle write;
-        // dropping the StateTransaction rolls that write back.
-    }
-    assert!(state_block.drain_transfer_transcripts().is_empty());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
-    stx.nexus = nexus;
-    assert_eq!(stx.world.public_lane_validators.get(&key), Some(&before));
-    assert_eq!(
-        stx.world.public_lane_stake_shares.get(&share_key),
-        Some(&share_before)
-    );
-    assert_eq!(
-        stx.world.public_lane_stake_custody.get(&key),
-        Some(&(asset.clone(), Quantity::from(10_000_u64)))
-    );
-    assert_eq!(
-        stx.world.public_lane_stake_reserves.get(&asset),
-        Some(&Quantity::from(10_000_u64))
-    );
-    assert_eq!(
-        stx.world.assets.get(&asset).unwrap().as_ref(),
-        &Quantity::from(10_000_u64)
-    );
-    assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
+    assert!(matches!(
+        before.status,
+        PublicLaneValidatorStatus::PendingActivation(_)
+    ));
+    // Enter the original block's pristine stage before its activation sweep.
+    // This preserves the regression's promotion-in-rejected-transaction rollback
+    // check while the registration itself comes from authenticated signed genesis.
+    let proposal = chain.proposal(Some(2), Vec::new());
+    let _block = state
+        .block_with_pristine_stage(proposal.header(), |state_block| {
+            let key = (lane, validator.clone());
+            let share_key = stake_key(lane, &validator, &validator);
+            let instruction = {
+                let mut stx = state_block.transaction_for_callback_testing();
+                stx.nexus = nexus.clone();
+                let monetary_plan =
+                    fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one());
+                BondPublicLaneStake {
+                    monetary_plan,
+                    lane_id: lane,
+                    validator: validator.clone(),
+                    staker: validator.clone(),
+                    amount: Quantity::one(),
+                    metadata: Metadata::default(),
+                }
+            };
+            {
+                let mut stx = state_block
+                    .transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
+                stx.nexus = nexus.clone();
+                let error = crate::executor::Executor::Initial
+                    .execute_instruction(&mut stx, &validator, instruction.clone().into())
+                    .unwrap_err();
+                assert!(
+                    matches!(
+                        &error,
+                        iroha_data_model::executor::ValidationFail::InstructionFailed(
+                            Error::InvariantViolation(message)
+                        ) if message.contains("unreserved custody")
+                    ),
+                    "{error:?}"
+                );
+                assert_eq!(
+                    stx.world.public_lane_validators.get(&key).unwrap().status,
+                    PublicLaneValidatorStatus::Active,
+                    "the rejected overlay includes the eligible lifecycle promotion"
+                );
+                // The executor rejects this transaction after its lifecycle write;
+                // dropping the StateTransaction rolls that write back.
+            }
+            assert!(state_block.drain_transfer_transcripts().is_empty());
+            let mut stx =
+                state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
+            stx.nexus = nexus;
+            assert_eq!(stx.world.public_lane_validators.get(&key), Some(&before));
+            assert_eq!(
+                stx.world.public_lane_stake_shares.get(&share_key),
+                Some(&share_before)
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_custody.get(&key),
+                Some(&(asset.clone(), Quantity::from(10_000_u64)))
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_reserves.get(&asset),
+                Some(&Quantity::from(10_000_u64))
+            );
+            assert_eq!(
+                stx.world.assets.get(&asset).unwrap().as_ref(),
+                &Quantity::from(10_000_u64)
+            );
+            assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
 
-    Mint::asset_quantity(1_u64, asset.clone())
-        .execute(&ALICE_ID, &mut stx)
+            Mint::asset_quantity(1_u64, asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            instruction
+                .execute(&validator, &mut stx)
+                .expect("same-account bonding may reserve newly supplied free funds");
+            let after = stx.world.public_lane_validators.get(&key).unwrap();
+            assert_eq!(after.total_stake, Quantity::from(10_001_u64));
+            assert_eq!(after.self_stake, Quantity::from(10_001_u64));
+            assert_eq!(
+                stx.world
+                    .public_lane_stake_shares
+                    .get(&share_key)
+                    .unwrap()
+                    .bonded,
+                Quantity::from(10_001_u64)
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_custody.get(&key),
+                Some(&(asset.clone(), Quantity::from(10_001_u64)))
+            );
+            assert_eq!(
+                stx.world.public_lane_stake_reserves.get(&asset),
+                Some(&Quantity::from(10_001_u64))
+            );
+            assert_eq!(
+                stx.world.assets.get(&asset).unwrap().as_ref(),
+                &Quantity::from(10_001_u64)
+            );
+            Ok::<(), core::convert::Infallible>(())
+        })
         .unwrap();
-    instruction
-        .execute(&validator, &mut stx)
-        .expect("same-account bonding may reserve newly supplied free funds");
-    let after = stx.world.public_lane_validators.get(&key).unwrap();
-    assert_eq!(after.total_stake, Quantity::from(10_001_u64));
-    assert_eq!(after.self_stake, Quantity::from(10_001_u64));
-    assert_eq!(
-        stx.world
-            .public_lane_stake_shares
-            .get(&share_key)
-            .unwrap()
-            .bonded,
-        Quantity::from(10_001_u64)
-    );
-    assert_eq!(
-        stx.world.public_lane_stake_custody.get(&key),
-        Some(&(asset.clone(), Quantity::from(10_001_u64)))
-    );
-    assert_eq!(
-        stx.world.public_lane_stake_reserves.get(&asset),
-        Some(&Quantity::from(10_001_u64))
-    );
-    assert_eq!(
-        stx.world.assets.get(&asset).unwrap().as_ref(),
-        &Quantity::from(10_001_u64)
-    );
 }
 
 #[test]

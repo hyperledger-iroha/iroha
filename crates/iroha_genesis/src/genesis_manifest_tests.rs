@@ -290,13 +290,17 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
-    let tx2 = tx.clone().with_consensus_meta();
+    let tx2 = tx
+        .clone()
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
     assert_eq!(tx2.consensus_mode, SumeragiConsensusMode::Permissioned);
     assert_eq!(tx2.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
     let fp1 = tx2.consensus_fingerprint.clone().unwrap();
     let fp2 = tx
         .clone()
         .with_consensus_meta()
+        .expect("valid fixture consensus parameters")
         .consensus_fingerprint
         .unwrap();
     assert_eq!(fp1, fp2);
@@ -304,6 +308,7 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
     differently_named.chain = ChainId::from("same-parameters-different-display-name");
     let differently_named_fp = differently_named
         .with_consensus_meta()
+        .expect("valid fixture consensus parameters")
         .consensus_fingerprint
         .expect("valid parameters fingerprint");
     assert_eq!(
@@ -339,6 +344,64 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
     assert!(saw_handshake, "expected handshake parameter");
 }
 #[test]
+fn with_consensus_meta_preserves_original_parameter_refusal_and_retry() {
+    let mut parameters = Parameters::default();
+    parameters.set_parameter(Parameter::Custom(SumeragiNposParameters::default().into()));
+    let manifest = RawGenesisTransaction {
+        chain: ChainId::from("iroha:test:npos-read-refusal"),
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+        executor: None,
+        ivm_dir: IvmPath::default(),
+        transactions: vec![RawGenesisTx {
+            parameters: Some(parameters),
+            ..RawGenesisTx::default()
+        }],
+        consensus_mode: SumeragiConsensusMode::Npos,
+        wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
+        consensus_fingerprint: None,
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+        crypto: ManifestCrypto::default(),
+    };
+    let before = manifest.encode();
+    let expected = manifest
+        .clone()
+        .with_consensus_meta()
+        .unwrap()
+        .consensus_fingerprint;
+    let original = manifest.clone();
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || original.with_consensus_meta(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref::<norito::json::Error>(),
+            Some(norito::json::Error::DecodeResourceLimit)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(manifest.encode(), before);
+    assert_eq!(
+        manifest
+            .clone()
+            .with_consensus_meta()
+            .unwrap()
+            .consensus_fingerprint,
+        expected
+    );
+    let wrong_mode = manifest.with_consensus_mode(SumeragiConsensusMode::Permissioned);
+    assert!(
+        wrong_mode
+            .with_consensus_meta()
+            .unwrap_err()
+            .to_string()
+            .contains("permissioned genesis must omit `sumeragi_npos_parameters`")
+    );
+}
+
+#[test]
 fn with_consensus_meta_handles_npos_mode() {
     let chain = ChainId::from("iroha:test:nposmeta");
     let npos = SumeragiNposParameters::default();
@@ -360,7 +423,8 @@ fn with_consensus_meta_handles_npos_mode() {
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
-    .with_consensus_meta();
+    .with_consensus_meta()
+    .expect("valid fixture consensus parameters");
     assert_eq!(manifest.consensus_mode, SumeragiConsensusMode::Npos);
     assert_eq!(manifest.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
     let fp = manifest
@@ -423,7 +487,8 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
-    .with_consensus_meta();
+    .with_consensus_meta()
+    .expect("valid fixture consensus parameters");
     let params = manifest
         .effective_parameters()
         .expect("single structured parameter block");
@@ -1366,7 +1431,8 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
     )
     .build_raw()
     .expect("complete strict manifest fixture")
-    .with_consensus_meta();
+    .with_consensus_meta()
+    .expect("valid fixture consensus parameters");
     let base = norito::json::to_value(&manifest).expect("serialize strict manifest");
     let protocol_version_array = norito::json::value::to_value(&vec![CONSENSUS_PROTOCOL_VERSION])
         .expect("serialize invalid protocol-version array");
@@ -1455,7 +1521,10 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
         let npos = params
             .custom()
             .get(&npos_param_id)
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()
+            .expect("valid fixture NPoS parameters")
+            .flatten()
             .expect("NPoS fixture must carry signed election parameters");
         assert_eq!(tx.consensus_mode, SumeragiConsensusMode::Npos);
         let dm_params = ConsensusGenesisParams {
@@ -1508,8 +1577,12 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
     let manifest_base_b = build_manifest(chain, 0xA1);
     let expected_a = fingerprint_for(&manifest_base_a);
     let expected_b = fingerprint_for(&manifest_base_b);
-    let manifest_a = manifest_base_a.with_consensus_meta();
-    let manifest_b = manifest_base_b.with_consensus_meta();
+    let manifest_a = manifest_base_a
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
+    let manifest_b = manifest_base_b
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
     assert_eq!(
         manifest_a.consensus_fingerprint,
         Some(ConsensusFingerprint::new(expected_a))

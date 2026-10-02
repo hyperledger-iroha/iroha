@@ -124,9 +124,9 @@ fn framed_hash<F: KagemushaPoseidonFieldV1>(
 }
 
 /// Join the true113 semantic offsets to the actual State and the same private credit openings.
-/// Both active and inactive branches emit the identical384-byte capacity and32-byte opening
-/// graphs. The active canonical original is327 bytes; inactive buffers/length and the entire
-///79-cell semantic prefix are explicitly zero. Transport padding is never part of its digest.
+/// Both active and inactive branches emit the same 384-byte capacity and 32-byte opening
+/// graphs. The active canonical original is 327 bytes; inactive buffers, length and the entire
+/// 79-cell semantic prefix are explicitly zero. Transport padding never enters the digest.
 /// The generic cash/Bootstrap approval cannot satisfy this dedicated pre-debit Mint family.
 pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_v1<
     F: KagemushaPoseidonFieldV1,

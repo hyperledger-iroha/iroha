@@ -195,10 +195,8 @@ impl<'a> ProviderDiscoveryProofRefV1<'a> {
     #[must_use]
     pub fn new(
         world: &'a WorldStateSnapshotV1,
-        council_head: &'a Vec<u8>,
-        council_predecessor: Option<&'a Vec<u8>>,
-        provider_head: &'a Vec<u8>,
-        provider_predecessor: Option<&'a Vec<u8>>,
+        council: (&'a Vec<u8>, Option<&'a Vec<u8>>),
+        provider: (&'a Vec<u8>, Option<&'a Vec<u8>>),
         owner: &'a AccountId,
         advert: &'a Vec<u8>,
         stream_token: Option<(&'a Vec<u8>, &'a Vec<u8>)>,
@@ -206,12 +204,12 @@ impl<'a> ProviderDiscoveryProofRefV1<'a> {
         Self {
             world: borrowed::Value(world),
             council: HeadRef {
-                head: borrowed::Vec(council_head),
-                predecessor: council_predecessor.map(borrowed::Vec),
+                head: borrowed::Vec(council.0),
+                predecessor: council.1.map(borrowed::Vec),
             },
             provider: HeadRef {
-                head: borrowed::Vec(provider_head),
-                predecessor: provider_predecessor.map(borrowed::Vec),
+                head: borrowed::Vec(provider.0),
+                predecessor: provider.1.map(borrowed::Vec),
             },
             owner: borrowed::Value(owner),
             advert: borrowed::Vec(advert),

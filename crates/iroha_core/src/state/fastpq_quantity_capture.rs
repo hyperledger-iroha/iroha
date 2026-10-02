@@ -881,6 +881,36 @@ impl StateTransaction<'_, '_> {
         })();
         self.apply_with_quantity_candidate(prepared, apply)
     }
+    /// Prepare an exact account-removal burn without changing its original write order.
+    /// The existing signed invocation and quota checks still own every captured fact.
+    pub(crate) fn prepare_quantity_account_removal_candidate(
+        &self,
+        authority: &AccountId,
+        entry_hash: Hash,
+        authorization_context: Hash,
+        id: &AssetId,
+        amount: &Quantity,
+        supply_after: &Quantity,
+    ) -> Result<PreparedQuantityCapture, QuantityCaptureIssue> {
+        let mut prepared = self.prepare_quantity_supply_candidate(
+            authority,
+            entry_hash,
+            authorization_context,
+            id,
+            amount,
+            false,
+            &Quantity::zero(),
+            supply_after,
+        )?;
+        prepared
+            .write_plan
+            .as_mut()
+            .ok_or(QuantityCaptureIssue::InvalidFacts)?
+            .order_supply_before_complete_removal(id, amount)
+            .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+        Ok(prepared)
+    }
+
     /// Borrow exact before-state and the values retained by the original supply owner.
     /// No capture-only arithmetic or intermediate owned effect allocation occurs here.
     pub(crate) fn prepare_quantity_supply_candidate(

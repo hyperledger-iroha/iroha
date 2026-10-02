@@ -28,21 +28,21 @@ fn hex(bytes: &[u8]) -> String {
     result
 }
 
-fn case(name: &str, instruction: InstructionBox, enum_family: bool) -> Value {
-    let (wire_id, frame) =
-        framed_instruction_payload(&instruction).expect("registered instruction");
+fn case(name: &str, instruction: &InstructionBox, enum_family: bool) -> Value {
+    let (wire_id, frame) = framed_instruction_payload(instruction).expect("registered instruction");
     let decoded = decode_instruction_from_pair(wire_id, &frame).expect("native instruction decode");
-    assert_eq!(decoded, instruction);
-    let instruction_box = norito::to_bytes(&instruction).expect("native InstructionBox frame");
+    assert_eq!(decoded, *instruction);
+    let instruction_box = norito::to_bytes(instruction).expect("native InstructionBox frame");
     let decoded_box: InstructionBox =
         norito::decode_from_bytes(&instruction_box).expect("native InstructionBox decode");
-    assert_eq!(decoded_box, instruction);
+    assert_eq!(decoded_box, *instruction);
     let header = norito::core::Header::read(frame.as_slice()).expect("native frame header");
     assert_eq!(header.flags, LAYOUT_FLAGS);
     if enum_family {
         // Reproduce the managed flattening defect while retaining a valid native
         // schema, declared flags and checksum; rejection must come from fields.
-        let payload = &frame[frame.len() - header.length as usize..];
+        let payload = &frame
+            [frame.len() - usize::try_from(header.length).expect("bounded native frame length")..];
         let (length, prefix) =
             norito::core::read_len_from_slice_with_flags(&payload[4..], LAYOUT_FLAGS).unwrap();
         let fields = &payload[4 + prefix..];
@@ -56,7 +56,7 @@ fn case(name: &str, instruction: InstructionBox, enum_family: bool) -> Value {
         "name": name,
         "wire_id": wire_id,
         "framed_instruction_hex": (hex(&frame)),
-        "instruction_box_payload_hex": (hex(&norito::codec::encode_adaptive(&instruction))),
+        "instruction_box_payload_hex": (hex(&norito::codec::encode_adaptive(instruction))),
         "instruction_box_frame_hex": (hex(&instruction_box)),
     })
 }
@@ -142,19 +142,19 @@ fn fixture() -> Value {
     ];
     let mut cases: Vec<_> = instructions
         .into_iter()
-        .map(|(name, instruction)| case(name, instruction, true))
+        .map(|(name, instruction)| case(name, &instruction, true))
         .collect();
     // This direct instruction shares TriggerId encoding with four enum variants.
     cases.push(case(
         "ExecuteTrigger",
-        ExecuteTrigger::new(trigger.clone())
+        &ExecuteTrigger::new(trigger.clone())
             .with_args(json!({"force": true}))
             .into(),
         false,
     ));
     cases.push(case(
         "SetAssetKeyValue",
-        SetAssetKeyValue::new(
+        &SetAssetKeyValue::new(
             AssetId::new(definition.clone(), source.clone()),
             "memo".parse().unwrap(),
             "fixture metadata",
@@ -164,7 +164,7 @@ fn fixture() -> Value {
     ));
     cases.push(case(
         "CustomInstruction",
-        CustomInstruction::new(json!({"force": true})).into(),
+        &CustomInstruction::new(json!({"force": true})).into(),
         false,
     ));
     let mut metadata = Metadata::default();

@@ -1,5 +1,6 @@
 //! Real BLS/model integration of Kura publication and retained read ownership.
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{body_read::BodyReadPoll, crypto::BlsCrypto};
 use iroha_data_model::{
     block::decode_versioned_signed_block,
@@ -14,7 +15,7 @@ impl AvailabilitySchedule for Schedule {
     fn instance(&self) -> Hash32 {
         self.instance
     }
-    fn height_config(&self, _height: u64) -> io::Result<Option<HeightConfig>> {
+    fn height_config(&self, _height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
         Ok(self.config.lock().clone())
     }
 }
@@ -160,7 +161,7 @@ fn independently_changed_authority_rejects_original_body_before_any_publication(
         "valid exact QC does not authorize relabelling full body authority"
     );
     assert_eq!(
-        f.store.append(&f.body, &f.qc).unwrap_err().kind(),
+        f.store.append(&f.body, &f.qc).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(f.store.height(), 1);
@@ -182,7 +183,7 @@ fn corrupt_availability_is_an_error_not_missing_or_served_metadata() {
     ));
     f.store.kura.store_block(block).unwrap();
     assert_eq!(
-        f.store.entry(2).unwrap_err().kind(),
+        f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert!(f.store.tip().is_err());
@@ -201,11 +202,11 @@ fn retry_retains_original_read_and_funding_even_when_another_height_is_requested
     let held = f.store.execution_budget.reserved_bytes();
     f.store.execution_budget.set_limit_bytes(held);
     assert_eq!(
-        f.store.committed_body(2).unwrap_err().kind(),
+        f.store.committed_body(2).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(
-        f.store.committed_body(3).unwrap_err().kind(),
+        f.store.committed_body(3).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(f.store.read.lock().as_ref().unwrap().height(), 2);
@@ -223,12 +224,12 @@ fn missing_authority_retains_decoded_source_and_resumes_without_replacement() {
     f.store.append(&f.body, &f.qc).unwrap();
     let config = f.schedule.config.lock().take();
     assert_eq!(
-        f.store.entry(2).unwrap_err().kind(),
+        f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     let reserved = f.store.execution_budget.reserved_bytes();
     assert_eq!(
-        f.store.entry(2).unwrap_err().kind(),
+        f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     assert_eq!(reserved, f.store.execution_budget.reserved_bytes());
@@ -361,7 +362,7 @@ fn invalid_full_qc_or_staged_certificate_never_reaches_kura() {
     let mut qc = f.qc.clone();
     qc.agg_sig.0[0] ^= 1;
     assert_eq!(
-        f.store.append(&f.body, &qc).unwrap_err().kind(),
+        f.store.append(&f.body, &qc).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(f.store.height(), 1);
@@ -451,7 +452,7 @@ fn empty_payload_header_cannot_restore_committed_body() {
         )
         .unwrap();
     assert_eq!(
-        f.store.committed_body(2).unwrap_err().kind(),
+        f.store.committed_body(2).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData,
     );
 }
@@ -472,7 +473,7 @@ fn refused_certificate_read_observation_preserves_original_source_and_table() {
     let table_len = f.body.availability().as_slice().len();
     budget.set_limit_bytes(reserved + table_len);
     assert_eq!(
-        f.store.certified(2).unwrap_err().kind(),
+        f.store.certified(2).unwrap_err().io_kind(),
         io::ErrorKind::WouldBlock
     );
     let owners = f.store.pending_certificate_read_for_test().unwrap();
@@ -482,7 +483,7 @@ fn refused_certificate_read_observation_preserves_original_source_and_table() {
     assert_eq!(budget.reserved_bytes(), reserved + table_len);
     for height in [2, 3, 2] {
         assert_eq!(
-            f.store.certified(height).unwrap_err().kind(),
+            f.store.certified(height).unwrap_err().io_kind(),
             io::ErrorKind::WouldBlock
         );
         assert_eq!(f.store.pending_certificate_read_for_test(), Some(owners));
@@ -535,7 +536,7 @@ fn real_valid_future_certificate_cannot_skip_a_height_and_reopening_keeps_origin
     );
     let (body, qc) = read.poll().unwrap();
     assert_eq!(
-        f.store.append(&body, &qc).unwrap_err().kind(),
+        f.store.append(&body, &qc).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(f.store.height(), 1);
@@ -596,7 +597,7 @@ fn untrusted_certificate_and_mismatching_staged_payload_are_never_written() {
     let uncertified = f.executed.as_ref().clone().with_commit_certificate(None);
     f.store.kura.store_block(uncertified).unwrap();
     assert_eq!(
-        f.store.entry(2).unwrap_err().kind(),
+        f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
     );
 }

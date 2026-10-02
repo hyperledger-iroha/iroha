@@ -15,6 +15,7 @@ let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - KAGEMUSHA V1 aggregate-balance wallet orchestration, payment models, proof binding helpers, and universal capability discovery through `/v1/kagemusha/readiness`
+- Petal Stream animated optical transport: stream encoder/assembler, camera-frame decoder, software and vector renderers, SwiftUI player and AVFoundation camera analyzer
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -677,6 +678,63 @@ all use the same canonical bytes from
 `../fixtures/offline/kagemusha_v1.json`; no transport has a second codec.
 Public proofs and payment envelopes remain constant-size as aggregate history
 grows, and there is no hop, input, origin, ancestry, or proof-depth field.
+
+### Petal Stream optical transport
+
+Petal Stream is the animated "streaming QR" in the Sakura-storm look: four
+sakura-blossom finders, a `天`-shaped field of 256 katakana tiles and three
+dotted rings. Each frame carries three independent lanes (tile polarity `P`,
+katakana `K`, ring dots `D`), each one whitened Reed–Solomon codeword of
+fountain-coded 16-byte atoms; every fourth frame repeats the stream beacon in
+lane `D`, so a receiver can join at any frame and any single readable lane is
+useful. `Sources/IrohaSwift/Petal/` is a function-by-function port of the
+normative Rust crate `crates/iroha_petal` (decoder included) and passes the
+shared fixtures `fixtures/petal/petal_stream_v1.json` and
+`fixtures/petal/petal_captures_v1.json`.
+
+```swift
+// Sender: play an IPM1 message at 8 fps. Payloads may be up to 16 MiB - 1;
+// receivers accept 64 KiB by default. `kind` is application-defined.
+let encoder = try PetalStreamEncoder(payload: message.encoded, kind: 1)
+PetalStreamView(encoder: encoder)                    // IrohaSwiftTransferUI
+
+// Receiver: feed camera frames into one scan session.
+let analyzer = PetalCameraAnalyzer { outcome in       // IrohaSwiftMobileTransports
+    if let done = outcome.completed { handle(done.payload) }
+}
+analyzer.attach(to: videoDataOutput)
+```
+
+- `PetalStreamEncoder` / `PetalStreamAssembler` are the sender and receiver
+  stream codecs; `PetalDecoder.decode(_:)` reads one `PetalLuma` frame (any
+  rotation, optionally mirrored) and `PetalScanSession` combines decoding,
+  reassembly and idle/absolute timeouts. The tile lanes `P` and `K` are first
+  read against the light and dark levels of the finders; a lane that stays
+  unreadable is read again with every patch normalised by its own contrast, so
+  over-exposure, veiling light, glare and shadows cancel out.
+- `PetalRenderer` is the pixel-exact reference software renderer;
+  `PetalDrawList` describes a frame for vector backends and
+  `PetalCoreGraphicsRenderer` / `PetalFrameView` / `PetalStreamView`
+  (`IrohaSwiftTransferUI`) draw it with CoreGraphics and SwiftUI.
+- `PetalCameraAnalyzer` (`IrohaSwiftMobileTransports`) is an
+  `AVCaptureVideoDataOutput` delegate that reads the Y plane of bi-planar YUV
+  frames (or converts BGRA), reports `PetalScanOutcome` values through a
+  callback and an `AsyncStream`, and stops after the payload completes.
+  Scanner setup: use the 1280×720 session preset
+  (`AVCaptureSession.Preset.hd1280x720`) where the device sustains about five
+  decoded frames per second and fall back to 640×480 only when it cannot (at
+  480p only lanes `P` and `D` read, so a 7.5 KB payment takes roughly four
+  times longer). Automatic exposure over-exposes a mostly black screen, so set
+  the exposure target bias to about −1 EV
+  (`AVCaptureDevice.setExposureTargetBias`) or lock the exposure once the code
+  has been seen (`specs/petal_stream.md` section 8, "Scanner guidance").
+
+Run the Petal suites (codec, fixture conformance, golden captures, renderer,
+SwiftUI and camera glue) with:
+
+```bash
+swift test --package-path IrohaSwift --disable-automatic-resolution --filter Petal
+```
 
 ### Push Devices
 

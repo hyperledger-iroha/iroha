@@ -360,7 +360,10 @@ impl Inner {
         lane.driver.shutdown();
     }
 
-    fn start_lane(&self, record: &SumeragiLaneRecord) -> Result<RunningLane, String> {
+    fn start_lane(
+        &self,
+        record: &SumeragiLaneRecord,
+    ) -> Result<RunningLane, crate::execution_attempt::ExecutionAttemptError<String>> {
         let inputs = &self.inputs;
         let node_gate = inputs.state.view().kura().native_consensus_gate();
         let _startup = node_gate
@@ -378,7 +381,7 @@ impl Inner {
         let store = inputs
             .stores
             .runtime_store(record.lane, &record.incarnation)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?;
         let key = core_key(inputs.key_pair.public_key()).map_err(|error| error.to_string())?;
         let custody = inputs
             .records
@@ -460,7 +463,7 @@ impl Inner {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
                     self.recovering.lock().insert(recovery_key, recovery);
                 }
-                return Err(error.to_string());
+                return Err(error.to_string().into());
             }
         };
         let bodies = Arc::new(

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iroha-petal"
+version = "0.1.0"
+description = "Petal Stream: the Sakura-storm optical transport (encoder, renderer and camera decoder) in pure Python."
+readme = "README.md"
+authors = [{name = "Hyperledger Iroha Contributors"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["iroha", "petal", "optical", "qr", "kagemusha"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/hyperledger/iroha"
+Repository = "https://github.com/hyperledger/iroha"
+
+[project.scripts]
+iroha-petal = "iroha_petal.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "*.pyo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = ["E203", "E501"]

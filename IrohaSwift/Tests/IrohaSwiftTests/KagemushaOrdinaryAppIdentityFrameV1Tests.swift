@@ -335,6 +335,7 @@ final class KagemushaOrdinaryAppIdentityFrameV1Tests:XCTestCase {
     func install(storagePath:Data) throws {}
     func open(storagePath:Data) throws -> UInt64 { 1 }
     func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func close(handle: UInt64) throws { XCTAssertEqual(handle,1);closeCalls += 1 }
     func invoke(handle:UInt64,method:UInt8,request:Data) throws -> Data {

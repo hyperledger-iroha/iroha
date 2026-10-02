@@ -120,7 +120,9 @@ async fn fund_citizen_fees(
         });
     let parameters = snapshots
         .next()
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| eyre!("citizen fee funding requires signed canonical NPoS parameters"))?;
     if snapshots.next().is_some() {
         return Err(eyre!(

@@ -1,5 +1,6 @@
 //! Public lane staking instruction handlers (NX-9).
 use super::prelude::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
@@ -763,26 +764,50 @@ fn global_eligibility_from_intervals(
         .ok_or_else(invalid)
 }
 
+fn read_staking_policy(
+    state: &mut StateTransaction<'_, '_>,
+) -> Result<Option<iroha_data_model::parameter::system::SumeragiNposParameters>, Error> {
+    state.world.sumeragi_npos_parameters().map_err(|error| {
+        retain_staking_attempt(
+            state,
+            error.map_rejection(|message| Error::InvariantViolation(message.into())),
+        )
+    })
+}
+
+fn retain_staking_attempt(state: &mut StateTransaction<'_, '_>, error: Attempt<Error>) -> Error {
+    match error {
+        Attempt::Rejected(error) => error,
+        Attempt::Deferred(reason) => {
+            if !cfg!(all(test, sumeragi_core_mutation = "HC48")) {
+                let _ = state.defer_execution(reason);
+            }
+            Error::InvariantViolation("local validator scheduling did not complete".into())
+        }
+    }
+}
+
 fn validator_eligibility_height(
     state: &impl crate::state::StateReadOnly,
     lane_id: LaneId,
     execution_height: u64,
     key_ready_height: u64,
-) -> Result<u64, Error> {
+) -> Result<u64, Attempt<Error>> {
     let fail = |message: String| Error::InvariantViolation(message.into());
     let parameters = state
         .world()
         .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(fail))?
         .ok_or_else(|| fail("validator scheduling requires committed NPoS parameters".into()))?;
     parameters
         .validate()
         .map_err(|error| fail(error.to_string()))?;
     let length = parameters.epoch_length_blocks.get();
     if lane_id != LaneId::SINGLE {
-        return next_unfrozen_election_height(key_ready_height, length);
+        return next_unfrozen_election_height(key_ready_height, length).map_err(Attempt::Rejected);
     }
-    let (authority, current) =
-        crate::state::validator_committee::current_authority(state).map_err(fail)?;
+    let (authority, current) = crate::state::validator_committee::current_authority(state)
+        .map_err(|error| error.map_rejection(fail))?;
     current
         .validate_against_authority(&authority)
         .map_err(|error| fail(error.to_string()))?;
@@ -792,7 +817,8 @@ fn validator_eligibility_height(
     {
         return Err(fail(
             "validator scheduling height lies outside the authenticated current interval".into(),
-        ));
+        )
+        .into());
     }
     let next_epoch = current
         .epoch
@@ -819,7 +845,8 @@ fn validator_eligibility_height(
         {
             return Err(fail(
                 "future validator interval is not the current boundary's frozen preparation".into(),
-            ));
+            )
+            .into());
         }
     }
     // At a boundary, the freshly staged preparation also fixes the complete
@@ -840,7 +867,7 @@ fn validator_eligibility_height(
     };
     let future_last = if let Some(future) = future {
         if next_last.checked_add(1) != Some(future.preparation.first_height) {
-            return Err(fail("frozen validator intervals are not contiguous".into()));
+            return Err(fail("frozen validator intervals are not contiguous".into()).into());
         }
         future.preparation.last_height
     } else {
@@ -848,20 +875,20 @@ fn validator_eligibility_height(
             .checked_add(length)
             .ok_or_else(|| fail("validator interval overflow".into()))?
     };
-    global_eligibility_from_intervals(
+    Ok(global_eligibility_from_intervals(
         current.first_height,
         current.last_height,
         next_last,
         future_last,
         key_ready_height,
         length,
-    )
+    )?)
 }
 
 fn scheduled_validator_eligibility_height(
     state_transaction: &StateTransaction<'_, '_>,
     lane_id: LaneId,
-) -> Result<u64, Error> {
+) -> Result<u64, Attempt<Error>> {
     let block_height = state_transaction.block_height();
     if state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty() {
         return Ok(block_height);
@@ -872,7 +899,7 @@ fn scheduled_validator_eligibility_height(
 fn scheduled_validator_deactivation_height(
     state_transaction: &StateTransaction<'_, '_>,
     lane_id: LaneId,
-) -> Result<u64, Error> {
+) -> Result<u64, Attempt<Error>> {
     // Same-block genesis registration is an exception for admitting the
     // initial validator. It must not shorten an exit or pending unbond's
     // already-frozen voting and slashing obligation to the genesis height.
@@ -966,7 +993,7 @@ fn ensure_frozen_validator_binding_preserved(
     state_transaction: &StateTransaction<'_, '_>,
     replacement: &PublicLaneValidatorRecord,
     operation: &str,
-) -> Result<(), Error> {
+) -> Result<(), Attempt<Error>> {
     let Some(existing) = state_transaction
         .world
         .public_lane_validators
@@ -983,11 +1010,15 @@ fn ensure_frozen_validator_binding_preserved(
             &state_transaction.world,
             existing,
             state_transaction.block_height(),
-        ) && immutable_binding_changed)
+        )
+        .map_err(|error| {
+            error.map_rejection(|message| Error::InvariantViolation(message.into()))
+        })? && immutable_binding_changed)
     {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             format!("{operation} cannot revoke a current or frozen validator binding").into(),
-        ));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -1194,14 +1225,11 @@ impl Execute for RegisterPublicLaneCandidate {
             &registration.stake_account,
             "register_public_lane_candidate",
         )?;
-        let parameters = state_transaction
-            .world
-            .sumeragi_npos_parameters()
-            .ok_or_else(|| {
-                Error::InvariantViolation(
-                    "candidate admission requires committed NPoS election parameters".into(),
-                )
-            })?;
+        let parameters = read_staking_policy(state_transaction)?.ok_or_else(|| {
+            Error::InvariantViolation(
+                "candidate admission requires committed NPoS election parameters".into(),
+            )
+        })?;
         parameters.validate().map_err(|error| {
             Error::InvariantViolation(
                 format!(
@@ -1244,7 +1272,8 @@ impl Execute for RegisterPublicLaneCandidate {
                 registration.lane_id,
                 block_height,
                 key_activation_height,
-            )?
+            )
+            .map_err(|error| retain_staking_attempt(state_transaction, error))?
         };
         if self.activation_height != activation_height {
             return Err(Error::InvariantViolation(
@@ -1374,7 +1403,8 @@ fn register_public_lane_validator(
     // key that remains live from this boundary onward.
     let activation_height = match &candidate_admission {
         Some(candidate) => candidate.activation_height,
-        None => scheduled_validator_eligibility_height(state_transaction, registration.lane_id)?,
+        None => scheduled_validator_eligibility_height(state_transaction, registration.lane_id)
+            .map_err(|error| retain_staking_attempt(state_transaction, error))?,
     };
     if let Some(prepared) = candidate_admission
         .as_ref()
@@ -1414,7 +1444,8 @@ fn register_public_lane_validator(
         &state_transaction.nexus.staking,
         &registration.stake_account,
         state_transaction.block_unix_timestamp_ms(),
-    )?;
+    )
+    .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     assert_stake_amount_matches_spec(
         state_transaction,
         &stake_ctx.asset_definition,
@@ -1437,11 +1468,20 @@ fn register_public_lane_validator(
             state_transaction.block_height(),
             "register_public_lane_validator",
         )?;
-        if crate::sumeragi::lanes::custody::retains_registration(
+        let retains_registration = match crate::sumeragi::lanes::custody::retains_registration(
             &state_transaction.world,
             existing,
             state_transaction.block_height(),
         ) {
+            Ok(retained) => retained,
+            Err(error) => {
+                return Err(retain_staking_attempt(
+                    state_transaction,
+                    error.map_rejection(|message| Error::InvariantViolation(message.into())),
+                ));
+            }
+        };
+        if retains_registration {
             return Err(Error::InvariantViolation(
                 "original lane custody must expire before validator re-registration".into(),
             ));
@@ -1530,7 +1570,8 @@ fn register_public_lane_validator(
         state_transaction,
         &record,
         "register_public_lane_validator",
-    )?;
+    )
+    .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     effects::verify_transfer_plan(
         state_transaction,
         &registration.monetary_plan,
@@ -1540,7 +1581,8 @@ fn register_public_lane_validator(
         &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
             activation_height,
         }),
-    )?;
+    )
+    .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
         state_transaction,
         authority,
@@ -1644,12 +1686,11 @@ impl Execute for ActivatePublicLaneValidator {
             activation_height,
         )?;
         let block_height = state_transaction.block_height();
-        // Only the activation metric reads the epoch; `max(1)` keeps this infallible.
+        // Only the activation metric needs this epoch read. Local refusal is retained
+        // by read_staking_policy so the transaction overlay cannot publish.
         #[cfg(feature = "telemetry")]
         let current_epoch = {
-            let epoch_length = state_transaction
-                .world
-                .sumeragi_npos_parameters()
+            let epoch_length = read_staking_policy(state_transaction)?
                 .map_or(
                     iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                     |params| params.epoch_length_blocks.get(),
@@ -1791,7 +1832,8 @@ impl Execute for RebindPublicLaneValidatorPeer {
             state_transaction,
             &replacement,
             "rebind_public_lane_validator_peer",
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         state_transaction
             .world
             .public_lane_validators
@@ -1858,7 +1900,8 @@ impl Execute for ExitPublicLaneValidator {
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &record)?;
         let deactivation_height =
-            scheduled_validator_deactivation_height(state_transaction, self.lane_id)?;
+            scheduled_validator_deactivation_height(state_transaction, self.lane_id)
+                .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         #[cfg(feature = "telemetry")]
         let previous_status = record.status.clone();
         match record.status {
@@ -1882,7 +1925,8 @@ impl Execute for ExitPublicLaneValidator {
             state_transaction,
             &record,
             "exit_public_lane_validator",
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         state_transaction
             .world
             .public_lane_validators
@@ -1895,7 +1939,7 @@ impl Execute for ExitPublicLaneValidator {
                 Some(&previous_status),
                 &record.status,
             );
-        prune_zero_custody_exited_validators(state_transaction);
+        prune_zero_custody_exited_validators(state_transaction)?;
         Ok(())
     }
 }
@@ -1921,7 +1965,8 @@ impl Execute for BondPublicLaneStake {
             &state_transaction.nexus.staking,
             &self.staker,
             state_transaction.block_unix_timestamp_ms(),
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         assert_stake_amount_matches_spec(
             state_transaction,
             &stake_ctx.asset_definition,
@@ -1966,7 +2011,8 @@ impl Execute for BondPublicLaneStake {
             state_transaction,
             &validator_record,
             "bond_public_lane_stake",
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
         let mut share = if let Some(share) = state_transaction
             .world
@@ -2020,7 +2066,8 @@ impl Execute for BondPublicLaneStake {
                 activation_height: validator_record.activation_height,
                 peer_id: validator_record.peer_id.clone(),
             }),
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
             state_transaction,
             authority,
@@ -2101,7 +2148,8 @@ impl Execute for SchedulePublicLaneUnbond {
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &validator_snapshot)?;
         let slashable_through_height =
-            scheduled_validator_deactivation_height(state_transaction, self.lane_id)?
+            scheduled_validator_deactivation_height(state_transaction, self.lane_id)
+                .map_err(|error| retain_staking_attempt(state_transaction, error))?
                 .checked_sub(1)
                 .ok_or_else(|| {
                     Error::InvariantViolation(
@@ -2161,7 +2209,8 @@ impl Execute for SchedulePublicLaneUnbond {
             state_transaction,
             &validator_snapshot,
             "schedule_public_lane_unbond",
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         share.bonded = quantity_sub(share.bonded.clone(), amount.clone())?;
         share.pending_unbonds.insert(
             self.request_id,
@@ -2231,6 +2280,12 @@ impl Execute for FinalizePublicLaneUnbond {
                 &validator_record,
                 state_transaction.block_height(),
             )
+            .map_err(|error| {
+                retain_staking_attempt(
+                    state_transaction,
+                    error.map_rejection(|message| Error::InvariantViolation(message.into())),
+                )
+            })?
         {
             return Err(Error::InvariantViolation(
                 "unbond withdrawal requires authenticated release of current and frozen committee obligations".into(),
@@ -2243,6 +2298,7 @@ impl Execute for FinalizePublicLaneUnbond {
             .get(&share_key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("stake position not found".into()))?;
+        ensure_public_lane_stake_share_matches_key(&share_key, &share)?;
         let pending = share
             .pending_unbonds
             .remove(&self.request_id)
@@ -2285,7 +2341,8 @@ impl Execute for FinalizePublicLaneUnbond {
                 activation_height: validator_record.activation_height,
                 request_hash,
             }),
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
         crate::smartcontracts::isi::asset::isi::execute_staking_unbond_transfer(
             state_transaction,
             authority,
@@ -2303,7 +2360,7 @@ impl Execute for FinalizePublicLaneUnbond {
         state_transaction
             .telemetry
             .decrease_public_lane_pending_unbond(self.lane_id, &pending.amount);
-        prune_zero_custody_exited_validators(state_transaction);
+        prune_zero_custody_exited_validators(state_transaction)?;
         Ok(())
     }
 }
@@ -2455,12 +2512,15 @@ fn finalize_validator_lifecycle(
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     finalize_pending_activations(state_transaction)?;
-    finalize_released_exits(state_transaction);
-    prune_zero_custody_exited_validators(state_transaction);
+    finalize_released_exits(state_transaction)?;
+    prune_zero_custody_exited_validators(state_transaction)?;
     Ok(())
 }
 
-fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction<'_, '_>) {
+fn prune_zero_custody_exited_validators(
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    let retention_policy = read_staking_policy(state_transaction)?;
     let removable =
         state_transaction
             .world
@@ -2475,10 +2535,11 @@ fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction
                         "validator pruning",
                     )
                     .is_ok()
-                    && !crate::sumeragi::lanes::custody::retains_registration(
+                    && !crate::sumeragi::lanes::custody::retains_registration_with_parameters(
                         &state_transaction.world,
                         record,
                         state_transaction.block_height(),
+                        retention_policy.as_ref(),
                     )
                     && record.total_stake.is_zero()
                     && record.self_stake.is_zero()
@@ -2491,6 +2552,7 @@ fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction
     for key in removable {
         state_transaction.world.public_lane_validators.remove(key);
     }
+    Ok(())
 }
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) fn promote_pending_validator(
@@ -2538,9 +2600,7 @@ fn finalize_pending_activations(
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let block_height = state_transaction.block_height();
-    let epoch_length = state_transaction
-        .world
-        .sumeragi_npos_parameters()
+    let epoch_length = read_staking_policy(state_transaction)?
         .map_or(
             iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
             |params| params.epoch_length_blocks.get(),
@@ -2586,7 +2646,8 @@ fn finalize_pending_activations(
     }
     Ok(())
 }
-fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) {
+fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+    let retention_policy = read_staking_policy(state_transaction)?;
     let now_ms = state_transaction.block_unix_timestamp_ms();
     let exiting: Vec<_> = state_transaction
         .world
@@ -2598,10 +2659,11 @@ fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) {
                     .deactivation_height
                     .is_some_and(|end| end <= state_transaction.block_height())
                 && !has_global_committee_obligation(state_transaction, record)
-                && !crate::sumeragi::lanes::custody::retains_registration(
+                && !crate::sumeragi::lanes::custody::retains_registration_with_parameters(
                     &state_transaction.world,
                     record,
                     state_transaction.block_height(),
+                    retention_policy.as_ref(),
                 )
                 && matches!(
                     record.status,
@@ -2625,6 +2687,7 @@ fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) {
                 &PublicLaneValidatorStatus::Exited,
             );
     }
+    Ok(())
 }
 fn ensure_reward_targets_active(
     state_transaction: &StateTransaction<'_, '_>,
@@ -2729,7 +2792,7 @@ fn validate_reward_amounts(
 fn validate_reward_sink(
     reward_asset: &AssetId,
     total_reward: &Quantity,
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let sink_account = crate::block::parse_account_literal_with_world(
         &state_transaction.world,
@@ -2737,7 +2800,7 @@ fn validate_reward_sink(
         &state_transaction.nexus.fees.fee_sink_account_id,
         state_transaction.block_unix_timestamp_ms(),
     )
-    .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
+    .map_err(|error| state_transaction.attempt_error_to_instruction_error(error.into_attempt_error(|error| Error::InvariantViolation(error.to_string().into()))))?
     .ok_or_else(|| {
         Error::InvariantViolation(
             "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
@@ -2872,7 +2935,7 @@ impl ConsensusSlashLiability {
         self,
         world: &impl WorldReadOnly,
         record: &PublicLaneValidatorRecord,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, Attempt<Error>> {
         let Self::Lane {
             scope,
             instance,
@@ -2884,7 +2947,8 @@ impl ConsensusSlashLiability {
             return validator_tenure_contains_height(
                 record,
                 self.offence_height().expect("root clock"),
-            );
+            )
+            .map_err(Attempt::Rejected);
         };
         if cfg!(all(test, sumeragi_core_mutation = "HC2")) {
             return Ok(true);
@@ -2892,6 +2956,9 @@ impl ConsensusSlashLiability {
         let invalid = |reason: &str| Error::InvariantViolation(reason.into());
         let parameters = world
             .sumeragi_npos_parameters()
+            .map_err(|error| {
+                error.map_rejection(|message| Error::InvariantViolation(message.into()))
+            })?
             .ok_or_else(|| invalid("lane slash lost immutable evidence policy"))?;
         let mut rows = world
             .sumeragi_lanes()
@@ -2922,9 +2989,10 @@ impl ConsensusSlashLiability {
                 .map(|entry| entry.binding)
                 != Some(binding)
         {
-            return Err(invalid(
+            return Err((invalid(
                 "lane slash differs from its original admission and signer custody",
-            ));
+            ))
+            .into());
         }
         if record.activation_height != binding.activation_height
             || !binding
@@ -2946,9 +3014,7 @@ impl ConsensusSlashLiability {
             iroha_data_model::sumeragi_lanes::SumeragiLaneStakeBinding::from_record(record, escrow)
                 .map_err(|reason| Error::InvariantViolation(reason.into()))?;
         if actual != binding {
-            return Err(invalid(
-                "original lane registration or escrow was substituted",
-            ));
+            return Err((invalid("original lane registration or escrow was substituted")).into());
         }
         Ok(true)
     }
@@ -2962,14 +3028,15 @@ pub(crate) fn indexed_slashable_validator_exposure(
     record: &PublicLaneValidatorRecord,
     liability: ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
-) -> Result<Quantity, Error> {
+) -> Result<Quantity, Attempt<Error>> {
     if !liability.names_registration(world, record)? {
         return Ok(Quantity::zero());
     }
     if !share_keys.windows(2).all(|pair| pair[0] < pair[1]) {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "indexed public-lane stake-share keys are not canonical".into(),
-        ));
+        ))
+        .into());
     }
     // This read-only calculation borrows the owned ordered scratch overlay.
     // An earlier slash in that same bundle may have removed a fully consumed
@@ -2992,6 +3059,7 @@ pub(crate) fn indexed_slashable_validator_exposure(
         Some(Ok((key, share)))
     });
     slashable_exposure_from_shares(record, shares, liability.offence_height())
+        .map_err(Attempt::Rejected)
 }
 
 fn validator_share_updates(
@@ -3105,17 +3173,12 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 fn unbond_liability_release_height(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     slashable_through_height: u64,
 ) -> Result<u64, Error> {
-    let parameters = state_transaction
-        .world
-        .sumeragi_npos_parameters()
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                "public-lane unbonding requires signed NPoS parameters".into(),
-            )
-        })?;
+    let parameters = read_staking_policy(state_transaction)?.ok_or_else(|| {
+        Error::InvariantViolation("public-lane unbonding requires signed NPoS parameters".into())
+    })?;
     slashable_through_height
         .checked_add(parameters.evidence_horizon_blocks())
         .and_then(|height| height.checked_add(parameters.slashing_delay_blocks()))
@@ -3533,12 +3596,13 @@ fn apply_slash_to_validator_inner(
         ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
     }
     let offence_height = liability.and_then(ConsensusSlashLiability::offence_height);
-    let deactivation_height = scheduled_validator_deactivation_height(state_transaction, lane_id)?;
+    let deactivation_height = scheduled_validator_deactivation_height(state_transaction, lane_id)
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     let dataspace_catalog = state_transaction.nexus.dataspace_catalog.clone();
     let staking_cfg = state_transaction.nexus.staking.clone();
-    let world = &state_transaction.world;
     let validator_key = validator_storage_key(lane_id, validator);
-    let validator_snapshot = world
+    let validator_snapshot = state_transaction
+        .world
         .public_lane_validators
         .get(&validator_key)
         .map(|record| {
@@ -3548,7 +3612,9 @@ fn apply_slash_to_validator_inner(
         .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
     if let Some(liability) = liability
-        && !liability.names_registration(world, &validator_snapshot)?
+        && !liability
+            .names_registration(&state_transaction.world, &validator_snapshot)
+            .map_err(|error| retain_staking_attempt(state_transaction, error))?
     {
         return Err(Error::InvariantViolation(
             match liability {
@@ -3561,14 +3627,17 @@ fn apply_slash_to_validator_inner(
         ));
     }
     let stake_account = validator_snapshot.stake_account.clone();
-    let stake_ctx = retained_stake_context(world, lane_id, validator, &stake_account)?;
+    let stake_ctx =
+        retained_stake_context(&state_transaction.world, lane_id, validator, &stake_account)?;
     let slash_sink = parse_staking_account_literal(
-        world,
+        &state_transaction.world,
         &dataspace_catalog,
         &staking_cfg.slash_sink_account_id,
         "slash_sink_account_id",
         now_ms,
-    )?;
+    )
+    .map_err(|error| retain_staking_attempt(state_transaction, error))?;
+    let world = &state_transaction.world;
     let slash_sink_asset = AssetId::with_scope(
         stake_ctx.asset_definition.clone(),
         slash_sink,
@@ -3624,7 +3693,8 @@ fn apply_slash_to_validator_inner(
                 activation_height: validator_snapshot.activation_height,
                 slashable_exposure: slashable_exposure.clone(),
             }),
-        )?;
+        )
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     }
     let self_pending = pending_unbond_group_total(
         &share_updates,
@@ -3786,7 +3856,7 @@ pub(in crate::smartcontracts::isi) fn is_retained_staking_slash_movement(
     validator: &AccountId,
     source_id: &AssetId,
     destination_id: &AssetId,
-) -> Result<bool, Error> {
+) -> Result<bool, Attempt<Error>> {
     let pinned = retained_stake_custody_asset(&state_transaction.world, lane_id, validator)?;
     let slash_sink = parse_staking_account_literal(
         &state_transaction.world,
@@ -3805,7 +3875,7 @@ fn stake_context(
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     staker: &AccountId,
     now_ms: u64,
-) -> Result<StakeEscrowContext, Error> {
+) -> Result<StakeEscrowContext, Attempt<Error>> {
     let asset_definition = resolve_configured_asset_definition(
         world,
         &staking_cfg.stake_asset_id,
@@ -3832,10 +3902,13 @@ fn parse_staking_account_literal(
     literal: &str,
     field: &'static str,
     now_ms: u64,
-) -> Result<AccountId, Error> {
+) -> Result<AccountId, Attempt<Error>> {
     if let Some(account) =
         crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-            .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
+            .map_err(|error| {
+                error
+                    .into_attempt_error(|error| Error::InvariantViolation(error.to_string().into()))
+            })?
     {
         return Ok(account);
     }
@@ -3848,7 +3921,7 @@ fn parse_staking_account_literal(
             "invalid nexus.staking.{field}; expected canonical I105 account id or on-chain alias ({reason})"
         )
         .into(),
-    ))
+    ).into())
 }
 fn resolve_configured_asset_definition(
     world: &impl WorldReadOnly,
@@ -3871,22 +3944,26 @@ fn resolve_configured_asset_definition(
 fn ensure_committed_xor_asset(
     world: &impl WorldReadOnly,
     asset: &AssetDefinitionId,
-) -> Result<(), Error> {
-    let params = world.sumeragi_npos_parameters().ok_or_else(|| {
-        Error::InvariantViolation(
-            "staking requires the committed network XOR asset identity".into(),
-        )
-    })?;
+) -> Result<(), Attempt<Error>> {
+    let params = world
+        .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(|message| Error::InvariantViolation(message.into())))?
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                "staking requires the committed network XOR asset identity".into(),
+            )
+        })?;
     if asset != &params.xor_asset_definition_id {
-        return Err(Error::InvariantViolation(
+        return Err((Error::InvariantViolation(
             "configured staking or reward asset differs from the committed network XOR identity"
                 .into(),
-        ));
+        ))
+        .into());
     }
     Ok(())
 }
 fn resolve_nexus_fee_asset_definition(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<AssetDefinitionId, Error> {
     let asset = resolve_configured_asset_definition(
         &state_transaction.world,
@@ -3894,7 +3971,8 @@ fn resolve_nexus_fee_asset_definition(
         "nexus.fees.fee_asset_id",
         state_transaction.block_unix_timestamp_ms(),
     )?;
-    ensure_committed_xor_asset(&state_transaction.world, &asset)?;
+    ensure_committed_xor_asset(&state_transaction.world, &asset)
+        .map_err(|error| retain_staking_attempt(state_transaction, error))?;
     Ok(asset)
 }
 fn assert_stake_amount_matches_spec(
@@ -5718,7 +5796,7 @@ mod tests {
             .get_mut(&(mismatched_key_lane, mismatched_validator.clone()))
             .expect("mismatched exit fixture")
             .deactivation_height = Some(2);
-        finalize_released_exits(&mut stx);
+        finalize_released_exits(&mut stx).unwrap();
         let valid = stx
             .world
             .public_lane_validators()

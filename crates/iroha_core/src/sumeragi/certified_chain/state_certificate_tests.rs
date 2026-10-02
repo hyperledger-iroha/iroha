@@ -549,6 +549,42 @@ fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_r
     assert_eq!(parent.id(), chain.committed(2).id());
 }
 
+#[test]
+fn state_certificate_original_qc_inner_limit_is_not_adopted_by_wider_query_scope() {
+    let (chain, _) = chain();
+    let current = chain.committed(3);
+    let bytes = current.block().commit_certificate().unwrap().commit_qc();
+    let original: iroha_sumeragi::message::Qc = norito::decode_canonical(bytes).unwrap();
+    norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 128),
+        || {
+            let error = norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 128),
+                || norito::decode_canonical::<iroha_sumeragi::message::Qc>(bytes).unwrap_err(),
+            );
+            assert!(
+                matches!(&error, norito::Error::FieldLengthExceeded { length, limit: 1 } if *length > 1)
+            );
+            let expected = error.to_string();
+            assert!(matches!(verification_codec_error(3, error),
+                VerificationReadError::Source(ChainReadError::Malformed { height: 3, reason }) if reason == expected));
+            let mut malformed = bytes.to_vec();
+            malformed.push(0);
+            let error =
+                norito::decode_canonical::<iroha_sumeragi::message::Qc>(&malformed).unwrap_err();
+            assert!(error.decode_resource_error().is_none());
+            assert!(matches!(
+                verification_codec_error(3, error),
+                VerificationReadError::Source(ChainReadError::Malformed { height: 3, .. })
+            ));
+        },
+    );
+    assert_eq!(
+        norito::decode_canonical::<iroha_sumeragi::message::Qc>(bytes).unwrap(),
+        original
+    );
+}
+
 /// One valid quorum chosen by the proposal is common input even when the
 /// independently executed source retains a different valid local certificate.
 #[test]
@@ -582,7 +618,7 @@ fn parent_service_common_proposal_is_independent_of_local_certificate_subset() {
         .verify_parent_service_at(
             &proposal,
             &predecessor,
-            read_frame_attempt(source, 5).unwrap(),
+            read_frame(source, 5).unwrap(),
             offered,
         )
         .unwrap()
@@ -591,7 +627,7 @@ fn parent_service_common_proposal_is_independent_of_local_certificate_subset() {
         .verify_parent_service_at(
             &proposal,
             &predecessor,
-            read_frame_attempt(other_source, 5).unwrap(),
+            read_frame(other_source, 5).unwrap(),
             offered,
         )
         .unwrap()
@@ -765,9 +801,8 @@ fn parent_service_source_allowance_counts_every_original_before_authentication()
         } else {
             assert!(matches!(
                 result,
-                Err(ParentServiceError::Source(
-                    QueryExecutionFail::GasBudgetExceeded
-                ))
+                Err(ParentServiceError::Deferred(reason))
+                    if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
             ));
             assert!(count.qcs.is_empty());
         }

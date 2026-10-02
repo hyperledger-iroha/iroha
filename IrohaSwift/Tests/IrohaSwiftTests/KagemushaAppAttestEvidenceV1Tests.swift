@@ -126,6 +126,7 @@ private final class AppAttestCommitEndpoint: KagemushaCoreCoordinatorEndpointV1 
   func install(storagePath: Data) throws {}
   func open(storagePath: Data) throws -> UInt64 { 7 }
   func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+  func invokeMintFunding(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
   func invokeIncoming(request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
   func close(handle: UInt64) throws {}
 

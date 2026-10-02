@@ -767,35 +767,35 @@ impl KuraSeed {
             "public_lane_stake_reserves",
             |_: &AssetId, value: &Quantity| !value.is_zero(),
         )?;
-        validate_public_lane_reward_reserves(&world.view()).map_err(|message| {
-            json::Error::InvalidField {
+        validate_public_lane_reward_reserves(&world.view()).map_err(|error| {
+            error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_reward_reserves.blocks".to_owned(),
                 message,
-            }
+            })
         })?;
         {
             let previous_world = world.try_block_and_revert(&self.execution_budget)?;
-            validate_public_lane_reward_reserves(&previous_world).map_err(|message| {
-                json::Error::InvalidField {
+            validate_public_lane_reward_reserves(&previous_world).map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_reward_reserves.revert".to_owned(),
                     message,
-                }
+                })
             })?;
         }
 
-        validate_public_lane_stake_reserves(&world.view()).map_err(|message| {
-            json::Error::InvalidField {
+        validate_public_lane_stake_reserves(&world.view()).map_err(|error| {
+            error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_stake_reserves.blocks".to_owned(),
                 message,
-            }
+            })
         })?;
         {
             let previous_world = world.try_block_and_revert(&self.execution_budget)?;
-            validate_public_lane_stake_reserves(&previous_world).map_err(|message| {
-                json::Error::InvalidField {
+            validate_public_lane_stake_reserves(&previous_world).map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_stake_reserves.revert".to_owned(),
                     message,
-                }
+                })
             })?;
         }
 
@@ -945,7 +945,7 @@ impl KuraSeed {
             field: "state.world.privacy_activations".to_owned(),
             message,
         })?;
-        let (mut restored_nexus, lane_incarnations, _, _, _) = nexus_from_snapshot_runtime(
+        let (mut restored_nexus, _, _, _, _) = nexus_from_snapshot_runtime(
             snapshot_nexus_runtime,
             &block_hashes,
             replay_nexus.as_ref(),
@@ -1088,9 +1088,11 @@ impl KuraSeed {
         )?;
         world
             .validate_quantity_ledger_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "state.world.numeric_ledgers".to_owned(),
-                message,
+            .map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
+                    field: "state.world.numeric_ledgers".to_owned(),
+                    message,
+                })
             })?;
         let state = build_state(
             BuildStateInputs {
@@ -1542,35 +1544,35 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
             "public_lane_stake_reserves",
             |_: &AssetId, value: &Quantity| !value.is_zero(),
         )?;
-        validate_public_lane_reward_reserves(&world.view()).map_err(|message| {
-            json::Error::InvalidField {
+        validate_public_lane_reward_reserves(&world.view()).map_err(|error| {
+            error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_reward_reserves.blocks".to_owned(),
                 message,
-            }
+            })
         })?;
         {
             let previous_world = world.try_block_and_revert(execution_budget)?;
-            validate_public_lane_reward_reserves(&previous_world).map_err(|message| {
-                json::Error::InvalidField {
+            validate_public_lane_reward_reserves(&previous_world).map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_reward_reserves.revert".to_owned(),
                     message,
-                }
+                })
             })?;
         }
 
-        validate_public_lane_stake_reserves(&world.view()).map_err(|message| {
-            json::Error::InvalidField {
+        validate_public_lane_stake_reserves(&world.view()).map_err(|error| {
+            error.map_rejection(|message| json::Error::InvalidField {
                 field: "public_lane_stake_reserves.blocks".to_owned(),
                 message,
-            }
+            })
         })?;
         {
             let previous_world = world.try_block_and_revert(execution_budget)?;
-            validate_public_lane_stake_reserves(&previous_world).map_err(|message| {
-                json::Error::InvalidField {
+            validate_public_lane_stake_reserves(&previous_world).map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
                     field: "public_lane_stake_reserves.revert".to_owned(),
                     message,
-                }
+                })
             })?;
         }
 

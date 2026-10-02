@@ -24132,82 +24132,304 @@
         "type": "object"
       },
       "MultisigApproveRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
-            "type": "object"
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment"
+        ],
+        "type": "object"
       },
       "MultisigCancelRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
-            "type": "object"
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment"
+        ],
+        "type": "object"
       },
       "MultisigCancelResponse": {
         "additionalProperties": false,
@@ -24310,89 +24532,294 @@
         "type": "object"
       },
       "MultisigContractCallApproveRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            "oneOf": [
+              {
+                "properties": {
+                  "proposal_id": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "properties": {
+                  "instructions_hash": {
+                    "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions_hash": {
-                "type": "string"
-              },
-              "proposal_id": {
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "fee_payment"
-            ],
+            ]
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions_hash": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "payload": {
+            "description": "Exact normalized object payload of the selected deployed contract entrypoint. Approval must match the active proposal alias, entrypoint and payload exactly.",
             "type": "object"
+          },
+          "proposal_id": {
+            "oneOf": [
+              {
+                "description": "Exactly one non-null proposal selector is required. Native parsing verifies the complete canonical instruction hash; a second selector is rejected even when equal.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "contract_alias",
+          "entrypoint",
+          "payload"
+        ],
+        "type": "object"
       },
       "MultisigContractCallProposeRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
             "properties": {
-              "contract_address": {
-                "type": "string"
-              },
-              "contract_alias": {
-                "type": "string"
-              },
-              "creation_time_ms": {
+              "fee_payment": {
+                "properties": {
+                  "value": {
+                    "properties": {
+                      "gas_limit": {
+                        "maximum": 18446744073709551615,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "gas_limit"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "entrypoint": {
-                "type": "string"
-              },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "payload": {
-                "type": "object"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "signer_account_id",
-              "entrypoint",
-              "fee_payment"
-            ],
+            ]
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "payload": {
+            "description": "Exact normalized object payload of the selected deployed contract entrypoint. Approval must match the active proposal alias, entrypoint and payload exactly.",
             "type": "object"
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "contract_alias",
+          "entrypoint",
+          "payload"
+        ],
+        "type": "object"
       },
       "MultisigContractCallResponse": {
         "additionalProperties": false,
@@ -24799,89 +25226,121 @@
         "type": "string"
       },
       "MultisigProposeRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
             "oneOf": [
               {
-                "required": [
-                  "multisig_account_id"
-                ]
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  }
+                }
               },
               {
+                "properties": {
+                  "public_key_hex": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
                 "required": [
-                  "multisig_account_alias"
+                  "public_key_hex",
+                  "signature_b64"
                 ]
               }
-            ],
-            "properties": {
-              "multisig_account_alias": {
-                "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format.",
-                "maxLength": 512,
-                "minLength": 3,
-                "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
-                "type": "string"
-              },
-              "multisig_account_id": {
-                "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "creation_time_ms": {
+            ]
+          }
+        ],
+        "description": "Complete flattened current DTO for canonical multisig authority preparation or detached submission. Missing and null optional fields decode as None. Detached public key and signature must be provided together. Native account/instruction decoding, signature verification, live signatory/target checks and exact monetary admission remain mandatory.",
+        "properties": {
+          "creation_time_ms": {
+            "oneOf": [
+              {
                 "format": "uint64",
                 "maximum": 18446744073709551615,
+                "minimum": 0,
                 "type": "integer"
               },
-              "fee_payment": {
-                "$ref": "#/components/schemas/FeePaymentIntent"
-              },
-              "instructions": {
-                "items": {
-                  "$ref": "#/components/schemas/MultisigProposeInstructionInput"
-                },
-                "type": "array"
-              },
-              "memo": {
-                "type": "string"
-              },
-              "multisig_account_alias": {
-                "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format.",
-                "maxLength": 512,
-                "minLength": 3,
-                "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
-                "type": "string"
-              },
-              "multisig_account_id": {
-                "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
-                "minLength": 1,
-                "type": "string"
-              },
-              "public_key_hex": {
-                "type": "string"
-              },
-              "signature_b64": {
-                "type": "string"
-              },
-              "signer_account_id": {
-                "type": "string"
-              },
-              "validation_fee_assessment": {
-                "$ref": "#/components/schemas/RetailFeeAssessmentV1"
+              {
+                "type": "null"
               }
+            ]
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "instructions": {
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposeInstructionInput"
             },
-            "required": [
-              "signer_account_id",
-              "fee_payment",
-              "instructions"
-            ],
-            "type": "object"
+            "type": "array"
+          },
+          "memo": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multisig_account_alias": {
+            "description": "Omit or null for unsigned draft preparation. Every non-null alias selector is rejected before account resolution; authenticated read routes retain their separately permission-checked alias surface.",
+            "type": "null"
+          },
+          "multisig_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "public_key_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "validation_fee_assessment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RetailFeeAssessmentV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        ]
+        },
+        "required": [
+          "multisig_account_id",
+          "signer_account_id",
+          "fee_payment",
+          "instructions"
+        ],
+        "type": "object"
       },
       "MultisigResponse": {
         "additionalProperties": false,
@@ -116244,7 +116703,8 @@
                   "type": "string"
                 }
               }
-            }
+            },
+            "x-iroha-max-bytes": 8388608
           },
           "400": {
             "content": {
@@ -116578,7 +117038,8 @@
               }
             }
           },
-          "required": true
+          "required": true,
+          "x-iroha-max-bytes": 16384
         },
         "responses": {
           "200": {
@@ -116607,7 +117068,8 @@
                   "type": "string"
                 }
               }
-            }
+            },
+            "x-iroha-max-bytes": 1048576
           },
           "400": {
             "content": {
@@ -116960,7 +117422,8 @@
                   "type": "string"
                 }
               }
-            }
+            },
+            "x-iroha-max-bytes": 8388608
           },
           "400": {
             "content": {
@@ -118398,7 +118861,8 @@
               }
             }
           },
-          "required": true
+          "required": true,
+          "x-iroha-max-bytes": 262144
         },
         "responses": {
           "200": {

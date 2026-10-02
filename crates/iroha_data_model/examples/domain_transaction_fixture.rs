@@ -28,7 +28,8 @@ fn hex(bytes: &[u8]) -> String {
 // Keep the framing/checksum valid when reproducing each managed encoding defect.
 fn reject_retired_payload_shapes(wire_id: &str, domain: &str, frame: &[u8]) {
     let header = norito::core::Header::read(frame).expect("native header");
-    let payload = &frame[frame.len() - header.length as usize..];
+    let payload = &frame
+        [frame.len() - usize::try_from(header.length).expect("bounded native frame length")..];
     assert_eq!(&payload[..4], &[0_u8; 4]);
     let (variant_len, variant_prefix) =
         norito::core::read_len_from_slice_with_flags(&payload[4..], LAYOUT_FLAGS).unwrap();
@@ -69,19 +70,18 @@ fn reject_retired_payload_shapes(wire_id: &str, domain: &str, frame: &[u8]) {
     assert!(decode_instruction_from_pair(wire_id, &bad).is_err());
 }
 
-fn case(name: &str, domain: &str, instruction: InstructionBox) -> Value {
-    let (wire_id, frame) =
-        framed_instruction_payload(&instruction).expect("registered instruction");
+fn case(name: &str, domain: &str, instruction: &InstructionBox) -> Value {
+    let (wire_id, frame) = framed_instruction_payload(instruction).expect("registered instruction");
     let decoded = decode_instruction_from_pair(wire_id, &frame).expect("native instruction decode");
-    assert_eq!(decoded, instruction);
-    let instruction_box = norito::to_bytes(&instruction).expect("native InstructionBox frame");
+    assert_eq!(decoded, *instruction);
+    let instruction_box = norito::to_bytes(instruction).expect("native InstructionBox frame");
     let decoded_box: InstructionBox =
         norito::decode_from_bytes(&instruction_box).expect("native InstructionBox decode");
-    assert_eq!(decoded_box, instruction);
+    assert_eq!(decoded_box, *instruction);
     let header = norito::core::Header::read(frame.as_slice()).expect("native frame header");
     assert_eq!(header.flags, LAYOUT_FLAGS);
     reject_retired_payload_shapes(wire_id, domain, &frame);
-    let bare = norito::codec::encode_adaptive(&instruction);
+    let bare = norito::codec::encode_adaptive(instruction);
     json!({
         "name": name,
         "domain_id": domain,
@@ -122,17 +122,18 @@ fn fixture() -> Value {
         cases.push(case(
             "TransferDomain",
             text,
-            Transfer::domain(source.clone(), domain.clone(), destination.clone()).into(),
+            &Transfer::domain(source.clone(), domain.clone(), destination.clone()).into(),
         ));
         cases.push(case(
             "SetDomainKeyValue",
             text,
-            SetKeyValue::domain(domain.clone(), "memo".parse().unwrap(), "fixture metadata").into(),
+            &SetKeyValue::domain(domain.clone(), "memo".parse().unwrap(), "fixture metadata")
+                .into(),
         ));
         cases.push(case(
             "RemoveDomainKeyValue",
             text,
-            RemoveKeyValue::domain(domain, "memo".parse().unwrap()).into(),
+            &RemoveKeyValue::domain(domain, "memo".parse().unwrap()).into(),
         ));
     }
     json!({

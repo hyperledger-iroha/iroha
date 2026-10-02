@@ -1448,14 +1448,26 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
             let appended = catch_unwind(AssertUnwindSafe(|| {
                 blocks.append(&commit.block, &commit.qc)
             }))
-            .unwrap_or_else(|_| Err(std::io::Error::other("block store panicked")));
-            ExecDone::Appended(match appended {
-                Ok(()) => true,
-                Err(error) => {
-                    iroha_logger::warn!(%error, "sumeragi block store append failed; retrying");
-                    false
+            .unwrap_or_else(|_| Err(std::io::Error::other("block store panicked").into()));
+            match appended {
+                Ok(()) => ExecDone::Appended {
+                    durable: true,
+                    deferred: None,
+                },
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
+                    ExecDone::Appended {
+                        durable: false,
+                        deferred: Some(reason),
+                    }
                 }
-            })
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error)) => {
+                    iroha_logger::warn!(%error, "sumeragi block store append failed; retrying");
+                    ExecDone::Appended {
+                        durable: false,
+                        deferred: None,
+                    }
+                }
+            }
         }
         ExecOp::Commit(commit) => {
             let committed = catch_unwind(AssertUnwindSafe(|| {

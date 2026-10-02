@@ -33,8 +33,8 @@ fn local_storage_recovery_emits_no_block_rejection() {
         BlockHashAdmissionError, LaneLifecycleError, MembershipAdmissionError,
         MergeLedgerCommitError,
     };
-    use iroha_data_model::block::error::BlockRejectionReason;
     use iroha_allocation::AllocationRefusal;
+    use iroha_data_model::block::error::BlockRejectionReason;
 
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -99,8 +99,8 @@ fn npos_local_admission_keeps_all_resource_refusals_out_of_rejection() {
         StateStorageAdmissionError,
     };
     use concread::bptree::PlanningError;
-    use iroha_allocation::{AllocationRefusal};
-    use mv::{storage::AdmittedStorageError};
+    use iroha_allocation::AllocationRefusal;
+    use mv::storage::AdmittedStorageError;
 
     let refusals = [
         StateAdmissionError::Storage(StateStorageAdmissionError::World(
@@ -495,4 +495,47 @@ fn transaction_event_refuses_a_route_bound_to_the_inner_reveal_hash() {
             .all(|event| !matches!(event, PipelineEventBox::Transaction(_))),
         "the inner signed identity cannot authenticate an outer reveal route"
     );
+}
+
+#[test]
+fn original_npos_lifecycle_read_refusal_cannot_emit_block_rejection() {
+    use crate::{
+        state::WorldReadOnly,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
+    };
+    let mut config = TestChainConfig::new(crate::state::World::new(), 1_000);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config.genesis_parameters.push(Parameter::Custom(
+        SumeragiNposParameters::default().into_custom_parameter(),
+    ));
+    let chain = CertifiedTestChain::start(config).unwrap();
+    let view = chain.state().view();
+    let policy = view.world().sumeragi_npos_parameters().unwrap();
+    let error = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || view.world().sumeragi_npos_parameters(),
+    )
+    .unwrap_err();
+    let crate::execution_attempt::ExecutionAttemptError::Deferred(expected) = &error else {
+        panic!("original decoder must refuse: {error:?}");
+    };
+    let expected = expected.clone();
+    let boundary = BlockValidationError::from_autoscale_lifecycle_error(
+        crate::state::LaneLifecycleError::NposPolicy(error),
+    );
+    assert!(
+        matches!(&boundary, BlockValidationError::ExecutionDeferred(actual) if actual == &expected),
+        "original policy owner was erased: {boundary:?}"
+    );
+    assert_eq!(map_block_err_to_reason(&boundary), None);
+    let mut events = Vec::new();
+    emit_block_rejection(chain.genesis().header(), &boundary, |event| {
+        events.push(event)
+    });
+    assert!(events.is_empty());
+    assert_eq!(view.world().sumeragi_npos_parameters().unwrap(), policy);
 }

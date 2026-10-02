@@ -388,7 +388,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_mint_funding_v1(
         _ => crate::ERR_KAGEMUSHA_V1,
     }
 }
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeMintFundingV1<
     'local,

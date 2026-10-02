@@ -85,6 +85,10 @@ response as "pending" and keeps polling until a terminal status arrives.
   the script automatically falls back to the first available destination (for example
   `platform=macOS,arch=arm64,variant=Designed for [iPad,iPhone],name=My Mac`) before running
   the build; otherwise it skips gracefully when tooling or destinations are missing.
+- The ordinary demo helper excludes `NativePrivacyPhysicalDeviceTests`. Run that
+  class explicitly with `xcodebuild test` and a physical iOS device destination.
+  All three native controls must execute with zero failures and zero skips; a
+  simulator, unsigned build, or demo-helper success provides no physical evidence.
 - `ci/check_swift_samples.sh` wraps this helper and also builds/tests the XcodeGen template
   in `examples/ios/NoritoDemo` so CI can gate both demos in one step.
 

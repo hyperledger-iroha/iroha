@@ -1309,7 +1309,7 @@ fn generate_localnet_runtime<T: Write>(
     )?;
     genesis = append_peer_pop(genesis, &peers)?;
     let stake_amount =
-        localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
+        localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount)?;
     if npos_bootstrap {
         genesis = append_localnet_npos_bootstrap(
             genesis,
@@ -1424,7 +1424,7 @@ fn generate_localnet_runtime<T: Write>(
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     let genesis_public_key_path = out_dir.join(GENESIS_PUBLIC_KEY_FILE);
     let genesis_private_key_path = out_dir.join(GENESIS_PRIVATE_KEY_FILE);
     write_genesis_key_files(
@@ -3463,11 +3463,13 @@ fn apply_localnet_npos_overrides(
     parameters: &mut Parameters,
     chain_id: &ChainId,
     peers: NonZeroU16,
-) {
+) -> Result<()> {
     let mut npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .unwrap_or_default();
     // The signed election ceiling must match the roster used to size ingress capacity.
     // A future larger committee requires an explicit capacity and parameter update.
@@ -3476,6 +3478,7 @@ fn apply_localnet_npos_overrides(
     npos.min_self_bond = 1_u64.into();
     npos.epoch_seed = localnet_npos_epoch_seed(chain_id);
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+    Ok(())
 }
 fn localnet_custom_parameter_id(name: &str) -> CustomParameterId {
     CustomParameterId::new(
@@ -3515,14 +3518,16 @@ fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
     );
     parameters.set_parameter(Parameter::Custom(units_per_gas));
 }
-fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> Quantity {
+fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> Result<Quantity> {
     let requested = Quantity::from(requested.unwrap_or(LOCALNET_STAKE_AMOUNT));
     let min_self_bond = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .map_or_else(|| requested.clone(), |params| params.min_self_bond);
-    requested.max(min_self_bond).max(Quantity::from(1_u64))
+    Ok(requested.max(min_self_bond).max(Quantity::from(1_u64)))
 }
 fn append_localnet_private_root_admission_policy(
     genesis: RawGenesisTransaction,
@@ -3597,7 +3602,7 @@ fn apply_parameter_overrides(
             NonZeroU64::new(block_cadence_ms).expect("validated non-zero block cadence");
     }
     if include_npos {
-        apply_localnet_npos_overrides(&mut parameters, genesis.chain_id(), peers);
+        apply_localnet_npos_overrides(&mut parameters, genesis.chain_id(), peers)?;
     }
     apply_localnet_ivm_gas_limit_override(&mut parameters);
     if include_npos {

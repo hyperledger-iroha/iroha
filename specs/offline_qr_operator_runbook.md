@@ -50,3 +50,30 @@ Acceptance:
 
 - Full payload reconstruction succeeds with one dropped data frame per parity group.
 - No checksum/payload-hash mismatches in the normal capture loop.
+
+### Petal Stream (custom optical transport)
+
+When a standard QR scanner is not required, `iroha offline petal` plays the same payloads as an animated
+`天` / katakana / dotted-ring stream (`specs/petal_stream.md`). It reads on phones where an animated QR does not:
+its dot and polarity lanes survive defocus of 3–4 px and 480p previews that defeat QR modules.
+
+| Environment | Display fps | Expect |
+| --- | --- | --- |
+| Sharp camera (720p+, in focus, steady hand) | 8–12 | Katakana turbo lane readable: about 110 B per frame, a 7.5 KB payment in about 9 s. |
+| Slightly soft 720p camera (about 1.8 px blur) | 8 | Katakana lane in about half of the frames: the same payment in about 12 s. |
+| Defocused or 480p camera | 8 (up to 12) | Only the polarity and dot lanes read: about 28 B per frame, the same payment in about 35 s. |
+
+Rehearse with the simulator before choosing a rate for a device class:
+
+```bash
+iroha offline petal simulate --camera legacy --bytes 7552 --fps 8 --trials 4
+iroha offline petal encode --input payment.bin --output out/ --kind 2 --fps 8 --format gif
+```
+
+Keep the whole square visible, full screen brightness, nothing bright within one finder diameter of the corner blossoms,
+and do not run the animation faster than a third of the camera frame rate.
+
+On the scanning phone, use a 1280×720 preview where the device keeps up, and lower the exposure by about one stop (two on old
+cameras) or lock it once the code is in view: automatic exposure over-exposes a mostly black screen. The decoder copes with
+2–3× over-exposure, veiling light and shadows at 720p, but a correct exposure keeps every lane. Tilt the screen away from
+windows and lamps: a deep glare hides whatever it covers.

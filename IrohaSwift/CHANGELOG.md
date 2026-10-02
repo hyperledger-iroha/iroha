@@ -4,6 +4,23 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Added the Petal Stream optical transport (`Sources/IrohaSwift/Petal/`), a
+  function-by-function port of `crates/iroha_petal`: CRC-32C bound streams,
+  whitened GF(256) Reed–Solomon lanes with errors-and-erasures decoding,
+  the GF(2) fountain code (`PetalStreamEncoder`, `PetalStreamAssembler`),
+  the reference software renderer and `PetalDrawList`, the camera decoder
+  (`PetalDecoder`: adaptive threshold, blossom finders, Hartley-normalised
+  homographies, joint polarity/katakana tile matching read against the finder
+  levels and, for a lane that stays unreadable, again with every patch and
+  template normalised by its own contrast so over-exposure, veiling light,
+  glare and shadows cancel; rotation and mirror hypotheses) and
+  `PetalScanSession`. The suites check every section of
+  `fixtures/petal/petal_stream_v1.json`, decode all nine golden captures in
+  `fixtures/petal/petal_captures_v1.json` with exactly the reference lanes and
+  reproduce the clean capture pixel for pixel. `IrohaSwiftTransferUI` adds
+  `PetalCoreGraphicsRenderer`, `PetalFrameView` and the animated
+  `PetalStreamView`; `IrohaSwiftMobileTransports` adds the AVFoundation
+  `PetalCameraAnalyzer` and `PetalCameraFrame` pixel-buffer conversion.
 - `ToriiPipelinePreflight` decodes exactly the served `GET /v1/pipeline/preflight`
   body, checked against the Rust-generated `fixtures/torii/pipeline_preflight.json`:
   `ToriiPipelinePreflightSumeragi` carries only the positive `blockCadenceMs`,

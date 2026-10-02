@@ -8,6 +8,48 @@ use crc64fast::Digest;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
+fn active_decode_depth_requires_exact_narrower_surviving_caller() {
+    let bytes = crate::to_bytes(&vec![vec![7_u64]]).unwrap();
+    let narrow = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0);
+    let wide = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64);
+    with_decode_limits_scope(narrow, || {
+        let error = crate::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap_err();
+        assert!(decode_error_matches_active_limits(&error));
+        assert!(matches!(
+            error,
+            Error::NestingDepthExceeded {
+                depth: 1,
+                limit: 0,
+                context: "decode budget"
+            }
+        ));
+    });
+    with_decode_limits_scope(wide, || {
+        let error =
+            with_decode_limits_scope(narrow, || crate::decode_from_bytes::<Vec<Vec<u64>>>(&bytes))
+                .unwrap_err();
+        assert!(!decode_error_matches_active_limits(&error));
+        // Exercise the real private codec guard at its canonical ceiling, without fabricating an error.
+        let error = with_decode_limits_scope(crate::canonical_decode_limits(bytes.len()), || {
+            let mut guards = Vec::new();
+            for _ in 0..MAX_VALUE_NESTING_DEPTH {
+                guards.push(DecodeDepthGuard::enter()?);
+            }
+            DecodeDepthGuard::enter().map(|_guard| ())
+        })
+        .unwrap_err();
+        assert!(matches!(error, Error::NestingDepthExceeded {
+            depth, limit: MAX_VALUE_NESTING_DEPTH, context: "decode budget"
+        } if depth == MAX_VALUE_NESTING_DEPTH + 1));
+        assert!(!decode_error_matches_active_limits(&error));
+    });
+    assert_eq!(
+        crate::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap(),
+        vec![vec![7_u64]]
+    );
+}
+
+#[test]
 fn decode_resource_error_preserves_every_variant_and_field() {
     let errors = [
         Error::ArchiveLengthExceeded {

@@ -96,7 +96,16 @@ mod original_schema {
     use super::*;
 
     /// The original complete action schema, with the same published type identifier.
-    #[derive(iroha_schema::IntoSchema)]
+    #[derive(
+        Debug,
+        PartialEq,
+        Eq,
+        iroha_schema::IntoSchema,
+        NoritoSerialize,
+        NoritoDeserialize,
+        NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyActionV1")]
     pub enum TopologyActionV1 {
         /// Configure original canonical custody policy.
         #[codec(index = 0)]
@@ -128,6 +137,15 @@ fn boxed_expiry_preserves_complete_original_wire_schema_identity() {
     use iroha_schema::IntoSchema;
     let actual = TopologyActionV1::schema();
     let original = original_schema::TopologyActionV1::schema();
+    let original_action = original_schema::TopologyActionV1::Expire(expiry());
+    let native_action = TopologyActionV1::Expire(Box::new(expiry()));
+    let original_bytes = norito::encode_canonical(&original_action).unwrap();
+    let native_bytes = norito::encode_canonical(&native_action).unwrap();
+    assert_eq!(native_bytes, original_bytes);
+    assert_eq!(
+        norito::decode_canonical::<original_schema::TopologyActionV1>(&native_bytes).unwrap(),
+        original_action
+    );
     assert_eq!(
         actual.get::<TopologyActionV1>(),
         original.get::<original_schema::TopologyActionV1>()

@@ -86,13 +86,16 @@ run_xcodebuild \
   -derivedDataPath "$DERIVED_DATA" \
   build
 
-echo "Running tests for ${SCHEME}"
+# Physical native qualification uses the explicit device-only test selection.
+# This ordinary demo lane may select a simulator or a desktop fallback.
+echo "Running demo tests for ${SCHEME}"
 run_xcodebuild \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
   -configuration Debug \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA" \
+  -skip-testing:NoritoDemoXcodeTests/NativePrivacyPhysicalDeviceTests \
   test
 
 echo "NoritoDemoXcode build + test finished successfully."

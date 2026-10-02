@@ -17,12 +17,18 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         view: &'v V,
         before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<Self, QueryExecutionFail> {
-        let genesis = view.canonical_history().block_with_admission(
-            NonZeroUsize::new(GENESIS_HEIGHT as usize).expect("genesis height is nonzero"),
-            before_read,
-        )?;
-        Self::from_genesis(ChainSource::State(view), genesis)
-            .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))
+        let genesis = view
+            .canonical_history()
+            .block_with_admission(
+                NonZeroUsize::new(GENESIS_HEIGHT as usize).expect("genesis height is nonzero"),
+                before_read,
+            )
+            .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
+        Self::from_genesis(ChainSource::State(view), genesis).map_err(|error| {
+            crate::smartcontracts::isi::query::query_transport_error(
+                error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string())),
+            )
+        })
     }
 
     /// Authenticate a local certificate through this view's original execution tip.
@@ -55,19 +61,16 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .ok_or_else(|| invalid("genesis alone has no native CommitQC".into()))?;
         let mut parent = None;
         let mut current = None;
-        view.canonical_history().visit_executed_backwards(
-            parent_height,
-            height,
-            before_read,
-            |receipt| {
+        view.canonical_history()
+            .visit_executed_backwards(parent_height, height, before_read, |receipt| {
                 if receipt.height() == height.get() as u64 {
                     current = Some(receipt);
                 } else {
                     parent = Some(receipt);
                 }
                 Ok(())
-            },
-        )?;
+            })
+            .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
         let parent = parent.ok_or_else(|| invalid("authenticated parent is absent".into()))?;
         let current = current.ok_or_else(|| invalid("authenticated target is absent".into()))?;
         self.verify_executed_successor(&parent, current)
@@ -106,38 +109,40 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let mut target = None;
         let mut latest = None;
         let mut ancestor = None;
-        view.canonical_history().visit_executed_backwards_until(
-            NonZeroUsize::new(1).expect("genesis height is nonzero"),
-            height,
-            before_read,
-            |receipt| {
-                if let Some(current) = target.take() {
-                    let certified = self
-                        .verify_executed_successor(&receipt, current)
-                        .map_err(query_failure)?;
-                    if let Some(select) = select.take() {
-                        let selected = select(&certified)?;
-                        latest = Some(certified);
-                        let Some(selected) = selected else {
+        view.canonical_history()
+            .visit_executed_backwards_until(
+                NonZeroUsize::new(1).expect("genesis height is nonzero"),
+                height,
+                before_read,
+                |receipt| {
+                    if let Some(current) = target.take() {
+                        let certified = self
+                            .verify_executed_successor(&receipt, current)
+                            .map_err(query_failure)?;
+                        if let Some(select) = select.take() {
+                            let selected = select(&certified)?;
+                            latest = Some(certified);
+                            let Some(selected) = selected else {
+                                return Ok(core::ops::ControlFlow::Break(()));
+                            };
+                            if selected.get() <= 1 || selected >= height {
+                                return Err(invalid(
+                                    "selected ancestor must precede the target and follow genesis",
+                                ));
+                            }
+                            target_height = selected.get() as u64;
+                        } else {
+                            ancestor = Some(certified);
                             return Ok(core::ops::ControlFlow::Break(()));
-                        };
-                        if selected.get() <= 1 || selected >= height {
-                            return Err(invalid(
-                                "selected ancestor must precede the target and follow genesis",
-                            ));
                         }
-                        target_height = selected.get() as u64;
-                    } else {
-                        ancestor = Some(certified);
-                        return Ok(core::ops::ControlFlow::Break(()));
                     }
-                }
-                if receipt.height() == target_height {
-                    target = Some(receipt);
-                }
-                Ok(core::ops::ControlFlow::Continue(()))
-            },
-        )?;
+                    if receipt.height() == target_height {
+                        target = Some(receipt);
+                    }
+                    Ok(core::ops::ControlFlow::Continue(()))
+                },
+            )
+            .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
         let latest = latest.ok_or_else(|| invalid("authenticated target is absent"))?;
         if select.is_none() && target_height != height.get() as u64 && ancestor.is_none() {
             return Err(invalid("authenticated selected ancestor is absent"));
@@ -229,7 +234,9 @@ pub(super) fn query_scratch_admission(
 
 fn query_failure(error: VerificationReadError) -> QueryExecutionFail {
     match error {
-        VerificationReadError::Resource(_) => QueryExecutionFail::GasBudgetExceeded,
+        VerificationReadError::Resource(_) | VerificationReadError::Deferred(_) => {
+            QueryExecutionFail::GasBudgetExceeded
+        }
         error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
@@ -237,6 +244,21 @@ fn query_failure(error: VerificationReadError) -> QueryExecutionFail {
 #[cfg(test)]
 mod allocation_tests {
     use super::*;
+
+    #[test]
+    fn parent_service_verification_retains_original_allocation_release_owner() {
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let expected: ExecutionDeferred = refusal.clone().into();
+        let error = parent_verification_source(VerificationReadError::Deferred(refusal.into()));
+        assert!(matches!(error, ParentServiceError::Deferred(actual) if actual == expected));
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(occupied);
+        budget
+            .try_reserve_bytes(1)
+            .expect("the original pool admits a retry after release");
+    }
 
     #[test]
     fn state_certificate_maps_local_scratch_refusal_without_source_invalidity() {
@@ -329,6 +351,7 @@ fn parent_source_attempt(
 fn parent_verification_source(error: VerificationReadError) -> ParentServiceError {
     match error {
         VerificationReadError::Resource(error) => parent_proof_decode_failure(error.into()),
+        VerificationReadError::Deferred(reason) => ParentServiceError::Deferred(reason),
         error => parent_source_failure(error),
     }
 }
@@ -338,12 +361,15 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     pub(crate) fn new_for_parent_service(view: &'v V) -> Result<Self, ParentServiceError> {
         let genesis = view
             .canonical_history()
-            .block_with_attempt_admission(
-                NonZeroUsize::new(1).expect("genesis is nonzero"),
-                |_, _| Ok(()),
-            )
+            .block_with_admission(NonZeroUsize::new(1).expect("genesis is nonzero"), |_, _| {
+                Ok(())
+            })
             .map_err(parent_source_attempt)?;
-        Self::from_genesis(ChainSource::State(view), genesis).map_err(parent_source_failure)
+        Self::from_genesis(ChainSource::State(view), genesis).map_err(|error| {
+            parent_source_attempt(
+                error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string())),
+            )
+        })
     }
 
     fn executed_parent_pair(
@@ -364,7 +390,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let mut parent = None;
         let mut current = None;
         view.canonical_history()
-            .visit_executed_backwards_until_attempt(predecessor, target, before_read, |receipt| {
+            .visit_executed_backwards_until(predecessor, target, before_read, |receipt| {
                 if receipt.height() == target.get() as u64 {
                     current = Some(receipt);
                 } else {

@@ -195,19 +195,24 @@ pub fn authenticate_signed_genesis(
         SignedBlock,
         iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
     ),
-    String,
+    crate::execution_attempt::ExecutionAttemptError<String>,
 > {
     limits.validate()?;
     if wire.is_empty() || wire.len() > limits.block_bytes {
         return Err("signed genesis exceeds its configured source bound".into());
     }
     norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
-        let block = iroha_data_model::block::decode_framed_signed_block(wire)
-            .map_err(|error| error.to_string())?;
+        let block = iroha_data_model::block::decode_framed_signed_block(wire).map_err(|error| {
+            crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+                error.to_string()
+            })
+        })?;
         if block.hash() != network.into_genesis_hash() {
             return Err("foreign signed genesis".into());
         }
-        let epoch = super::epoch::genesis_epoch(&block)?;
+        let epoch = super::epoch::genesis_epoch(&block).map_err(|error| {
+            crate::execution_attempt::genesis_read_attempt_error(error, |error| error.to_string())
+        })?;
         Ok((block, epoch))
     })
 }

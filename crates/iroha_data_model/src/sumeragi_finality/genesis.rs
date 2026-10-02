@@ -17,6 +17,31 @@ use crate::{
 };
 use iroha_crypto::Hash;
 
+/// An invalid signed genesis or its original, unfinished JSON decoding attempt.
+///
+/// This local read error is not a signed rejection and has no wire codec. Callers must
+/// classify the original decoder cause before publishing a deterministic verdict.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum GenesisReadError {
+    /// Signed authority, commitments, metadata, or policy bounds are invalid.
+    #[error("{0}")]
+    Invalid(String),
+    /// The original signed parameter decoder did not complete successfully.
+    #[error("signed genesis JSON: {0}")]
+    Json(#[from] norito::json::Error),
+}
+
+impl From<String> for GenesisReadError {
+    fn from(error: String) -> Self {
+        Self::Invalid(error)
+    }
+}
+impl From<&str> for GenesisReadError {
+    fn from(error: &str) -> Self {
+        Self::Invalid(error.into())
+    }
+}
+
 /// Authenticate the genesis body and reconstruct its complete native signing context.
 /// The returned context is independent of result-only certificate data and mutable World.
 /// Its network identity is the signed genesis header hash, not a caller-selected network.
@@ -25,7 +50,7 @@ use iroha_crypto::Hash;
 /// Rejects non-genesis input, invalid proposal commitments or original signatures,
 /// ambiguous authority or consensus metadata, malformed signed parameters, and an
 /// invalid reconstructed epoch or committee.
-pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, String> {
+pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, GenesisReadError> {
     if !genesis.header().is_genesis() {
         return Err("native epoch root requires height-one signed genesis".into());
     }
@@ -72,7 +97,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, S
             if custom.id() != &SumeragiNposParameters::parameter_id() {
                 continue;
             }
-            let parameters = SumeragiNposParameters::from_custom_parameter(custom)
+            let parameters = SumeragiNposParameters::from_custom_parameter(custom)?
                 .ok_or("invalid signed genesis NPoS parameters")?;
             if npos.replace(parameters).is_some() {
                 return Err("genesis repeats its signed NPoS parameter authority".into());
@@ -139,7 +164,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, S
 /// Missing, duplicate, malformed or invalid current consensus metadata.
 pub fn signed_genesis_consensus_metadata(
     block: &SignedBlock,
-) -> Result<crate::parameter::system::ConsensusHandshakeMetadata, String> {
+) -> Result<crate::parameter::system::ConsensusHandshakeMetadata, GenesisReadError> {
     use crate::parameter::system::{ConsensusHandshakeMetadata, consensus_metadata};
     let mut metadata = None;
     for transaction in block.external_transactions() {
@@ -156,10 +181,8 @@ pub fn signed_genesis_consensus_metadata(
             if custom.id() != &consensus_metadata::handshake_meta_id() {
                 continue;
             }
-            let decoded = custom
-                .payload()
-                .try_into_any::<ConsensusHandshakeMetadata>()
-                .map_err(|error| format!("decode signed genesis consensus metadata: {error}"))?;
+            let decoded =
+                norito::json::from_str::<ConsensusHandshakeMetadata>(custom.payload().get())?;
             if metadata.replace(decoded).is_some() {
                 return Err(
                     "signed genesis contains more than one consensus metadata instruction".into(),

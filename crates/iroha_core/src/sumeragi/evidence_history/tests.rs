@@ -183,8 +183,8 @@ fn local_history_refusal_and_corrupt_original_tip_never_become_attribution() {
             Err(QueryExecutionFail::GasBudgetExceeded)
         }),
         Err(NativeEvidenceError::History(
-            QueryExecutionFail::GasBudgetExceeded
-        ))
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local)
+        )) if local.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
     ));
     assert_eq!(reads, 1);
     chain

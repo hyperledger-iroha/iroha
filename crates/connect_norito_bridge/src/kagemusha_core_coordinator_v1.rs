@@ -40,6 +40,8 @@ pub use ordinary_app_identity::{
     KagemushaOrdinaryNativeIntegrityRefreshResponseV1, KagemushaOrdinaryNativeMintFundingRequestV1,
     KagemushaOrdinaryNativeMintFundingResponseV1, KagemushaOrdinaryNativeOutgoingRequestV1,
     KagemushaOrdinaryNativeOutgoingResponseV1, KagemushaOrdinaryOutgoingErrorV1,
+    KagemushaNativeOrdinaryFiHttpKeyLoanV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
     bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
     invoke_kagemusha_native_ordinary_current_control_v1,

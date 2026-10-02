@@ -6,6 +6,7 @@ use super::{
     payload_worker::{PayloadWork, PayloadWorker},
     traits::{BlockStore, BodyStore, Frame, Net, PendingSend, SendOutcome},
 };
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use iroha_sumeragi::{
     api::{Action, Event},
     message::{SyncEntry, SyncResponse, WireMessage},
@@ -110,8 +111,13 @@ pub struct ServeSched {
     peers: BTreeMap<PublicKey, PeerServe>,
     order: VecDeque<PublicKey>,
     in_flight: bool,
+    in_flight_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
     retry_at: Option<Millis>,
-    failed: Option<(Millis, ServeRequest)>,
+    failed: Option<(
+        Millis,
+        ServeRequest,
+        Option<crate::execution_attempt::ExecutionDeferred>,
+    )>,
     dropped: u64,
 }
 impl ServeSched {
@@ -126,6 +132,7 @@ impl ServeSched {
             peers: BTreeMap::new(),
             order: VecDeque::new(),
             in_flight: false,
+            in_flight_refusal: None,
             retry_at: None,
             failed: None,
             dropped: 0,
@@ -235,12 +242,13 @@ impl ServeSched {
             self.in_flight = true;
             return Some(ServeRequest::Payload(Box::new(work)));
         }
-        if self.failed.as_ref().is_some_and(|(at, _)| *at <= now) {
-            let (_, request) = self
+        if self.failed.as_ref().is_some_and(|(at, _, _)| *at <= now) {
+            let (_, request, refusal) = self
                 .failed
                 .take()
                 .expect("retained refused metadata request");
             self.in_flight = true;
+            self.in_flight_refusal = refusal;
             return Some(request);
         }
         if self.retry_at.is_some_and(|at| at <= now) {
@@ -248,7 +256,11 @@ impl ServeSched {
             self.in_flight = true;
             return Some(ServeRequest::Payload(Box::new(PayloadWork::Poll)));
         }
-        while let Some(key) = self.order.pop_front() {
+        // The sole failed metadata slot must survive until its original request completes.
+        // Still serve payload requests and local row progress while metadata backs off.
+        let queued = self.order.len();
+        for _ in 0..queued {
+            let key = self.order.pop_front().expect("bounded queued peers");
             let Some(p) = self.peers.get_mut(&key) else {
                 continue;
             };
@@ -260,8 +272,17 @@ impl ServeSched {
                 p.queued = false;
                 continue;
             }
-            let Some(request) = p.body.take().or_else(|| p.blocks.take()) else {
-                p.queued = false;
+            let request = p.body.take().or_else(|| {
+                (self.failed.is_none() || cfg!(all(test, sumeragi_core_mutation = "HC47")))
+                    .then(|| p.blocks.take())
+                    .flatten()
+            });
+            let Some(request) = request else {
+                if p.pending() > 0 {
+                    self.order.push_back(key);
+                } else {
+                    p.queued = false;
+                }
                 continue;
             };
             if p.pending() > 0 {
@@ -277,6 +298,7 @@ impl ServeSched {
     /// Release this turn, charge actual responses and schedule only actual retained work.
     pub fn done(&mut self, now: Millis, served: &Served) {
         self.in_flight = false;
+        self.in_flight_refusal = None;
         for (key, bytes) in &served.charges {
             if let Some(p) = self.peers.get_mut(key) {
                 p.refill(self.limits, now);
@@ -291,14 +313,18 @@ impl ServeSched {
                 .then_some(now.saturating_add(if served.refused { 10 } else { 0 }));
         }
         if let Some(request) = &served.retry_request {
-            self.failed = Some((now.saturating_add(10), request.clone()));
+            self.failed = Some((
+                now.saturating_add(10),
+                request.clone(),
+                served.deferred.clone(),
+            ));
         }
     }
     /// Earliest retained-job retry; no timer for jobs awaiting remote rows.
     pub fn wakeup(&self) -> Millis {
         self.retry_at
             .unwrap_or(Millis::MAX)
-            .min(self.failed.as_ref().map_or(Millis::MAX, |(at, _)| *at))
+            .min(self.failed.as_ref().map_or(Millis::MAX, |(at, _, _)| *at))
     }
     /// Pending commands, excluding worker-owned retained jobs.
     pub fn len(&self) -> usize {
@@ -329,7 +355,7 @@ pub fn entries(
     from_height: u64,
     max_count: u16,
     max_bytes: u32,
-) -> io::Result<Vec<SyncEntry>> {
+) -> Result<Vec<SyncEntry>, Attempt<io::Error>> {
     let (mut out, mut bytes) = (Vec::new(), 0usize);
     for offset in 0..u64::from(max_count) {
         let Some(height) = from_height.checked_add(offset) else {
@@ -368,6 +394,8 @@ pub struct Served {
     pub payload: bool,
     /// Exact metadata request retained after local resource refusal.
     pub retry_request: Option<ServeRequest>,
+    /// Original local storage refusal, retained with the exact metadata retry request.
+    pub deferred: Option<crate::execution_attempt::ExecutionDeferred>,
     /// Verified events in order.
     pub events: Vec<Event>,
     /// Actual bytes sent per requesting peer, including continued rows from later turns.
@@ -539,7 +567,12 @@ pub fn serve(
                 };
                 let entries = match entries(blocks, from_height, max_count, max_bytes) {
                     Ok(entries) => entries,
-                    Err(error)
+                    Err(Attempt::Deferred(reason)) => {
+                        served.retry_request = Some(original);
+                        served.deferred = Some(reason);
+                        return Ok(served);
+                    }
+                    Err(Attempt::Rejected(error))
                         if matches!(
                             error.kind(),
                             io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
@@ -548,7 +581,7 @@ pub fn serve(
                         served.retry_request = Some(original);
                         return Ok(served);
                     }
-                    Err(error) => return Err(error),
+                    Err(Attempt::Rejected(error)) => return Err(error),
                 };
                 let msg = WireMessage::SyncResponse(SyncResponse {
                     instance,

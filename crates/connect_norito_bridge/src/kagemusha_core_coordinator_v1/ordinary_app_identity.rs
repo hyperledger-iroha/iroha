@@ -3,6 +3,8 @@
 //! Monetary methods stay unavailable until a separate genuine constrained financial owner exists.
 #[path = "ordinary_current_control.rs"]
 mod current_control;
+#[path = "ordinary_fi_http_proof.rs"]
+mod fi_http_proof;
 #[path = "ordinary_incoming_driver.rs"]
 mod incoming_driver;
 #[path = "ordinary_integrity_refresh.rs"]
@@ -23,6 +25,10 @@ pub use current_control::{
     KagemushaOrdinaryNativeCurrentControlRequestV1,
     KagemushaOrdinaryNativeCurrentControlResponseV1,
     invoke_kagemusha_native_ordinary_current_control_v1,
+};
+pub use fi_http_proof::{
+    KagemushaNativeOrdinaryFiHttpKeyLoanV1, KagemushaNativePreparedOrdinaryFiHttpProofV1,
+    prepare_kagemusha_native_ordinary_fi_http_proof_v1,
 };
 pub use incoming_driver::{
     KagemushaOrdinaryNativeIncomingRequestV1, KagemushaOrdinaryNativeIncomingResponseV1,
@@ -307,7 +313,10 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
         if let Some(session) = &self.native_account_session {
             session.recheck()?;
         }
-        self.selected.trusted_time_ms().map_err(|_| Error::Rejected)
+        self.selected
+            .trusted_time_ms()
+            .map(|_| ())
+            .map_err(|_| Error::Rejected)
     }
     fn recheck_installed_directory_originals(&self, path: &Path) -> Result<(), Error> {
         if let Some(cash) = &self.cash {
@@ -1065,6 +1074,54 @@ impl OrdinaryBackend {
         let mut owner = self.owner.lock().map_err(|_| Error::Rejected)?;
         if owner.handle != Some(handle) {
             return Err(Error::Rejected);
+        }
+        if phase == 15 {
+            let ticket =
+                u64::from_le_bytes(f[1].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let index =
+                u32::from_le_bytes(f[2].as_slice().try_into().map_err(|_| Error::Rejected)?);
+            let pending = owner
+                .attempt
+                .as_ref()
+                .ok_or(Error::Rejected)?
+                .retained_pending_identity()
+                .map_err(|_| Error::Rejected)?;
+            let app = owner.possession.as_ref().ok_or(Error::Rejected)?;
+            if app.ticket() != ticket {
+                return Err(Error::Rejected);
+            }
+            let body = app
+                .financial_start_original_http_data(
+                    pending,
+                    owner.reservation.as_ref().ok_or(Error::Rejected)?,
+                )
+                .map_err(|_| Error::Rejected)?;
+            let offset = (index as usize).checked_mul(65536).ok_or(Error::Rejected)?;
+            if offset >= body.len() {
+                return Err(Error::Rejected);
+            }
+            let now = self
+                .source
+                .selected
+                .trusted_time_ms()
+                .map_err(|_| Error::Rejected)?;
+            let fields = vec![
+                index.to_le_bytes().to_vec(),
+                body[offset..body.len().min(offset + 65536)].to_vec(),
+                Sha256::digest(&body).to_vec(),
+                (body.len() as u32).to_le_bytes().to_vec(),
+                pending.native_scope().to_vec(),
+                app.final_identity(pending, now)
+                    .map_err(|_| Error::Rejected)?
+                    .digest()
+                    .to_vec(),
+            ];
+            self.source.recheck_originals(&self.path)?;
+            let response = kagemusha_core_coordinator_encode_response_v1(&fields)
+                .map_err(|_| Error::Rejected)?;
+            kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
+                .map_err(|_| Error::Rejected)?;
+            return Ok(response);
         }
         if phase == 13
             && (owner.integrity_recovery.is_some()

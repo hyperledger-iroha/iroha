@@ -2639,7 +2639,12 @@ pub mod extractors {
                 });
             assert_eq!(norito_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
             let versioned_response = versioned_decode_rejection::<Dummy>(
-                iroha_version::error::Error::NoritoResourceLimit,
+                iroha_version::error::Error::NoritoResourceLimit(
+                    norito::core::DecodeResourceError::TotalAllocationExceeded {
+                        attempted: 1,
+                        limit: 0,
+                    },
+                ),
             );
             assert_eq!(versioned_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         }

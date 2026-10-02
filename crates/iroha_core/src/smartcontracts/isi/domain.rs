@@ -1272,7 +1272,7 @@ pub mod isi {
         #[metrics(+"unregister_account")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
@@ -2265,9 +2265,11 @@ pub mod isi {
                 .map(|ad| ad.id().clone())
                 .collect();
             for asset_id in remove_assets {
-                state_transaction
-                    .world
-                    .remove_asset_and_metadata_with_total(&asset_id)?;
+                crate::smartcontracts::isi::asset::isi::remove_account_asset_with_quantity_candidate(
+                    state_transaction,
+                    authority,
+                    &asset_id,
+                )?;
             }
             let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
@@ -2759,6 +2761,11 @@ pub mod isi {
             if state_transaction
                 .world
                 .sumeragi_npos_parameters()
+                .map_err(|error| {
+                    state_transaction.attempt_error_to_instruction_error(error.map_rejection(
+                        |message| InstructionExecutionError::InvariantViolation(message.into()),
+                    ))
+                })?
                 .is_some_and(|params| params.xor_asset_definition_id == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(

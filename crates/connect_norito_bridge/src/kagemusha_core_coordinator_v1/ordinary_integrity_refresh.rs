@@ -357,7 +357,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_integrity_refresh_v1(
         Ok(Err(Error::Rejected)) | Err(_) => crate::ERR_KAGEMUSHA_V1,
     }
 }
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIntegrityRefreshV1<
     'local,

@@ -1,12 +1,14 @@
 //! A startup owner retains its lock, validated prefix and every original recovery allocation.
 
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 
 /// Exclusive initialization in progress; no not-ready store or unvalidated tip is exposed.
 pub struct LaneStoreOpen {
     pub(super) store: FileLaneBlockStore,
     target: u64,
     pub(super) validated: u64,
+    refusal: Option<crate::execution_attempt::ExecutionDeferred>,
 }
 impl LaneStoreOpen {
     pub(super) fn new(store: FileLaneBlockStore, target: u64) -> Self {
@@ -14,6 +16,7 @@ impl LaneStoreOpen {
             store,
             target,
             validated: 0,
+            refusal: None,
         }
     }
     /// Complete recovery, returning this exact owner on every refusal or error.
@@ -26,10 +29,15 @@ impl LaneStoreOpen {
         clippy::result_large_err,
         reason = "return original startup ownership without allocating"
     )]
-    pub fn complete(mut self) -> Result<FileLaneBlockStore, (Self, io::Error)> {
+    pub fn complete(mut self) -> Result<FileLaneBlockStore, (Self, Attempt<io::Error>)> {
         if let Err(error) = self.progress() {
+            self.refusal = match &error {
+                Attempt::Deferred(original) => Some(original.clone()),
+                Attempt::Rejected(_) => None,
+            };
             return Err((self, error));
         }
+        self.refusal = None;
         *self.store.state.lock() = StoreState {
             tip: self.target,
             read: None,
@@ -37,7 +45,7 @@ impl LaneStoreOpen {
         };
         Ok(self.store)
     }
-    fn progress(&mut self) -> io::Result<()> {
+    fn progress(&mut self) -> Result<(), Attempt<io::Error>> {
         while self.validated < self.target {
             let height = self.validated + 1;
             let mut state = self.store.state.lock();
