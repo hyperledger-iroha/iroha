@@ -373,3 +373,7 @@ artifacts/*.json
 # either the repository root or the relay crate, depending on the test cwd.
 /.tmp*
 tools/soranet-relay/.tmp*
+
+# sorafs_cli writes deploy run outputs to .sorafs/deploy relative to its working
+# directory; they are operational outputs, never source or seal inputs.
+.sorafs/
