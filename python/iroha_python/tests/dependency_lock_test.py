@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import sys
+import sysconfig
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -118,17 +121,28 @@ def test_ci_lock_is_exact_and_hash_pinned() -> None:
         assert _exact_version(requirement) == _exact_version(lock_requirements[name])
 
 
-def test_ci_uses_checkout_sources_and_blake3_runtime() -> None:
+def test_ci_uses_selected_package_sources_and_blake3_runtime() -> None:
     import blake3
     import iroha_torii_client
     import norito
 
-    assert (
-        Path(iroha_torii_client.__file__)
-        .resolve()
-        .is_relative_to(PYTHON_ROOT / "iroha_torii_client")
-    )
-    assert Path(norito.__file__).resolve().is_relative_to(PYTHON_ROOT / "norito_py")
+    if os.environ.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE") == "1":
+        site_packages = Path(sysconfig.get_paths()["purelib"]).resolve(strict=True)
+        assert site_packages.is_relative_to(Path(sys.prefix).resolve(strict=True))
+        for package in (iroha_torii_client, norito):
+            origin = Path(package.__file__)
+            assert not origin.is_symlink()
+            assert origin.resolve(strict=True) == origin
+            assert origin.is_relative_to(site_packages)
+            assert package.__spec__.origin == str(origin)
+            assert tuple(package.__path__) == (str(origin.parent),)
+    else:
+        assert (
+            Path(iroha_torii_client.__file__)
+            .resolve()
+            .is_relative_to(PYTHON_ROOT / "iroha_torii_client")
+        )
+        assert Path(norito.__file__).resolve().is_relative_to(PYTHON_ROOT / "norito_py")
     assert len(blake3.blake3(b"numeric-v1").digest()) == 32
 
 

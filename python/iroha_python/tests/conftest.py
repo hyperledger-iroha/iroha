@@ -6,6 +6,7 @@ import os
 import site
 import sys
 import sysconfig
+import types
 from pathlib import Path
 
 
@@ -16,9 +17,6 @@ def _add_path(path: Path) -> None:
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_add_path(_ROOT)
-_add_path(_ROOT / "norito_py" / "src")
-_add_path(_ROOT / "iroha_torii_client")
 _add_path(_ROOT / "iroha_python" / "tests")
 
 _INSTALLED_PACKAGE_MODE = os.environ.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE")
@@ -26,7 +24,10 @@ if _INSTALLED_PACKAGE_MODE not in {None, "1"}:
     raise RuntimeError("IROHA_PYTHON_TEST_INSTALLED_PACKAGE must be unset or 1")
 
 if _INSTALLED_PACKAGE_MODE == "1":
-    for module_name in ("iroha_python", "iroha_native", "iroha_native._crypto"):
+    for module_name in (
+        "iroha_python", "iroha_native", "iroha_native._crypto",
+        "norito", "iroha_torii_client",
+    ):
         if module_name in sys.modules:
             raise RuntimeError(
                 f"installed-package tests reject pre-seeded module {module_name}"
@@ -81,6 +82,8 @@ if _INSTALLED_PACKAGE_MODE == "1":
 
     package_spec, package_origin = _package_spec("iroha_python")
     owner_spec, owner_origin = _package_spec("iroha_native")
+    norito_spec, norito_origin = _package_spec("norito")
+    torii_spec, torii_origin = _package_spec("iroha_torii_client")
     native_spec = importlib.machinery.PathFinder.find_spec(
         "iroha_native._crypto", [str(owner_origin.parent)]
     )
@@ -98,6 +101,12 @@ if _INSTALLED_PACKAGE_MODE == "1":
     sys.modules["iroha_native"] = owner
     owner_spec.loader.exec_module(owner)
     native = owner.load_crypto_extension()
+    norito = importlib.util.module_from_spec(norito_spec)
+    sys.modules["norito"] = norito
+    norito_spec.loader.exec_module(norito)
+    torii = importlib.util.module_from_spec(torii_spec)
+    sys.modules["iroha_torii_client"] = torii
+    torii_spec.loader.exec_module(torii)
     package = importlib.util.module_from_spec(package_spec)
     sys.modules["iroha_python"] = package
     package_spec.loader.exec_module(package)
@@ -120,6 +129,22 @@ if _INSTALLED_PACKAGE_MODE == "1":
     _assert_loaded(owner, "iroha_native", owner_origin, importlib.machinery.SourceFileLoader)
     _assert_loaded(package, "iroha_python", package_origin, importlib.machinery.SourceFileLoader)
     _assert_loaded(native, "iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
+    _assert_loaded(norito, "norito", norito_origin, importlib.machinery.SourceFileLoader)
+    _assert_loaded(torii, "iroha_torii_client", torii_origin, importlib.machinery.SourceFileLoader)
+
+    # A client test shares a Torii test helper. Keep that test-only namespace
+    # separate from the installed package's unchanged runtime search path.
+    test_namespace = types.ModuleType("iroha_torii_client.tests")
+    test_namespace.__package__ = test_namespace.__name__
+    test_namespace.__path__ = [str(_ROOT / "iroha_torii_client" / "tests")]
+    test_namespace.__spec__ = importlib.machinery.ModuleSpec(
+        test_namespace.__name__, loader=None, is_package=True
+    )
+    test_namespace.__spec__.submodule_search_locations = test_namespace.__path__
+    sys.modules[test_namespace.__name__] = test_namespace
 else:
+    _add_path(_ROOT)
+    _add_path(_ROOT / "norito_py" / "src")
+    _add_path(_ROOT / "iroha_torii_client")
     _add_path(_ROOT / "iroha_python" / "src")
     _add_path(_ROOT / "iroha_native" / "src")
