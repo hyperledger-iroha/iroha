@@ -46,9 +46,7 @@ const ARTIFACT_STREAM_BUFFER_BYTES_V1: usize = 64 * 1024;
 #[cfg(test)]
 mod stored_capture;
 
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) mod stored_key;
-#[cfg(feature = "zk-halo2-ipa")]
 pub(super) use stored_key::CanonicalArtifactDigestWriterV1;
 
 /// One canonical transparent parameter derivation and its exact wire encoding.
@@ -113,7 +111,8 @@ pub enum KagemushaCircuitFamilyV1 {
     InnerState,
     /// Compact public transport decider for the aggregate state.
     State,
-    /// Compact outer recipient hardware authorization checked before reserve mutation.
+    /// Pre-debit authorization; the signed native profile selects the exact hardware-recursive
+    /// or ordinary-app leaf family. The same four semantic roles require fresh family-specific keys.
     MintAuthorization,
     /// Compact outer finalized reserve-mint receipt and consensus-finality helper.
     MintCredit,
@@ -701,7 +700,6 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
 
     /// Exact signed ordinary Guard roles used by the first ordinary production State family.
     /// Public helper originals remain untrusted until their actual equations are consumed.
-    #[cfg(feature = "kagemusha-production-prover")]
     pub(super) fn ordinary_recursion_artifacts(
         &self,
     ) -> Result<KagemushaRecursionArtifactsV1, KagemushaArtifactErrorV1> {
@@ -1070,6 +1068,126 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Independent first-release storage catalogue. Updating the release inventory requires
+    // explicit storage coverage for each key family, kind and Pasta curve, not a numeric count.
+    pub(super) fn storage_role_catalogue() -> Vec<(
+        KagemushaArtifactRoleV1,
+        KagemushaArtifactKindV1,
+        KagemushaPastaParityV1,
+    )> {
+        use KagemushaArtifactKindV1::{Parameters, ProvingKey, VerifyingKey};
+        use KagemushaArtifactRoleV1 as Role;
+        use KagemushaPastaParityV1::{Ep, Eq};
+        let mut roles = vec![
+            (Role::ParamsEq, Parameters, Eq),
+            (Role::ParamsEp, Parameters, Ep),
+        ];
+        for [pk_eq, vk_eq, pk_ep, vk_ep] in [
+            [
+                Role::InnerStatePkEq,
+                Role::InnerStateVkEq,
+                Role::InnerStatePkEp,
+                Role::InnerStateVkEp,
+            ],
+            [
+                Role::StatePkEq,
+                Role::StateVkEq,
+                Role::StatePkEp,
+                Role::StateVkEp,
+            ],
+            [
+                Role::MintAuthorizationPkEq,
+                Role::MintAuthorizationVkEq,
+                Role::MintAuthorizationPkEp,
+                Role::MintAuthorizationVkEp,
+            ],
+            [
+                Role::MintCreditPkEq,
+                Role::MintCreditVkEq,
+                Role::MintCreditPkEp,
+                Role::MintCreditVkEp,
+            ],
+            [
+                Role::PlatformCredentialPkEq,
+                Role::PlatformCredentialVkEq,
+                Role::PlatformCredentialPkEp,
+                Role::PlatformCredentialVkEp,
+            ],
+            [
+                Role::GuardBundlePkEq,
+                Role::GuardBundleVkEq,
+                Role::GuardBundlePkEp,
+                Role::GuardBundleVkEp,
+            ],
+            [
+                Role::TerminalAuthorizationPkEq,
+                Role::TerminalAuthorizationVkEq,
+                Role::TerminalAuthorizationPkEp,
+                Role::TerminalAuthorizationVkEp,
+            ],
+            [
+                Role::CommitWrapperPkEq,
+                Role::CommitWrapperVkEq,
+                Role::CommitWrapperPkEp,
+                Role::CommitWrapperVkEp,
+            ],
+            [
+                Role::InnerMintAuthorizationPkEq,
+                Role::InnerMintAuthorizationVkEq,
+                Role::InnerMintAuthorizationPkEp,
+                Role::InnerMintAuthorizationVkEp,
+            ],
+            [
+                Role::InnerMintCreditPkEq,
+                Role::InnerMintCreditVkEq,
+                Role::InnerMintCreditPkEp,
+                Role::InnerMintCreditVkEp,
+            ],
+            [
+                Role::MintHashShardPkEq,
+                Role::MintHashShardVkEq,
+                Role::MintHashShardPkEp,
+                Role::MintHashShardVkEp,
+            ],
+            [
+                Role::MintHashClaimPkEq,
+                Role::MintHashClaimVkEq,
+                Role::MintHashClaimPkEp,
+                Role::MintHashClaimVkEp,
+            ],
+            [
+                Role::OrdinaryAppGuardPkEq,
+                Role::OrdinaryAppGuardVkEq,
+                Role::OrdinaryAppGuardPkEp,
+                Role::OrdinaryAppGuardVkEp,
+            ],
+        ] {
+            roles.extend([
+                (pk_eq, ProvingKey, Eq),
+                (vk_eq, VerifyingKey, Eq),
+                (pk_ep, ProvingKey, Ep),
+                (vk_ep, VerifyingKey, Ep),
+            ]);
+        }
+        roles
+    }
+
+    #[test]
+    fn storage_catalogue_covers_each_released_role_kind_and_curve() {
+        let catalogue = storage_role_catalogue();
+        assert_eq!(
+            catalogue
+                .iter()
+                .map(|(role, _, _)| *role)
+                .collect::<Vec<_>>(),
+            KagemushaArtifactRoleV1::ALL
+        );
+        for (role, kind, parity) in catalogue {
+            let actual = KagemushaArtifactDescriptorV1::for_role(role);
+            assert_eq!((actual.kind, actual.parity), (kind, parity), "{role:?}");
+        }
+    }
 
     #[test]
     fn artifact_empty_effect_rejects_nonzero_and_cross_release_substitution() {

@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from ._canonical_values import (
+    BASE58_ALPHABET,
+    BASE58_INDEX,
+    _QUANTITY_MAX_MANTISSA,
+    _canonical_quantity,
+    _decode_base_n,
+    _offline_exact_string,
+    _offline_canonical_asset_definition_id,
+)
+
 from .native_sumeragi import SumeragiStatus, SumeragiFootprint, SumeragiBeaconHorizon, SumeragiHaltReason, parse_native_status_json
 from .native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters, SumeragiDataAvailabilityLayout, parse_native_lanes_json
 from .iroha_hash import iroha_hash_bytes as _iroha_hash_bytes
@@ -177,8 +187,6 @@ from .vpn_validation import (
 # authority, because it may be missing, dishonest, or describe encoded bytes.
 _KAIGI_RELAY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
 
-BASE58_ALPHABET = _account_id_codec.BASE58_ALPHABET
-BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
 IROHA_POEM_KANA_HALFWIDTH = _account_id_codec.IROHA_POEM_KANA_HALFWIDTH
 I105_ALPHABET = _account_id_codec.I105_ALPHABET
 I105_INDEX = _account_id_codec.I105_INDEX
@@ -227,8 +235,6 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "receipt_recorded",
 }
 _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
-_QUANTITY_MAX_TEXT_LENGTH = 155
-_QUANTITY_MAX_MANTISSA = (1 << 511) - 1
 _FEE_QUOTE_U64_MAX = (1 << 64) - 1
 _FEE_QUOTE_RESPONSE_MAX_BYTES = 64 * 1024
 _FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64 * 1024
@@ -411,21 +417,6 @@ _VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
 _VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
 
 
-def _canonical_quantity(value: Any, context: str) -> str:
-    """Decode one canonical bounded non-negative Quantity JSON string."""
-
-    if not isinstance(value, str):
-        raise RuntimeError(f"{context} must be a quantity string")
-    if len(value) > _QUANTITY_MAX_TEXT_LENGTH:
-        raise RuntimeError(f"{context} quantity exceeds the text length bound")
-    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
-    if matched is None:
-        raise RuntimeError(f"{context} must be a canonical non-negative quantity")
-    fraction = matched.group(2) or ""
-    mantissa = int(matched.group(1) + fraction)
-    if mantissa > _QUANTITY_MAX_MANTISSA:
-        raise RuntimeError(f"{context} quantity exceeds the signed 512-bit domain")
-    return value
 
 
 def _canonical_numeric(value: Any, context: str) -> str:
@@ -590,25 +581,6 @@ _SORAFS_ORDERBOOK_LEDGER_EVENT_FIELDS = frozenset(
         "occurred_at_unix_ms",
     }
 )
-def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
-    value = 0
-    for digit in digits:
-        value = value * base + digit
-    if value == 0:
-        decoded = b""
-    else:
-        pieces = bytearray()
-        while value:
-            pieces.append(value & 0xFF)
-            value >>= 8
-        decoded = bytes(reversed(pieces))
-    pad = 0
-    for digit in digits:
-        if digit == 0:
-            pad += 1
-        else:
-            break
-    return b"\x00" * pad + decoded
 
 
 def _parse_i105_sentinel_and_payload(encoded: str) -> Tuple[str, int, str]:
@@ -702,7 +674,6 @@ __all__ = [
     "PipelineTransactionStatus",
     "PipelineTransactionStatusResponse",
     "MultisigResponse",
-    "MultisigDraftIntent",
     "GovernanceContractEmergencyHold",
     "GovernanceContractLifecycle",
     "GovernanceContractResponse",
@@ -1723,7 +1694,6 @@ _KAGEMUSHA_READINESS_PATH = "/v1/kagemusha/readiness"
 _KAGEMUSHA_TOP_UP_PATH = "/v1/kagemusha/top-up"
 _KAGEMUSHA_REDEEM_PATH = "/v1/kagemusha/redeem"
 _KAGEMUSHA_OPERATION_PATH_PREFIX = "/v1/kagemusha/operations/"
-_OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
@@ -1752,44 +1722,8 @@ def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional
 
 
 
-def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -> str:
-    if not isinstance(value, str):
-        raise RuntimeError(f"{context} must be a string")
-    if non_empty and not value:
-        raise RuntimeError(f"{context} must not be empty")
-    if value.strip() != value:
-        raise RuntimeError(f"{context} must not contain surrounding whitespace")
-    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
-        raise RuntimeError(f"{context} must not contain Unicode surrogate code points")
-    if any(ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F for character in value):
-        raise RuntimeError(f"{context} must not contain control characters")
-    return value
 
 
-def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
-    asset_definition_id = _offline_exact_string(value, context)
-    if _OFFLINE_ASSET_DEFINITION_ID_RE.fullmatch(asset_definition_id) is None:
-        raise RuntimeError(
-            f"{context} must be a canonical unprefixed Base58 asset definition id"
-        )
-    # Keep this complete validation synchronized with the normative Rust codec:
-    # `iroha_data_model::asset::AssetDefinitionId::parse_address_literal`.
-    payload = _decode_base_n(
-        [BASE58_INDEX[symbol] for symbol in asset_definition_id],
-        len(BASE58_ALPHABET),
-    )
-    uuid_bytes = payload[1:17]
-    if (
-        len(payload) != 21
-        or payload[0] != 1
-        or payload[17:] != blake3(payload[:17]).digest(length=4)
-        or (uuid_bytes[6] >> 4) != 0b0100
-        or (uuid_bytes[8] & 0b1100_0000) != 0b1000_0000
-    ):
-        raise RuntimeError(
-            f"{context} must be a canonical checksummed UUIDv4 asset definition id"
-        )
-    return asset_definition_id
 
 
 def _offline_canonical_account_id_bytes(value: Any, context: str) -> bytes:
@@ -3424,12 +3358,6 @@ class MultisigResponse:
     signing_message_b64: Optional[str]
 
 
-@dataclass(frozen=True)
-class MultisigDraftIntent:
-    """Caller-trusted exact executable and metadata archives for an unsigned proposal."""
-
-    executable_b64: str
-    metadata_b64: str
 
 
 @dataclass(frozen=True)
@@ -6546,218 +6474,6 @@ class ToriiClient(
         )
         return result
 
-    def propose_multisig(
-        self,
-        *,
-        multisig_account_id: Optional[str] = None,
-        multisig_account_alias: Optional[str] = None,
-        signer_account_id: str,
-        instructions: Sequence[Any],
-        fee_payment: Mapping[str, Any],
-        public_key_hex: Optional[str] = None,
-        signature_b64: Optional[str] = None,
-        creation_time_ms: Optional[int] = None,
-        validation_fee_policy_version: Optional[int] = None,
-        validation_fee_policy_hash: Optional[str] = None,
-        validation_fee_hijiri_fee_quote_hash: Optional[str] = None,
-        validation_fee_instruction_index: Optional[int] = None,
-        validation_fee_transfer_entry_index: Optional[int] = None,
-        draft_intent: Optional[MultisigDraftIntent] = None,
-    ) -> MultisigResponse:
-        """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
-
-        Each instruction may be raw native Norito ``InstructionBox`` bytes or an already-base64
-        encoded string carrying those bytes.
-        """
-
-        has_account_id = multisig_account_id is not None
-        has_alias = multisig_account_alias is not None
-        if has_account_id == has_alias:
-            raise ValueError(
-                "propose_multisig requires exactly one of multisig_account_id or multisig_account_alias"
-            )
-        if isinstance(instructions, (str, bytes, bytearray, memoryview)):
-            raise TypeError("propose_multisig.instructions must be a sequence of instruction payloads")
-        try:
-            instruction_values = list(instructions)
-        except TypeError as exc:
-            raise TypeError(
-                "propose_multisig.instructions must be a sequence of instruction payloads"
-            ) from exc
-        if not instruction_values:
-            raise ValueError("propose_multisig.instructions must not be empty")
-
-        normalized_signer = self._normalize_canonical_account_id(
-            signer_account_id,
-            "propose_multisig.signer_account_id",
-        )
-        request_payload: Dict[str, Any] = {
-            "signer_account_id": normalized_signer,
-            "instructions": [
-                self.multisig_instruction_b64(
-                    value,
-                    context=f"propose_multisig.instructions[{index}]",
-                )
-                for index, value in enumerate(instruction_values)
-            ],
-        }
-        normalized_fee_payment = self._normalize_fee_payment_intent(
-            fee_payment,
-            context="propose_multisig.fee_payment",
-        )
-        request_payload["fee_payment"] = normalized_fee_payment
-        if has_account_id:
-            request_payload["multisig_account_id"] = self._normalize_canonical_account_id(
-                multisig_account_id,
-                "propose_multisig.multisig_account_id",
-            )
-        else:
-            request_payload["multisig_account_alias"] = self._require_non_empty_string(
-                multisig_account_alias,
-                "propose_multisig.multisig_account_alias",
-            )
-        if public_key_hex is not None:
-            request_payload["public_key_hex"] = self._normalize_hex_string(
-                public_key_hex,
-                context="propose_multisig.public_key_hex",
-                expected_length=64,
-            )
-        if signature_b64 is not None:
-            request_payload["signature_b64"] = self._normalize_required_exact_base64_payload(
-                signature_b64,
-                "propose_multisig.signature_b64",
-            )
-        normalized_creation_time = self._normalize_optional_int(
-            creation_time_ms,
-            "propose_multisig.creation_time_ms",
-            allow_zero=True,
-        )
-        if normalized_creation_time is not None:
-            request_payload["creation_time_ms"] = normalized_creation_time
-        has_validation_fee_policy_version = validation_fee_policy_version is not None
-        has_validation_fee_policy_hash = validation_fee_policy_hash is not None
-        has_hijiri_fee_quote_hash = validation_fee_hijiri_fee_quote_hash is not None
-        has_validation_fee_instruction_index = validation_fee_instruction_index is not None
-        has_validation_fee_transfer_entry_index = (
-            validation_fee_transfer_entry_index is not None
-        )
-        if has_validation_fee_policy_version != has_validation_fee_policy_hash:
-            raise ValueError(
-                "propose_multisig validation fee policy version and hash must be provided together"
-            )
-        if not has_validation_fee_policy_version and has_hijiri_fee_quote_hash:
-            raise ValueError(
-                "propose_multisig validation fee Hijiri quote hash requires policy metadata"
-            )
-        if not has_validation_fee_policy_version and has_validation_fee_instruction_index:
-            raise ValueError(
-                "propose_multisig validation fee instruction index requires policy metadata"
-            )
-        if not has_validation_fee_policy_version and has_validation_fee_transfer_entry_index:
-            raise ValueError(
-                "propose_multisig validation fee transfer entry index requires policy metadata"
-            )
-        if has_validation_fee_transfer_entry_index and not has_validation_fee_instruction_index:
-            raise ValueError(
-                "propose_multisig validation fee transfer entry index requires instruction index"
-            )
-        if has_validation_fee_policy_version:
-            normalized_policy_version = _require_u64(
-                validation_fee_policy_version,
-                "propose_multisig.validation_fee_policy_version",
-            )
-            request_payload["validation_fee_policy_version"] = str(
-                normalized_policy_version
-            )
-            request_payload["validation_fee_policy_hash"] = self._normalize_hex32_string(
-                validation_fee_policy_hash,
-                context="propose_multisig.validation_fee_policy_hash",
-            )
-            if has_hijiri_fee_quote_hash:
-                request_payload["validation_fee_hijiri_fee_quote_hash"] = (
-                    self._normalize_hex32_string(
-                        validation_fee_hijiri_fee_quote_hash,
-                        context=(
-                            "propose_multisig.validation_fee_hijiri_fee_quote_hash"
-                        ),
-                    )
-                )
-            if has_validation_fee_instruction_index:
-                normalized_instruction_index = _require_u64(
-                    validation_fee_instruction_index,
-                    "propose_multisig.validation_fee_instruction_index",
-                )
-                request_payload["validation_fee_instruction_index"] = str(
-                    normalized_instruction_index
-                )
-            if has_validation_fee_transfer_entry_index:
-                normalized_transfer_entry_index = _require_u64(
-                    validation_fee_transfer_entry_index,
-                    "propose_multisig.validation_fee_transfer_entry_index",
-                )
-                request_payload["validation_fee_transfer_entry_index"] = str(
-                    normalized_transfer_entry_index
-                )
-        body = self._post_json(
-            "/v1/multisig/propose",
-            request_payload,
-            context="multisig propose response",
-        )
-        result = self._parse_multisig_response(
-            body,
-            context="multisig propose response",
-        )
-        if not self._fee_payment_selections_match(
-            result.fee_payment,
-            normalized_fee_payment,
-        ):
-            raise RuntimeError(
-                "multisig propose response fee_payment changed the requested payer, "
-                "sponsor revision, or gas bound"
-            )
-        if (
-            normalized_creation_time is not None
-            and result.creation_time_ms != normalized_creation_time
-        ):
-            raise RuntimeError(
-                "multisig propose response creation_time_ms is not bound to the request"
-            )
-        if not result.submitted:
-            if not isinstance(draft_intent, MultisigDraftIntent):
-                raise ValueError(
-                    "unsigned multisig proposals require a caller-trusted MultisigDraftIntent"
-                )
-            if result.transaction_payload_b64 is None:
-                raise RuntimeError(
-                    "multisig propose response is missing its transaction payload"
-                )
-            transaction_payload = base64.b64decode(
-                result.transaction_payload_b64,
-                validate=True,
-            )
-            try:
-                bindings = _transaction_payload_bindings(transaction_payload)
-            except RuntimeError as exc:
-                raise RuntimeError(
-                    "multisig propose response transaction_payload_b64 must contain "
-                    "one canonical transaction payload"
-                ) from exc
-            if result.creation_time_ms is None:
-                raise RuntimeError(
-                    "multisig propose response omitted creation_time_ms for an unsigned draft"
-                )
-            _validate_exact_unsigned_transaction_intent(
-                bindings,
-                signing_context=self._local_signing_context,
-                authority=normalized_signer,
-                creation_time_ms=result.creation_time_ms,
-                fee_payment=result.fee_payment,
-                executable_b64=draft_intent.executable_b64,
-                metadata_b64=draft_intent.metadata_b64,
-                context="multisig propose response",
-
-            )
-        return result
 
     def get_governance_contract(
         self,
@@ -9330,18 +9046,6 @@ class ToriiClient(
             raise ValueError(f"{context} must be exact standard-base64")
         return literal
 
-    @staticmethod
-    def multisig_instruction_b64(value: Any, *, context: str = "instruction") -> str:
-        """Return a base64 native Norito ``InstructionBox`` payload for multisig propose."""
-
-        if isinstance(value, str):
-            return ToriiClient._normalize_required_base64_payload(value, context)
-        if isinstance(value, (bytes, bytearray, memoryview)):
-            raw = bytes(value)
-            if not raw:
-                raise RuntimeError(f"{context} must not be empty")
-            return base64.b64encode(raw).decode("ascii")
-        raise TypeError(f"{context} must be bytes-like or base64 text")
 
     @staticmethod
     def _normalize_optional_exact_base64_payload(value: Any, context: str) -> Optional[str]:

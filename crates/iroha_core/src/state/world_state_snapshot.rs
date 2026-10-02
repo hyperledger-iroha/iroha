@@ -7,6 +7,8 @@
 //! complete reconstructed root/count must match certified R; current typed targets
 //! that changed in the tail are refused. Decoded restoration requires native replay.
 
+#[path = "world_state_snapshot/ordinary_mint_issuer.rs"]
+mod ordinary_mint_issuer;
 #[path = "world_state_snapshot/ordinary_wallet.rs"]
 mod ordinary_wallet;
 use super::world_state_cut::CutCapsule;
@@ -511,6 +513,46 @@ impl State {
         })
     }
 
+    /// Borrow two distinct immutable execution record originals at one certified cut.
+    /// Missing, oversized, post-result or changed originals refuse publication.
+    /// The original native cut owner retains network, root, generation and capacity checks.
+    pub fn with_native_execution_records_snapshot_v1<T>(
+        &self,
+        tip: &CommittedBlock,
+        keys: &[iroha_model_base::state_path::StatePath; 2],
+        budget: &AllocationBudget,
+        consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>, &Vec<u8>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if keys[0] == keys[1] {
+            return Err("World snapshot target keys must differ".into());
+        }
+        self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
+            let first = world
+                .smart_contract_state
+                .get(&keys[0])
+                .ok_or("World snapshot first immutable execution record is absent")?;
+            let second = world
+                .smart_contract_state
+                .get(&keys[1])
+                .ok_or("World snapshot second immutable execution record is absent")?;
+            if first.len() > 64 * 1024 || second.len() > 64 * 1024 {
+                return Err(
+                    "World snapshot immutable execution record exceeds its reader bound".into(),
+                );
+            }
+            for (key, value) in [(&keys[0], first), (&keys[1], second)] {
+                require_target(
+                    snapshot,
+                    "world.smart_contract_state",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(key)?),
+                    hash_value(value)?,
+                )?;
+            }
+            consume(snapshot, first, second)
+        })
+    }
+
     /// Publish complete canonical alias bindings and smart-contract key originals
     /// to a currently registered native ledger-wide reader at one certified cut.
     ///
@@ -757,3 +799,7 @@ mod authority_originals;
 #[cfg(test)]
 #[path = "world_state_snapshot_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "world_state_snapshot_multisig_tests.rs"]
+mod multisig_tests;

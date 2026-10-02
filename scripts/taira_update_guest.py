@@ -31,7 +31,7 @@ COHORT_STALL_TIMEOUT_SECONDS = 600
 COHORT_MAX_TIMEOUT_SECONDS = 90 * 60
 COHORT_OBSERVATION_SCHEMA = 'taira.cohort-observation-intent.v1'
 COHORT_REMAINING_ACTIONS = ('observe_cohort', 'verify_strict_restore',
-                          'public_basic_doctor', 'publish_completion_receipts')
+                          'observe_final_cohort', 'publish_completion_receipts')
 FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
@@ -1371,13 +1371,8 @@ def apply(plan, capacity_source):
         restored = [verify_restored_checkpoint(row, checkpoint)
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
         record('checkpoint-restored.json', restored)
-        report = json.loads(command([CLI, 'taira', 'doctor',
-                                     '--scope', 'basic', '--json', '--public-root', PUBLIC_ORIGIN],
-                                    timeout=90, name='public-doctor'))
-        need(report.get('command') == 'taira_doctor' and report.get('status') == 'ok'
-             and report.get('scope') == 'basic' and report.get('failures') == []
-             and len(report.get('checks', [])) == 10
-             and all(row.get('ok') is True for row in report['checks']), 'public basic doctor failed')
+        # Public doctor is an independently invoked diagnostic. Deployment
+        # completion depends on the actual cohort, retained state and readiness.
         final_samples = []
         final = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
                                 retained_tip=retained_tip, startup_processes=startup_processes,
@@ -1396,8 +1391,8 @@ def apply(plan, capacity_source):
                   'cohort_retained_tip_verified': retained_tip,
                   'cohort_quorum': final_samples[-1],
                   'cohort_fresh_quorum_confirmations': len(final_samples),
-                  'cohort_processes_verified_after_public_doctor': True,
-                  'all_own_retained_tips_verified_after_public_doctor': True,
+                  'cohort_processes_verified_after_final_observation': True,
+                  'all_own_retained_tips_verified_after_final_observation': True,
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}

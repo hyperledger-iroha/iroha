@@ -20,6 +20,9 @@ mod issuer_dispatch_retention_tests;
 #[path = "../participant_enrollment_fi_read_tests.rs"]
 mod fi_current_receiving_tests;
 
+#[path = "../participant_enrollment_http_tests.rs"]
+mod http_original_tests;
+
 struct Fixture {
     signer: KeyPair,
     signatory: AccountId,
@@ -391,7 +394,7 @@ fn actual_owner_rejects_another_network_schema_peer_config_and_retained_certifie
 }
 
 pub(crate) struct NativeCustodyFixture(Fixture);
-#[cfg(all(unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(unix)]
 impl NativeCustodyFixture {
     pub(crate) fn new() -> Self {
         Self(Fixture::new())

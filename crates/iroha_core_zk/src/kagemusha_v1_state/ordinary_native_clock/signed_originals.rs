@@ -132,6 +132,25 @@ impl KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1 {
         }
         Ok(())
     }
+    /// Height shared by the four signature/finality-admitted original observations.
+    /// This lends their historical certified prefix, without a current clock or FI loan.
+    pub(crate) fn certified_height(&self) -> Result<u64> {
+        let mut height = None;
+        for original in &self.original.originals {
+            let reply: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
+                original,
+                norito::canonical_decode_limits(MAX_FRAME / 4),
+            )
+            .map_err(|_| Rejected)?;
+            let current = reply.body.finality_proof.height();
+            if current == 0 || height.is_some_and(|prior| prior != current) {
+                return Err(Rejected);
+            }
+            height = Some(current);
+        }
+        height.ok_or(Rejected)
+    }
+
     /// Complete sample selector shared with the Native context's maintained purpose-bound digest.
     #[must_use]
     pub fn signed_observations_original_digest(&self) -> [u8; 32] {
@@ -220,6 +239,22 @@ impl KagemushaRetainedOrdinaryNativeClockOriginalsV1 {
     }
 }
 impl KagemushaOrdinaryNativeClockOwnerV1 {
+    /// Authenticate received historical samples under this actual installed clock root/prefix.
+    /// Offered samples cannot enter the clock WAL, renew elapsed time or construct a retained
+    /// Native nonce loan. This lends only independently checked signed/finality original data.
+    pub(crate) fn authenticate_received_historical_signed_original(
+        &self,
+        raw: &[u8],
+    ) -> Result<KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1> {
+        self.recheck()?;
+        let verifier = self.retained_finality_verifier_for_original_custody()?;
+        let verified =
+            verify_ordinary_native_signed_clock_original_v1(&self.selected, &verifier, raw)?;
+        verified.certified_height()?;
+        self.recheck()?;
+        Ok(verified)
+    }
+
     /// Borrow historical signed data from the authentic private WAL without lending a previous
     /// boot's current time. Only actual Native retained cash records supply the context here.
     pub(crate) fn retained_cash_clock_originals(

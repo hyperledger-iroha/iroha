@@ -45,7 +45,7 @@ const WORD_BITS: usize = 64;
 const STAGES: usize = 3;
 const SOURCE_OFFSET: usize = PUBLIC_WIDTH;
 const BANK_OFFSET: usize = SOURCE_OFFSET + word::WIDTH;
-const RESULT: usize = 0;
+pub(super) const RESULT: usize = 0;
 const STAGE: usize = 4;
 const SELECTORS: usize = STAGE + STAGES * WORD_BITS;
 pub(super) const BANK_WIDTH: usize = SELECTORS + 4 * STAGES;
@@ -378,6 +378,19 @@ fn residues(row: &[F], fixed: &[F], word: u32) -> Result<Vec<F>, ProofManagedNot
 /// Barrel stages are shared unchanged between single-step and segment adapters.
 pub(super) fn bank_residues(bank: &[F], sources: Sources<'_>, kinds: [F; 5]) -> Vec<F> {
     let mut out = Vec::with_capacity(BANK_CONSTRAINTS);
+    append_bank_residues(&mut out, bank, sources, kinds);
+    debug_assert_eq!(out.len(), BANK_CONSTRAINTS);
+    out
+}
+
+/// Append directly into the caller-owned private residual allocation.
+pub(super) fn append_bank_residues(
+    out: &mut Vec<F>,
+    bank: &[F],
+    sources: Sources<'_>,
+    kinds: [F; 5],
+) {
+    let start = out.len();
     for stage in 0..STAGES {
         let previous = if stage == 0 {
             sources.bits(0)
@@ -420,8 +433,7 @@ pub(super) fn bank_residues(bank: &[F], sources: Sources<'_>, kinds: [F; 5]) -> 
             ..STAGE + (STAGES - 1) * WORD_BITS + 16 * (limb + 1)];
         out.push(bank[RESULT + limb].sub(word::pack(bits, 1)));
     }
-    debug_assert_eq!(out.len(), BANK_CONSTRAINTS);
-    out
+    debug_assert_eq!(out.len() - start, BANK_CONSTRAINTS);
 }
 
 pub(super) fn bank_witness(opcode: u8, left: u64, amount: u64) -> [F; BANK_WIDTH] {
@@ -431,7 +443,9 @@ pub(super) fn bank_witness(opcode: u8, left: u64, amount: u64) -> [F; BANK_WIDTH
     let mut value = left;
     for stage in 0..STAGES {
         let digit = (amount >> (2 * stage)) & 3;
-        bank[SELECTORS + 4 * stage + digit as usize] = F::ONE;
+        // Write all four positions; a private amount must not choose an address.
+        bank[SELECTORS + 4 * stage..SELECTORS + 4 * (stage + 1)]
+            .copy_from_slice(&stage_selectors(F(digit & 1), F(digit >> 1)));
         value = kind.apply(value, (digit << (2 * stage)) as u32);
         for position in 0..WORD_BITS {
             bank[STAGE + stage * WORD_BITS + position] = F((value >> position) & 1);

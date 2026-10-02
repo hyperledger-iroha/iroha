@@ -619,7 +619,11 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         let cached = (cache.base_columns + cache.aux_columns) as u64;
         assert!(cache.base_columns <= segment.base_width);
         assert!(cache.aux_columns <= segment.aux_width);
-        assert!(cache.aux_columns == 0 || cache.base_columns == segment.base_width);
+        if segment.adapter == SegmentAdapterIdV1::P256Arithmetic {
+            assert!(cache.base_columns == 0 || cache.aux_columns == segment.aux_width);
+        } else {
+            assert!(cache.aux_columns == 0 || cache.base_columns == segment.base_width);
+        }
         if stripes == 1 {
             assert_eq!(cached, 0);
         }
@@ -657,7 +661,14 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     // removing 16 RFC and 64 SHA public scalar bindings, removes a further
     // 24 * 2^21 + 4 * 16 * 2^22 local evaluations. The 20 new private
     // quotient terms and 32 original-column replays are counted separately.
-    assert_eq!(residues, 28_245_204_992);
+    // The final original-polynomial CA joins retire 208 further scalar
+    // constraints per SHA registration and four RFC root-SPKI constraints.
+    // Their 108 private joint quotients have a separate original-owner census.
+    assert_eq!(
+        28_245_204_992_u64 - 4 * 208 * (1 << 22) - 4 * (1 << 21),
+        24_747_155_456
+    );
+    assert_eq!(residues, 24_747_155_456);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,

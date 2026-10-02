@@ -165,7 +165,6 @@ fn disk_history_store_reopens_prepare_and_dual_commit_with_exact_retries() {
     );
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn pending_incoming_prefix_is_actual_signed_wal_and_unwraps_only_exact_original_cas() {
     let (_parent, path) = location();
@@ -210,7 +209,6 @@ fn pending_incoming_prefix_is_actual_signed_wal_and_unwraps_only_exact_original_
     assert_eq!(fs::read(path.join(JOURNAL_FILE)).unwrap(), durable_bytes);
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn pending_incoming_prefix_refuses_substituted_original_and_later_unrelated_commit() {
     let (_parent, path) = location();
@@ -264,7 +262,6 @@ fn pending_incoming_prefix_refuses_substituted_original_and_later_unrelated_comm
     assert!(store.pending_incoming.is_none());
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 #[test]
 fn pending_incoming_key_selection_uses_original_provisioned_epoch_and_reference() {
     let (_parent, path) = location();

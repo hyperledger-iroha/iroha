@@ -108,6 +108,7 @@ mod json_helpers;
 
 mod json_key_codec;
 
+pub mod fee_evidence;
 mod json_object_key;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
@@ -204,6 +205,8 @@ pub mod transactions;
 pub mod trigger;
 /// Parliament-governed validation-fee policy and transaction metadata bindings.
 pub mod validation_fee;
+/// Protected conversion accounting and validator rewards.
+pub mod validation_fee_rewards;
 /// Permission tokens and helpers related to validators.
 pub mod validator;
 /// Verification helper traits and host bindings.

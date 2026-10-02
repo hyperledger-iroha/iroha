@@ -252,11 +252,6 @@ class CSharpNativePackageTests(unittest.TestCase):
         consumer = (
             REPO_ROOT / "ci/check_csharp_sdk_package_consumer.sh"
         ).read_text(encoding="utf-8")
-        hijiri_quote = (
-            REPO_ROOT
-            / "csharp/src/Hyperledger.Iroha.Sdk/Torii/"
-            "ToriiClient.ValidationFeeHijiriQuote.cs"
-        ).read_text(encoding="utf-8")
 
         reviewed_rows = (
             (
@@ -658,19 +653,18 @@ class CSharpNativePackageTests(unittest.TestCase):
         self.assertIn("BeforeTargets=\"GenerateNuspec\"", project)
         self.assertIn("$(IrohaNativePackageScript)&quot; verify-stage", project)
         self.assertIn("SoraFsReferenceValidators.IsAppealFinanceAvailable()", consumer)
-        self.assertIn(
-            "ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest)", consumer
-        )
-        self.assertIn(
-            "ValidationFeeHijiriQuoteNative.VerifyResponseV1(", consumer
-        )
-        self.assertIn("catch (InvalidDataException)", consumer)
-        self.assertIn("if (!OperatingSystem.IsWindows())", hijiri_quote)
-        self.assertIn("NativeEncodeRequestV1Unix(", hijiri_quote)
-        self.assertIn("NativeVerifyResponseV1Unix(", hijiri_quote)
-        self.assertIn("NativeEncodeRequestV1Windows(", hijiri_quote)
-        self.assertIn("NativeVerifyResponseV1Windows(", hijiri_quote)
-        self.assertIn("out uint outputLength);", hijiri_quote)
+        self.assertIn("NativeLibrary.Load(", consumer)
+        self.assertIn("typeof(SoraFsReferenceValidators).Assembly", consumer)
+        self.assertIn("NativeLibrary.GetExport(feeBridge, symbol)", consumer)
+        self.assertIn("NativeLibrary.TryGetExport(feeBridge, retired, out _)", consumer)
+        self.assertIn("NativeLibrary.Free(feeBridge)", consumer)
+        for symbol in (
+            "connect_norito_retail_fee_intent_hash_v1",
+            "connect_norito_retail_fee_assessment_marker_v1",
+            "connect_norito_retail_fee_assessment_decode_v1",
+        ):
+            self.assertIn(symbol, consumer)
+        self.assertNotIn("ValidationFeeHijiriQuoteNative.", consumer)
         self.assertIn("CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER", consumer)
 
 

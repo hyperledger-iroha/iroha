@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import inspect
 import json
 from types import SimpleNamespace
@@ -33,28 +31,6 @@ from iroha_python.crypto import (
 
 CANONICAL_ED25519_PUBLIC_KEY = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
 CANONICAL_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
-
-
-def _authority_fee_payment() -> Dict[str, Any]:
-    return {
-        "payer": "authority",
-        "value": {"charge_limits": [], "gas_limit": None},
-    }
-
-
-def _unsigned_multisig_response_fields() -> Dict[str, Any]:
-    transaction_payload = b"canonical unsigned multisig payload"
-    signing_message = bytearray(
-        hashlib.blake2b(transaction_payload, digest_size=32).digest()
-    )
-    signing_message[-1] |= 1
-    return {
-        "submitted": False,
-        "creation_time_ms": 0,
-        "fee_payment": _authority_fee_payment(),
-        "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
-        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
-    }
 
 
 class StubResponse(requests.Response):
@@ -767,136 +743,6 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
     assert "canonical_i105" not in body
 
 
-def test_propose_multisig_posts_native_instruction_payload_and_requires_draft_intent() -> None:
-    session = RecordingSession()
-    session._response = StubResponse(
-        payload={
-            "ok": True,
-            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            **_unsigned_multisig_response_fields(),
-        }
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(ValueError, match="caller-trusted MultisigDraftIntent"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01\x02\x03"],
-            fee_payment=_authority_fee_payment(),
-            creation_time_ms=0,
-        )
-
-    assert session.calls[0]["method"] == "POST"
-    assert session.calls[0]["url"] == "http://node.test/v1/multisig/propose"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["multisig_account_alias"] == "ops@universal"
-    assert payload["signer_account_id"] == "signer@universal"
-    assert payload["creation_time_ms"] == 0
-    assert payload["instructions"] == [base64.b64encode(b"\x01\x02\x03").decode("ascii")]
-
-
-def test_propose_multisig_inherited_helper_rejects_bad_payload_shape() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-
-    with pytest.raises(ValueError, match="exactly one"):
-        client.propose_multisig(
-            multisig_account_id="ops@universal",
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01"],
-            fee_payment=_authority_fee_payment(),
-        )
-    with pytest.raises(RuntimeError, match="valid base64"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=["not base64"],
-            fee_payment=_authority_fee_payment(),
-        )
-
-
-def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
-    session = RecordingSession()
-    session._response = StubResponse(
-        payload={
-            "ok": True,
-            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            **_unsigned_multisig_response_fields(),
-            "signing_message_b64": "not base64",
-        }
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(ValueError, match="exact standard-base64"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01"],
-            fee_payment=_authority_fee_payment(),
-        )
-
-
-def test_propose_multisig_inherited_helper_rejects_false_ok_response() -> None:
-    session = RecordingSession()
-    session._response = StubResponse(
-        payload={
-            "ok": False,
-            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-        }
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="ok"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01"],
-            fee_payment=_authority_fee_payment(),
-        )
-
-
-def test_propose_multisig_inherited_helper_rejects_empty_signing_message() -> None:
-    session = RecordingSession()
-    session._response = StubResponse(
-        payload={
-            "ok": True,
-            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            **_unsigned_multisig_response_fields(),
-            "signing_message_b64": "",
-        }
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(ValueError, match="non-empty string"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01"],
-            fee_payment=_authority_fee_payment(),
-        )
-
-
-def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> None:
-    session = RecordingSession()
-    session._response = StubResponse(
-        payload={
-            "ok": True,
-            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            "creation_time_ms": -1,
-        }
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="non-negative"):
-        client.propose_multisig(
-            multisig_account_alias="ops@universal",
-            signer_account_id="signer@universal",
-            instructions=[b"\x01"],
-            fee_payment=_authority_fee_payment(),
-        )
-
-
 def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
     address = AccountAddress.from_account(public_key=CANONICAL_ED25519_PUBLIC_KEY)
     literal = address.to_i105(0x02F1)
@@ -1132,3 +978,10 @@ def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:
 
     with pytest.raises(TypeError):
         client.query_asset_holders("xor#wonderland", canonical_i105="i105")
+
+
+def test_generic_multisig_proposal_is_not_inherited_by_first_release_sdk() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    assert not hasattr(ToriiClient, "propose_multisig")
+    assert not hasattr(client, "propose_multisig")
+    assert not hasattr(client, "multisig_instruction_b64")

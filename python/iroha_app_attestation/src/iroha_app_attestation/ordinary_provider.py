@@ -23,6 +23,7 @@ from .play_integrity import (GooglePlayIntegrityVerifier, PlayIntegrityPolicy,
 from .provider import (AppleAppPolicy, GoogleKeyMintPolicy, OemKeyMintPolicy,
                        _apple_release_digest)
 from .revocation import verify_google_chain_not_revoked
+from .native_time_interval import NativeTimeInterval
 
 
 @dataclass(frozen=True)
@@ -196,7 +197,12 @@ class VerifiedOrdinaryRawEvidence:
     challenge: OrdinaryEnrollmentChallenge
     policy: OrdinaryReleasePolicy
     raw_proof: RawPlatformProof
-    trusted_time_ms: int
+    trusted_time_interval: NativeTimeInterval
+
+    @property
+    def trusted_time_ms(self) -> int:
+        """Immutable lower issuance timestamp; validity must check the complete interval."""
+        return self.trusted_time_interval.validate().lower_at_ms
 
 
 @dataclass(frozen=True)
@@ -207,7 +213,12 @@ class VerifiedOrdinaryEvidence:
     policy: OrdinaryReleasePolicy
     raw_proof: RawPlatformProof
     possession: EnrollmentPossession
-    trusted_time_ms: int
+    trusted_time_interval: NativeTimeInterval
+
+    @property
+    def trusted_time_ms(self) -> int:
+        """Immutable lower issuance timestamp; validity must check the complete interval."""
+        return self.trusted_time_interval.validate().lower_at_ms
 
     def signing_request(self, issued_at_ms: int, expires_at_ms: int,
                         integrity: PlayIntegrityProof | None) -> bytes:
@@ -227,10 +238,10 @@ class GovernedOrdinaryEvidenceProvider:
     separate so the durable issuer can save each actual response before signing.
     """
     def __init__(self, *, policies: tuple[OrdinaryReleasePolicy, ...],
-                 trusted_time_ms: Callable[[], int], recheck_native_policy: Callable[[], None],
+                 trusted_time_interval: Callable[[], NativeTimeInterval], recheck_native_policy: Callable[[], None],
                  openssl_path: Path, play_integrity: GooglePlayIntegrityVerifier | None) -> None:
         require(type(policies) is tuple and 0 < len(policies) <= 64
-                and callable(trusted_time_ms) and callable(recheck_native_policy)
+                and callable(trusted_time_interval) and callable(recheck_native_policy)
                 and openssl_path.is_absolute() and openssl_path.is_file(),
                 "ordinary Native policy holder absent")
         self._policies = {}
@@ -244,7 +255,7 @@ class GovernedOrdinaryEvidenceProvider:
                 "actual Google decoder is required")
         require(play_integrity is not None or all(p.play_integrity_policy is None for p in policies),
                 "selected Play Integrity decoder absent")
-        self._clock = trusted_time_ms
+        self._clock = trusted_time_interval
         self._recheck = recheck_native_policy
         self._openssl = openssl_path
         self._google = play_integrity
@@ -254,50 +265,54 @@ class GovernedOrdinaryEvidenceProvider:
                 "invalid raw admission request")
         challenge = request.validate()
         self._recheck()
-        now = self._clock()
-        require(type(now) is int and 0 < now < (1 << 64), "invalid ordinary trusted time")
+        interval = self._clock()
+        require(type(interval) is NativeTimeInterval, "ordinary Native interval absent")
+        interval.validate()
+        now = interval.lower_at_ms
         policy = self._policies.get((challenge.release_id, challenge.hardware_profile_id))
         require(policy is not None, "unapproved ordinary release/profile")
-        policy.select(challenge, now)
-        authenticate_challenge_transport(request.signed_preparation, challenge,
-            policy.core_preparation_public_key, now, self._openssl, fresh=fresh)
-        evidence_time = now if fresh else min(now, challenge.expires_at_ms - 1)
+        for bound in interval.endpoints():
+            policy.select(challenge, bound)
+            authenticate_challenge_transport(request.signed_preparation, challenge,
+                policy.core_preparation_public_key, bound, self._openssl, fresh=fresh)
+        evidence_times = interval.endpoints() if fresh else tuple(min(bound, challenge.expires_at_ms - 1) for bound in interval.endpoints())
         key_id = hashlib.sha256(request.attested_public_key_sec1).digest()
         selected = OrdinaryPlatformEvidenceChallenge(challenge, key_id if challenge.platform_class == 2 else bytes(32))
         platform = policy.platform_policy
-        if type(platform) is AppleAppPolicy:
-            proof = verify_apple_raw(request.raw_attestation, key_id, platform.app_id,
-                platform.environment, selected, platform.attestation_root_der,
-                platform.attestation_root_sha256, evidence_time, self._openssl,
-                expected_validation_category=platform.expected_validation_category,
-                expected_bundle_version=platform.expected_bundle_version)
-            original = cbor_exact(request.raw_attestation)["attStmt"]
-            verify_apple_receipt(original["receipt"], platform.app_id, original["x5c"][0],
-                proof.attested_public_key_sec1, platform.receipt_root_der, platform.receipt_root_sha256,
-                evidence_time, self._openssl, expected_type="ATTEST")
-            require((proof.apple_validation_category is None) == (proof.apple_bundle_version is None),
-                    "incomplete ordinary Apple distribution")
-            if proof.apple_validation_category is not None:
-                require(policy.app_release_digest == _apple_release_digest(
-                    proof.apple_validation_category, proof.apple_bundle_version),
-                    "ordinary Apple evidence release differs")
-        else:
-            chain = decode_android_chain(request.raw_attestation)
-            selected_root = (platform.root_for_chain(chain[-1]) if type(platform) is GoogleKeyMintPolicy
-                             else platform.attestation_root_der)
-            proof = verify_android_persistent_app_key_raw(chain, selected, platform.package_name, platform.package_version,
-                platform.signing_certificate_sha256, selected_root,
-                hashlib.sha256(selected_root).digest(), evidence_time, self._openssl,
-                allowed_security_levels=platform.allowed_security_levels)
-            if type(platform) is GoogleKeyMintPolicy:
-                verify_google_chain_not_revoked(chain)
+        for current_bound,evidence_time in zip(interval.endpoints(),evidence_times):
+            if type(platform) is AppleAppPolicy:
+                proof = verify_apple_raw(request.raw_attestation, key_id, platform.app_id,
+                    platform.environment, selected, platform.attestation_root_der,
+                    platform.attestation_root_sha256, evidence_time, self._openssl,
+                    expected_validation_category=platform.expected_validation_category,
+                    expected_bundle_version=platform.expected_bundle_version)
+                original = cbor_exact(request.raw_attestation)["attStmt"]
+                verify_apple_receipt(original["receipt"], platform.app_id, original["x5c"][0],
+                    proof.attested_public_key_sec1, platform.receipt_root_der, platform.receipt_root_sha256,
+                    evidence_time, self._openssl, expected_type="ATTEST")
+                require((proof.apple_validation_category is None) == (proof.apple_bundle_version is None),
+                        "incomplete ordinary Apple distribution")
+                if proof.apple_validation_category is not None:
+                    require(policy.app_release_digest == _apple_release_digest(
+                        proof.apple_validation_category, proof.apple_bundle_version),
+                        "ordinary Apple evidence release differs")
             else:
-                require(platform.revocation_verifier(tuple(chain), now) is True,
-                        "ordinary OEM revocation is not positively clear")
+                chain = decode_android_chain(request.raw_attestation)
+                selected_root = (platform.root_for_chain(chain[-1]) if type(platform) is GoogleKeyMintPolicy
+                                 else platform.attestation_root_der)
+                proof = verify_android_persistent_app_key_raw(chain, selected, platform.package_name, platform.package_version,
+                    platform.signing_certificate_sha256, selected_root,
+                    hashlib.sha256(selected_root).digest(), evidence_time, self._openssl,
+                    allowed_security_levels=platform.allowed_security_levels)
+                if type(platform) is GoogleKeyMintPolicy:
+                    verify_google_chain_not_revoked(chain)
+                else:
+                    require(platform.revocation_verifier(tuple(chain), current_bound) is True,
+                            "ordinary OEM revocation is not positively clear")
         require(proof.attested_public_key_sec1 == request.attested_public_key_sec1,
                 "offered ordinary app key differs from actual attestation")
         self._recheck()
-        return VerifiedOrdinaryRawEvidence(request, challenge, policy, proof, now)
+        return VerifiedOrdinaryRawEvidence(request, challenge, policy, proof, interval)
 
     def prepare(self, request: OrdinaryCredentialRequest, *, fresh: bool) -> VerifiedOrdinaryEvidence:
         require(type(request) is OrdinaryCredentialRequest and type(fresh) is bool,
@@ -318,7 +333,7 @@ class GovernedOrdinaryEvidenceProvider:
         require((policy.play_integrity_policy is None) == (request.play_integrity_token is None),
                 "opaque Play token differs from selected ordinary policy")
         self._recheck()
-        return VerifiedOrdinaryEvidence(request, challenge, policy, proof, possession, now)
+        return VerifiedOrdinaryEvidence(request, challenge, policy, proof, possession, original.trusted_time_interval)
 
     def decode_integrity(self, evidence: VerifiedOrdinaryEvidence):
         require(type(evidence) is VerifiedOrdinaryEvidence, "ordinary evidence absent")
@@ -327,12 +342,20 @@ class GovernedOrdinaryEvidenceProvider:
             return None
         require(self._google is not None, "selected Google decoder absent")
         self._recheck()
-        now = self._clock()
-        require(type(now) is int and evidence.trusted_time_ms <= now < evidence.challenge.expires_at_ms,
-                "ordinary preparation expired before Google decode")
-        result = self._google.decode(evidence.request.play_integrity_token, policy,
-            evidence.challenge.play_integrity_request_hash(evidence.possession.attested_key_id), now)
+        interval = self._clock()
+        require(type(interval) is NativeTimeInterval, "ordinary Native interval absent")
+        interval.require_window(evidence.challenge.issued_at_ms,evidence.challenge.expires_at_ms)
+        require(evidence.trusted_time_ms <= interval.lower_at_ms, "ordinary clock regressed")
+        request_hash=evidence.challenge.play_integrity_request_hash(evidence.possession.attested_key_id)
+        result = self._google.decode(evidence.request.play_integrity_token, policy, request_hash, interval.lower_at_ms)
         self._recheck()
+        latest=self._clock()
+        require(type(latest) is NativeTimeInterval, "ordinary Native interval absent")
+        latest.require_window(evidence.challenge.issued_at_ms,evidence.challenge.expires_at_ms)
+        require(interval.lower_at_ms <= latest.lower_at_ms, "ordinary clock regressed")
+        for now in latest.endpoints():
+            _verify_google_payload(result.google_response,policy,request_hash,now,
+                hashlib.sha256(evidence.request.play_integrity_token.encode("ascii")).digest())
         return result
 
     def retained_integrity(self, evidence: VerifiedOrdinaryEvidence, original_google_response: bytes,
@@ -345,8 +368,9 @@ class GovernedOrdinaryEvidenceProvider:
                 <= evidence.trusted_time_ms, "invalid retained Google verification time")
         # Stored originals are recovered only through the store's immutable
         # attempt match. No public/mobile decoded-verdict route reaches this.
-        proof = _verify_google_payload(original_google_response, policy,
-            evidence.challenge.play_integrity_request_hash(evidence.possession.attested_key_id),
-            evidence.trusted_time_ms if fresh else verified_at_ms,
-            hashlib.sha256(evidence.request.play_integrity_token.encode("ascii")).digest())
+        times = evidence.trusted_time_interval.endpoints() if fresh else (verified_at_ms,)
+        for now in times:
+            proof = _verify_google_payload(original_google_response, policy,
+                evidence.challenge.play_integrity_request_hash(evidence.possession.attested_key_id), now,
+                hashlib.sha256(evidence.request.play_integrity_token.encode("ascii")).digest())
         return proof

@@ -172,18 +172,18 @@ fn ca_fixed_deep_evaluation_matches_known_polynomials_and_rejects_shape() {
 
 #[test]
 fn ca_complete_deep_constraint_check_rejects_trace_and_composition_substitution() {
-    let (public, claims) = public_and_claims();
+    let (public, _) = public_and_claims();
     let (sha, io) = challenges();
     let layout = ca_aggregate_layout_v1().unwrap();
     let point = E::canonical([7, 11, 13, 17]).unwrap();
     let fixed_columns = compile_ca_accumulator_fixed_columns_v1().unwrap();
     let fixed = ca_fixed_columns_at_deep_v1(&fixed_columns, point).unwrap();
     let rows = rows();
-    let residues = evaluate_ca_accumulator_stark_residues_v1(
-        public, &rows[0], &rows[1], &rows[2], &rows[3], &fixed, sha, io, claims,
+    let residues = evaluate_ca_accumulator_local_residues_v1(
+        public, &rows[0], &rows[1], &rows[2], &rows[3], &fixed, sha, io,
     )
     .unwrap();
-    let alphas = (0..ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1)
+    let alphas = (0..ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1)
         .map(|index| E::canonical([index as u64 + 2, 3, 5, 7]).unwrap())
         .collect::<Vec<_>>();
     let quotient = residues
@@ -238,7 +238,6 @@ fn ca_complete_deep_constraint_check_rejects_trace_and_composition_substitution(
             &fixed_columns,
             sha,
             io,
-            claims,
             &alphas,
         )
     };
@@ -271,7 +270,6 @@ fn ca_complete_deep_constraint_check_rejects_trace_and_composition_substitution(
             &fixed_columns,
             sha,
             io,
-            claims,
             &alphas
         )
         .is_err()

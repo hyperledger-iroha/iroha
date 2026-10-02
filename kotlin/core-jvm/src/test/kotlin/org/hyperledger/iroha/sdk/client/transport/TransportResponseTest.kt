@@ -33,7 +33,7 @@ class TransportResponseTest {
         assertEquals(null, provenanceUnavailable.finalUri)
         assertEquals(false, provenanceUnavailable.redirected)
 
-        val finalUri = URI.create("https://torii.example/v1/validation-fee/hijiri/quote")
+        val finalUri = URI.create("https://torii.example/v1/validation-fee/current-policy-proof")
         val response = TransportResponse.builder()
             .setStatusCode(200)
             .setNetworkProvenance(finalUri, redirected = true)

@@ -97,6 +97,31 @@ final class KagemushaAppApprovalSigningProjectionV1Tests: XCTestCase {
     XCTAssertEqual(operationCounts, [1: 2, 2: 2, 3: 2, 4: 2, 5: 2])
   }
 
+  func testPurposeTwoPreparationHasDistinctGrammarAndTenSecondBound() throws {
+    let values = try vectors()
+    var subject = try XCTUnwrap(values["s_mint_native_first"])
+    subject[331] = 2
+    subject.replaceSubrange(364..<428, with: Data(repeating: 0, count: 64))
+    var wrapper = try XCTUnwrap(values["w_approval_native_first"])
+    let start = KagemushaAppApprovalSigningProjectionV1.signingDomain.count + 8
+    wrapper[start + 2] = 2
+    wrapper.replaceSubrange((start + 195)..<(start + 227), with: Data(SHA256.hash(data: subject)))
+    wrapper.replaceSubrange((start + 267)..<(start + 275), with: littleEndian(11_000))
+    let preparation = try KagemushaAppApprovalSigningProjectionV1(nativePreparationSigningBytes: wrapper, nativeFinancialSubject: subject)
+    XCTAssertEqual(preparation.canonicalSigningBytes, wrapper)
+    XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativeSigningBytes: wrapper, nativeFinancialSubject: subject))
+    var wrongPurpose = wrapper; wrongPurpose[start + 2] = 1
+    XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativePreparationSigningBytes: wrongPurpose, nativeFinancialSubject: subject))
+    var tooLong = wrapper; tooLong.replaceSubrange((start + 267)..<(start + 275), with: littleEndian(11_001))
+    XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativePreparationSigningBytes: tooLong, nativeFinancialSubject: subject))
+    for offset in [331, 364, 396, 444] {
+      var invalidSubject = subject; invalidSubject[offset] ^= 1
+      var rebound = wrapper
+      rebound.replaceSubrange((start + 195)..<(start + 227), with: Data(SHA256.hash(data: invalidSubject)))
+      XCTAssertThrowsError(try KagemushaAppApprovalSigningProjectionV1(nativePreparationSigningBytes: rebound, nativeFinancialSubject: invalidSubject))
+    }
+  }
+
   private func hex(_ text: String) throws -> Data {
     let chars = Array(text.utf8)
     guard chars.count % 2 == 0 else { throw Failure.invalidFixture }

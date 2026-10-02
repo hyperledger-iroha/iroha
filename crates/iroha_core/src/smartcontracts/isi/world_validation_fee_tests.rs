@@ -1,39 +1,4 @@
 #[test]
-fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
-    let enacted_at_height = 40;
-    let minimum = enacted_at_height
-        + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-    assert!(
-        super::ensure_validation_fee_policy_activation_delay(
-            minimum.saturating_sub(1),
-            enacted_at_height,
-        )
-        .is_err()
-    );
-    assert_eq!(
-        super::ensure_validation_fee_policy_activation_delay(minimum, enacted_at_height)
-            .expect("exact activation boundary"),
-        minimum
-    );
-    assert!(
-        super::ensure_validation_fee_policy_activation_delay(
-            minimum.saturating_add(1),
-            enacted_at_height,
-        )
-        .is_err(),
-        "late activation must not weaken the exact 120,960-block relation"
-    );
-    assert!(
-        super::ensure_validation_fee_policy_activation_delay(
-            u64::MAX,
-            u64::MAX
-                - iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS
-                + 1,
-        )
-        .is_err()
-    );
-}
-#[test]
 fn sorafs_provider_owner_transition_uses_canonical_constitutional_parliament_pipeline() {
     let kind = ProposalKind::SorafsProviderGovernance(
         iroha_data_model::governance::types::SorafsProviderGovernanceProposal {
@@ -1086,7 +1051,8 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     nexus.dataspace_fee_sponsor_program_ids.clear();
     nexus.fees.fee_asset_id = vault_key.asset_definition_id.to_string();
     assert_eq!(
-        crate::block::resolve_network_xor_asset_definition(&stx.world, &nexus.fees.fee_asset_id, 0).expect("completed pin read"),
+        crate::block::resolve_network_xor_asset_definition(&stx.world, &nexus.fees.fee_asset_id, 0)
+            .expect("completed pin read"),
         Some(vault_key.asset_definition_id.clone()),
         "sponsor funding must use the network's exact XOR asset"
     );
@@ -1134,9 +1100,10 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
             .expect("exact signature-bound quote also passes strict admission");
         } else {
             assert_eq!(
-                crate::execution_attempt::expect_completed_rejection(result
-                    .expect_err("other absent identity is not enrolled"))
-                    .code(),
+                crate::execution_attempt::expect_completed_rejection(
+                    result.expect_err("other absent identity is not enrolled")
+                )
+                .code(),
                 FeeRejectionCode::BeneficiaryNotEligible
             );
         }
@@ -2057,6 +2024,7 @@ struct RetainedValidationFeeUnregisterFixture {
     policy_treasury: AccountId,
     payout_binding: iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
     embedded_policy_proposal_id: [u8; 32],
+    policy_proposal_id: [u8; 32],
     lifecycle_proposal_id: [u8; 32],
     unrelated_account: AccountId,
 }
@@ -2084,9 +2052,7 @@ fn install_retained_validation_fee_unregister_fixture(
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
             ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-            ValidationFeeTreasuryPayoutRecipientV1, initial_validation_fee_amount,
-            validation_fee_payout_batch_ds, validation_fee_payout_max_xor,
-            validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
+            initial_validation_fee_amount,
         },
     };
 
@@ -2094,6 +2060,9 @@ fn install_retained_validation_fee_unregister_fixture(
     let contract_address =
         ContractAddress::derive(&network_id, &ALICE_ID, 369, DataSpaceId::UNIVERSAL)
             .expect("validation-fee unregister fixture contract address");
+    let pool_contract_address =
+        ContractAddress::derive(&network_id, &ALICE_ID, 370, DataSpaceId::UNIVERSAL)
+            .expect("pool address");
     let payout_binding = ValidationFeeTreasuryPayoutBindingV1 {
         treasury_account_id: contract_address.subject_id(),
         contract_address,
@@ -2103,16 +2072,22 @@ fn install_retained_validation_fee_unregister_fixture(
             .expect("validation-fee payout entrypoint"),
         ds_asset_id: payout_ds_asset_id,
         xor_asset_id: payout_xor_asset_id,
-        pool_vault_account_id: validation_fee_unregister_account(0xD2),
-        batch_ds: validation_fee_payout_batch_ds(),
-        min_xor_out: validation_fee_payout_min_xor(),
-        max_xor_out: validation_fee_payout_max_xor(),
-        recipients: (0xD3..=0xD6)
-            .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                account_id: validation_fee_unregister_account(seed),
-                share: validation_fee_payout_recipient_share(),
-            })
+        pool_vault_account_id: pool_contract_address.subject_id(),
+        pool_contract_address,
+        pool_code_hash: [0xD2; 32],
+        reward_pool_account_id: validation_fee_unregister_account(0xD3),
+        reference_feed_id: "xor_per_sbd".parse().expect("feed"),
+        reference_feed_config_version: 1,
+        reference_provider_accounts: (0xE0..0xE5)
+            .map(validation_fee_unregister_account)
             .collect(),
+        max_sbd_per_attempt_minor: 1000,
+        max_sbd_per_day_minor: 100000,
+        min_interval_ms: 60000,
+        max_source_age_ms: 300000,
+        max_slippage_bps: 100,
+        validator_lane_id: iroha_model_base::topology::LaneId::new(0),
+        min_reward_claim_xor_minor: 1,
     };
     assert_eq!(
         payout_binding.invariant_error(),
@@ -2120,7 +2095,13 @@ fn install_retained_validation_fee_unregister_fixture(
         "unregister fixture must carry the exact V1 payout binding"
     );
 
-    let policy_treasury = validation_fee_unregister_account(0xD0);
+    let policy_contract =
+        ContractAddress::derive(&network_id, &ALICE_ID, 371, DataSpaceId::UNIVERSAL).unwrap();
+    let policy_treasury = policy_contract.subject_id();
+    let mut policy_binding = payout_binding.clone();
+    policy_binding.contract_address = policy_contract;
+    policy_binding.treasury_account_id = policy_treasury.clone();
+    policy_binding.ds_asset_id = policy_ds_asset_id.clone();
     let lifecycle_kind =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
             proposal_operator: ALICE_ID.clone(),
@@ -2130,21 +2111,22 @@ fn install_retained_validation_fee_unregister_fixture(
     let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: ALICE_ID.clone(),
         policy: ValidationFeePolicyV1 {
+            retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+            effective_from_ms: 1793451600000,
+            notice_published_at_ms: 1790859600000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             network_id: network_id.clone(),
             policy_version: 1,
             previous_policy_hash: None,
             ds_asset_id: policy_ds_asset_id,
             ds_scale: VALIDATION_FEE_DS_SCALE,
-            fee: Quantity::from(0_u32),
+            fee: initial_validation_fee_amount(),
             treasury_account_id: policy_treasury.clone(),
-            charging_mode: ValidationFeeChargingMode::Disabled,
-            effective_from_height: 10,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
+            exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.into()],
+            reward_custody: policy_binding.custody(),
         },
-        payout_lifecycle_proposal_id: None,
     });
     let policy_proposal_id = policy_kind.fingerprint();
     state_transaction
@@ -2174,6 +2156,9 @@ fn install_retained_validation_fee_unregister_fixture(
         .expect("retain enacted validation-fee payout lifecycle fixture");
 
     let embedded_policy = ValidationFeePolicyV1 {
+        retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+        effective_from_ms: 1793451600000,
+        notice_published_at_ms: 1790859600000,
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         network_id,
         policy_version: 1,
@@ -2182,11 +2167,10 @@ fn install_retained_validation_fee_unregister_fixture(
         ds_scale: VALIDATION_FEE_DS_SCALE,
         fee: initial_validation_fee_amount(),
         treasury_account_id: payout_binding.treasury_account_id.clone(),
-        charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-        effective_from_height: 10,
-        expires_after_height: None,
+        charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
         exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
-        treasury_payout_binding: Some(payout_binding.clone()),
+        reward_custody: payout_binding.custody(),
     };
     assert_eq!(
         embedded_policy.policy_invariant_error(),
@@ -2196,7 +2180,6 @@ fn install_retained_validation_fee_unregister_fixture(
     let embedded_policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: ALICE_ID.clone(),
         policy: embedded_policy,
-        payout_lifecycle_proposal_id: Some(lifecycle_proposal_id),
     });
     let embedded_policy_proposal_id = embedded_policy_kind.fingerprint();
     state_transaction
@@ -2216,6 +2199,7 @@ fn install_retained_validation_fee_unregister_fixture(
         policy_treasury,
         payout_binding,
         embedded_policy_proposal_id,
+        policy_proposal_id,
         lifecycle_proposal_id,
         unrelated_account: validation_fee_unregister_account(0xDF),
     }
@@ -2328,6 +2312,10 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
         {
             let mut proposals = stx.world.governance_proposals_mut();
             proposals
+                .get_mut(&fixture.policy_proposal_id)
+                .expect("retained custody-only pricing proposal")
+                .status = status;
+            proposals
                 .get_mut(&fixture.lifecycle_proposal_id)
                 .expect("retained lifecycle proposal")
                 .status = status;
@@ -2388,12 +2376,16 @@ fn enacted_validation_fee_account_references_reject_unregister_atomically() {
             fixture.payout_binding.pool_vault_account_id.clone(),
         ),
     ];
+    references.push((
+        "validator reward custody",
+        fixture.payout_binding.reward_pool_account_id.clone(),
+    ));
     references.extend(
         fixture
             .payout_binding
-            .recipients
+            .reference_provider_accounts
             .iter()
-            .map(|recipient| ("payout recipient", recipient.account_id.clone())),
+            .map(|account| ("reference provider", account.clone())),
     );
     for (_, account_id) in references.iter().chain(std::iter::once(&(
         "unrelated",

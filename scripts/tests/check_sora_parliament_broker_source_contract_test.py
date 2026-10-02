@@ -47,6 +47,18 @@ def test_broker_rejects_changed_parliament_operation_bindings(
         guard.require_parliament_broker_primitives(mutated)
 
 
+@pytest.mark.parametrize(("before", "after"), (
+    ("for (operation, expected) in exact {", "for (_, expected) in exact {"),
+    ("assert_eq!(operation, expected);", "assert_eq!(operation, operation);"),
+    ("assert!(super::super::operation_is_known(operation));", "assert!(true);"),
+))
+def test_broker_rejects_disconnected_exact_operation_ordinal_checks(before: str, after: str) -> None:
+    source = guard.read(PRIMITIVES)
+    assert source.count(before) == 1
+    with pytest.raises(RuntimeError, match="missing modeled source binding"):
+        guard.require_parliament_broker_primitives(source.replace(before, after, 1))
+
+
 @pytest.mark.parametrize("kind", ("Request", "Result"))
 @pytest.mark.parametrize("mutation", ("unframed", "wrong_schema", "wrong_field_type"))
 def test_broker_rejects_malformed_attestation_wire(kind: str, mutation: str) -> None:
@@ -72,13 +84,16 @@ def test_broker_rejects_malformed_attestation_wire(kind: str, mutation: str) -> 
 def test_broker_allows_additional_unrelated_operations() -> None:
     """The next unused operation ID is independent of Parliament's fixed IDs."""
     source = guard.read(PRIMITIVES)
-    unknown_operation = re.search(
-        r"assert!\(!super::super::operation_is_known\((\d+)\)\);", source
-    )
-    assert unknown_operation is not None
-    current = int(unknown_operation.group(1))
+    unknown_operations = re.search(r"for unsupported in \[([0-9, ]+)\] \{", source)
+    assert unknown_operations is not None
+    unsupported = [int(value.strip()) for value in unknown_operations.group(1).split(",")]
+    assert unsupported == [107, 108, 109, 110, 131]
+    assert "assert!(!super::super::operation_is_known(unsupported));" in source
+    changed = unsupported[:-1] + [unsupported[-1] + 1]
     source = source.replace(
-        f"operation_is_known({current})", f"operation_is_known({current + 1})"
+        "for unsupported in [" + ", ".join(map(str, unsupported)) + "] {",
+        "for unsupported in [" + ", ".join(map(str, changed)) + "] {",
+        1,
     )
     guard.require_parliament_broker_primitives(source)
 

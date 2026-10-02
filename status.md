@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-01. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-02. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -106,37 +106,80 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
-Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
-checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. Privacy component coverage includes
-normal builds, authentic profile pins, ordinary controls, required-Metal
-coefficient parity and RFC key replay. Maximum X509 proofs pass verification and
-byte/RSS limits, but exceed the unchanged 300-second proving limit; observed
-virtual size also exceeds the literal 32 GiB limit on the recorded candidate.
-The retained-query optimization requires fresh native parity, proof verification
-and time/memory measurements. Detailed boundaries remain in the
-[ZK goals](specs/zk_first_release_goals.md).
+The `d05dc9c1` base and reviewed merge repairs build with stock Rust
+1.93.1. On source17, normal privacy and optimized native test builds pass on
+macOS and Linux, including all three authentic profile/proof pins. All 1,128
+ordinary privacy controls pass on macOS; Linux passes those plus its required
+full-domain CPU parity control. The 35 focused query/CPU/Metal controls also pass.
+
+The joint MAIN/CA maximum proof and fresh verifier pass on that Linux candidate,
+including wrong-genesis and tampering controls. The 9,412,912-byte proof fits its
+cap, and the actual child stays under the kernel-enforced 32 GiB address-space
+limit. Proving takes 2,275.987086 seconds against 300 seconds. Both live and
+terminal RSS readings are below 12 GiB, but their 659,456-byte discrepancy fails
+the observer's consistency check; RSS qualification remains unresolved. Query
+transforms take 639.87 seconds and are the largest measured performance target.
+The retained run is `dist/zk-remediation/2026-09-30/epoch19-linux-source17-maximum`.
+Activation remains unavailable.
+
+The source17 Core/MV/concread/IVM selection executes 1,242 controls: 1,240 pass and
+two paid-alias fixtures fail. Both genuine native IVM capture producers and all
+four AIR consumers pass. The paid-alias catalog-authority repair, retained source
+quota custody, required X509 proof-instance nonce and authentic Kagemusha TSV
+fixture are now applied. Stock verifier-only, evidence and optimized test builds
+pass for source20, including all four genuine profile/proof/pre-aux diagnostics.
+Its expanded selection records 1,183 passes and four X509 fixture failures. The
+historical-descriptor repair and independently regenerated scoped DER values
+are applied. The resolved merge and subsequent private scalar/branch equations,
+public X509 coefficient extents, fixed-row construction and cleanup repairs now
+require fresh combined native validation. The first post-merge verifier-only,
+normal Core, Core/component test and Kagami test builds pass. Evidence/privacy
+test builds expose two test-boundary errors; repairs are applied and await
+native reruns. Genuine quantity and IVM captures match across paired runs; the
+quantity consumer's stale timestamp assertion is repaired, with full consumption
+still pending. Seven private IVM shift/rotate equations and Swift fixture/build
+guidance corrections are included in the next combined candidate. The source22
+build attempts failed source-observation guards when the merge began; they supply
+no native test pass.
+All 648 macOS CPU cost/parity measurements pass, with the pruned transform faster
+than the full-transform reference. Linux comparison and a complete current
+maximum proof remain pending.
+
+Source17 managed runs pass 25 attestation-tool tests, 40 wallet tests and 57 typed
+workflow/example checks. JVM tests record 1,214 passes and 394 failures; Android
+records 284 passes and one stale enrollment-fixture failure. Genuine native and
+generator prerequisites must be rebuilt before the consumer rerun. The current
+Vega timing attempt refuses a busy host before measurement; it supplies no timing
+qualification.
+
+Fresh canonical fixture generation, native SDK consumers, Swift/Android packages,
+workspace checks and four-validator tests still require one integrated candidate.
+Complete cryptographic/side-channel, physical-device and signed release evidence
+remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact boundaries.
 
 KAGEMUSHA component coverage includes journal recovery, issuer-key and
 enrollment-floor controls, expired-preparation custody, Guard-generation and
-reciprocal claim-carrier binding. The non-test real-proof frontend, strict privacy
-lint and complete ordinary suite remain under qualification. SDK native-custody
-and assembly tools have explicit feature/target owners; FASTPQ uses the existing
-STARK feature. Current dependency costs and the native proving context remain
-under review.
+reciprocal claim-carrier binding. Primary-owner Privacy library strict lint passes
+with defaults, `privacy-release-evidence` and
+`privacy-release-evidence,test-utils` in an unchanged source/Git interval.
+The current debug-profile Privacy libtest build and all 22 selected controls
+pass. Its registry contains 2,479 tests, including 61 ignored cases; independent
+framing of all 29 native profile fields matches the current source pin. Genuine
+IO, Projection and CA proof checks, the optimized constructor and maximum proof
+with external time/RSS evidence, the full ordinary suite, upstream strict lint
+and merged-source qualification remain open. The non-test real-proof frontend
+remains under qualification. SDK Native custody and genuine production proving
+are mandatory even with SDK defaults disabled; assembly tools remain explicit
+`dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
+CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
+Current source budgets pass with the updated developer-tool manifest fingerprint;
+current native frontend and proof qualification remain open.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit
 preflight and compact authenticated carrier layout still need fresh compiler,
 layout, parity and proof qualification.
 
-The combined candidate needs fresh compiler and focused-test validation, genuine
-fixture production, private-terminal/quotient-mask profile regeneration, current
-native/SDK consumers and executable-metadata freshness. Historical Core fixture
-failures and unfinished selections require fresh execution after their repairs.
-Full workspace tests, Kotlin/Swift consumers, four-validator and physical-device
-qualification, and same-candidate signed release validation remain incomplete.
 
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
@@ -161,22 +204,15 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
-  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
-  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
-  bind P256/projection byte declarations to the shared trace. The selected-input
-  repair binds bytes to actual P256 values, but native comparison exposed a
-  missing selected-input multiplicity in the closed fixed-schedule compiler.
-  The post-pin privacy selection completes with 942 passes and 14 failures;
-  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
-  corrections require a new native run. The partial private-terminal repair
-  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
-  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
-  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
-  retained artifacts also pass fresh-process verification. RAM-LFE secure
-  encryption/full execution, IVM execution/finalized-State binding, protocol and
-  side-channel review, hardware/network evidence and final signing remain open
-  under the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** the source17 joint X509 maximum proof passes native and fresh
+  verification, proof size and enforced address space. The 300-second limit fails;
+  RSS readings need observer reconciliation. Complete relation, adaptive transcript/hiding and
+  side-channel qualification remain open. Historical q77 ordinary/AXT maximum
+  proofs pass on their recorded source; finalized-source, hardware and network
+  qualification remain. RAM-LFE secure encryption/full execution, IVM native
+  execution/finalized-State binding and signed release evidence remain open under
+  the [ZK goals](specs/zk_first_release_goals.md).
+
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

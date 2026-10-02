@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+const nativePolicy = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_policy_v1.json", import.meta.url), "utf8"));
+const nativeConversion = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_conversion_v1.json", import.meta.url), "utf8"));
 import test from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
@@ -39,6 +42,8 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
   const beaconSessionId = id(offset + 4);
   const beaconPulseId = id(offset + 5);
   const root = (delta) => Array(32).fill(offset + delta);
+  // Synthetic projection only: a three-seat corpus keeps its lifecycle below
+  // result/certification 119 without changing the mocked proof-page heights.
   return {
     proposal_kind: kind,
     proposal_operator: proposalOperator,
@@ -49,7 +54,7 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
       proposal_content_id: proposalId,
       governance_attempt_id: governanceAttemptId,
       governance_attempt_sequence: 0,
-      risk_tier: { tier: "Standard" },
+      risk_tier: { tier: "Standard", details: null },
       body_bindings: [{
         body_instance_id: bodyInstanceId,
         election_attempt_id: electionAttemptId,
@@ -63,8 +68,8 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
           candidate_root: root(7),
           candidate_count: 3,
           target_seats: 3,
-          request_height: 1000,
-          pulse_height: 1001,
+          request_height: 10,
+          pulse_height: 11,
           beacon_session_id: beaconSessionId,
         },
         body: "policy-jury",
@@ -74,7 +79,7 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
         roster_root: root(8),
         assignment_root: root(9),
         result_root: root(10),
-        result_height: 4599,
+        result_height: 119,
         public_finding: null,
         ballot: {
           ballot_attempt_id: id(offset + 11),
@@ -88,19 +93,19 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
           no_recovery_root: root(18),
           timed_commitment_root: root(19),
           release_beacon_session_id: id(offset + 20),
-          registered_at_height: 1100,
-          registration_close_height: 2101,
-          survivor_freeze_height: 3101,
-          commitment_close_height: 3133,
-          registration_closed_at_height: 2101,
-          survivors_frozen_at_height: 3101,
-          commitment_closed_at_height: 3133,
+          registered_at_height: 20,
+          registration_close_height: 24,
+          survivor_freeze_height: 27,
+          commitment_close_height: 28,
+          registration_closed_at_height: 24,
+          survivors_frozen_at_height: 27,
+          commitment_closed_at_height: 28,
           max_ballot_retries: 3,
-          max_corpus_entries: 1000,
-          release_height: 3200,
-          opening_deadline_height: 4599,
+          max_corpus_entries: 3,
+          release_height: 29,
+          opening_deadline_height: 119,
           release_pulse_id: id(offset + 21),
-          opening_height: 3200,
+          opening_height: 29,
           opening_root: root(22),
           tally: {
             original_seats: 3,
@@ -109,17 +114,17 @@ function completeParliamentProposal(kind, proposalOctet, offset) {
             nay: 1,
             abstain: 0,
           },
-          outcome: { outcome: "Approved" },
+          outcome: { outcome: "Approved", details: null },
         },
       }],
       policy_version: 1,
       effect_preimage_hash: root(23),
       expected_head: { state: "Absent", head: { subject_id: root(24) } },
-      certified_at_height: 4599,
-      enact_at_height: 4600,
+      certified_at_height: 119,
+      enact_at_height: 120,
     },
-    certified_at_height: "4599",
-    enacted_at_height: "4600",
+    certified_at_height: "119",
+    enacted_at_height: "120",
   };
 }
 
@@ -127,42 +132,18 @@ function completeCurrentPolicy() {
   return {
     activePolicyVersion: "1",
     activePolicyHash: "ab".repeat(32),
-    feeAssetDefinitionId: "ds#sora",
+    feeAssetDefinitionId: nativePolicy.ds_asset_id,
     feeScale: 2,
     feeMinorUnits: "10",
-    chargingMode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
-    effectiveFromHeight: "125560",
-    expiresAfterHeight: null,
-    parliament: {
-      validationFeePolicy: completeParliamentProposal(
-        "ValidationFeePolicyV1",
-        "02",
-        0x20,
-      ),
-      payoutLifecycle: completeParliamentProposal(
-        "ValidationFeePayoutLifecycleV1",
-        "08",
-        0x50,
-      ),
-      payoutLifecycleSealHash: "cd".repeat(32),
-    },
-    payout: {
-      contractAddress: "validation-fee-contract",
-      codeHash: "aa".repeat(32),
-      entrypoint: "autonomous_validation_fee_tick",
-      dsAssetDefinitionId: "ds#sora",
-      xorAssetDefinitionId: "xor#sora",
-      treasuryAccountId: "treasury-account",
-      vaultAccountId: "vault-account",
-      batchDsMinorUnits: "1000",
-      dsScale: 2,
-      xorOutputMin: "4",
-      xorOutputMax: "100",
-      recipients: [0, 1, 2, 3].map((index) => ({
-        account_id: `validator-${index}`,
-        share_basis_points: 2500,
-      })),
-    },
+    chargingMode: "RETAIL_MONTHLY_ALLOWANCE",
+    effective_from_ms: 1793451600000,
+    notice_published_at_ms: 1790859600000,
+    retail_schedule: { included_payments: 50, overage_minor: 10, maintenance_tiers: [
+      [0,100],[50000,200],[250000,300],[1000000,500],[5000000,1000],
+    ].map(([minimum_average_balance_minor,monthly_fee_minor]) => ({minimum_average_balance_minor,monthly_fee_minor})) },
+    effectiveFromHeight: "121",
+    parliament: completeParliamentProposal("ValidationFeePolicyV1", "02", 0x20),
+    reward_custody: structuredClone(nativePolicy.reward_custody),
   };
 }
 
@@ -176,6 +157,9 @@ function completeVerifiedProjection() {
     head_policy_version: 1,
     head_policy_hash: "ab".repeat(32),
     current_policy: completeCurrentPolicy(),
+    conversion_policy: {revision: 1, binding: structuredClone(nativeConversion),
+      authority: completeParliamentProposal("ValidationFeePayoutLifecycleV1", "08", 0x50),
+      lifecycle_seal_hash: "cd".repeat(32)},
     trusted_checkpoint_height: 100,
     trusted_checkpoint_context_id: "57".repeat(32),
     evaluated_block_height: 127,
@@ -375,41 +359,41 @@ test("verified current policy enforces and freezes the complete nested projectio
   const verified = verifyProjectionFixture(completeVerifiedProjection());
   assert.equal(verified.current_policy.activePolicyVersion, "1");
   assert.equal(
-    verified.current_policy.parliament.validationFeePolicy
+    verified.current_policy.parliament
       .governance_certificate.proposal_content_id,
     "02".repeat(32),
   );
   assert.equal(
-    verified.current_policy.parliament.validationFeePolicy.proposal_operator,
+    verified.current_policy.parliament.proposal_operator,
     proposalOperator,
   );
   assert.equal(
-    verified.current_policy.parliament.payoutLifecycle
+    verified.conversion_policy.authority
       .governance_certificate.body_bindings[0].body,
     "policy-jury",
   );
   assert.equal(
-    verified.current_policy.payout.recipients[3].share_basis_points,
-    2500,
+    verified.current_policy.retail_schedule.included_payments,
+    50,
   );
   assert.equal(
-    verified.current_policy.payout.dsAssetDefinitionId,
-    "ds#sora",
+    verified.current_policy.reward_custody.ds_asset_id,
+    nativePolicy.ds_asset_id,
   );
-  assert.equal(verified.current_policy.payout.batchDsMinorUnits, "1000");
-  assert.equal(verified.current_policy.payout.dsScale, 2);
+  assert.equal(verified.conversion_policy.binding.max_sbd_per_attempt_minor, 1000);
+  assert.equal(verified.current_policy.feeScale, 2);
   assert.equal(Object.isFrozen(verified.current_policy), true);
   assert.equal(Object.isFrozen(verified.current_policy.parliament), true);
   assert.equal(
     Object.isFrozen(
-      verified.current_policy.parliament.validationFeePolicy
+      verified.current_policy.parliament
         .governance_certificate.body_bindings[0].ballot.tally,
     ),
     true,
   );
-  assert.equal(Object.isFrozen(verified.current_policy.payout.recipients), true);
+  assert.equal(Object.isFrozen(verified.current_policy.retail_schedule.maintenance_tiers), true);
   assert.equal(
-    Object.isFrozen(verified.current_policy.payout.recipients[0]),
+    Object.isFrozen(verified.current_policy.retail_schedule.maintenance_tiers[0]),
     true,
   );
 });
@@ -419,15 +403,15 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "missing proposal operator",
       mutate(projection) {
-        delete projection.current_policy.parliament.validationFeePolicy
+        delete projection.current_policy.parliament
           .proposal_operator;
       },
-      error: /validationFeePolicy must contain exactly/u,
+      error: /parliament must contain exactly/u,
     },
     {
       label: "empty proposal operator",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy.proposal_operator =
+        projection.current_policy.parliament.proposal_operator =
           "";
       },
       error: /proposal_operator must be a non-empty string/u,
@@ -435,15 +419,15 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "retired PLAIN electorate projection",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .plainElectorateRules = {};
       },
-      error: /validationFeePolicy must contain exactly/u,
+      error: /parliament must contain exactly/u,
     },
     {
       label: "extra certificate field",
       mutate(projection) {
-        projection.current_policy.parliament.payoutLifecycle
+        projection.conversion_policy.authority
           .governance_certificate.legacy = null;
       },
       error: /certificate contains unknown, aliased, or missing fields/u,
@@ -451,7 +435,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "missing sortition binding",
       mutate(projection) {
-        delete projection.current_policy.parliament.validationFeePolicy
+        delete projection.current_policy.parliament
           .governance_certificate.body_bindings[0].sortition_request.candidate_root;
       },
       error: /sortition_request contains unknown, aliased, or missing fields/u,
@@ -459,7 +443,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "extra ballot field",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.body_bindings[0].ballot.raw = {};
       },
       error: /ballot contains unknown, aliased, or missing fields/u,
@@ -467,7 +451,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "legacy flattened ballot outcome",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.body_bindings[0].ballot.outcome = "Approved";
       },
       error: /ballot\.outcome must be a plain object/u,
@@ -475,7 +459,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "ballot retry ceiling exceeds the Rust contract",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.body_bindings[0].ballot.max_ballot_retries = 17;
       },
       error: /max_ballot_retries must be an integer from 0 through 16/u,
@@ -483,7 +467,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "sortition target exceeds the Rust contract",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.body_bindings[0].sortition_request.target_seats =
           1001;
       },
@@ -492,7 +476,7 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "release pulse reuses a sortition pulse",
       mutate(projection) {
-        const body = projection.current_policy.parliament.validationFeePolicy
+        const body = projection.current_policy.parliament
           .governance_certificate.body_bindings[0];
         body.ballot.release_pulse_id = body.beacon_pulse_id;
       },
@@ -501,23 +485,22 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "retired SBD payout field",
       mutate(projection) {
-        projection.current_policy.payout.sbdAssetDefinitionId =
-          projection.current_policy.payout.dsAssetDefinitionId;
+        projection.conversion_policy.binding.sbdAssetDefinitionId =
+          projection.current_policy.reward_custody.ds_asset_id;
       },
-      error: /payout must contain exactly/u,
+      error: /binding contains unknown, aliased, or missing fields/u,
     },
     {
-      label: "mistyped payout share",
+      label: "invalid conversion loss limit",
       mutate(projection) {
-        projection.current_policy.payout.recipients[0].share_basis_points =
-          "2500";
+        projection.conversion_policy.binding.max_slippage_bps = 10000;
       },
-      error: /share_basis_points must be an unsigned integer/u,
+      error: /conversion limits exceed native bounds/u,
     },
     {
       label: "certificate targets another proposal",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.proposal_content_id = "04".repeat(32);
       },
       error: /differs from its retained governance certificate/u,
@@ -525,23 +508,23 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
     {
       label: "outer certification height differs",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
-          .certified_at_height = "4598";
+        projection.current_policy.parliament
+          .certified_at_height = "118";
       },
       error: /differs from its retained governance certificate/u,
     },
     {
       label: "outer certification height is not a decimal string",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
-          .certified_at_height = 4599;
+        projection.current_policy.parliament
+          .certified_at_height = 119;
       },
       error: /certified_at_height must be a canonical unsigned decimal string/u,
     },
     {
       label: "non-approving certificate ballot",
       mutate(projection) {
-        projection.current_policy.parliament.validationFeePolicy
+        projection.current_policy.parliament
           .governance_certificate.body_bindings[0].ballot.outcome = {
             outcome: "Rejected",
           };
@@ -593,7 +576,6 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
     },
   };
   const client = new ToriiClient("https://torii.invalid", {
-    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => assert.fail("overridden request path should be used"),
     [TORII_TEST_NATIVE_BINDING]: native,
   });
@@ -790,7 +772,6 @@ test("Torii validation-fee proof pages reject non-Norito content before reading"
 
 test("proof catch-up promotes only consecutive locally verified pages", async () => {
   const client = new ToriiClient("https://torii.invalid", {
-    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => {
       throw new Error("network must not be used by this fixture");
     },
@@ -826,7 +807,6 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
 
 test("proof catch-up fails closed when a non-final page does not advance", async () => {
   const client = new ToriiClient("https://torii.invalid", {
-    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => {
       throw new Error("network must not be used by this fixture");
     },

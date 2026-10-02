@@ -46,7 +46,7 @@ use super::{
         P256ValueKindV1,
     },
     profile::{ZK_X509_MAIN_COMMON_LDE_LOG2_V1, ZK_X509_MAX_NATIVE_TRACE_LOG2_V1},
-    stark::ZK_X509_DIGEST_CONTEXT_V1,
+    stark::ZK_X509_FIXED_DIGEST_CONTEXT_V1,
 };
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PrivacyOuterDigestV1,
@@ -2645,7 +2645,7 @@ fn logical_constant_range_atom_count_v1(
 pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
 -> Result<PrivacyOuterDigestV1, ZkX509P256FixedAlgebraicErrorV1> {
     privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_FIXED_DIGEST_CONTEXT_V1,
         P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1,
         b"p256-fixed-algebraic-compiler",
         0,
@@ -2693,7 +2693,7 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
                 .copy_from_slice(&child.descriptor_digest_v1().to_bytes());
         }
         let descriptor_digest = privacy_outer_digest_frame_v1(
-            ZK_X509_DIGEST_CONTEXT_V1,
+            ZK_X509_FIXED_DIGEST_CONTEXT_V1,
             P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
             b"p256-fixed-algebraic-composite",
             0,

@@ -127,7 +127,7 @@ class LocalAppleIntegrationTests(unittest.TestCase):
                 self.assertEqual(arguments.count('--local-integration'), int(local))
                 self.assertEqual(arguments[0], '/fixture/scripts/' + ('validate_norito_bridge_xcframework.py' if command == fragment else 'check_mobile_sdk_artifacts.sh'))
 
-    def test_apple_cargo_command_pins_proc_macro_compiler_wrapper(self):
+    def test_apple_cargo_command_uses_stock_root_manifest_without_overrides(self):
         self.git.stop()
         source = (ROOT / 'scripts/build_norito_xcframework.sh').read_text()
         function = re.search(r'^run_hermetic_apple_cargo\(\) \{.*?^\}', source, re.MULTILINE | re.DOTALL)
@@ -152,36 +152,39 @@ class LocalAppleIntegrationTests(unittest.TestCase):
         subprocess.run(['/bin/bash', '-eu', '-c', command], check=True, capture_output=True, text=True)
         args = (self.lane / 'build/cargo-messages/aarch64-apple-darwin.jsonl').read_text().splitlines()
         cargo = args.index('--') + 1
-        self.assertEqual(args[cargo:cargo + 10], [
-            '/fixture/cargo', '-Z', 'host-config', '-Z', 'target-applies-to-host',
-            '--config', 'build.rustc-wrapper="/fixture/scripts/apple_proc_macro_rustc_wrapper.sh"',
-            '--config', 'build.rustc-workspace-wrapper=""',
-            'build',
+        self.assertEqual(args[cargo:], [
+            '/fixture/cargo', 'build', '--manifest-path', '/fixture/Cargo.toml',
+            '--message-format=json-render-diagnostics',
+            '--target', 'aarch64-apple-darwin', '-p', 'connect_norito_bridge',
         ])
+        for forbidden in ('-Z', '--lockfile-path', '--config', 'RUSTC_BOOTSTRAP=1'):
+            self.assertNotIn(forbidden, args)
 
-    def test_apple_proc_macro_wrapper_disables_strip_only_for_proc_macros(self):
+    def test_apple_builder_rejects_any_bootstrap_assignment(self):
         self.git.stop()
-        compiler = self.lane / 'rustc-stub'
-        compiler.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$ARG_DUMP"\n')
-        compiler.chmod(0o700)
-        wrapper = ROOT / 'scripts/apple_proc_macro_rustc_wrapper.sh'
-        dump = self.lane / 'arguments'
-        environment = dict(os.environ, RUSTC=str(compiler), ARG_DUMP=str(dump))
-        for arguments, expected in [
-            (['--crate-type', 'proc-macro', '--crate-name', 'example'],
-             ['--crate-type', 'proc-macro', '--crate-name', 'example', '-C', 'strip=none']),
-            (['--crate-type', 'proc-macro', '-C', 'strip=debuginfo'],
-             ['--crate-type', 'proc-macro', '-C', 'strip=debuginfo', '-C', 'strip=none']),
-            (['--crate-type=proc-macro', '--crate-name', 'example'],
-             ['--crate-type=proc-macro', '--crate-name', 'example', '-C', 'strip=none']),
-            (['--crate-type', 'staticlib', '--crate-name', 'example'],
-             ['--crate-type', 'staticlib', '--crate-name', 'example']),
-        ]:
-            subprocess.run([str(wrapper), str(compiler), *arguments], check=True, env=environment)
-            self.assertEqual(dump.read_text().splitlines(), expected)
-        rejected = subprocess.run([str(wrapper), '/usr/bin/true', '--crate-type', 'proc-macro'],
-                                  env=environment, capture_output=True, text=True)
-        self.assertNotEqual(rejected.returncode, 0)
+        source = (ROOT / 'scripts/build_norito_xcframework.sh').read_text()
+        fragment = source.split('if [[ "${CARGO_BUILD_JOBS:-}"', 1)[1]
+        fragment = 'if [[ "${CARGO_BUILD_JOBS:-}"' + fragment.split('if [[ -z "${CARGO_TARGET_DIR:-}"', 1)[0]
+        environment = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_INCREMENTAL='0', CARGO_NET_OFFLINE='true')
+        environment.pop('RUSTC_BOOTSTRAP', None)
+        accepted = subprocess.run(['/bin/bash', '-eu', '-c', fragment], env=environment, capture_output=True, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        for value in ('', '0', '1'):
+            refused = subprocess.run(['/bin/bash', '-eu', '-c', fragment], env=dict(environment, RUSTC_BOOTSTRAP=value), capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('RUSTC_BOOTSTRAP must be unset', refused.stderr)
+
+    def test_apple_host_macro_and_target_strip_settings_are_source_owned(self):
+        self.git.stop()
+        import tomllib
+        manifest = tomllib.loads((ROOT / 'Cargo.toml').read_text())
+        self.assertEqual(manifest['profile']['release']['build-override']['strip'], 'none')
+        self.assertEqual(manifest['profile']['apple-release']['strip'], 'none')
+        self.assertEqual(manifest['profile']['apple-release']['package']['connect_norito_bridge']['strip'], 'none')
+        builder = (ROOT / 'scripts/build_norito_xcframework.sh').read_text()
+        self.assertNotIn('apple_proc_macro_rustc_wrapper', builder)
+        self.assertNotIn('build.rustc-wrapper', builder)
+        self.assertNotIn('build.rustc-workspace-wrapper', builder)
 
     def payload(self, dirty=False):
         return {

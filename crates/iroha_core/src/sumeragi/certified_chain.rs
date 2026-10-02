@@ -710,7 +710,7 @@ impl PrefixVerifierContext<'_> {
             .height_config_with_validation(&mut prefix.validation)
             .map_err(|error| malformed(error.to_string()))?;
         let certified = self.verify_certificate(committed, &authority, Some(&config), artifacts)?;
-        verify_boundary_source(&certified, &prefix.tip, &authority)?;
+        verify_boundary_source(&certified.committed, &prefix.tip, &authority)?;
         let schedule = prefix
             .schedule
             .advanced_with_validation(&certified.commitment.schedule, &mut prefix.validation)
@@ -745,6 +745,62 @@ impl PrefixVerifierContext<'_> {
         })
     }
 
+    /// Authenticate an offered original against this independently executed block.
+    /// All local-certificate and consensus-carried parent participation paths use
+    /// this same complete relation; availability remains independently verified
+    /// by the full certificate readers and the original Native execution tip.
+    fn verify_commit_qc_original(
+        &self,
+        committed: &CommittedBlock,
+        authority: &VerifiedAuthority,
+        commit_qc: &Qc,
+    ) -> Result<(), ChainReadError> {
+        let height = committed.height;
+        let header = committed
+            .header
+            .as_ref()
+            .ok_or_else(|| ChainReadError::Malformed {
+                height,
+                reason: "genesis alone has no parent service CommitQC".into(),
+            })?;
+        if header.epoch != authority.epoch
+            || commit_qc.epoch != authority.epoch
+            || height < authority.material.authorization.first_height
+            || height > authority.material.authorization.last_height
+            || (authority.material.mode == ConsensusMode::Npos
+                && height == authority.material.authorization.last_height
+                && !header.attest)
+            || commit_qc.kind != VoteKind::Commit
+            || commit_qc.height != height
+            || commit_qc.block_hash != committed.core_hash
+            || commit_qc.attest != header.attest
+        {
+            return Err(ChainReadError::HeaderMismatch { height });
+        }
+        if commit_qc.result != committed.result {
+            return Err(ChainReadError::ResultMismatch { height });
+        }
+        if header.instance != self.instance || commit_qc.instance != self.instance {
+            return Err(ChainReadError::WrongInstance { height });
+        }
+        let native = OriginalResultVerifier {
+            source: committed,
+            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
+        };
+        let verifier = self.attestations.unwrap_or(&native);
+        #[cfg(test)]
+        relation_counts::qc(height);
+        let checked = iroha_sumeragi::crypto::Verifier::new(
+            &authority.crypto,
+            &self.instance,
+            &authority.epoch,
+            &authority.committee,
+        )
+        .verify_qc(verifier, commit_qc);
+        checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        Ok(())
+    }
+
     fn verify_certificate_with_scratch_admission(
         &self,
         committed: CommittedBlock,
@@ -777,41 +833,7 @@ impl PrefixVerifierContext<'_> {
                 .map_err(|error| verification_codec_error(height, error))?;
             (qc, None)
         };
-        if header.epoch != authority.epoch
-            || commit_qc.epoch != authority.epoch
-            || height < authority.material.authorization.first_height
-            || height > authority.material.authorization.last_height
-            || (authority.material.mode == ConsensusMode::Npos
-                && height == authority.material.authorization.last_height
-                && !header.attest)
-            || commit_qc.kind != VoteKind::Commit
-            || commit_qc.height != height
-            || commit_qc.block_hash != committed.core_hash
-            || commit_qc.attest != header.attest
-        {
-            return Err(ChainReadError::HeaderMismatch { height }.into());
-        }
-        if commit_qc.result != committed.result {
-            return Err(ChainReadError::ResultMismatch { height }.into());
-        }
-        if header.instance != self.instance || commit_qc.instance != self.instance {
-            return Err(ChainReadError::WrongInstance { height }.into());
-        }
-        let native = OriginalResultVerifier {
-            source: &committed,
-            native: super::attestation::NativePastaVerifier::new(self.instance, self.network),
-        };
-        let verifier = self.attestations.unwrap_or(&native);
-        #[cfg(test)]
-        relation_counts::qc(height);
-        let checked = iroha_sumeragi::crypto::Verifier::new(
-            &authority.crypto,
-            &self.instance,
-            &authority.epoch,
-            &authority.committee,
-        )
-        .verify_qc(verifier, &commit_qc);
-        checked.map_err(|error| ChainReadError::Certificate { height, error })?;
+        self.verify_commit_qc_original(&committed, authority, &commit_qc)?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
         let config = config.ok_or_else(|| {
@@ -879,7 +901,7 @@ impl AttestationVerifier for OriginalResultVerifier<'_> {
 }
 
 fn verify_boundary_source(
-    certified: &CertifiedBlock,
+    certified: &CommittedBlock,
     parent: &CommittedBlock,
     authority: &VerifiedAuthority,
 ) -> Result<(), ChainReadError> {
@@ -1699,6 +1721,7 @@ pub use execution_read::{
     AuthenticatedExecutionBlock, NativeExecutionRead, NativeExecutionReadError,
     NativeExecutionReadLimits, NativeExecutionReadResource, read_authenticated_execution,
 };
+pub(crate) use state_certificate::{ParentServiceError, VerifiedParentService};
 
 #[cfg(test)]
 pub(crate) mod relation_counts;

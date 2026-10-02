@@ -17,6 +17,9 @@ use fastpq_prover::goldilocks_transform::{
 
 type Column = aggregate::ZeroizingFieldColumnV1;
 
+#[path = "main_selected_coset.rs"]
+mod selected_coset;
+
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(super) struct MainTransformReceiptV1 {
     cpu_columns: usize,
@@ -69,6 +72,27 @@ impl MainTraceCosetEvaluatorV1 {
         native_log: u8,
         common_log: u8,
     ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
+        self.evaluate_rows_v1(columns, native_log, common_log, None)
+    }
+
+    /// Return only the exact canonical selected rows from the original coset.
+    pub(super) fn evaluate_selected_v1(
+        &mut self,
+        columns: &[Column],
+        native_log: u8,
+        common_log: u8,
+        selected: &[usize],
+    ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
+        self.evaluate_rows_v1(columns, native_log, common_log, Some(selected))
+    }
+
+    fn evaluate_rows_v1(
+        &mut self,
+        columns: &[Column],
+        native_log: u8,
+        common_log: u8,
+        selected: Option<&[usize]>,
+    ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
         // An already admitted CPU phase must also stop if another device call
         // has since left a live private allocation with uncertain completion.
         if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
@@ -76,15 +100,21 @@ impl MainTraceCosetEvaluatorV1 {
             prover_observation::failed_transform_v1();
             return Err(AggregateStarkErrorV1::InternalInvariant);
         }
-        let result = self.evaluate_with_v1(columns, native_log, common_log, |values, root| {
-            transform_goldilocks_columns_v1(
-                values,
-                root,
-                Direction::Forward,
-                fastpq_prover::ExecutionMode::Auto,
-            )
-            .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
-        });
+        let result = self.evaluate_selected_with_v1(
+            columns,
+            native_log,
+            common_log,
+            selected,
+            |values, root| {
+                transform_goldilocks_columns_v1(
+                    values,
+                    root,
+                    Direction::Forward,
+                    fastpq_prover::ExecutionMode::Auto,
+                )
+                .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+            },
+        );
         #[cfg(test)]
         if result.is_err() {
             prover_observation::failed_transform_v1();
@@ -92,11 +122,23 @@ impl MainTraceCosetEvaluatorV1 {
         result
     }
 
+    #[cfg(test)]
     fn evaluate_with_v1(
         &mut self,
         columns: &[Column],
         native_log: u8,
         common_log: u8,
+        transform: impl FnMut(&mut [Vec<u64>], u64) -> Result<Backend, AggregateStarkErrorV1>,
+    ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
+        self.evaluate_selected_with_v1(columns, native_log, common_log, None, transform)
+    }
+
+    fn evaluate_selected_with_v1(
+        &mut self,
+        columns: &[Column],
+        native_log: u8,
+        common_log: u8,
+        selected: Option<&[usize]>,
         mut transform: impl FnMut(&mut [Vec<u64>], u64) -> Result<Backend, AggregateStarkErrorV1>,
     ) -> Result<Vec<Column>, AggregateStarkErrorV1> {
         let rows = 1_usize
@@ -120,6 +162,13 @@ impl MainTraceCosetEvaluatorV1 {
         {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
+        if selected.is_some_and(|indices| {
+            indices.is_empty()
+                || indices.last().is_none_or(|&row| row >= rows)
+                || indices.windows(2).any(|pair| pair[0] >= pair[1])
+        }) {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
         if columns
             .iter()
             .flat_map(|column| column.iter())
@@ -130,10 +179,13 @@ impl MainTraceCosetEvaluatorV1 {
         if self.device_columns == 0 {
             let result = columns
                 .par_iter()
-                .map(|column| {
-                    masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
+                .map(|column| match selected {
+                    Some(indices) => {
+                        selected_coset::evaluate_v1(column, native_log, common_log, indices)
+                    }
+                    None => masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
                         .map(Column::from_vec_v1)
-                        .map_err(aggregate::map_transparent_error_v1)
+                        .map_err(aggregate::map_transparent_error_v1),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             self.receipt.cpu_columns += columns.len();
@@ -183,11 +235,21 @@ impl MainTraceCosetEvaluatorV1 {
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         for words in words.iter_mut() {
             let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+            let output_rows = selected.map_or(rows, <[usize]>::len);
             column
-                .try_reserve_exact(rows)
+                .try_reserve_exact(output_rows)
                 .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-            for &word in words.iter() {
-                column.push(F::canonical(word).ok_or(AggregateStarkErrorV1::NonCanonicalField)?);
+            if column.capacity() != output_rows {
+                return Err(AggregateStarkErrorV1::AllocationFailure);
+            }
+            // Preserve full device-output canonical checking, including
+            // unselected rows; gather only after original completion succeeds.
+            if words.iter().any(|&word| F::canonical(word).is_none()) {
+                return Err(AggregateStarkErrorV1::NonCanonicalField);
+            }
+            match selected {
+                Some(indices) => column.extend(indices.iter().map(|&row| F(words[row]))),
+                None => column.extend(words.iter().copied().map(F)),
             }
             output.push(Column::from_vec_v1(column.into_vec()));
             // Only one field conversion column overlaps the word outputs.
@@ -433,9 +495,142 @@ mod tests {
             result,
             Err(AggregateStarkErrorV1::NonCanonicalField)
         ));
-        // All three raw output columns and the partially converted field row
-        // are cleared at their actual ownership boundaries on this failure.
+        // All three raw output columns are cleared at their actual ownership
+        // boundaries; canonical validation precedes field-value publication.
         assert!(cleared.iter().map(|entry| entry.cells).sum::<usize>() >= 3 * 64);
         assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+    }
+    #[test]
+    fn selected_cpu_and_device_adapter_keep_original_row_coordinates_and_fault_checks() {
+        use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+        for width in [1, 3, 8] {
+            let columns = columns_v1(width);
+            for selected in [vec![0], vec![63], vec![0, 7, 16, 63], (0..64).collect()] {
+                let expected = columns
+                    .iter()
+                    .map(|column| masked_trace_coefficients_on_coset_v1(column, 4, 6).unwrap())
+                    .collect::<Vec<_>>();
+                for device_columns in [0, 1, 2, 4] {
+                    let mut evaluator = MainTraceCosetEvaluatorV1 {
+                        evaluation_rows: 64,
+                        device_columns,
+                        receipt: Default::default(),
+                    };
+                    let actual = evaluator
+                        .evaluate_selected_with_v1(
+                            &columns,
+                            4,
+                            6,
+                            Some(&selected),
+                            |batch, root| {
+                                transform_goldilocks_columns_v1(
+                                    batch,
+                                    root,
+                                    Direction::Forward,
+                                    fastpq_prover::ExecutionMode::Cpu,
+                                )
+                                .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+                            },
+                        )
+                        .unwrap();
+                    for (column, full) in actual.iter().zip(&expected) {
+                        assert_eq!(column.len(), selected.len());
+                        for (&row, &value) in selected.iter().zip(column.iter()) {
+                            assert_eq!(value, full[row]);
+                        }
+                    }
+                    assert_eq!(evaluator.receipt.cpu_columns, width);
+                }
+            }
+        }
+        let columns = columns_v1(1);
+        let mut evaluator = MainTraceCosetEvaluatorV1 {
+            evaluation_rows: 64,
+            device_columns: 1,
+            receipt: Default::default(),
+        };
+        let result = evaluator.evaluate_selected_with_v1(&columns, 4, 6, Some(&[0]), |batch, _| {
+            batch[0][63] = GOLDILOCKS_MODULUS_V1;
+            Ok(Backend::Metal)
+        });
+        assert!(
+            matches!(result, Err(AggregateStarkErrorV1::NonCanonicalField)),
+            "unselected device corruption must remain visible"
+        );
+        for selected in [vec![], vec![64], vec![2, 1], vec![1, 1]] {
+            assert!(
+                evaluator
+                    .evaluate_selected_with_v1(&columns, 4, 6, Some(&selected), |_, _| panic!(
+                        "invalid selected geometry dispatched"
+                    ))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires actual Metal common22 selected-row parity; component evidence only"]
+    fn selected_required_metal_matches_pruned_cpu_and_original_full_coset() {
+        use crate::privacy_engines::transparent_stark::masked_trace_coefficients_with_mask_v1;
+        assert_eq!(
+            fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+            Some(Backend::Metal)
+        );
+        let common = 22;
+        let rows = 1usize << common;
+        let selected = (0..136)
+            .flat_map(|query| {
+                let block = (query * 1_729 + 17) % (rows / 16);
+                block * 16..block * 16 + 16
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for native in [5, 19] {
+            for width in [1, 8] {
+                let columns = (0..width)
+                    .map(|column| {
+                        let values = (0..1usize << native)
+                            .map(|row| F((row * 17 + column * 13 + 1) as u64))
+                            .collect::<Vec<_>>();
+                        let mask = (0..1816)
+                            .map(|degree| F((degree * 29 + column * 7 + 3) as u64))
+                            .collect::<Vec<_>>();
+                        Column::from_vec_v1(
+                            masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+                let mut metal = MainTraceCosetEvaluatorV1::new_v1(&layout, 0).unwrap();
+                assert!(metal.device_columns > 0);
+                let actual = metal
+                    .evaluate_selected_v1(&columns, native, common, &selected)
+                    .unwrap();
+                assert_eq!(metal.receipt.metal_columns, width);
+                assert_eq!(metal.receipt.cpu_columns, 0);
+                let mut cpu = MainTraceCosetEvaluatorV1 {
+                    evaluation_rows: rows,
+                    device_columns: 0,
+                    receipt: Default::default(),
+                };
+                let pruned = cpu
+                    .evaluate_selected_v1(&columns, native, common, &selected)
+                    .unwrap();
+                for ((column, actual), pruned) in
+                    columns.iter().zip(actual.iter()).zip(pruned.iter())
+                {
+                    let full = Column::from_vec_v1(
+                        masked_trace_coefficients_on_coset_v1(column, native, common).unwrap(),
+                    );
+                    for ((&row, &actual), &pruned) in
+                        selected.iter().zip(actual.iter()).zip(pruned.iter())
+                    {
+                        assert_eq!(actual, full[row]);
+                        assert_eq!(pruned, full[row]);
+                    }
+                }
+            }
+        }
     }
 }

@@ -176,6 +176,7 @@ pub(super) fn append_leaves_v1(
 }
 
 /// Parallel finalization wipes original slots; no private state backing is moved.
+#[cfg(test)]
 pub(super) fn finish_rows_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     streams: &mut [PrivacyOuterLastFieldStreamV1],
@@ -188,6 +189,7 @@ pub(super) fn finish_rows_v1(
     })
 }
 
+#[cfg(test)]
 fn finish_rows_with_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     streams: &mut [PrivacyOuterLastFieldStreamV1],

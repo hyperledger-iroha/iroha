@@ -56,6 +56,8 @@ struct Identity {
     enrollment_sha256: [u8; 32],
     credential_sha256: [u8; 32],
     issuer_policy_digest: [u8; 32],
+    core_issuer_policy_digest: [u8; 32],
+    ordinary_identity_policy_id: [u8; 32],
 }
 struct Pending {
     nonce: [u8; 32],
@@ -188,6 +190,14 @@ impl KagemushaOrdinaryIntegrityRefreshOwnerV1 {
                 &self.selected.issuer,
             )
             .map_err(|_| Rejected)?,
+            core_issuer_policy_digest: self
+                .selected
+                .ordinary
+                .issuer_policy()
+                .policy()
+                .canonical_digest()
+                .map_err(|_| Rejected)?,
+            ordinary_identity_policy_id: self.selected.ordinary.identity_policy().policy_id(),
         })
     }
     fn require_financial(
@@ -513,7 +523,7 @@ impl KagemushaOrdinaryIntegrityRefreshOwnerV1 {
                     self.selected.governed.release(),
                     self.selected.governed.trust(),
                     self.selected.governed.authority(),
-                    &self.selected.issuer.issuer_public_key,
+                    self.selected.preparation_issuer_key()?,
                     point,
                 )
                 .map_err(|_| Rejected)?;
@@ -580,7 +590,7 @@ impl KagemushaOrdinaryIntegrityRefreshOwnerV1 {
                 self.selected.governed.trust(),
                 self.selected.governed.authority(),
                 pending.challenge.as_ref().ok_or(Rejected)?,
-                &self.selected.issuer.issuer_public_key,
+                self.selected.preparation_issuer_key()?,
                 lower,
             )
             .map_err(|_| Rejected)?;
@@ -874,6 +884,7 @@ mod tests {
         KagemushaPlayIntegrityRefreshLeaseV1,
     ) {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
         let c = financial.enrollment.app_credential();
         let s = c.subject();
         let challenge = KagemushaPlayIntegrityRefreshChallengeV1 {
@@ -905,7 +916,7 @@ mod tests {
         };
         let signed = KagemushaSignedPlayIntegrityRefreshChallengeV1 {
             signature: Signature::new(
-                issuer.private_key(),
+                core_issuer.private_key(),
                 &challenge.canonical_signing_bytes().unwrap(),
             ),
             challenge,

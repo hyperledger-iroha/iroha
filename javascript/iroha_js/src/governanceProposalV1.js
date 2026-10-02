@@ -217,147 +217,132 @@ function normalizeSccpRoute(value, context) {
   };
 }
 
-function normalizeValidationFeePolicy(value, context) {
-  const record = exactRecord(value, [
-    "proposal_operator",
-    "policy",
-    "payout_lifecycle_proposal_id",
-  ], context);
-  const policy = normalizeValidationFeePolicyValue(record.policy, `${context}.policy`);
-  const lifecycleId = record.payout_lifecycle_proposal_id === null
-    ? null
-    : byteArray(
-      record.payout_lifecycle_proposal_id,
-      32,
-      `${context}.payout_lifecycle_proposal_id`,
-      { nonZero: true },
-    );
-  if ((policy.treasury_payout_binding === null) !== (lifecycleId === null)) {
-    throw new TypeError(
-      `${context}.payout_lifecycle_proposal_id must be present exactly when the policy has a payout binding`,
-    );
+function requireNativeFeeHash(value, context) {
+  if (typeof value !== "string" || !/^[0-9A-F]{64}$/.test(value) || /^0+$/.test(value)) {
+    rejectFeeType(`${context} must be a nonzero canonical uppercase 32-byte hex string`);
   }
+  return value;
+}
+
+export function normalizeValidationFeePolicy(payload, context) {
+  const record = exactRecord(
+    payload,
+    ["proposal_operator", "policy"],
+    context,
+  );
+  const policy = normalizeValidationFeePolicyValue(
+    record.policy,
+    `${context}.policy`,
+  );
   return {
     proposal_operator: canonicalAccountId(
       record.proposal_operator,
       `${context}.proposal_operator`,
     ),
     policy,
-    payout_lifecycle_proposal_id: lifecycleId,
   };
 }
 
-function normalizeValidationFeePolicyValue(value, context) {
-  const record = exactRecord(value, [
-    "schema_version",
-    "network_id",
-    "policy_version",
-    "previous_policy_hash",
-    "ds_asset_id",
-    "ds_scale",
-    "fee",
-    "treasury_account_id",
-    "charging_mode",
-    "effective_from_height",
-    "expires_after_height",
+export function normalizeValidationFeePolicyValue(payload, context) {
+  const record = exactRecord(payload, [
+    "schema_version", "network_id", "policy_version", "previous_policy_hash",
+    "ds_asset_id", "ds_scale", "retail_schedule", "effective_from_ms",
+    "notice_published_at_ms", "fee", "treasury_account_id", "charging_mode",
     "exemption_classes",
-    "treasury_payout_binding",
+    "reward_custody",
   ], context);
-  if (record.schema_version !== 1) {
-    throw new TypeError(`${context}.schema_version must be the number 1`);
-  }
-  if (record.ds_scale !== 2) {
-    throw new TypeError(`${context}.ds_scale must be the number 2`);
+  if (record.schema_version !== 1 || record.ds_scale !== 2) {
+    rejectFeeType(`${context} requires policy schema 1 and SBD scale 2`);
   }
   const networkId = nonEmptyString(record.network_id, `${context}.network_id`);
   NetworkId.parse(networkId);
-  const policyVersion = uint64String(record.policy_version, `${context}.policy_version`, {
-    allowZero: false,
-  });
-  const previousPolicyHash = record.previous_policy_hash === null
-    ? null
-    : byteArray(record.previous_policy_hash, 32, `${context}.previous_policy_hash`);
+  const policyVersion = uint64String(record.policy_version,
+    `${context}.policy_version`, { allowZero: false });
+  const previousPolicyHash = record.previous_policy_hash === null ? null
+    : requireNativeFeeHash(record.previous_policy_hash, `${context}.previous_policy_hash`);
   if ((policyVersion === "1") !== (previousPolicyHash === null)) {
-    throw new TypeError(`${context}.previous_policy_hash does not match policy_version`);
+    rejectFeeType(`${context}.previous_policy_hash does not match policy_version`);
   }
-  const chargingMode = normalizeValidationFeeChargingMode(
-    record.charging_mode,
-    `${context}.charging_mode`,
-  );
   const fee = canonicalQuantity(record.fee, `${context}.fee`);
-  const exemptions = array(record.exemption_classes, `${context}.exemption_classes`)
-    .map((item, index) => nonEmptyString(
-      item,
-      `${context}.exemption_classes[${index}]`,
-    ));
-  if (
-    exemptions.some((item) => item !== "TREASURY_PAYOUT") ||
-    new Set(exemptions).size !== exemptions.length
-  ) {
-    throw new TypeError(`${context}.exemption_classes contains an unsupported or duplicate class`);
+  if (fee === "0" || (fee.split(".")[1]?.length ?? 0) > 2) {
+    rejectFeeType(`${context}.fee must be positive exact SBD minor units`);
   }
-  const payoutBinding = record.treasury_payout_binding === null
-    ? null
-    : normalizeValidationFeePayoutBinding(
-      record.treasury_payout_binding,
-      `${context}.treasury_payout_binding`,
-    );
-  if ((payoutBinding === null) !== !exemptions.includes("TREASURY_PAYOUT")) {
-    throw new TypeError(`${context}.treasury_payout_binding does not match exemption_classes`);
+  const chargingMode = normalizeValidationFeeChargingMode(record.charging_mode,
+    `${context}.charging_mode`);
+  const schedule = exactRecord(record.retail_schedule,
+    ["included_payments", "overage_minor", "maintenance_tiers"], `${context}.retail_schedule`);
+  const included = feeJsonUint(schedule.included_payments,
+    `${context}.retail_schedule.included_payments`, { allowZero: false });
+  if (BigInt(included) > 0xffffffffn) rejectFeeType(`${context}.included_payments exceeds u32`);
+  const overage = feeJsonUint(schedule.overage_minor,
+    `${context}.retail_schedule.overage_minor`, { allowZero: false });
+  const tiers = array(schedule.maintenance_tiers,
+    `${context}.retail_schedule.maintenance_tiers`).map((tier, index) => {
+    const label = `${context}.retail_schedule.maintenance_tiers[${index}]`;
+    const value = exactRecord(tier,
+      ["minimum_average_balance_minor", "monthly_fee_minor"], label);
+    return {
+      minimum_average_balance_minor: feeJsonUint(
+        value.minimum_average_balance_minor, `${label}.minimum_average_balance_minor`),
+      monthly_fee_minor: feeJsonUint(value.monthly_fee_minor,
+        `${label}.monthly_fee_minor`, { allowZero: false }),
+    };
+  });
+  if (tiers.length === 0 || tiers.length > 32 ||
+      BigInt(tiers[0].minimum_average_balance_minor) !== 0n ||
+      tiers.some((tier, i) => i > 0 && (
+        BigInt(tier.minimum_average_balance_minor) <= BigInt(tiers[i - 1].minimum_average_balance_minor) ||
+        BigInt(tier.monthly_fee_minor) < BigInt(tiers[i - 1].monthly_fee_minor)))) {
+    rejectFeeType(`${context}.retail_schedule requires increasing thresholds and nondecreasing rates`);
   }
-  if (chargingMode.charging_mode === "DISABLED") {
-    if (fee !== "0" || exemptions.length !== 0 || payoutBinding !== null) {
-      throw new TypeError(`${context} disabled charging mode requires zero fee and no exemptions`);
-    }
-  } else if (fee !== "0.1") {
-    throw new TypeError(`${context}.fee must be exactly 0.1 for enabled V1 charging`);
+  const effective = feeJsonUint(record.effective_from_ms,
+    `${context}.effective_from_ms`, { allowZero: false });
+  const notice = feeJsonUint(record.notice_published_at_ms,
+    `${context}.notice_published_at_ms`, { allowZero: false });
+  const honiara = new Date(Number(BigInt(effective) + 39600000n));
+  if (BigInt(effective) < BigInt(notice) + 2592000000n ||
+      !Number.isFinite(honiara.getTime()) || honiara.getUTCDate() !== 1 ||
+      honiara.getUTCHours() !== 0 || honiara.getUTCMinutes() !== 0 ||
+      honiara.getUTCSeconds() !== 0 || honiara.getUTCMilliseconds() !== 0) {
+    rejectFeeType(`${context} requires a Honiara month boundary after thirty calendar days notice`);
   }
-  const effectiveHeight = uint64String(
-    record.effective_from_height,
-    `${context}.effective_from_height`,
-  );
-  const expiresHeight = record.expires_after_height === null
-    ? null
-    : uint64String(record.expires_after_height, `${context}.expires_after_height`);
-  if (expiresHeight !== null && BigInt(expiresHeight) <= BigInt(effectiveHeight)) {
-    throw new TypeError(`${context}.expires_after_height must exceed effective_from_height`);
+  if (!Array.isArray(record.exemption_classes) || record.exemption_classes.length !== 1 ||
+      record.exemption_classes[0] !== "TREASURY_PAYOUT") {
+    rejectFeeType(`${context} requires governed reward custody and no automatic policy expiry`);
+  }
+  const payout = normalizeValidationFeeRewardCustody(record.reward_custody,
+    `${context}.reward_custody`);
+  const dsAsset = canonicalAssetDefinitionId(record.ds_asset_id, `${context}.ds_asset_id`);
+  const treasury = canonicalAccountId(record.treasury_account_id,
+    `${context}.treasury_account_id`);
+  if (payout.ds_asset_id !== dsAsset || payout.treasury_account_id !== treasury) {
+    rejectFeeType(`${context} payout custody must match the fee asset and treasury`);
   }
   return {
-    schema_version: 1,
-    network_id: networkId,
-    policy_version: policyVersion,
-    previous_policy_hash: previousPolicyHash,
-    ds_asset_id: canonicalAssetDefinitionId(record.ds_asset_id, `${context}.ds_asset_id`),
-    ds_scale: 2,
-    fee,
-    treasury_account_id: canonicalAccountId(
-      record.treasury_account_id,
-      `${context}.treasury_account_id`,
-    ),
-    charging_mode: chargingMode,
-    effective_from_height: effectiveHeight,
-    expires_after_height: expiresHeight,
-    exemption_classes: exemptions,
-    treasury_payout_binding: payoutBinding,
+    schema_version: 1, network_id: networkId, policy_version: policyVersion,
+    previous_policy_hash: previousPolicyHash, ds_asset_id: dsAsset, ds_scale: 2,
+    retail_schedule: { included_payments: Number(included), overage_minor: overage, maintenance_tiers: tiers },
+    effective_from_ms: effective, notice_published_at_ms: notice, fee,
+    treasury_account_id: treasury, charging_mode: chargingMode,
+    exemption_classes: ["TREASURY_PAYOUT"],
+    reward_custody: payout,
   };
 }
 
-function normalizeValidationFeeChargingMode(value, context) {
-  const record = exactRecord(value, ["charging_mode", "value"], context);
-  if (
-    record.charging_mode !== "DISABLED" &&
-    record.charging_mode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
-  ) {
-    throw new TypeError(`${context}.charging_mode contains an unsupported variant`);
+function normalizeValidationFeeChargingMode(payload, context) {
+  const record = exactRecord(payload, ["charging_mode", "value"], context);
+  if (record.charging_mode !== "RETAIL_MONTHLY_ALLOWANCE" || record.value !== null) {
+    rejectFeeType(`${context} must be RETAIL_MONTHLY_ALLOWANCE with null value`);
   }
-  if (record.value !== null) {
-    throw new TypeError(`${context}.value must be null`);
-  }
-  return { charging_mode: record.charging_mode, value: null };
+  return { charging_mode: "RETAIL_MONTHLY_ALLOWANCE", value: null };
 }
 
-function normalizeValidationFeePayoutLifecycle(value, context) {
-  const record = exactRecord(value, ["proposal_operator", "payout_binding"], context);
+export function normalizeValidationFeePayoutLifecycle(payload, context) {
+  const record = exactRecord(
+    payload,
+    ["proposal_operator", "payout_binding"],
+    context,
+  );
   return {
     proposal_operator: canonicalAccountId(
       record.proposal_operator,
@@ -370,80 +355,87 @@ function normalizeValidationFeePayoutLifecycle(value, context) {
   };
 }
 
-function normalizeValidationFeePayoutBinding(value, context) {
-  const record = exactRecord(value, [
-    "contract_address",
-    "code_hash",
-    "entrypoint",
-    "treasury_account_id",
-    "ds_asset_id",
-    "xor_asset_id",
-    "pool_vault_account_id",
-    "batch_ds",
-    "min_xor_out",
-    "max_xor_out",
-    "recipients",
+export function normalizeValidationFeePayoutBinding(payload, context) {
+  const record = exactRecord(payload, [
+    "contract_address", "code_hash", "entrypoint", "treasury_account_id", "ds_asset_id", "xor_asset_id",
+    "pool_contract_address", "pool_code_hash", "pool_vault_account_id", "reward_pool_account_id",
+    "reference_feed_id", "reference_feed_config_version", "reference_provider_accounts",
+    "max_sbd_per_attempt_minor", "max_sbd_per_day_minor", "min_interval_ms", "max_source_age_ms",
+    "max_slippage_bps", "validator_lane_id", "min_reward_claim_xor_minor",
   ], context);
-  const contractAddress = nonEmptyString(record.contract_address, `${context}.contract_address`);
-  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
+  const result = {};
+  for (const field of ["contract_address", "pool_contract_address"]) {
+    result[field] = nonEmptyString(record[field], `${context}.${field}`);
+    parseCanonicalContractAddress(result[field], `${context}.${field}`);
+  }
+  for (const field of ["code_hash", "pool_code_hash"]) {
+    result[field] = requireNativeFeeHash(record[field], `${context}.${field}`);
+  }
   if (record.entrypoint !== "autonomous_validation_fee_tick") {
-    throw new TypeError(`${context}.entrypoint must be autonomous_validation_fee_tick`);
+    rejectFeeType(`${context}.entrypoint must be autonomous_validation_fee_tick`);
   }
-  const treasury = canonicalAccountId(
-    record.treasury_account_id,
-    `${context}.treasury_account_id`,
-  );
-  const vault = canonicalAccountId(
-    record.pool_vault_account_id,
-    `${context}.pool_vault_account_id`,
-  );
-  if (treasury === vault) {
-    throw new TypeError(`${context} treasury and pool vault accounts must differ`);
+  result.entrypoint = record.entrypoint;
+  const custody = ["treasury_account_id", "pool_vault_account_id", "reward_pool_account_id"];
+  for (const field of custody) {
+    result[field] = canonicalAccountId(record[field], `${context}.${field}`);
   }
-  const dsAsset = canonicalAssetDefinitionId(record.ds_asset_id, `${context}.ds_asset_id`);
-  const xorAsset = canonicalAssetDefinitionId(record.xor_asset_id, `${context}.xor_asset_id`);
-  if (dsAsset === xorAsset) {
-    throw new TypeError(`${context} DS and XOR assets must differ`);
+  if (new Set(custody.map((field) => result[field])).size !== 3) {
+    rejectFeeType(`${context} treasury, pool and reward custody must differ`);
   }
-  if (
-    canonicalQuantity(record.batch_ds, `${context}.batch_ds`) !== "10" ||
-    canonicalQuantity(record.min_xor_out, `${context}.min_xor_out`) !== "4" ||
-    canonicalQuantity(record.max_xor_out, `${context}.max_xor_out`) !== "100"
-  ) {
-    throw new TypeError(`${context} must use the exact V1 payout quantities`);
+  for (const field of ["ds_asset_id", "xor_asset_id"]) {
+    result[field] = canonicalAssetDefinitionId(record[field], `${context}.${field}`);
   }
-  const recipients = array(record.recipients, `${context}.recipients`)
-    .map((item, index) => {
-      const itemContext = `${context}.recipients[${index}]`;
-      const recipient = exactRecord(item, ["account_id", "share"], itemContext);
-      const accountId = canonicalAccountId(recipient.account_id, `${itemContext}.account_id`);
-      if (canonicalQuantity(recipient.share, `${itemContext}.share`) !== "0.25") {
-        throw new TypeError(`${itemContext}.share must be exactly 0.25`);
-      }
-      return { account_id: accountId, share: "0.25" };
-    });
-  const recipientIds = recipients.map((recipient) => recipient.account_id);
-  if (
-    recipients.length !== 4 ||
-    new Set(recipientIds).size !== 4 ||
-    recipientIds.includes(treasury) ||
-    recipientIds.includes(vault)
-  ) {
-    throw new TypeError(`${context}.recipients must contain four unique non-pool accounts`);
+  if (result.ds_asset_id === result.xor_asset_id) rejectFeeType(`${context} SBD and XOR assets must differ`);
+  if (!Array.isArray(record.reference_feed_id) || record.reference_feed_id.length !== 1) {
+    rejectFeeType(`${context}.reference_feed_id must be the native one-element FeedId tuple`);
   }
-  return {
-    contract_address: contractAddress,
-    code_hash: byteArray(record.code_hash, 32, `${context}.code_hash`, { nonZero: true }),
-    entrypoint: "autonomous_validation_fee_tick",
-    treasury_account_id: treasury,
-    ds_asset_id: dsAsset,
-    xor_asset_id: xorAsset,
-    pool_vault_account_id: vault,
-    batch_ds: "10",
-    min_xor_out: "4",
-    max_xor_out: "100",
-    recipients,
-  };
+  result.reference_feed_id = [canonicalName(record.reference_feed_id[0], `${context}.reference_feed_id[0]`)];
+  result.reference_provider_accounts = array(record.reference_provider_accounts,
+    `${context}.reference_provider_accounts`).map((item, index) =>
+    canonicalAccountId(item, `${context}.reference_provider_accounts[${index}]`));
+  if (result.reference_provider_accounts.length !== 5 || new Set(result.reference_provider_accounts).size !== 5) {
+    rejectFeeType(`${context} requires five distinct reference providers`);
+  }
+  const providerKeys = result.reference_provider_accounts.map((account) => {
+    const bytes = AccountAddress.parseEncoded(account).address.canonicalBytes();
+    if (bytes[1] !== 0) throw new TypeError(`${context} reference providers must have single-signature controllers`);
+    return Buffer.from(bytes).toString("hex");
+  });
+  if (new Set(providerKeys).size !== 5) throw new TypeError(`${context} reference providers must have independent signing keys`);
+  for (const field of ["reference_feed_config_version", "max_sbd_per_attempt_minor", "max_sbd_per_day_minor",
+    "min_interval_ms", "max_source_age_ms", "min_reward_claim_xor_minor", "max_slippage_bps", "validator_lane_id"]) {
+    result[field] = feeJsonUint(record[field], `${context}.${field}`,
+      { allowZero: field === "max_slippage_bps" || field === "validator_lane_id" });
+  }
+  if (BigInt(result.reference_feed_config_version) > 0xffffffffn ||
+      BigInt(result.validator_lane_id) > 0xffffffffn || BigInt(result.max_slippage_bps) >= 10000n ||
+      BigInt(result.max_sbd_per_day_minor) < BigInt(result.max_sbd_per_attempt_minor)) {
+    rejectFeeType(`${context} conversion limits exceed native bounds`);
+  }
+  return result;
+}
+
+
+function rejectFeeType(message) { throw new TypeError(message); }
+function feeJsonUint(value, context, options = {}) {
+  if ((typeof value !== "number" || !Number.isSafeInteger(value)) && typeof value !== "bigint") {
+    throw new TypeError(`${context} requires a lossless JSON integer token`);
+  }
+  const integer = BigInt(value);
+  if (integer < 0n || integer > MAX_UINT64_BIGINT || (options.allowZero === false && integer === 0n)) {
+    throw new TypeError(`${context} is outside unsigned 64-bit bounds`);
+  }
+  return integer <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(integer) : integer;
+}
+export function normalizeValidationFeeRewardCustody(value, context) {
+  const custody = exactRecord(value, ["contract_address", "treasury_account_id", "ds_asset_id", "xor_asset_id", "reward_pool_account_id", "validator_lane_id"], context);
+  const result = { ...custody };
+  parseCanonicalContractAddress(nonEmptyString(custody.contract_address, `${context}.contract_address`), `${context}.contract_address`);
+  for (const field of ["treasury_account_id", "reward_pool_account_id"]) result[field] = canonicalAccountId(custody[field], `${context}.${field}`);
+  for (const field of ["ds_asset_id", "xor_asset_id"]) result[field] = canonicalAssetDefinitionId(custody[field], `${context}.${field}`);
+  result.validator_lane_id = feeJsonUint(custody.validator_lane_id, `${context}.validator_lane_id`);
+  if (result.ds_asset_id === result.xor_asset_id || result.treasury_account_id === result.reward_pool_account_id || BigInt(result.validator_lane_id) > 0xffff_ffffn) throw new TypeError(`${context} has invalid reward custody`);
+  return result;
 }
 
 function normalizeMusubiAction(value, context) {

@@ -13,10 +13,8 @@ use crate::{
     cache_memory::OwnedVec,
     error::ExecutionDeferral,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
+    limits::MAX_CONTRACT_CALL_DEPTH,
 };
-
-/// Malicious cyclic call graphs cannot grow the protected stack without bound.
-pub(crate) const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
 
 enum Storage {
     Local(OwnedVec<u64>),
@@ -239,6 +237,34 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), BACKING_BYTES);
         assert_eq!(copy.pop(), Some(13));
         drop(copy);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn protected_depth_limit_retains_full_lifo_stack_on_refusal_and_reuses_popped_slot() {
+        let budget = AllocationBudget::new(BACKING_BYTES);
+        let mut stack = ContractReturnStack::with_memory_budget(&budget);
+        assert!(stack.is_empty()); // The root sentinel is not a nested return PC.
+        for return_pc in 0..MAX_CONTRACT_CALL_DEPTH as u64 {
+            stack.try_push(return_pc).unwrap();
+        }
+        assert_eq!(stack.len(), MAX_CONTRACT_CALL_DEPTH);
+        assert_eq!(budget.reserved_bytes(), BACKING_BYTES);
+        for _ in 0..2 {
+            assert_eq!(stack.try_push(u64::MAX), Err(VMError::AssertionFailed));
+            assert_eq!(stack.len(), MAX_CONTRACT_CALL_DEPTH);
+            assert_eq!(budget.reserved_bytes(), BACKING_BYTES);
+        }
+        assert_eq!(stack.pop(), Some(MAX_CONTRACT_CALL_DEPTH as u64 - 1));
+        stack.try_push(u64::MAX).unwrap();
+        assert_eq!(stack.pop(), Some(u64::MAX));
+        for expected in (0..MAX_CONTRACT_CALL_DEPTH as u64 - 1).rev() {
+            assert_eq!(stack.pop(), Some(expected));
+        }
+        assert_eq!(stack.pop(), None);
+        assert!(stack.is_empty());
+        assert_eq!(budget.reserved_bytes(), BACKING_BYTES);
+        drop(stack);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 

@@ -65,7 +65,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Local certificate AIR components and a bounded joined codec exist; activation is unavailable. Verifier equations connecting P256/projection byte declarations to the shared byte trace remain incomplete. Native comparison exposed missing selected-input multiplicity in the closed fixed-schedule compiler; the complete post-pin privacy selection has 942 passes and 14 failures. | Complete those source joins, remove exposed intermediate claims, regenerate the combined profile and prove the full relation under the unchanged 9,437,184-byte and resource limits. Local proof acceptance does not establish the complete credential relation. |
+| ZK-X509 | The joint original-polynomial MAIN/CA relation removes public intermediate terminal values and retains source-bound key/digest joins. The recorded source17 maximum proof and fresh verifier pass byte and enforced address-space limits; proving time and RSS-observer consistency fail. Activation is unavailable. | Qualify the complete relation, nonce-scoped transcript privacy, regenerated profiles and current maximum proof under the unchanged 9,437,184-byte and resource limits. Component acceptance does not establish soundness or zero knowledge. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -73,21 +73,32 @@ independent audit, SDK, hardware, and deployment evidence.
 | IVM private note | Native profile and lifecycle integration exist. | Shared STARK soundness/qualification, program/authority adversaries, SDK and network evidence. |
 | PQ-MASP | Native note/AIR/profile and lifecycle integration exist. | Shared STARK soundness/qualification, full action/asset conservation, SDK and network evidence. |
 
-The X509 candidate uses the shared 136-query, eightfold-LDE profile: MAIN
-has a log-22 common domain and the accumulator pads its 104 active rows to
-8,192 rows on a log-16 LDE. All six MAIN groups retain their native polynomial
-and transition domains under one joined base root and one joined auxiliary root.
-Full current/next Fp4 DEEP constraints precede verification of the reduced
-current-row query wire. The private terminal repair retains 285 RFC base, 280
-auxiliary and 102 verifier-fixed columns, with 1,702 local degree-four constraints
-and a separate 192-equation MAIN endpoint plan. It removes 364 public scalars;
-384 MAIN and 108 accumulator scalars remain exposed. Canonical quotient chunks
-use independent adjacent masks with 137 Fp4 coefficients and unchanged FRI caps.
-The revised codec arithmetic bounds combined X5S1 at 9,415,166 bytes; native
-profile regeneration passes, while the fixed-schedule repair and further source joins require another profile generation, proof generation and resource measurement.
-The historical 9,420,938-byte proof passes local verification and memory limits
-but exceeds the 300-second proving limit. Its acceptance does not establish the
-missing byte-source joins, full soundness, hiding or activation.
+The X509 candidate uses the shared 136-query, eightfold-LDE profile. MAIN
+retains six native groups under joined base and auxiliary roots with a log-22
+LDE. CA pads 104 active rows to 4,096 native rows with a log-16 LDE. The
+[joint relation contract](zk_x509_joint_private_relation.md) binds the original
+MAIN and CA polynomials without public intermediate terminal products; the
+required proof-instance nonce scopes dynamic commitments and transcripts.
+Both auxiliary roots precede active composition challenges, and both
+composition and FRI-mask roots precede the common DEEP point. All joint
+openings precede local mixing. Independent relation and transcript-hiding
+qualification remain required.
+
+The canonical descriptors bind the current 192 endpoint, 17 key/digest,
+20 SHA-union and 108 CA-link alpha phases after both original auxiliary roots.
+They retain the claim-free joint wire and the 39-relation RFC lookup inventory.
+The current profile pin and deterministic IO/Projection proof goldens bind this
+sole descriptor. Complete current-candidate qualification remains required;
+prior profile evidence does not qualify the merged descriptor.
+
+The source17 Linux maximum proof is 9,412,912 bytes and passes native and fresh
+verification, wrong-genesis rejection and tampering controls. Its proof and
+verifier children stay under the enforced 32 GiB address-space limit. Proving
+takes 2,275.987086 seconds against 300 seconds. Live and terminal RSS readings
+are below 12 GiB but disagree by 659,456 bytes, failing observer consistency.
+The changed nonce-scoped source, current native/SDK fixtures and full maximum
+proof still require fresh qualification under the unchanged limits. See the
+[current evidence and outstanding goals](zk_first_release_goals.md#zk05--zk-x509).
 
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and

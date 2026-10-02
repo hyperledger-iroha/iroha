@@ -675,7 +675,7 @@ impl<R, G, H> KagemushaStateMachineV1<R, G, H> {
         &self.recovery_metadata.enrollment
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Borrow the exact checkpointed credential floor; only opaque machines expose this view.
     #[must_use]
     pub(crate) fn accepted_credential_floor(&self) -> &KagemushaAcceptedCredentialFloorV1 {

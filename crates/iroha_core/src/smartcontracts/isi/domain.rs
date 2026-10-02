@@ -1070,6 +1070,7 @@ pub mod isi {
             let account: Account = self.object().clone().build(authority);
             if let Some(reserved_key) = [
                 ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
                 iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
             ]
             .into_iter()
@@ -1100,6 +1101,7 @@ pub mod isi {
                 }
                 .into());
             }
+            crate::retail_fee::ensure_not_rekeyed(&state_transaction.world, &account_id)?;
             crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
                 state_transaction,
                 &account_id,
@@ -1261,6 +1263,7 @@ pub mod isi {
                 ));
             }
             let created = AccountEvent::Created(AccountCreated::new(account));
+            crate::retail_fee::reopen_account(state_transaction, &account_id)?;
             state_transaction.world.emit_events(Some(created));
             Ok(())
         }
@@ -1287,6 +1290,7 @@ pub mod isi {
                 )
                 .into());
             }
+            crate::retail_fee::close_account(state_transaction, &account_id)?;
             if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
                 &state_transaction.world,
                 &account_id,
@@ -3077,6 +3081,25 @@ pub mod isi {
                 )
                 .into());
             }
+            if key.as_ref() == iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1 {
+                let definition = state_transaction.world.asset_definition(&asset_definition_id)?;
+                if !crate::executor::is_initial_genesis_context(state_transaction)
+                    && definition.owned_by() != authority {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "lineage DATA authority requires asset-definition owner".into()).into());
+                }
+                let selected: iroha_data_model::kagemusha::KagemushaOrdinaryLineageDataAuthorityV1 = value
+                    .try_into_any_norito().map_err(|error| InstructionExecutionError::InvariantViolation(error.to_string().into()))?;
+                let incarnation = state_transaction.world.axt_asset_incarnations.get(&asset_definition_id)
+                    .copied().ok_or_else(|| InstructionExecutionError::InvariantViolation(
+                        "lineage DATA authority requires actual asset incarnation".into()))?;
+                selected.validate_for_pool(state_transaction.network_id(), &asset_definition_id, incarnation)
+                    .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+                if definition.metadata().get(&key).is_some_and(|original| original != &value) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "lineage DATA authority is immutable for the current asset incarnation".into()).into());
+                }
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -3085,9 +3108,9 @@ pub mod isi {
             )?;
             state_transaction
                 .world
-                .asset_definition_mut(&asset_definition_id)
+                .asset_definition_metadata_mut(&asset_definition_id)
                 .map_err(Error::from)
-                .map(|asset_definition| {
+                .map(|mut asset_definition| {
                     asset_definition
                         .metadata_mut()
                         .insert(key.clone(), value.clone())
@@ -3110,6 +3133,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            if self.key().as_ref() == iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "lineage DATA authority cannot be removed from a live asset incarnation".into()).into());
+            }
+
             if self.key().as_ref() == ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
                 && !crate::executor::is_initial_genesis_context(state_transaction)
                 && state_transaction
@@ -3125,8 +3153,8 @@ pub mod isi {
             }
             let value = state_transaction
                 .world
-                .asset_definition_mut(&asset_definition_id)
-                .and_then(|asset_definition| {
+                .asset_definition_metadata_mut(&asset_definition_id)
+                .and_then(|mut asset_definition| {
                     asset_definition
                         .metadata_mut()
                         .remove(self.key().as_ref())
@@ -3771,6 +3799,95 @@ mod tests {
         SetKeyValue::asset_definition(definition_id, ordinary_key, Json::new(true))
             .execute(&BOB_ID, &mut tx)
             .expect("native issuer restriction does not cover ordinary metadata");
+    }
+    #[test]
+    fn lineage_data_authority_installation_is_owner_only_and_immutable_per_incarnation() {
+        use iroha_data_model::kagemusha::{
+            KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1,
+            KagemushaOrdinaryLineageDataAuthorityV1, kagemusha_liability_pool_id_v1,
+        };
+        let domain = DomainId::try_new("retail", "universal").unwrap();
+        let id = AssetDefinitionId::derive_from_components(domain.clone(), "kina".parse().unwrap());
+        let world = World::with_assets(
+            [Domain::new(domain).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [],
+            [],
+            [],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut tx = block.transaction();
+        Register::asset_definition(AssetDefinition::numeric(
+            id.clone(),
+            "Kina",
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        let incarnation = *tx.world.axt_asset_incarnations.get(&id).unwrap();
+        let key: Name = KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1
+            .parse()
+            .unwrap();
+        let binding = KagemushaOrdinaryLineageDataAuthorityV1 {
+            version: 1,
+            liability_pool_id: kagemusha_liability_pool_id_v1(tx.network_id(), &id, incarnation)
+                .unwrap(),
+            service_identity_digest: [90; 32],
+            data_incarnation_digest: [91; 32],
+            dataspace: "mibank.bpng".into(),
+            tenant: "mibank-core".into(),
+            principal: "core-mibank".into(),
+            collection: "retail_enrollments".into(),
+        };
+        let value = Json::new(binding.clone());
+        assert!(
+            SetKeyValue::asset_definition(id.clone(), key.clone(), value.clone())
+                .execute(&BOB_ID, &mut tx)
+                .is_err()
+        );
+        SetKeyValue::asset_definition(id.clone(), key.clone(), value.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        SetKeyValue::asset_definition(id.clone(), key.clone(), value.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        binding
+            .require_asset_definition_metadata(&tx.world.asset_definition(&id).unwrap())
+            .unwrap();
+        for coordinate in 0..6 {
+            let mut changed = binding.clone();
+            match coordinate {
+                0 => changed.service_identity_digest[0] ^= 1,
+                1 => changed.data_incarnation_digest[0] ^= 1,
+                2 => changed.dataspace.push('x'),
+                3 => changed.tenant.push('x'),
+                4 => changed.principal.push('x'),
+                _ => changed.collection.push('x'),
+            }
+            assert!(
+                SetKeyValue::asset_definition(id.clone(), key.clone(), Json::new(changed))
+                    .execute(&ALICE_ID, &mut tx)
+                    .is_err()
+            );
+        }
+        assert!(
+            RemoveKeyValue::asset_definition(id.clone(), key.clone())
+                .execute(&ALICE_ID, &mut tx)
+                .is_err()
+        );
+        assert_eq!(
+            tx.world.asset_definition(&id).unwrap().metadata().get(&key),
+            Some(&value)
+        );
     }
     fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)

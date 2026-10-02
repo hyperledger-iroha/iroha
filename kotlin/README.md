@@ -2,6 +2,25 @@
 
 The canonical JVM/Android SDK for Kotlin and Java applications using Iroha 3.
 
+Android KAGEMUSHA uses an app-owned, persistent, nonexportable P-256 approval key
+in Android Keystore, backed by TEE or StrongBox. Prefer StrongBox when available;
+reject software-only approval keys. Wallet code runs in the app/native runtime.
+Embedded applets, OMAPI/eSE monetary services, OEM support or provisioning, and
+device-hardware installation are excluded Android paths. Retained OEM/device
+service prototypes are unsupported for Android; remaining prototype-only
+admission is an ordinary-provider integration defect to fix.
+
+The P-256 approval key is separate from the Ed25519 wallet account signatory S.
+Preserve the existing account identity, encrypted key records and activation/
+recovery data. Trusted platform storage may admit the existing S key to the
+private Native account owner; Native-only key generation, a new vault or account
+key rotation is not required. Authentic app/key attestation, separately verified
+Play Integrity, exact owner/key/operation binding, Native financial proofs,
+durable state/time/replay/recovery and accepted signed release authority remain
+mandatory. An ordinary approval key proves no monetary counter, nonforking
+journal or trusted hardware clock, and this source guidance grants no device
+qualification.
+
 Java-source runtime consumer tests live in `core-jvm/src/test/java` and exercise
 this implementation directly. Both Kotlin and Java compilation enforce JDK 8
 APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
@@ -20,6 +39,23 @@ I105 strings without surrounding whitespace. For host tests, set
 `IROHA_NATIVE_LIBRARY_PATH` to the absolute directory containing the freshly
 built bridge. Android packages the bridge through the generated native artifact
 pipeline described in `CLAUDE.md`.
+
+Android Native builds require two canonical absolute public originals outside
+source and Cargo target directories:
+
+- `-PirohaHardwareBootstrapCompiledBinding=` selects `hardware-compiled-binding.norito`
+  from the maintained Native hardware preparation helper.
+- `-PirohaOrdinaryContextCompiledBinding=` selects `common-sdk-compiled-root.bin`.
+  The sole source/policy producer in `png2-deploy` derives its 76 bytes from the
+  independently admitted SDK signer role, actual Iroha source inventory and header ABI.
+
+The recipe rechecks both originals before and after ABI builds and stripping,
+holds their descriptors across the hermetic Cargo child, and retains complete
+bytes plus SHA256/size in provenance. Actual artifact admission matches the
+ordinary original to the independently admitted role/source/ABI. Managed unit
+compilation does not load these Native inputs. Neither input grants account,
+financial or device authority; Native startup still requires the installed
+package, genuine signed context and selected hardware release.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
@@ -121,9 +157,11 @@ implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 implementation("org.hyperledger.iroha.sdk:kagemusha-wallet-android:0.1.0")
 ```
 
-`KagemushaWalletV1` is the Android-free aggregate-balance orchestrator. It opens only with an
-`KagemushaHardwareProviderV1` that attests the complete exact-next counter, rollback-resistant
-journal/inbox/outbox, trusted-time, atomic recovery, and hardware-epoch rotation contract. Incoming
+`KagemushaWalletV1` is the Android-free aggregate-balance orchestrator. Android
+monetary integration requires the ordinary Native/Core/State/Guard provider to
+authenticate financial proofs, rollback-resistant state, durable inbox/outbox,
+trusted-time admission and atomic recovery. A hardware-backed P-256 app approval
+key supplies operation-bound approval; it cannot attest those monetary guarantees. Incoming
 payments are acknowledged only after durable staging; duplicate delivery returns the provider's
 same durable ACK. Sends and redemptions require the native provider to fold the staged credits
 needed to cover the amount; unrelated backlog must not delay an already-covered spend.
@@ -131,15 +169,21 @@ needed to cover the amount; unrelated backlog must not delay an already-covered 
 `drainPendingCredits()` repeatedly folds a stable snapshot without a cumulative count limit.
 The drain releases the lane after each credit for queued foreground work. Concurrent epoch rotation interrupts the drain; start a new
 pass for the new epoch's watermark. Continuous background scheduling remains an integration
-requirement. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
-the native device service. Stock KeyMint and StrongBox remain online-only because signing keys do
-not supply the required non-forking persistence contract; there is no software fallback.
+requirement. Android uses the ordinary app-owned TEE/StrongBox approval-key path;
+StrongBox is preferred and software-only approval custody is refused. The
+retained `KagemushaAndroidWalletV1.openProduction(...)` OEM adapter and SDK-to-OEM
+operation-16 path are unsupported Android prototypes. Applets, OMAPI/eSE,
+OEM support/provisioning and device-hardware installation are excluded. Missing
+ordinary-provider integration remains an implementation blocker, not a hardware
+inability of stock KeyMint or StrongBox devices.
 Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
-reservation/inbox implementation is under validation; its SDK-to-OEM operation-16 adapter is
-still required. A completed MintFold is a separate proved transition, not a staging result.
+reservation/inbox implementation and ordinary-provider integration remain under
+validation. A completed MintFold is a separate proved transition, not a staging result.
 Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
 canonical X25519 elements during object and complete three-message exchange validation before monetary use.
+The retained hardware-provider epoch-rotation behavior below is unsupported
+Android prototype history and is not an account-key rotation prerequisite.
 Logical sequence and durable journal revision are per hardware epoch. Authenticated rotation carries
 the full balance and replay root into the exact successor epoch, replaces the device-policy binding,
 and resets both counters to zero. `rotateHardwareEpoch()` does not first drain the inbox, so it
@@ -214,6 +258,16 @@ It covers the software key manager, explicit chain-context codecs, and
 coordinator adapter fixtures that require the canonical Rust address validator.
 The adapter's scripted endpoints remain mapping controls, not native coordinator
 or hardware qualification.
+
+The separate `:kagemusha-wallet-android:testDebugHostNative` task uses the wallet's
+main JNI implementation and the same explicit canonical host-library directory.
+It checks ABI 25, signer contract 7, actual initial startup phase 1 and selection
+revocation phase 5 against an absent independently registered Native root.
+Missing symbols or libraries fail; phase 6 is not exercised after phase 1 refuses.
+A later Core-open assertion checks the managed startup fence. The task excludes
+scripted client test JNI classes, disables result reuse, and is excluded from
+ordinary managed tests through its `host-native` tag. It creates no account,
+release, monetary or hardware authority and grants no device qualification.
 
 ### Java transaction metadata
 
@@ -490,7 +544,31 @@ reservation, authenticated signed preparation, persistent generated hardware
 P-256 key, raw admission, E20 possession, governed Play Integrity request and
 credential admission. Native C20 phases 9–14 then retain the FI challenge,
 wallet invocation and exact original wallet signature before the protected FI
-finish request. The wallet signer remains separate from the platform app key.
+finish request. The product constructor requires one opaque same-coordinator
+current Native wallet selection: activated protected HTTP signatory S matches
+selected S, and reserved wallet W matches selected W. Genuine W is distinct and
+contains exactly one S member, weight 1 and threshold 1. Native C20 phase 10
+supplies the retained account signature from its actual held member key; the
+superseded public managed-wallet-signer constructor is removed. Hardware P-256
+app approval and protected HTTP request custody remain separate.
+The Android HTTP store retains required stable W plus original S/device/runtime/
+request key/ID/kind/body/reply, checking that same private selection before commit,
+HTTP retries and cached exposure. A session handle is not persisted authority;
+missing or changed W refuses without rewriting, migrating or clearing old records.
+The app serializes one original Bootstrap publication/retirement handoff and marks
+completion only after the callback and owner checks return. Current-FI retries skip
+that completed Bootstrap and retain their original request/signature/body.
+All eight ordinary backend enrollment/Integrity routes now have the certified
+customer W/S join applied in source: the genuine current World must authenticate
+both exact account rows while HTTP/device recovery/CAS retain S. Backend
+library compilation and three focused cases passed on the original cut; its HTTP
+executable failed with eight errors before tests. Subsequent signed-policy joins
+were reviewed and the exact evidence-byte borrow repair is applied. A fresh
+preparation stopped before compilation on two changed Native test files. Current
+HTTP cases and genuine installed issuer/runtime validation remain pending.
+Genuine installed signed inputs and shipping Native account construction remain pending. Selected managed checks passed 58 SDK, 20 Core and
+7 app cases per variant across retained source cuts; these checks grant no Root,
+hardware, monetary, release or roster qualification.
 Explicit retries reuse the same complete Google and wallet originals; a retained
 wallet invocation without a signature requires Native recovery. The explicit
 Google invalid-provider error permits a new warmup only on the next user action.
@@ -548,8 +626,21 @@ network/lane/profile/policy scope. It provides no alternate encoder or reconstru
 from the recursive State's 93 public cells; Native must supply the complete retained
 model original and authenticate both State/Guard parities and current custody.
 The product supplies protected HTTP and wallet signing after the trusted Native
-account/release source is installed. An applet is not an enrollment prerequisite.
-The adapter also exposes `initialEnrollment()` for the bounded OEM method-12 ceremony.
+account/release source is installed. Trusted platform intake can supply the actual
+existing Ed25519 S key to that private Native owner while preserving account
+identity, encrypted records and activation/recovery data. Native-only RNG, a new
+vault and account-key rotation are not prerequisites. Public-key DTOs,
+caller-supplied private-key frames and managed signing callbacks do not establish
+Native custody. Genuine app/key attestation, separate Play Integrity verification,
+operation binding, Native financial/state/time/replay/recovery proofs and the exact
+accepted signed release remain required.
+
+The following OEM method-12/device-service details are retained unsupported
+Android prototype history. They are not an ordinary Android enrollment,
+recovery, release or device qualification path; applets, OMAPI/eSE, OEM support/
+provisioning and device-hardware installation are excluded. Any active
+prototype-only admission must be replaced with the ordinary app-key provider.
+The retained adapter exposes `initialEnrollment()` for its bounded OEM method-12 ceremony.
 It retains one phase-1 selection only in the original process. Phase-7 rechecks
 that exact selection, and phase-4 reads its original possession proof, while the
 same native owner remains live. A failed dispatch or response publication revokes
@@ -572,9 +663,12 @@ binds the exact canonical command body digest as well as the response header and
 payload digest, hardware policy, and qualification report. The Android bridge
 captures the dispatched command and request identity before execution and passes
 those detached bytes to verification; no old verifier symbol or overload remains.
-Those projections remain selectors: the qualified native backend must authenticate
-the journal, release, Core authorization, and actual recursive proof. No software
-backend or stock provider factory is supplied. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
+Those prototype projections remain selectors; they supply no Android monetary
+or device admission. The ordinary Native/Core/State/Guard provider must
+authenticate journal/replay state, release, Core authorization and actual recursive
+proofs independently of app-key signing. Completing that provider is unfinished
+software integration; OEM or applet installation is not a prerequisite. Software-only
+P-256 approval keys remain rejected. See [the retained device-bridge source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
@@ -620,23 +714,6 @@ include a positive gas bound in the intent.
 
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. A sponsor rejection never falls back to charging the authority.
-
-For a live aggregate Hijiri adjustment, use the separate native-Norito route:
-
-```kotlin
-val request = ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount)
-val quote = transport.postValidationFeeHijiriQuote(request, canonicalAuth).join()
-```
-
-This operation requires `libconnect_norito_bridge` ABI 25 and an HTTPS Torii
-base URL. It signs the exact bounded Norito request with `Cache-Control: no-store`,
-requires a private, non-stored, uncompressed `application/x-norito` response,
-and exposes the typed projection only after native canonical decode,
-arithmetic/hash validation, and exact request binding. `canonicalAuth` may be
-the quoted account or a direct signatory of that multisig account; Torii checks
-the live relationship. The returned assurance explicitly describes an
-authenticated live evaluation, not an independently witness-verified proof;
-admission-bound policy and Hijiri hashes detect a quote that became stale.
 
 ### Atomic mixed executable batches
 
@@ -907,15 +984,17 @@ qualification. The `privacyProductionEnabled` property has been removed.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
 executables from exact Rust 1.93.1. It requires one job, incremental compilation
-off, offline dependency resolution, and `RUSTC_BOOTSTRAP=1`, then invokes the
-Cargo build with the exact root lock contract:
+off and offline dependency resolution, then invokes stock Cargo through
+cargo-ndk with the authenticated root manifest and lock:
 
 ```text
-build --locked --offline --jobs 1 -Z unstable-options \
-  --lockfile-path <canonical-iroha-root>/Cargo.lock
+build --locked --offline --jobs 1 \
+  --manifest-path <canonical-iroha-root>/Cargo.toml
 ```
 
-There is no alternate-lock or compatibility override.
+The original root `Cargo.lock` is authenticated before and after execution.
+Bootstrap, alternate locks, and compiler or profile configuration overrides
+are rejected.
 
 The first build takes ~5-10 minutes because it compiles all Rust dependencies.
 The isolated target can reuse dependency artifacts, but compiler incremental

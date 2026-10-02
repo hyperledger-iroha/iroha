@@ -58,6 +58,8 @@ pub struct KagemushaOrdinaryRetailEnrollmentFixtureV1 {
     pub app_authority: KagemushaAppAttestationAuthorityPolicyV1,
     /// Exact selected FI issuer/runtime original.
     pub issuer_policy: KagemushaRetailEnrollmentIssuerPolicyV1,
+    /// Independent threshold Core identity and complete issuer originals, separate from the FI key.
+    pub ordinary_policy: Arc<KagemushaOrdinaryRetailIdentityPolicyOriginalsV1>,
     /// Independently selected owner, Core signer reference and signed preparation.
     pub selection: KagemushaOrdinaryRetailEnrollmentSelectionV1,
     /// Complete native challenge supplied to both possession signers.
@@ -164,7 +166,91 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         app_release_digest: [u8; 32],
         wallet_controller: bool,
     ) -> Self {
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        Self::with_complete_scope(
+            apple,
+            integrity,
+            financial_commitment,
+            app_release_digest,
+            wallet_controller,
+            [83; 32],
+            63,
+            1,
+        )
+    }
+    /// Build a separate complete signed policy for Native scope substitution controls.
+    /// All keys and metadata are explicit synthetic fixtures; no installed authority is granted.
+    /// # Panics
+    /// Panics if the genuine threshold/Core/app/FI verifier rejects the fixture recipe.
+    #[must_use]
+    pub fn with_selected_scope(
+        apple: bool,
+        commitment: [u8; 32],
+        namespace: [u8; 32],
+        core_seed: u8,
+        hardware_epoch: u64,
+    ) -> Self {
+        Self::with_complete_scope(
+            apple,
+            false,
+            commitment,
+            [3; 32],
+            false,
+            namespace,
+            core_seed,
+            hardware_epoch,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn with_complete_scope(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+        app_release_digest: [u8; 32],
+        wallet_controller: bool,
+        namespace: [u8; 32],
+        core_seed: u8,
+        hardware_epoch: u64,
+    ) -> Self {
+        Self::with_complete_scope_and_time_scale(
+            apple,
+            integrity,
+            financial_commitment,
+            app_release_digest,
+            wallet_controller,
+            namespace,
+            core_seed,
+            hardware_epoch,
+            1,
+        )
+    }
+    /// Broad signed Android originals for actual Native interval regression equations only.
+    /// The fixed window permits real BLS/WAL latency; callers construct separate signed refresh
+    /// originals from this credential. All qualification/Google inputs remain synthetic.
+    /// Existing constructors and codec goldens retain their original times and policies.
+    /// # Panics
+    /// Panics if production model admission rejects the fixed genuine fixture recipe.
+    #[must_use]
+    pub fn android_for_current_interval_tests(integrity: bool) -> Self {
+        Self::with_complete_scope_and_time_scale(
+            false, integrity, [19; 32], [3; 32], false, [73; 32], 63, 1, 50,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn with_complete_scope_and_time_scale(
+        apple: bool,
+        integrity: bool,
+        financial_commitment: [u8; 32],
+        app_release_digest: [u8; 32],
+        wallet_controller: bool,
+        namespace: [u8; 32],
+        core_seed: u8,
+        hardware_epoch: u64,
+        time_scale: u64,
+    ) -> Self {
+        assert!(matches!(time_scale, 1 | 50));
+        let app_authority_issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![core_seed; 32], Algorithm::Ed25519);
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let app = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
         let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -177,16 +263,20 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             KagemushaHardwarePlatformClassV1::AndroidKeyMint
         };
         let authority = KagemushaAppAttestationAuthorityPolicyV1 {
-            authority_key: issuer.public_key().clone(),
+            authority_key: app_authority_issuer.public_key().clone(),
             platform_class: class,
             app_signing_identity_digest: [2; 32],
             app_release_digest,
-            maximum_lifetime_ms: 10000,
+            maximum_lifetime_ms: 10000 * time_scale,
         };
         let trust = KagemushaOrdinaryAppTrustPolicyV1 {
             version: 1,
             app_authority_policy_digest: authority.canonical_digest().unwrap(),
             platform_class: class,
+            distribution: KagemushaOrdinaryAppDistributionV1::Development,
+            apple_environment: apple.then_some(KagemushaOrdinaryAppAppleEnvironmentV1::Development),
+            platform_trust_roots_digest: [11; 32],
+            platform_revocation_policy_digest: [31; 32],
             allowed_android_security_levels: if apple {
                 vec![]
             } else {
@@ -197,13 +287,13 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             },
             play_integrity_policy: integrity.then_some(KagemushaPlayIntegrityPolicyV1 {
                 policy_digest: [56; 32],
-                maximum_evidence_age_ms: 1000,
-                maximum_refresh_interval_ms: 1000,
+                maximum_evidence_age_ms: 1000 * time_scale,
+                maximum_refresh_interval_ms: if time_scale == 1 { 1000 } else { 100_000 },
                 require_play_recognized: true,
                 require_licensed: true,
                 minimum_device_integrity: 1,
             }),
-            maximum_credential_lifetime_ms: 10000,
+            maximum_credential_lifetime_ms: 10000 * time_scale,
         };
         let artifacts = release_fixture::artifacts();
         let mut receipt = release_fixture::receipt(&artifacts);
@@ -219,6 +309,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         enabled
             .hardware_profile
             .app_attestation_authority_policy_digest = authority.canonical_digest().unwrap();
+        enabled.hardware_profile.expires_at_ms *= time_scale;
         enabled.hardware_profile = enabled.hardware_profile.seal_hardware_profile_id().unwrap();
         enabled.hardware_profile_id = enabled.hardware_profile.hardware_profile_id;
         receipt.profile_qualifications = vec![release_fixture::profile_qualification(
@@ -293,7 +384,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             .unwrap(),
             scale: 2,
         };
-        let owner = KagemushaRetailEnrollmentOwnerV1 {
+        let mut owner = KagemushaRetailEnrollmentOwnerV1 {
             account_id: if wallet_controller {
                 AccountId::new_multisig(
                     crate::account::MultisigPolicy::new(
@@ -318,9 +409,105 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             issuer_audience: "test-ordinary-enrollment-service".parse().unwrap(),
             runtime,
             valid_from_ms: 1,
-            expires_at_ms: 20000,
-            maximum_certificate_lifetime_ms: 10000,
+            expires_at_ms: 20000 * time_scale,
+            maximum_certificate_lifetime_ms: 10000 * time_scale,
         };
+        let identity_profile = KagemushaOrdinaryAppIdentityProfileV1 {
+            version: 1,
+            identity_profile_id: [0; 32],
+            platform_class: class,
+            planned_release_id: release.release_id(),
+            planned_hardware_profile_id: enabled.hardware_profile_id,
+            planned_suite_id: enabled.suite_id,
+            policy_epoch: enabled.policy_epoch,
+            trust_policy_digest: trust.canonical_digest().unwrap(),
+            app_authority_policy_digest: authority.canonical_digest().unwrap(),
+            platform_trust_roots_digest: trust.platform_trust_roots_digest,
+            valid_from_ms: enabled.hardware_profile.valid_from_ms,
+            expires_at_ms: enabled.hardware_profile.expires_at_ms,
+        }
+        .seal_identity_profile_id()
+        .unwrap();
+        let core_policy = KagemushaOrdinaryEnrollmentIssuerPolicyV1 {
+            version: 1,
+            network_id: *release.network_id().as_bytes(),
+            lane_namespace_id: namespace,
+            identity_profile_id: identity_profile.identity_profile_id,
+            planned_policy_epoch: enabled.policy_epoch,
+            planned_hardware_epoch: hardware_epoch,
+            enrollment_issuer_key: core_issuer.public_key().clone(),
+            app_authority_key: authority.authority_key.clone(),
+            maximum_pending_lifetime_ms: authority.maximum_lifetime_ms.min(120_000),
+            maximum_current_state_lifetime_ms: 1000 * time_scale,
+            maximum_credential_lifetime_ms: trust.maximum_credential_lifetime_ms,
+        };
+        owner.lane_id = core_policy
+            .derive_enrollment_lane(&owner.runtime.fi_id, &owner.account_id)
+            .unwrap();
+        let identity_policy = KagemushaOrdinaryAppIdentityPolicyV1 {
+            version: 1,
+            authority_set_id: [80; 32],
+            network_id: release.network_id(),
+            profile: identity_profile,
+            trust: trust.clone(),
+            app_authority_key: authority.authority_key.clone(),
+            app_authority_platform_class: authority.platform_class,
+            app_signing_identity_digest: authority.app_signing_identity_digest,
+            app_release_digest: authority.app_release_digest,
+            app_authority_maximum_lifetime_ms: authority.maximum_lifetime_ms,
+            enrollment_issuer_key: core_issuer.public_key().clone(),
+            enrollment_issuer_p256_key: enabled.hardware_profile.governance_credential_public_key,
+            enrollment_issuer_policy_digest: core_policy.canonical_digest().unwrap(),
+        };
+        let threshold = [
+            KeyPair::from_seed(vec![81; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![82; 32], Algorithm::Ed25519),
+        ];
+        let message = identity_policy.approval_signing_bytes().unwrap();
+        let mut approvals: Vec<_> = threshold
+            .iter()
+            .map(|key| KagemushaOrdinaryAppIdentityPolicyApprovalV1 {
+                public_key: key.public_key().clone(),
+                signature: Signature::try_new(key.private_key(), &message).unwrap(),
+            })
+            .collect();
+        approvals.sort_by(|a, b| a.public_key.cmp(&b.public_key));
+        let roots = KagemushaOrdinaryAppIdentityAuthorityPolicyV1 {
+            version: 1,
+            authority_set_id: identity_policy.authority_set_id,
+            network_id: identity_policy.network_id,
+            expected_identity_policy_id: identity_policy.canonical_digest().unwrap(),
+            threshold: 2,
+            authorized_signers: approvals
+                .iter()
+                .map(|approval| approval.public_key.clone())
+                .collect(),
+        };
+        let identity = Arc::new(
+            KagemushaSignedOrdinaryAppIdentityPolicyV1 {
+                policy: identity_policy,
+                approvals,
+            }
+            .authenticate(&roots, 100 * time_scale)
+            .unwrap(),
+        );
+        let core = Arc::new(
+            core_policy
+                .authenticate_under_policy(&identity, namespace, 100 * time_scale)
+                .unwrap(),
+        );
+        let ordinary_policy = Arc::new(
+            KagemushaOrdinaryRetailIdentityPolicyOriginalsV1::authenticate(
+                identity,
+                core,
+                namespace,
+                policy.clone(),
+                &release,
+                enabled.hardware_profile_id,
+                100 * time_scale,
+            )
+            .unwrap(),
+        );
         let preparation_subject = KagemushaOrdinaryAppEnrollmentChallengeV1 {
             version: 1,
             platform_class: class,
@@ -336,23 +523,39 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             trust_policy_digest: trust.canonical_digest().unwrap(),
             app_authority_policy_digest: authority.canonical_digest().unwrap(),
             financial_authority_commitment: financial_commitment,
-            issuer_policy_digest: kagemusha_ordinary_retail_issuer_policy_digest_v1(&policy)
-                .unwrap(),
+            issuer_policy_digest: core_policy.canonical_digest().unwrap(),
             policy_epoch: enabled.policy_epoch,
-            hardware_epoch: 1,
-            issued_at_ms: 100,
-            expires_at_ms: 2000,
+            hardware_epoch,
+            issued_at_ms: 100 * time_scale,
+            expires_at_ms: 2000 * time_scale,
         };
         let preparation = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
             challenge: preparation_subject,
             signature: Signature::try_new(
-                issuer.private_key(),
+                core_issuer.private_key(),
                 &preparation_subject.canonical_signing_bytes().unwrap(),
             )
             .unwrap(),
         };
-        let raw_attestation =
-            b"explicit-synthetic-platform-attestation-original-not-physical".to_vec();
+        // Resource-valid inert container only: no raw platform verifier is exercised here.
+        let raw_attestation = KagemushaPlatformAttestationOriginalV1 {
+            version: 1,
+            evidence: if apple {
+                KagemushaPlatformAttestationEvidenceV1::AppleAppAttest {
+                    attestation_object_cbor:
+                        b"explicit-synthetic-apple-enrollment-original-not-physical".to_vec(),
+                }
+            } else {
+                KagemushaPlatformAttestationEvidenceV1::AndroidKeyMint {
+                    certificate_chain_der: vec![
+                        b"explicit-synthetic-leaf-not-physical".to_vec(),
+                        b"explicit-synthetic-root-not-physical".to_vec(),
+                    ],
+                }
+            },
+        }
+        .canonical_bytes()
+        .unwrap();
         let possession_message = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &preparation_subject,
             &key,
@@ -426,9 +629,9 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             enrollment_challenge_digest: preparation_subject.attestation_challenge().unwrap(),
             app_public_key: key,
             policy_epoch: enabled.policy_epoch,
-            hardware_epoch: 1,
-            issued_at_ms: 200,
-            expires_at_ms: 10200,
+            hardware_epoch,
+            issued_at_ms: 200 * time_scale,
+            expires_at_ms: 10200 * time_scale,
             app_attest_counter_floor: if apple { 11 } else { 0 },
             play_integrity: integrity.then_some(KagemushaPlayIntegrityBindingV1 {
                 request_hash: preparation_subject
@@ -436,12 +639,12 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
                     .unwrap(),
                 evidence_digest: [58; 32],
                 policy_digest: [56; 32],
-                verified_at_ms: 200,
-                refresh_before_ms: 1200,
+                verified_at_ms: 200 * time_scale,
+                refresh_before_ms: 1200 * time_scale,
             }),
         };
         let signature = Signature::try_new(
-            issuer.private_key(),
+            app_authority_issuer.private_key(),
             &credential_subject.canonical_signing_bytes().unwrap(),
         )
         .unwrap();
@@ -472,8 +675,8 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             owner: selection.owner.clone(),
             issuance: selection.issuance.clone(),
             preparation: selection.preparation.clone(),
-            issued_at_ms: 250,
-            expires_at_ms: 2000,
+            issued_at_ms: 250 * time_scale,
+            expires_at_ms: 2000 * time_scale,
         };
         let proof = KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
             challenge: challenge.clone(),
@@ -485,16 +688,22 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             raw_attestation,
             app_possession: evidence,
         };
+        let checked_preparation = ordinary_policy
+            .identity_policy()
+            .authenticate_preparation(
+                &selection.preparation,
+                &selection.preparation.challenge,
+                100 * time_scale,
+            )
+            .unwrap();
         let app_credential = selection
             .issuance
             .credential
             .authenticate(
-                &release,
-                &trust,
-                &authority,
-                &selection.preparation.challenge,
+                ordinary_policy.identity_policy(),
+                &checked_preparation,
                 &key,
-                300,
+                300 * time_scale,
             )
             .unwrap();
         let possession = proof
@@ -505,7 +714,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
                 &release,
                 &app_credential,
                 if apple { Some(0) } else { None },
-                300,
+                300 * time_scale,
             )
             .unwrap();
         let subject = KagemushaOrdinaryRetailEnrollmentSubjectV1 {
@@ -517,8 +726,8 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             issuance: selection.issuance.clone(),
             challenge_evidence_digest: possession.evidence_digest(),
             ordinary_app_credential_digest: app_credential.digest(),
-            issued_at_ms: 300,
-            expires_at_ms: 9000,
+            issued_at_ms: 300 * time_scale,
+            expires_at_ms: 9000 * time_scale,
         };
         let certificate = KagemushaOrdinaryRetailEnrollmentCertificateV1 {
             signature: SignatureOf::try_new(
@@ -533,12 +742,13 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             trust,
             app_authority: authority,
             issuer_policy: policy,
+            ordinary_policy,
             selection,
             challenge,
             proof,
             certificate,
         };
-        fixture.verify(300).unwrap();
+        fixture.verify(300 * time_scale).unwrap();
         fixture
     }
     /// Construct a separate genuine periodic lease for an Android Integrity fixture.
@@ -556,6 +766,7 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         let credential = enrolled.app_credential();
         let s = credential.subject();
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
         let c = KagemushaPlayIntegrityRefreshChallengeV1 {
             version: 1,
             credential_digest: credential.digest(),
@@ -577,7 +788,10 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
             expires_at_ms: 2000,
         };
         let signed = KagemushaSignedPlayIntegrityRefreshChallengeV1 {
-            signature: Signature::new(issuer.private_key(), &c.canonical_signing_bytes().unwrap()),
+            signature: Signature::new(
+                core_issuer.private_key(),
+                &c.canonical_signing_bytes().unwrap(),
+            ),
             challenge: c,
         };
         let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
@@ -632,11 +846,25 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
                 &self.trust,
                 &self.app_authority,
                 &signed,
-                issuer.public_key(),
+                core_issuer.public_key(),
                 1500,
             )
             .unwrap();
         (signed, lease)
+    }
+    /// Recheck the genuine historical C at its retained issue point; no interval renewal.
+    /// # Errors
+    /// Rejects substituted complete C or independent threshold policy.
+    pub fn checked_preparation(
+        &self,
+    ) -> Result<KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1, String> {
+        self.ordinary_policy
+            .identity_policy()
+            .authenticate_preparation(
+                &self.selection.preparation,
+                &self.selection.preparation.challenge,
+                self.selection.preparation.challenge.issued_at_ms,
+            )
     }
     /// Run actual public current credential/dual-possession/FI certificate admission again.
     /// # Errors
@@ -646,11 +874,12 @@ impl KagemushaOrdinaryRetailEnrollmentFixtureV1 {
         now: u64,
     ) -> Result<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1, String> {
         let credential = &self.selection.issuance.credential;
+        self.ordinary_policy
+            .require_owner_data(&self.release, &self.selection.owner, now)?;
+        let preparation = self.checked_preparation()?;
         let app = credential.authenticate(
-            &self.release,
-            &self.trust,
-            &self.app_authority,
-            &self.selection.preparation.challenge,
+            self.ordinary_policy.identity_policy(),
+            &preparation,
             &credential.subject.app_public_key,
             now,
         )?;
@@ -742,7 +971,12 @@ pub fn kagemusha_ordinary_enrollment_public_codec_golden_v1() -> Vec<u8> {
             subject: raw_subject,
         };
         raw_admission
-            .authenticate(&f.release, &f.trust, &f.app_authority, c, 300)
+            .authenticate(
+                f.ordinary_policy.identity_policy(),
+                &f.checked_preparation().unwrap(),
+                &f.proof.raw_attestation,
+                300,
+            )
             .unwrap();
         let raw = raw_admission.to_transport_bytes().unwrap();
         let pop = match &f.proof.app_possession {

@@ -22,6 +22,11 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
     /** Reads the exact retained wallet Ed64 without invoking a wallet signer again. */
     fun recoverOriginalAccountSignature(): ByteArray? = state.recoverSignature()
     fun signOriginalAccount(signer: KagemushaOrdinaryWalletAccountSignerV1): ByteArray = state.sign(signer)
+    /** Actual retained Native custody signs this exact retail operation. The finite selection
+     * only correlates the same coordinator/session; it cannot authorize caller messages.
+     */
+    fun signOriginalNativeAccount(selection: KagemushaNativeWalletAccountSelectionOriginalV1): ByteArray =
+        state.signNative(selection)
     fun finishRequestOriginal(): KagemushaOrdinaryIdentityHttpOriginalV1 = state.finishRequest()
     /** A protected reply remains untrusted until same-ticket Native phase12 admits the full FI original. */
     suspend fun completeOriginalEnrollment(transport: KagemushaOrdinaryIdentityOriginalTransportV1): ByteArray {
@@ -92,6 +97,25 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
         if (recovered[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()
         return recovered[1].takeIf { it.isNotEmpty() }?.copyOf().also { current() }
     }
+    @Synchronized fun signNative(selection: KagemushaNativeWalletAccountSelectionOriginalV1): ByteArray {
+        selection.requireForCoordinator(bridge)
+        val prior = current()
+        if (prior[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()
+        try {
+            selection.requireForCoordinator(bridge)
+            val retained = invoke(10)
+            check(retained[0][0] == 2.toByte() && retained[1].size == 64) {
+                "Actual Native retained account signing is unavailable"
+            }
+            same(retained[1], checkNotNull(current()[1].takeIf { it.size == 64 }))
+            selection.requireForCoordinator(bridge)
+            return retained[1].copyOf().also { current(); selection.requireForCoordinator(bridge) }
+        } catch (failure: Throwable) {
+            unusable = true
+            throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1(failure)
+        }
+    }
+
     @Synchronized fun sign(signer: KagemushaOrdinaryWalletAccountSignerV1): ByteArray {
         val prior = current()
         if (prior[0][0] == 1.toByte()) throw KagemushaNativeRetailSigningUnknownOutcomeExceptionV1()

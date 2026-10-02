@@ -2497,7 +2497,11 @@ impl Execute for ClaimPublicLaneRewards {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        effects::execute_reward_claim(self, authority, state_transaction)
+        let claimant = self.account.clone();
+        let lane_id = self.lane_id;
+        effects::execute_reward_claim(self, authority, state_transaction)?;
+        crate::validation_fee_rewards::claim_fee_rewards(state_transaction, &claimant, lane_id)?;
+        Ok(())
     }
 }
 fn validator_storage_key(lane_id: LaneId, validator: &AccountId) -> (LaneId, AccountId) {

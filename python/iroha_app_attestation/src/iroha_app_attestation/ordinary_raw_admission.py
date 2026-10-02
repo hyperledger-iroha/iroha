@@ -72,9 +72,9 @@ def authenticate_transport(original: bytes, evidence: VerifiedOrdinaryRawEvidenc
             and original[:BODY_BYTES] == expected and type(fresh) is bool,
             "raw admission transport differs from original checked platform")
     c = evidence.challenge
-    require(c.issued_at_ms <= evidence.trusted_time_ms
-            and (not fresh or evidence.trusted_time_ms < c.expires_at_ms),
-            "raw admission original expired or from the future")
+    for now in evidence.trusted_time_interval.endpoints():
+        require(c.issued_at_ms <= now and (not fresh or now < c.expires_at_ms),
+                "raw admission original expired or from the future")
     key = fixed32(evidence.policy.authority_public_key, "actual raw issuer public key")
     require(isinstance(openssl_path, Path) and openssl_path.is_absolute() and openssl_path.is_file(),
             "raw admission signature verification environment absent")

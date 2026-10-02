@@ -6,7 +6,8 @@
 //! rows through its query-specific bounded adapter.
 #![allow(unsafe_code)]
 use super::{
-    OrdinaryQueryExecutionLimits, QueryExecutionStats, ordinary_memory::OrdinaryCursorMode,
+    OrdinaryQueryExecutionLimits, QueryAttemptError, QueryExecutionStats,
+    ordinary_memory::OrdinaryCursorMode,
 };
 use crate::{
     smartcontracts::ValidQuery,
@@ -48,17 +49,18 @@ pub(super) const KURA_PRODUCER_RESIDUALS: usize = 3;
 /// The limit-bearing branch deliberately returns before source execution. A
 /// preflight followed by the legacy producer would not couple its infallible
 /// clones and eager collections to the admitted allocation envelope.
-pub(super) fn execute<T, Q>(
+pub(super) fn execute<T, Q, E>(
     query: Q,
     predicate: CompoundPredicate<T>,
     params: &QueryParams,
     mode: OrdinaryCursorMode,
     limits: Option<OrdinaryQueryExecutionLimits>,
     state: &impl StateReadOnly,
-) -> Result<(impl Iterator<Item = T>, QueryExecutionStats), Error>
+) -> Result<(impl Iterator<Item = T>, QueryExecutionStats), QueryAttemptError>
 where
     T: NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de> + Send + Sync + 'static,
-    Q: ValidQuery<Item = T> + 'static,
+    Q: ValidQuery<E, Item = T> + 'static,
+    E: Into<QueryAttemptError>,
 {
     if let Some(limits) = limits {
         if TypeId::of::<Q>() == TypeId::of::<iroha_data_model::query::peer::prelude::FindPeers>()
@@ -102,10 +104,11 @@ where
         // additionally need an authenticated fixed projection in the reader.
         return Err(Error::Conversion(
             "ordinary iterable source adapters are not yet complete".to_owned(),
-        ));
+        )
+        .into());
     }
     Ok((
-        OrdinaryIterable::Legacy(ValidQuery::execute(query, predicate, state)?),
+        OrdinaryIterable::Legacy(ValidQuery::execute(query, predicate, state).map_err(Into::into)?),
         QueryExecutionStats::default(),
     ))
 }

@@ -334,7 +334,8 @@ mod tests {
             issued_at_ms: 300,
             expires_at_ms: 800,
         };
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
+        assert_eq!(issuer.public_key(), &f.issuer_policy.issuer_public_key);
         KagemushaSignedOrdinaryCurrentControlV1 {
             signature: Signature::try_new(
                 issuer.private_key(),
@@ -432,6 +433,19 @@ mod tests {
                 .subject
                 .request
                 .verify_account_signature(&wrong)
+                .is_err()
+        );
+        let app_authority = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        assert_eq!(app_authority.public_key(), &f.app_authority.authority_key);
+        let mut wrong_role = signed.clone();
+        wrong_role.signature = Signature::try_new(
+            app_authority.private_key(),
+            &wrong_role.subject.issuer_signing_message().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            wrong_role
+                .verify_for_request(&signed.subject.request, &f.issuer_policy)
                 .is_err()
         );
         let mut policy = f.issuer_policy.clone();

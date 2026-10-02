@@ -2365,6 +2365,58 @@ impl KagemushaOperationFinalityV1 {
         Ok(())
     }
 
+    /// Authenticate an immutable reserve receipt against an independently retained contiguous
+    /// Native verifier. The verifier must already hold this decision; the offered response cannot
+    /// extend its prefix, select a checkpoint, substitute a network or supply a trust root.
+    /// This checks actual consensus/receipt/top-up membership only, not monetary proof authority.
+    ///
+    /// # Errors
+    /// Refuses a foreign network, genesis, a decision outside the held prefix, changed execution
+    /// roots or any receipt/mint membership mismatch. Historical receipts may precede its tip.
+    pub fn validate_retained_with_verifier(
+        &self,
+        selected_network: &NetworkId,
+        verifier: &SumeragiFinalityVerifier,
+    ) -> Result<(), KagemushaIsiValidationErrorV1> {
+        require_chain_version(self.version)?;
+        if self.finality_proof.height() <= 1
+            || self.network_id != *selected_network
+            || self.reserve_receipt_witness.receipt.network_id != *selected_network
+        {
+            return Err(invalid("operation_finality.retained_network"));
+        }
+        let decision = verifier
+            .verify_retained_decision(&self.finality_proof)
+            .map_err(|e| KagemushaIsiValidationErrorV1::InvalidFinality(e.to_string()))?;
+        let commitment = decision.execution();
+        if !self
+            .reserve_receipt_witness
+            .verify(commitment.ordinary_writes_root)
+        {
+            return Err(invalid("operation_finality.retained_receipt_membership"));
+        }
+        let receipt = &self.reserve_receipt_witness.receipt;
+        match (receipt.kind, &self.top_up_membership_witness) {
+            (KagemushaOperationKindV1::TopUp, Some(witness)) => {
+                witness.validate(commitment.kagemusha_top_up_count)?;
+                let root = commitment
+                    .kagemusha_top_up_root
+                    .ok_or_else(|| invalid("operation_finality.retained_top_up_root"))?;
+                if kagemusha_mint_finality_root_v1(witness.root) != root
+                    || witness.leaf.operation_id != receipt.operation_id
+                    || witness.leaf.reserve_receipt_digest != receipt.canonical_digest()?
+                    || witness.leaf.statement_digest != receipt.mint_statement_digest
+                    || witness.leaf.amount != receipt.amount
+                {
+                    return Err(invalid("operation_finality.retained_top_up_membership"));
+                }
+            }
+            (KagemushaOperationKindV1::Redemption, None) => {}
+            _ => return Err(invalid("operation_finality.retained_top_up_presence")),
+        }
+        Ok(())
+    }
+
     /// Return the finalized block height.
     #[must_use]
     pub fn finalized_block_height(&self) -> u64 {
@@ -2814,6 +2866,19 @@ isi! {
     }
 }
 
+isi! {
+    /// Ordinary Mint113 top-up, complete independent issuer and native clock proof inputs.
+    /// Construction only validates public data. Node must verify actual World purpose,
+    /// current FI, current governed release, full ordinary proofs and global predecessor hold.
+    #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1")]
+    pub struct TopUpKagemushaOrdinaryV1 {
+        /// Complete bounded ordinary public submission. No OEM authorization is accepted.
+        pub request: crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1,
+    }
+}
+impl crate::seal::Instruction for TopUpKagemushaOrdinaryV1 {}
+
 impl crate::seal::Instruction for TopUpKagemushaV1 {}
 impl crate::seal::Instruction for RedeemKagemushaV1 {}
 
@@ -2842,6 +2907,30 @@ macro_rules! impl_kagemusha_instruction_decode_from_slice {
 }
 
 impl_kagemusha_instruction_decode_from_slice!(TopUpKagemushaV1, KagemushaTopUpRequestV1);
+impl_kagemusha_instruction_decode_from_slice!(
+    TopUpKagemushaOrdinaryV1,
+    crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1
+);
+impl TopUpKagemushaOrdinaryV1 {
+    /// Distinct first-release ordinary top-up instruction identity, without a legacy alias.
+    pub const WIRE_ID: &'static str = "iroha.kagemusha.v1.ordinary_top_up";
+    /// Construct only shape-checked submission data; this grants no debit or funding authority.
+    /// # Errors
+    /// Refuses oversized, unsupported or internally substituted complete public originals.
+    pub fn new(
+        request: crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1,
+    ) -> Result<Self, String> {
+        request.validate_shape()?;
+        Ok(Self { request })
+    }
+    /// Recheck the sole complete public input shape, without authenticating any offered root.
+    /// # Errors
+    /// Refuses invalid or oversized submission data.
+    pub fn validate_shape(&self) -> Result<(), String> {
+        self.request.validate_shape()
+    }
+}
+
 impl_kagemusha_instruction_decode_from_slice!(RedeemKagemushaV1, KagemushaRedemptionRequestV1);
 
 impl TopUpKagemushaV1 {
@@ -4627,6 +4716,55 @@ mod tests {
         assert_eq!(
             overflowing.validate_against_previous_receipt(Some(&saturated)),
             Err(invalid("reserve_receipt.total_topups"))
+        );
+    }
+
+    #[test]
+    fn retained_operation_finality_refuses_unrecorded_prefix_and_altered_receipt() {
+        use crate::testing::native_finality::NativeFinalityFixture;
+        // Genuine known-public validator signatures over synthetic outputs; no Node execution,
+        // actual Mint proof, installed Native owner or funding capability is constructed.
+        let mut fixture = NativeFinalityFixture::new();
+        let mut receipt = reserve_receipt(KagemushaOperationKindV1::Redemption);
+        receipt.network_id = fixture.network_id();
+        receipt.liability_pool_id = kagemusha_liability_pool_id_v1(
+            &receipt.network_id,
+            &receipt.asset,
+            receipt.asset_incarnation,
+        )
+        .unwrap();
+        let witness = KagemushaReserveReceiptWitnessV1 {
+            key: KagemushaReserveReceiptWitnessV1::expected_key(receipt.operation_id),
+            receipt,
+            siblings: vec![Hash::new([]); KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1],
+        };
+        let before = fixture.verifier();
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        let proof = fixture.certify(block);
+        let original = KagemushaOperationFinalityV1 {
+            version: 1,
+            network_id: fixture.network_id(),
+            finality_proof: proof,
+            reserve_receipt_witness: witness,
+            top_up_membership_witness: None,
+        };
+        assert!(
+            original
+                .validate_retained_with_verifier(&fixture.network_id(), &before)
+                .is_err()
+        );
+        // The authentic prefix alone cannot certify an unrelated caller-generated receipt root.
+        assert!(
+            original
+                .validate_retained_with_verifier(&fixture.network_id(), &fixture.verifier())
+                .is_err()
+        );
+        let mut changed = original;
+        changed.reserve_receipt_witness.receipt.amount += 1;
+        assert!(
+            changed
+                .validate_retained_with_verifier(&fixture.network_id(), &fixture.verifier())
+                .is_err()
         );
     }
 

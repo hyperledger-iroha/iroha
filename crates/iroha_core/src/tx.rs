@@ -294,8 +294,6 @@ pub(crate) struct StatefulAdmission {
     pub(crate) allow_unregistered_authority: bool,
     /// Monotonic sequence value to store after successful execution.
     pub(crate) sequence_to_commit: Option<u64>,
-    /// Exact signed validation-fee value to credit only after complete execution succeeds.
-    pub(crate) validation_fee_credit: Option<crate::validation_fee::ValidationFeeCredit>,
     /// Consensus-owned faucet claim record to persist only after complete execution succeeds.
     pub(crate) faucet_claim_to_commit: Option<(StatePath, Vec<u8>)>,
 }
@@ -3124,24 +3122,24 @@ impl StateBlock<'_> {
         state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         crate::executor::validate_transaction_fee_admission(state_transaction, tx)
             .map_err(TransactionRejectionReason::Validation)?;
+        if let Err(error) =
+            crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)
+        {
+            return Err(match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    TransactionRejectionReason::Validation(
+                        state_transaction.defer_execution(reason),
+                    )
+                }
+            });
+        }
         let lane_assignment = LaneAssignment {
             lane_id: physical.lane_id,
             dataspace_id: physical.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
-        let validation_fee_credit =
-            match crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction) {
-                Ok(credit) => credit,
-                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(error)) => {
-                    return Err(error);
-                }
-                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) => {
-                    return Err(TransactionRejectionReason::Validation(
-                        state_transaction.defer_execution(reason),
-                    ));
-                }
-            };
         if genesis.is_none() {
             enforce_fraud_policy(
                 &state_transaction.fraud_monitoring,
@@ -3156,7 +3154,6 @@ impl StateBlock<'_> {
             authority,
             allow_unregistered_authority,
             sequence_to_commit,
-            validation_fee_credit,
             faucet_claim_to_commit,
         })
     }
@@ -3289,10 +3286,7 @@ impl StateBlock<'_> {
             debug!("Data triggers executed successfully");
             trigger_sequence
         };
-        crate::validation_fee::commit_validation_fee_credit(
-            state_transaction,
-            admission.validation_fee_credit.as_ref(),
-        )?;
+        crate::retail_fee::finalize(state_transaction)?;
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
                 .world

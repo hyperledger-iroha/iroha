@@ -623,7 +623,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.manifest.future = null; },
     (proposal) => { proposal.payload.proposal.future = null; },
     (proposal) => { proposal.payload.policy.future = null; },
-    (proposal) => { proposal.payload.payout_binding.recipients[0].future = null; },
+    (proposal) => { proposal.payload.payout_binding.future = null; },
     (proposal) => { proposal.payload.value.target.name = "governed-package"; },
     (proposal) => { proposal.payload.action.value.provider_id = Array(32).fill(0x31); },
     (proposal) => { proposal.payload.action.payload.future = null; },
@@ -1345,25 +1345,15 @@ function fixtureAccountId(label) {
 }
 
 function parliamentProposalFixtures() {
-  const [treasury, vault, ...recipients] = ACCOUNTS;
+  const [treasury] = ACCOUNTS;
   const packageId = {
     home_dataspace: 7,
     scope: { kind: "DataspaceRoot", value: null },
     name: ["governed-package"],
   };
-  const payoutBinding = {
-    contract_address: CONTRACT_ADDRESS,
-    code_hash: Array(32).fill(0x44),
-    entrypoint: "autonomous_validation_fee_tick",
-    treasury_account_id: treasury,
-    ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    xor_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
-    pool_vault_account_id: vault,
-    batch_ds: "10",
-    min_xor_out: "4",
-    max_xor_out: "100",
-    recipients: recipients.map((account_id) => ({ account_id, share: "0.25" })),
-  };
+  const payoutBinding = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_conversion_v1.json", import.meta.url), "utf8"));
+  const policy = JSON.parse(readFileSync(new URL("./fixtures/retail_fee_native_policy_v1.json", import.meta.url), "utf8"));
+  policy.network_id = NETWORK_ID;
   return [
     {
       kind: "DeployContract",
@@ -1419,25 +1409,7 @@ function parliamentProposalFixtures() {
       kind: "ValidationFeePolicy",
       payload: {
         proposal_operator: treasury,
-        policy: {
-          schema_version: 1,
-          network_id: NETWORK_ID,
-          policy_version: "1",
-          previous_policy_hash: null,
-          ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          ds_scale: 2,
-          fee: "0.1",
-          treasury_account_id: treasury,
-          charging_mode: {
-            charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
-            value: null,
-          },
-          effective_from_height: "121100",
-          expires_after_height: null,
-          exemption_classes: [],
-          treasury_payout_binding: null,
-        },
-        payout_lifecycle_proposal_id: null,
+        policy,
       },
     },
     {
@@ -1615,7 +1587,7 @@ function readResponse() {
       proposal_content_id: PROPOSAL_ID,
       governance_attempt_id: ATTEMPT_ID,
       governance_attempt_sequence: 0,
-      risk_tier: { tier: "Standard" },
+      risk_tier: { tier: "Standard", details: null },
       body_bindings: [{
         body_instance_id: ID(1),
         election_attempt_id: ID(2),
@@ -1747,7 +1719,7 @@ function policyJuryCertificateComponents(commitmentClosedAtHeight) {
       nay: 1,
       abstain: 0,
     },
-    outcome: { outcome: "Approved" },
+    outcome: { outcome: "Approved", details: null },
     },
   };
   return { binding, bodyState, requiredBody };

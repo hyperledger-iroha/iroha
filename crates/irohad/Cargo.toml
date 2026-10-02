@@ -125,7 +125,7 @@ iroha_model_base = { workspace = true }
 iroha_musubi_service = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_core_zk = { workspace = true, default-features = false }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_panic_hook = { workspace = true }

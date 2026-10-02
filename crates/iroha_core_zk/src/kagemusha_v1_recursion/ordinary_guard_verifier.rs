@@ -44,6 +44,22 @@ pub(crate) use terminal_guard::{
     KagemushaAuthenticatedOrdinaryTerminalGuardV1, verify_ordinary_terminal_guard_v1,
 };
 
+#[path = "ordinary_incoming_guard_verifier.rs"]
+mod incoming_guard;
+pub(super) use incoming_guard::incoming_preparation_digests;
+pub(crate) use incoming_guard::{
+    KagemushaAuthenticatedOrdinaryIncomingPreparationGuardV1,
+    verify_ordinary_incoming_preparation_guard_v1,
+};
+
+#[path = "ordinary_incoming_terminal_guard_verifier.rs"]
+mod incoming_terminal_guard;
+pub(super) use incoming_terminal_guard::incoming_terminal_digests;
+pub(crate) use incoming_terminal_guard::{
+    KagemushaAuthenticatedOrdinaryIncomingTerminalGuardV1,
+    verify_ordinary_incoming_terminal_guard_v1,
+};
+
 type History = [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
 type Result<T> = core::result::Result<T, KagemushaStateErrorV1>;
 

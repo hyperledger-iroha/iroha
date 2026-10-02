@@ -39,8 +39,10 @@ pub(super) enum PhaseV1 {
     InitialJoinedTransform,
     QueryJoinedSourceBatch,
     QueryJoinedTransform,
+    CompositionArithmeticFixedRows,
+    CompositionArithmeticFixedInverseTransform,
 }
-const PHASES: [PhaseV1; 28] = [
+const PHASES: [PhaseV1; 30] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -69,6 +71,8 @@ const PHASES: [PhaseV1; 28] = [
     PhaseV1::InitialJoinedTransform,
     PhaseV1::QueryJoinedSourceBatch,
     PhaseV1::QueryJoinedTransform,
+    PhaseV1::CompositionArithmeticFixedRows,
+    PhaseV1::CompositionArithmeticFixedInverseTransform,
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -495,6 +499,8 @@ mod tests {
         // These observations are wall time around the original serial caller's
         // whole parallel operation, never per-worker field data or CPU time.
         let phases = [
+            PhaseV1::CompositionArithmeticFixedRows,
+            PhaseV1::CompositionArithmeticFixedInverseTransform,
             PhaseV1::CompositionRegistration,
             PhaseV1::CompositionTraceCache,
             PhaseV1::CompositionDenominators,

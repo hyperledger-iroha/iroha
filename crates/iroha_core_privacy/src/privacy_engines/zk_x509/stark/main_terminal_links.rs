@@ -721,7 +721,14 @@ mod tests {
     #[test]
     fn transcript_binds_link_order_columns_points_and_both_native_geometries() {
         let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-        let base = || new_main_transcript_after_profile_validation_v1(&[7; 32], [8; 32]).unwrap();
+        let base = || {
+            new_main_transcript_after_profile_validation_v1(
+                TEST_PROOF_INSTANCE_V1,
+                &[7; 32],
+                [8; 32],
+            )
+            .unwrap()
+        };
         let expected = MainTerminalLinkPlanV1::new_v1(&layout)
             .unwrap()
             .derive_alphas_v1(&mut base())
@@ -753,8 +760,12 @@ mod tests {
         let plan =
             MainTerminalLinkPlanV1::new_v1(&AggregateProofLayoutV1::for_full_profile_v1().unwrap())
                 .unwrap();
-        let mut actual_transcript =
-            new_main_transcript_after_profile_validation_v1(&[7; 32], [8; 32]).unwrap();
+        let mut actual_transcript = new_main_transcript_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
+            &[7; 32],
+            [8; 32],
+        )
+        .unwrap();
         let mut reference = actual_transcript.clone();
         reference
             .absorb(LINK_DOMAIN_V1, &[LINK_DESCRIPTOR_V1])

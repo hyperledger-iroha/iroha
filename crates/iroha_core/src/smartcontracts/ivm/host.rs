@@ -7482,7 +7482,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     const QUERY_GAS_PER_BYTE: u64 = ivm::gas::LEDGER_QUERY_GAS_PER_BYTE;
     const ACCOUNT_VIEW_WORDS: u64 = 2;
     const ASSET_VIEW_WORDS: u64 = 2;
-    const ASSET_DEFINITION_VIEW_WORDS: u64 = 6;
+    const ASSET_DEFINITION_VIEW_WORDS: u64 = 7;
     const DOMAIN_VIEW_WORDS: u64 = 3;
     const NFT_VIEW_WORDS: u64 = 3;
     fn query_sort_requested(request: &QueryRequest) -> bool {
@@ -8212,6 +8212,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             description: definition.description,
             owned_by: definition.owned_by,
             total_quantity: definition.total_quantity.into(),
+            numeric_scale: definition.spec.scale().map(i64::from),
             metadata: Json::new(definition.metadata),
         })
     }
@@ -8299,6 +8300,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             Self::prepare_optional_query_blob(view.description)?,
             Self::prepare_typed_query_leaf(PointerType::AccountId, &view.owned_by)?,
             Self::prepare_quantity_query_leaf(&view.total_quantity)?,
+            Self::prepare_optional_int_query_leaf(view.numeric_scale)?,
             Self::prepare_typed_query_leaf(PointerType::Json, &view.metadata)?,
         ])
     }
@@ -11321,7 +11323,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let key = self
                         .scoped_durable_state_path(&path)?
                         .unwrap_or_else(|| path.clone());
-                    if crate::validation_fee::is_validation_fee_credit_state_key(&key) {
+                    if crate::validation_fee::is_consensus_fee_state_key(&key) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
                     ivm::host::validate_declared_state_path(vm, &path)?;
@@ -11344,7 +11346,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let scoped_path = self.scoped_durable_state_path(&path)?;
                     let key = scoped_path.unwrap_or_else(|| path.clone());
                     let effective_path = &key;
-                    if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
+                    if crate::validation_fee::is_consensus_fee_state_key(effective_path) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
                     ivm::host::validate_declared_state_path(vm, &path)?;
@@ -20872,8 +20874,7 @@ seiyaku Callee {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let state =
-            signed_contract_host_state(crate::sumeragi::test_chain::TestChainConfig::new(world, 0));
+        let state = contract_test_state_with_world(&authority, world);
         let caller_contract = install_contract(
             &state,
             &authority,
@@ -21294,15 +21295,8 @@ seiyaku Callee {
                 None,
             )
         };
-        // Alias cases exercise ordinary global-root contract execution; their
+        // The original signed genesis authenticates these global-root alias cases;
         // alias permissions and asset balances remain independent fixture inputs.
-        {
-            let mut parameters = world.parameters.block();
-            parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-                iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ));
-            parameters.commit();
-        }
         let (paynet, catalog) = retail_dataspace_catalog();
         let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
         config.chain_id = ChainId::from("test-chain");
@@ -23156,7 +23150,7 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn contract_reads_but_cannot_mutate_consensus_validation_fee_credit() {
+    fn contract_reads_but_cannot_mutate_consensus_conversion_offer() {
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -23173,15 +23167,23 @@ seiyaku DurableOwner {
             contract_alias: Some("validation_fee::credit_reader".parse().expect("alias")),
             entrypoint: "main".to_owned(),
         };
-        let credit_key =
-            crate::validation_fee::validation_fee_credit_state_key_for_address(&contract_address);
+        let base: iroha_model_base::name::Name = "ValidationFeeConversion".parse().expect("base");
+        let encoded_key =
+            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
+                .expect("integer key");
+        let relative_key =
+            ivm::host::canonical_state_map_path(&base, &encoded_key).expect("canonical map path");
+        let scope = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let credit_key: StatePath = format!("sc/{scope}/{relative_key}")
+            .parse()
+            .expect("native projection path");
         let credit: Quantity = "18446744073709551616.25"
             .parse()
             .expect("canonical credit above the u64 domain");
         let mut world = World::new();
         world.smart_contract_state.insert(
             credit_key,
-            crate::validation_fee::encode_validation_fee_credit_state_value(&credit)
+            crate::validation_fee::encode_conversion_quantity_state_value(&credit)
                 .expect("encode schema-bound native consensus credit"),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -23195,14 +23197,11 @@ seiyaku DurableOwner {
             .expect("store authenticated ledger-time fixture block");
         state.append_committed_block_header_for_tests(authenticated_block.header());
         let source = r#"
-            seiyaku ValidationFeeCreditReader {
-                state quantity AvailableValidationFeeCredit;
-                hajimari() {
-                    let quantity zero = 0;
-                    AvailableValidationFeeCredit = zero;
-                }
+            seiyaku ValidationFeeConversionReader {
+                state StateMap<int, quantity> ValidationFeeConversion;
                 view fn main() -> quantity {
-                    return AvailableValidationFeeCredit;
+                    let quantity zero = 0;
+                    return ValidationFeeConversion.get(0).unwrap_or(zero);
                 }
             }
         "#;
@@ -23254,15 +23253,12 @@ seiyaku DurableOwner {
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
-            &crate::validation_fee::encode_validation_fee_credit_state_value(&Quantity::from(
+            &crate::validation_fee::encode_conversion_quantity_state_value(&Quantity::from(
                 999_u64,
             ))
             .expect("encode forged schema-bound credit"),
         );
-        for leaf in [
-            crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,
-            crate::validation_fee::VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
-        ] {
+        for leaf in [relative_key.as_ref(), "ValidationFeeRewards/reserved/State"] {
             let leaf: StatePath = leaf.parse().expect("reserved validation-fee credit leaf");
             let path_ptr = store_state_path_tlv(&mut vm, &leaf);
             vm.set_register(10, path_ptr);

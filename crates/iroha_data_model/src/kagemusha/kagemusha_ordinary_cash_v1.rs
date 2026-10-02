@@ -2555,6 +2555,8 @@ impl KagemushaOrdinaryPreparedOutgoingV1 {
     /// No approval signature, recursive proof or Native money capability is authenticated here.
     /// # Errors
     /// Rejects substituted operation, heads, lifecycle, request, reservation or pre-approval SHA.
+    // The prepared lifecycle binding must equal the original transition lifecycle digest.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_transition(
         &self,
         transition: &KagemushaOrdinaryPreparedTransitionV1,
@@ -2751,6 +2753,8 @@ impl KagemushaOrdinaryCashTerminalRecordV1 {
     /// This validates data only. Native separately verifies authentic W1 purpose1 and original nonce.
     /// # Errors
     /// Rejects different original credentials, prepared authorization or approval interval.
+    // The approved interval must exactly match the original intent issue and expiry times.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_originals(
         &self,
         intent: &KagemushaOrdinaryCashTerminalIntentV1,

@@ -509,6 +509,8 @@ where
         self.phase = AcquisitionPhase::Block(Block {
             writers,
             dirty: mode == BlockMode::Replace,
+            direct_write: false,
+            applied_transactions: 0,
             failed: true,
             predecessor,
             next: None,

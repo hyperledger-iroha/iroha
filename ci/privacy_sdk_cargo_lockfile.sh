@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 
-# Resolve and authenticate the private Cargo lock used by privacy SDK builds.
+# Authenticate original-root Cargo builds and independent lock evidence.
 #
 # This file is both a small command-line utility and a sourceable shell library.
 # Callers must select exactly one lock with
 # IROHA_PRIVACY_CARGO_LOCKFILE_PATH. The selected lock must be external to the
 # repository. The tracked repository-root Cargo.lock owns the reviewed graph
-# and is the lock consumed by stock Cargo for JavaScript native builds. Other
-# privacy build corridors consume an external snapshot with the same
-# authenticated bytes and an independently sealed physical identity.
+# and is consumed by stock Cargo. The external evidence snapshot has the
+# same authenticated bytes and an independently sealed physical identity.
 # SDK-specific environment names are outputs derived from that
 # authenticated selection, never aliases or fallback inputs.
 
 readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\
-"c766e96ceedbad8f0a457746590ec5e5795934793bfc507aa3a5c3f2effee631"
+"700e2d5b9e7c2527c367305a469c8cc4aa1adb26f659fa7a0f81ae9fede0b0e3"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -970,6 +969,7 @@ exact_names = {
     "RANLIB",
     "SDKROOT",
     "RUSTC",
+    "RUSTC_BOOTSTRAP",
     "RUSTC_WRAPPER",
     "RUSTC_WORKSPACE_WRAPPER",
     "RUSTDOC",
@@ -1085,6 +1085,51 @@ PY
   done
 }
 
+# Stock Cargo consumes the original workspace graph; the selected external
+# lock is independent evidence, never a Cargo command-line override.
+privacy_sdk_assert_stock_cargo_manifest() {
+  local repository_root="$1"
+  local manifest_path="$2"
+  local python_bin="${3:-python3}"
+  "${python_bin}" -I - "${repository_root}" "${manifest_path}" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+manifest = Path(sys.argv[2])
+try:
+    if (not manifest.is_absolute() or manifest.name != "Cargo.toml"
+            or manifest.resolve(strict=True) != manifest or not manifest.is_file()
+            or root.resolve(strict=True) != root):
+        raise ValueError("manifest must be a canonical original Cargo.toml")
+    if manifest == root / "Cargo.toml":
+        raise SystemExit(0)
+    directory = manifest.parent
+    directory.relative_to(root)
+    graph = tomllib.loads((root / "Cargo.toml").read_text())
+    workspace = graph["workspace"]
+    def selected(patterns):
+        return any(directory in root.glob(pattern) for pattern in patterns)
+    if not selected(workspace.get("members", [])) or selected(workspace.get("exclude", [])):
+        raise ValueError("manifest is not an original workspace member")
+    package = tomllib.loads(manifest.read_text())
+    if "workspace" in package:
+        raise ValueError("nested workspace cannot select the authenticated root graph")
+    explicit = package.get("package", {}).get("workspace")
+    if explicit is not None and (directory / explicit).resolve(strict=True) != root:
+        raise ValueError("member redirects its workspace")
+    for parent in directory.parents:
+        if parent == root:
+            break
+        candidate = parent / "Cargo.toml"
+        if candidate.exists() and "workspace" in tomllib.loads(candidate.read_text()):
+            raise ValueError("intermediate workspace changes Cargo lock discovery")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    raise SystemExit(f"error: stock Cargo manifest is not bound to the authenticated root: {error}")
+PY
+}
+
 privacy_sdk_assert_ci_cargo_lock_state() {
   local repository_root="$1"
   local python_bin="${2:-python3}"
@@ -1124,7 +1169,7 @@ privacy_sdk_assert_ci_cargo_lock_state() {
     "${CARGO_INCREMENTAL:-}" != "0" || \
     "${CARGO_ENCODED_RUSTFLAGS+x}" != "x" || \
     -n "${CARGO_ENCODED_RUSTFLAGS:-}" || \
-    "${RUSTC_BOOTSTRAP:-}" != "1" ]]; then
+    -n "${RUSTC_BOOTSTRAP+x}" ]]; then
     echo "error: privacy SDK CI deterministic Cargo environment changed" >&2
     return 1
   fi
@@ -1607,7 +1652,8 @@ privacy_sdk_provision_ci_cargo_lock() {
     "${workspace_lock_state}" "${python_bin}" || return 1
   resolved_lock_seal="$(privacy_sdk_file_seal "${lock_path}" "${python_bin}")" || return 1
   # Full metadata resolves all workspace packages and target dependencies. The
-  # pinned graph must already fit; never retry without --locked or update it.
+  # original root graph must already fit; the independent external copy is
+  # evidence only. Never retry without --locked or update either lock.
   (
     set -C
     cd "${canonical_repository_root}" || exit 1
@@ -1615,10 +1661,8 @@ privacy_sdk_provision_ci_cargo_lock() {
     CARGO_NET_OFFLINE=false \
     RUSTC="${real_rustc}" \
     RUSTDOC="${real_rustdoc}" \
-    RUSTC_BOOTSTRAP=1 \
-      "${real_cargo}" -Z unstable-options metadata --locked --format-version 1 \
+      "${real_cargo}" metadata --locked --format-version 1 \
         --manifest-path "${canonical_repository_root}/Cargo.toml" \
-        --lockfile-path "${lock_path}" \
         >"${canonical_corridor_root}/dependency-metadata.json"
   ) || compatibility_status=$?
   privacy_sdk_assert_file_seal \
@@ -1741,7 +1785,6 @@ privacy_sdk_provision_ci_cargo_lock() {
     printf 'CARGO_NET_OFFLINE=true\n'
     printf 'CARGO_INCREMENTAL=0\n'
     printf 'CARGO_ENCODED_RUSTFLAGS=\n'
-    printf 'RUSTC_BOOTSTRAP=1\n'
   } >>"${github_env_path}" || return 1
   # GitHub prepends each GITHUB_PATH entry as it is processed. Write the sealed
   # toolchain first and the wrapper second so the effective order is

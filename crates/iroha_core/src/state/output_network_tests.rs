@@ -180,7 +180,7 @@ fn recorded_network_block<'state>(
 fn execute(
     block: &mut StateBlock<'_>,
     source: &SignedBlock,
-) -> Result<(), ExecutionAttemptError<String>> {
+) -> Result<(), ExecutionOutputAttemptError> {
     block.reserve_ordinary_execution_outputs(source)?;
     block.produce_ordinary_execution_outputs(source, |producer| {
         producer.execute_network_sources(None)?;
@@ -915,7 +915,7 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     let before = exec_witness::snapshot_exec_witness();
     assert_eq!(
         execute(&mut block, &source),
-        Err(ExecutionAttemptError::Deferred(reason.into()))
+        Err(ExecutionOutputAttemptError::Deferred(reason.into()))
     );
     assert_eq!(exec_witness::snapshot_exec_witness(), before);
     assert_eq!(block.gas_used_in_block, 0);

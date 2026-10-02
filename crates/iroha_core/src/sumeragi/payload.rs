@@ -50,7 +50,10 @@ pub enum PayloadError {
     /// The original versioned decoder refused this unfinished local attempt.
     #[error("payload decoding was refused by local resources: {0}")]
     DecodeResource(crate::execution_attempt::ExecutionDeferred),
-    /// Original committed routing could not be read with the local resources.
+    /// Original parent participation preparation failed; no local QC is execution input.
+    #[error("parent service preparation failed: {0}")]
+    ParentService(String),
+    /// Original committed routing or parent service could not be read with local resources.
     #[error("payload routing deferred: {0}")]
     RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// The payload bytes are not a canonical block proposal.
@@ -217,7 +220,7 @@ fn build_at(
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
     let mut proposal = builder.into_unsigned_proposal();
-    let effects = if npos {
+    let mut effects = if npos {
         let header = proposal.header();
         Some(
             super::penalties::PenaltyApplier::new(state, None)
@@ -227,6 +230,27 @@ fn build_at(
     } else {
         None
     };
+    if height > 2 {
+        let view = state.view();
+        let reader = super::certified_chain::CertifiedChain::new_for_parent_service(&view)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::RoutingDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        let original = reader
+            .parent_service_proposal_original(assembly.parent)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::RoutingDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        effects
+            .get_or_insert_with(Default::default)
+            .parent_service_commit_qc = Some(original);
+    }
     proposal.set_npos_consensus_effects(effects);
     Ok(proposal)
 }

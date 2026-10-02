@@ -44,6 +44,9 @@ pub(crate) struct KagemushaOrdinaryGuardDataBindingV1<F: KagemushaPoseidonFieldV
     pub(crate) digests: [[PastaSha256ByteV1<F>; 32]; 5],
     /// Actual account binding copied from the same issuer-authenticated original C.
     pub(crate) account_binding: [PastaSha256ByteV1<F>; 32],
+    /// Same financial witness commitment copied from the complete issuer-bound C original.
+    /// This is a commitment, not an exported financial secret or a new funding capability.
+    pub(crate) financial_authority_commitment: [PastaSha256ByteV1<F>; 32],
     /// Exact full S signing bytes; State additionally joins its real proof statement/candidate.
     pub(crate) canonical_subject: [AssignedValue<F>; S::TOTAL_BYTES],
     /// Same signed purpose cell inside the whole platform-approved wrapper transcript.
@@ -201,6 +204,7 @@ pub(super) fn constrain_ordinary_guard_data_binding_v1<F: KagemushaPoseidonField
             provider,
         ],
         account_binding: cells.fixed_digests[3],
+        financial_authority_commitment: cells.fixed_digests[15],
         canonical_subject: signed_s,
         approval_purpose,
         approval_operation_id: original.operation_id,

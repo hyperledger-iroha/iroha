@@ -1,62 +1,8 @@
 #[cfg(test)]
 mod validation_fee_policy_proof_bridge_tests {
     use super::*;
-    use iroha_data_model::{
-        hijiri::{FeeMultiplierBand, HijiriFeePolicy, HijiriParametersV1, Q16},
-        validation_fee::VALIDATION_FEE_DS_SCALE,
-    };
-    use iroha_torii_shared::validation_fee_api::{
-        VALIDATION_FEE_BASE_MINOR_UNITS_V1,
-        VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1, ValidationFeeHijiriQuoteBaseV1,
-        evaluate_hijiri_quote_v1,
-    };
     use std::ptr;
 
-    fn hijiri_quote_request() -> ValidationFeeHijiriQuoteRequestV1 {
-        let key_pair = KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519)
-            .expect("derive Hijiri quote account");
-        ValidationFeeHijiriQuoteRequestV1 {
-            version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-            account_id: AccountId::new(key_pair.public_key().clone()),
-            qualifying_transfer_count: 2,
-        }
-    }
-
-    fn hijiri_quote_response(
-        request: &ValidationFeeHijiriQuoteRequestV1,
-    ) -> ValidationFeeHijiriQuoteResponseV1 {
-        let policy = HijiriFeePolicy::new(
-            vec![FeeMultiplierBand::new(Q16::ONE, Q16::ONE).expect("valid fee band")],
-            Q16::ONE,
-        )
-        .expect("valid fee policy");
-        let parameters = HijiriParametersV1::try_new(1, None, policy, Q16::ZERO)
-            .expect("valid Hijiri parameters");
-        let fee_asset = AssetDefinitionId::from_uuid_bytes([
-            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
-            0xcd, 0x2f,
-        ])
-        .expect("valid fee asset");
-        let base = ValidationFeeHijiriQuoteBaseV1::try_new(
-            42,
-            43,
-            1,
-            [0x03; 32],
-            fee_asset.to_string(),
-            request.account_id.to_string(),
-            VALIDATION_FEE_DS_SCALE,
-            VALIDATION_FEE_BASE_MINOR_UNITS_V1,
-        )
-        .expect("valid quote base");
-        evaluate_hijiri_quote_v1(
-            base,
-            &request.account_id,
-            &parameters,
-            None,
-            request.qualifying_transfer_count,
-        )
-        .expect("evaluate quote")
-    }
     fn native_checkpoint(height: u64) -> &'static [u8] {
         match height {
             1 => include_bytes!(concat!(
@@ -192,166 +138,227 @@ mod validation_fee_policy_proof_bridge_tests {
         assert_eq!((projection_len, promoted_len), (0, 0));
     }
 
-    #[test]
-    fn hijiri_quote_bridge_roundtrips_native_request_and_bound_response() {
-        let request = hijiri_quote_request();
-        let account_literal = request.account_id.to_string();
-        let mut request_ptr: *mut c_uchar = ptr::null_mut();
-        let mut request_len: c_ulong = 0;
-        let request_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_request_v1(
-                account_literal.as_ptr(),
-                account_literal.len() as c_ulong,
-                request.qualifying_transfer_count,
-                &mut request_ptr,
-                &mut request_len,
-            )
-        };
-        assert_eq!(request_status, 0);
-        assert!(!request_ptr.is_null());
-        let request_archive =
-            unsafe { slice::from_raw_parts(request_ptr, request_len as usize).to_vec() };
-        connect_norito_free(request_ptr);
-        let decoded_request: ValidationFeeHijiriQuoteRequestV1 =
-            decode_from_bytes(&request_archive).expect("decode request archive");
-        assert_eq!(decoded_request, request);
-
-        let expected = hijiri_quote_response(&request);
-        let response_archive = norito::to_bytes(&expected).expect("encode response archive");
-        let mut projection_ptr: *mut c_uchar = ptr::null_mut();
-        let mut projection_len: c_ulong = 0;
-        let response_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_response_verify_v1(
-                response_archive.as_ptr(),
-                response_archive.len() as c_ulong,
-                request_archive.as_ptr(),
-                request_archive.len() as c_ulong,
-                &mut projection_ptr,
-                &mut projection_len,
-            )
-        };
-        assert_eq!(response_status, 0);
-        assert!(!projection_ptr.is_null());
-        let projection =
-            unsafe { slice::from_raw_parts(projection_ptr, projection_len as usize).to_vec() };
-        connect_norito_free(projection_ptr);
-        let decoded_projection: ValidationFeeHijiriQuoteResponseV1 =
-            norito::json::from_slice(&projection).expect("decode typed projection JSON");
-        assert_eq!(decoded_projection, expected);
+    fn retail_fixture() -> JsonValue {
+        norito::json::from_str(include_str!(
+            "../../../javascript/iroha_js/test/fixtures/retail_fee_codec_v1.json"
+        ))
+        .unwrap()
     }
-
     #[test]
-    fn hijiri_quote_bridge_rejects_invalid_counts_and_response_substitution() {
-        let request = hijiri_quote_request();
-        let account_literal = request.account_id.to_string();
-        assert!(
-            validation_fee_hijiri_quote_request_v1(&account_literal, 0).is_err(),
-            "zero qualifying transfers must fail closed"
+    fn retail_bridge_matches_native_and_javascript_fixture() {
+        let fixture = retail_fixture();
+        let request = norito::json::to_vec(&fixture["request"]).unwrap();
+        let assessment = norito::json::to_vec(&fixture["assessment"]).unwrap();
+        assert_eq!(
+            hex::encode(retail_fee_intent_hash_v1(&request).unwrap()),
+            fixture["intent_hash_hex"].as_str().unwrap()
         );
-        assert!(
-            validation_fee_hijiri_quote_request_v1(
-                &account_literal,
-                VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1 + 1,
-            )
-            .is_err(),
-            "an oversized transfer count must fail closed"
+        let marker = retail_fee_assessment_marker_v1(&assessment).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&marker).unwrap(),
+            fixture["marker"].as_str().unwrap()
         );
-        let request_archive = norito::to_bytes(&request).expect("encode request");
-        let response_archive =
-            norito::to_bytes(&hijiri_quote_response(&request)).expect("encode response");
-        let mut substituted_request = request.clone();
-        substituted_request.qualifying_transfer_count = 1;
-        let substituted_request_archive =
-            norito::to_bytes(&substituted_request).expect("encode substituted request");
+        let decoded: RetailFeeAssessmentV1 =
+            norito::json::from_slice(&retail_fee_assessment_decode_v1(&marker).unwrap()).unwrap();
+        let expected: RetailFeeAssessmentV1 = norito::json::from_slice(&assessment).unwrap();
+        assert_eq!(decoded, expected);
+        let mut trailing = marker.clone();
+        trailing.extend_from_slice(b"00");
+        assert!(retail_fee_assessment_decode_v1(&trailing).is_err());
+        assert!(retail_fee_assessment_decode_v1(marker.to_ascii_uppercase().as_slice()).is_err());
+    }
+    #[test]
+    fn retail_bridge_rejects_unknown_fields_and_invalid_payment_shape() {
+        let mut fixture = retail_fixture();
+        fixture
+            .as_object_mut()
+            .unwrap()
+            .get_mut("request")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("exempt".into(), JsonValue::Bool(true));
         assert!(
-            validation_fee_hijiri_quote_response_verify_v1(
-                &response_archive,
-                &substituted_request_archive,
-            )
-            .is_err(),
-            "response must remain bound to the exact request"
+            retail_fee_intent_hash_v1(&norito::json::to_vec(&fixture["request"]).unwrap()).is_err()
         );
-        let mut trailing_request = request_archive.clone();
-        trailing_request.push(0);
+        let mut request: RetailFeeQuoteRequestV1 =
+            norito::json::from_value(retail_fixture()["request"].clone()).unwrap();
+        request.transfers[0].amount_minor_units = 0;
+        assert!(retail_fee_intent_hash_v1(&norito::json::to_vec(&request).unwrap()).is_err());
+        let mut assessment: RetailFeeAssessmentV1 =
+            norito::json::from_value(retail_fixture()["assessment"].clone()).unwrap();
+        assessment.fee_minor = 1;
         assert!(
-            validation_fee_hijiri_quote_response_verify_v1(&response_archive, &trailing_request,)
-                .is_err(),
-            "non-canonical request bytes must fail closed"
-        );
-        let mut trailing_response = response_archive;
-        trailing_response.push(0);
-        assert!(
-            validation_fee_hijiri_quote_response_verify_v1(&trailing_response, &request_archive,)
-                .is_err(),
-            "non-canonical response bytes must fail closed"
+            retail_fee_assessment_marker_v1(&norito::json::to_vec(&assessment).unwrap()).is_err()
         );
     }
-
     #[test]
-    fn hijiri_quote_c_abi_clears_outputs_and_reports_stable_errors() {
-        let request = hijiri_quote_request();
-        let account_literal = request.account_id.to_string();
-        let sentinel = ptr::dangling_mut::<c_uchar>();
+    fn retail_bridge_accepts_exact_byte_limits_and_rejects_one_more() {
+        let fixture = retail_fixture();
+        let request = norito::json::to_vec(&fixture["request"]).unwrap();
+        let expected = retail_fee_intent_hash_v1(&request).unwrap();
+        let mut padded = request;
+        assert!(padded.len() < RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES);
+        padded.resize(RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES, b' ');
+        assert_eq!(retail_fee_intent_hash_v1(&padded).unwrap(), expected);
+        padded.push(b' ');
+        assert!(retail_fee_intent_hash_v1(&padded).is_err());
 
-        let mut request_ptr = sentinel;
-        let mut request_len = c_ulong::MAX;
-        let invalid_account_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_request_v1(
-                ptr::null(),
-                1,
-                request.qualifying_transfer_count,
-                &mut request_ptr,
-                &mut request_len,
+        let assessment = norito::json::to_vec(&fixture["assessment"]).unwrap();
+        let expected = retail_fee_assessment_marker_v1(&assessment).unwrap();
+        let mut padded = assessment;
+        assert!(padded.len() < RETAIL_FEE_ASSESSMENT_MAX_BYTES);
+        padded.resize(RETAIL_FEE_ASSESSMENT_MAX_BYTES, b' ');
+        assert_eq!(retail_fee_assessment_marker_v1(&padded).unwrap(), expected);
+        padded.push(b' ');
+        assert!(retail_fee_assessment_marker_v1(&padded).is_err());
+        assert!(expected.len() <= RETAIL_FEE_MARKER_MAX_BYTES);
+        assert!(
+            retail_fee_assessment_decode_v1(&expected).unwrap().len()
+                <= RETAIL_FEE_ASSESSMENT_MAX_BYTES
+        );
+        let oversized = vec![b'0'; RETAIL_FEE_MARKER_MAX_BYTES + 1];
+        assert!(retail_fee_assessment_decode_v1(&oversized).is_err());
+    }
+    #[test]
+    fn retail_bridge_binds_order_and_amount_at_the_payment_count_limit() {
+        let mut request: RetailFeeQuoteRequestV1 =
+            norito::json::from_value(retail_fixture()["request"].clone()).unwrap();
+        let leg = request.transfers[0].clone();
+        request.transfers = vec![leg; 1_000];
+        request.transfers[1].amount_minor_units += 1;
+        let bytes = norito::json::to_vec(&request).unwrap();
+        assert!(bytes.len() <= RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES);
+        let original = retail_fee_intent_hash_v1(&bytes).unwrap();
+        request.transfers.swap(0, 1);
+        let reordered =
+            retail_fee_intent_hash_v1(&norito::json::to_vec(&request).unwrap()).unwrap();
+        assert_ne!(original, reordered);
+        request.transfers[0].amount_minor_units += 1;
+        assert_ne!(
+            reordered,
+            retail_fee_intent_hash_v1(&norito::json::to_vec(&request).unwrap()).unwrap()
+        );
+        request.transfers.push(request.transfers[0].clone());
+        assert!(retail_fee_intent_hash_v1(&norito::json::to_vec(&request).unwrap()).is_err());
+    }
+    #[test]
+    fn retail_c_abi_refuses_oversized_inputs_before_reading_and_clears_outputs() {
+        let single_byte = [0_u8];
+        let operations: [(
+            unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int,
+            usize,
+        ); 3] = [
+            (
+                connect_norito_retail_fee_intent_hash_v1,
+                RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
+            ),
+            (
+                connect_norito_retail_fee_assessment_marker_v1,
+                RETAIL_FEE_ASSESSMENT_MAX_BYTES,
+            ),
+            (
+                connect_norito_retail_fee_assessment_decode_v1,
+                RETAIL_FEE_MARKER_MAX_BYTES,
+            ),
+        ];
+        for (operation, limit) in operations {
+            let mut output = ptr::dangling_mut::<c_uchar>();
+            let mut length = c_ulong::MAX;
+            // Only one byte is readable: the operation must inspect the length first.
+            let status = unsafe {
+                operation(
+                    single_byte.as_ptr(),
+                    (limit + 1) as c_ulong,
+                    &mut output,
+                    &mut length,
+                )
+            };
+            assert_eq!(status, ERR_RETAIL_FEE_ASSESSMENT);
+            assert!(output.is_null());
+            assert_eq!(length, 0);
+        }
+    }
+    #[test]
+    fn retail_c_abi_refuses_controller_output_that_cannot_roundtrip() {
+        use iroha_data_model::account::controller::{MultisigMember, MultisigPolicy};
+        let mut assessment: RetailFeeAssessmentV1 =
+            norito::json::from_value(retail_fixture()["assessment"].clone()).unwrap();
+        let mut found = false;
+        // General Model accounts allow large controllers. This finite control finds
+        // a legitimate input within the JSON cap whose marker exceeds its own cap.
+        for count in 2..=128_u8 {
+            let members = (1..=count)
+                .map(|seed| {
+                    let pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
+                    MultisigMember::new(pair.public_key().clone(), 1).unwrap()
+                })
+                .collect();
+            assessment.account_id =
+                AccountId::new_multisig(MultisigPolicy::new(1, members).unwrap());
+            let input = norito::json::to_vec(&assessment).unwrap();
+            if input.len() > RETAIL_FEE_ASSESSMENT_MAX_BYTES {
+                break;
+            }
+            let encoded = norito::encode_canonical(&assessment).unwrap();
+            if encoded.len() <= (RETAIL_FEE_MARKER_MAX_BYTES - RETAIL_FEE_MARKER_PREFIX.len()) / 2 {
+                continue;
+            }
+            found = true;
+            let mut output = ptr::dangling_mut::<c_uchar>();
+            let mut length = c_ulong::MAX;
+            let status = unsafe {
+                connect_norito_retail_fee_assessment_marker_v1(
+                    input.as_ptr(),
+                    input.len() as c_ulong,
+                    &mut output,
+                    &mut length,
+                )
+            };
+            assert_eq!(status, ERR_RETAIL_FEE_ASSESSMENT);
+            assert!(output.is_null());
+            assert_eq!(length, 0);
+            break;
+        }
+        assert!(
+            found,
+            "the bounded controller output refusal must be exercised"
+        );
+    }
+    #[test]
+    fn retail_c_abi_clears_outputs_and_roundtrips() {
+        let mut output = ptr::dangling_mut::<c_uchar>();
+        let mut length = c_ulong::MAX;
+        let status = unsafe {
+            connect_norito_retail_fee_intent_hash_v1(ptr::null(), 1, &mut output, &mut length)
+        };
+        assert_eq!(status, ERR_RETAIL_FEE_ASSESSMENT);
+        assert!(output.is_null());
+        assert_eq!(length, 0);
+        let input = norito::json::to_vec(&retail_fixture()["assessment"]).unwrap();
+        let status = unsafe {
+            connect_norito_retail_fee_assessment_marker_v1(
+                input.as_ptr(),
+                input.len() as c_ulong,
+                &mut output,
+                &mut length,
             )
         };
-        assert_eq!(invalid_account_status, ERR_VALIDATION_FEE_HIJIRI_QUOTE);
-        assert!(request_ptr.is_null());
-        assert_eq!(request_len, 0);
-
-        request_len = c_ulong::MAX;
-        let missing_output_pointer_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_request_v1(
-                account_literal.as_ptr(),
-                account_literal.len() as c_ulong,
-                request.qualifying_transfer_count,
+        assert_eq!(status, 0);
+        assert!(!output.is_null());
+        let actual = unsafe { slice::from_raw_parts(output, length as usize).to_vec() };
+        connect_norito_free(output);
+        assert_eq!(actual, retail_fee_assessment_marker_v1(&input).unwrap());
+        length = c_ulong::MAX;
+        let status = unsafe {
+            connect_norito_retail_fee_assessment_marker_v1(
+                input.as_ptr(),
+                input.len() as c_ulong,
                 ptr::null_mut(),
-                &mut request_len,
+                &mut length,
             )
         };
-        assert_eq!(missing_output_pointer_status, ERR_NULL_PTR);
-        assert_eq!(request_len, 0);
-
-        request_ptr = sentinel;
-        let missing_output_length_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_request_v1(
-                account_literal.as_ptr(),
-                account_literal.len() as c_ulong,
-                request.qualifying_transfer_count,
-                &mut request_ptr,
-                ptr::null_mut(),
-            )
-        };
-        assert_eq!(missing_output_length_status, ERR_NULL_PTR);
-        assert!(request_ptr.is_null());
-
-        let request_archive = norito::to_bytes(&request).expect("encode request");
-        let malformed_response = [0_u8];
-        let mut projection_ptr = sentinel;
-        let mut projection_len = c_ulong::MAX;
-        let malformed_response_status = unsafe {
-            connect_norito_validation_fee_hijiri_quote_response_verify_v1(
-                malformed_response.as_ptr(),
-                malformed_response.len() as c_ulong,
-                request_archive.as_ptr(),
-                request_archive.len() as c_ulong,
-                &mut projection_ptr,
-                &mut projection_len,
-            )
-        };
-        assert_eq!(malformed_response_status, ERR_VALIDATION_FEE_HIJIRI_QUOTE);
-        assert!(projection_ptr.is_null());
-        assert_eq!(projection_len, 0);
-
-        connect_norito_free(ptr::null_mut());
+        assert_eq!(status, ERR_NULL_PTR);
+        assert_eq!(length, 0);
     }
 }

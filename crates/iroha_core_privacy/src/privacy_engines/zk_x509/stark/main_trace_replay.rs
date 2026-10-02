@@ -336,11 +336,15 @@ impl MainTraceMaskGroupV1 {
 /// Witnesses remain borrowed from the closed phase owners below. Each replay
 /// reconstructs the same polynomial and final commitment replay checks its root.
 pub(in super::super) struct MainTracePolynomialSetV1 {
+    proof_instance: ZkX509ProofInstanceV1,
     groups: [MainTraceMaskGroupV1; FULL_PROFILE_TRACE_GROUPS_V1],
     cut: Option<aggregate::retained_commitment::RetainedMerkleCutV1>,
 }
 
 impl MainTracePolynomialSetV1 {
+    pub(super) const fn proof_instance_v1(&self) -> ZkX509ProofInstanceV1 {
+        self.proof_instance
+    }
     #[cfg(test)]
     pub(in super::super) fn from_ordered_v1(
         layout: &AggregateProofLayoutV1,
@@ -349,6 +353,7 @@ impl MainTracePolynomialSetV1 {
     ) -> Result<Self, ZkX509StarkErrorV1> {
         layout.validate_exact_full_profile_registration_v1()?;
         let set = Self {
+            proof_instance: TEST_PROOF_INSTANCE_V1,
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
@@ -458,6 +463,7 @@ impl MainTracePolynomialSetV1 {
         cut.check_root_v1(layout.common_lde_size(), expected_root)
             .map_err(map_aggregate_error_v1)?;
         let (result, retained) = Self::commit_joined_batches_v1(
+            self.proof_instance,
             layout,
             kind,
             indices,
@@ -485,6 +491,7 @@ impl MainTracePolynomialSetV1 {
     /// All successful RNG draws, polynomials and commitment framing are unchanged.
     /// Errors are fail-fast: no later source/RNG activity and no partial root escapes.
     pub(super) fn sample_and_commit_joined_v1<R: TryRngCore>(
+        proof_instance: ZkX509ProofInstanceV1,
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
         assembly_payload: usize,
@@ -514,6 +521,7 @@ impl MainTracePolynomialSetV1 {
             )?);
         }
         let mut set = Self {
+            proof_instance,
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
@@ -533,6 +541,7 @@ impl MainTracePolynomialSetV1 {
         let policy = MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?
             .for_native_replay_v1()?;
         let (commitment, cut) = Self::commit_joined_batches_v1(
+            proof_instance,
             layout,
             kind,
             &[],
@@ -595,6 +604,7 @@ impl MainTracePolynomialSetV1 {
 
     /// One framing and evaluator path serves initial resident batches and replay.
     fn commit_joined_batches_v1(
+        proof_instance: ZkX509ProofInstanceV1,
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
         indices: &[usize],
@@ -620,7 +630,7 @@ impl MainTracePolynomialSetV1 {
         let mut evaluator =
             main_transform::MainTraceCosetEvaluatorV1::new_v1(layout, assembly_payload)?;
         let result = plan.commit_retained_replayed_v1(
-            AGGREGATE_DOMAINS_V1,
+            main_domains_v1(proof_instance),
             indices,
             cut,
             |group, column| {
@@ -662,14 +672,19 @@ impl MainTracePolynomialSetV1 {
                         AggregateStarkErrorV1::InvalidLayout
                     })
             },
-            |columns, native, common| {
+            |columns, native, common, selected| {
                 #[cfg(test)]
                 let transform_timer = PhaseTimerV1::start_v1(if cut.is_some() {
                     PhaseV1::QueryJoinedTransform
                 } else {
                     PhaseV1::InitialJoinedTransform
                 });
-                let evaluated = evaluator.evaluate_v1(columns, native, common)?;
+                let evaluated = match selected {
+                    Some(indices) => {
+                        evaluator.evaluate_selected_v1(columns, native, common, indices)?
+                    }
+                    None => evaluator.evaluate_v1(columns, native, common)?,
+                };
                 #[cfg(test)]
                 transform_timer.complete_v1();
                 Ok(evaluated)
@@ -1109,6 +1124,52 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                                 .map_err(map_main_rfc_source_error_v1)?;
                         }
                     }
+                }
+                output.extend(batch);
+                first = end;
+                continue;
+            }
+            if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
+                && matches!(kind, MainTraceColumnKindV1::Aux)
+                && let Self::Bound { log19, .. } = self
+            {
+                let end = columns.end.min(registration.aux_end()?);
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                if log19.registration_index_v1(registration)? != 1 {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let count = end - first;
+                let rows = registration.segment.trace_size();
+                if output.capacity() != width {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                let mut batch = Vec::new();
+                batch
+                    .try_reserve_exact(count)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                if batch.capacity() != count {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                for _ in 0..count {
+                    let column = zeroed_main_trace_column_v1(rows)?;
+                    if column.0.capacity() != rows {
+                        return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                    }
+                    batch.push(column);
+                }
+                {
+                    let count = batch.len();
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    log19
+                        .rfc
+                        .fill_aux_columns_v1(local, &mut targets[..count])
+                        .map_err(map_main_rfc_source_error_v1)?;
                 }
                 output.extend(batch);
                 first = end;

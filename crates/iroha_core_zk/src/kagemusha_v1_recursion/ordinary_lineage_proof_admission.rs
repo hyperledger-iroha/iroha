@@ -13,12 +13,10 @@ use super::{
     deferred_parent::ordinary_ipa_proof_profile_v1,
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
     ordinary_guard_verifier,
-    ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1,
     state_relation::{RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, public_instance as s},
     terminal_authorization::canonical_terminal_authorization_candidate_digest_v1,
 };
-use crate::kagemusha_v1_poseidon::{decode, from_u128};
-use ff::PrimeField;
+use crate::kagemusha_v1_poseidon::from_u128;
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalPurposeV1, KagemushaAppOperationApprovalV1,
@@ -32,230 +30,49 @@ use iroha_data_model::kagemusha::{
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
+#[path = "ordinary_incoming_reservation_admission.rs"]
+mod incoming_admission;
+pub(crate) use incoming_admission::{
+    GeneratedOrdinaryIncomingCommitOriginalsV1, assemble_ordinary_incoming_commit_v1,
+    assemble_ordinary_incoming_reservation_v1, readmit_ordinary_incoming_commit_v1,
+};
+pub use incoming_admission::{
+    KAGEMUSHA_ORDINARY_INCOMING_COMMIT_BUNDLE_MAX_BYTES_V1,
+    KAGEMUSHA_ORDINARY_INCOMING_RESERVATION_BUNDLE_MAX_BYTES_V1,
+    KagemushaOrdinaryIncomingCommitProofBundleV1,
+    KagemushaOrdinaryIncomingReservationProofBundleV1,
+    KagemushaVerifiedOrdinaryIncomingCommitProofV1,
+    KagemushaVerifiedOrdinaryIncomingReservationProofV1,
+    ordinary_incoming_commit_carrier_max_bytes_v1, verify_ordinary_incoming_commit_v1,
+    verify_ordinary_incoming_reservation_v1,
+};
+
 #[path = "ordinary_lineage_bundle_admission.rs"]
 mod bundle_admission;
+pub(super) use bundle_admission::terminal_public;
 pub use bundle_admission::{
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
     KagemushaOrdinaryLineageOutgoingOriginalsV1, KagemushaOrdinaryLineageStateProofBundleV1,
     KagemushaOrdinaryLineageStatementOriginalV1, KagemushaVerifiedOrdinaryLineageAnchorProofV1,
     KagemushaVerifiedOrdinaryLineageCommitProofV1,
-    KagemushaVerifiedOrdinaryLineageReservationProofV1, verify_ordinary_lineage_anchor_v1,
+    KagemushaVerifiedOrdinaryLineageReservationProofV1,
+    KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1, verify_ordinary_lineage_anchor_v1,
     verify_ordinary_lineage_commit_v1, verify_ordinary_lineage_reservation_v1,
+    verify_service_ordinary_received_cash_output_v1,
 };
 
 pub(crate) use bundle_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1, ordinary_incoming_artifacts_v1,
+    readmit_historical_ordinary_received_cash_output_v1, require_ordinary_incoming_predecessor_v1,
+    verify_ordinary_received_cash_output_v1,
 };
 
+use super::ordinary_lineage_state_original::{
+    KagemushaOrdinaryLineageStateOriginalV1, KagemushaOrdinaryLineageStateProjectionV1,
+};
 const CELLS: usize = RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT;
-const PROJECTION_MAX: usize = 16 * 1024;
 type Column = [[u8; 32]; CELLS];
 type Result<T> = core::result::Result<T, String>;
-
-/// Public, data-only State projection. Each parity has exactly93 canonical field encodings.
-/// Only cells30/31 are parity-native full field elements; all others are shared128-bit cells.
-/// This record has no constructor that admits a proof or grants a Native financial capability.
-#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::zk::kagemusha_v1_recursion::OrdinaryLineageStateProjectionV1",
-    frame = "iroha.kagemusha.core.v1.ordinary-lineage-state-projection"
-)]
-pub struct KagemushaOrdinaryLineageStateProjectionV1 {
-    version: u16,
-    eq: Column,
-    ep: Column,
-}
-impl KagemushaOrdinaryLineageStateProjectionV1 {
-    /// Encode the actual already-admitted Native candidate's public projection, without secrets.
-    pub(crate) fn from_admitted_candidate(
-        candidate: &super::KagemushaAuthenticatedOrdinaryCashCandidateV1,
-    ) -> Result<Self> {
-        let p = candidate.public_inputs();
-        Self::from_fields(
-            p.recursive_semantic_public_instances::<Fp>()?,
-            p.recursive_semantic_public_instances::<Fq>()?,
-        )
-    }
-    fn from_fields(eq: Vec<Fp>, ep: Vec<Fq>) -> Result<Self> {
-        if eq.len() != CELLS || ep.len() != CELLS {
-            return reject();
-        }
-        let value = Self {
-            version: 1,
-            eq: core::array::from_fn(|i| eq[i].to_repr()),
-            ep: core::array::from_fn(|i| ep[i].to_repr()),
-        };
-        value.fields()?;
-        Ok(value)
-    }
-    /// Strict bounded decoder for public data; it performs no proof or authority admission.
-    /// # Errors
-    /// Refuses oversized, noncanonical, substituted parity or scalar encodings.
-    pub fn decode_original(original: &[u8]) -> Result<Self> {
-        if original.is_empty() || original.len() > PROJECTION_MAX {
-            return reject();
-        }
-        let value: Self = norito::decode_canonical_with_limits(
-            original,
-            norito::canonical_decode_limits(original.len()),
-        )
-        .map_err(|e| e.to_string())?;
-        if value.canonical_bytes()? != original {
-            return reject();
-        }
-        Ok(value)
-    }
-    /// Encode the sole bounded public data original; this does not authenticate the projection.
-    /// # Errors
-    /// Refuses invalid scalar/pair shape or a canonical codec failure.
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
-        self.fields()?;
-        let raw = norito::encode_canonical(self).map_err(|e| e.to_string())?;
-        if raw.len() > PROJECTION_MAX {
-            return reject();
-        }
-        Ok(raw)
-    }
-    fn fields(&self) -> Result<(Vec<Fp>, Vec<Fq>)> {
-        if self.version != 1 {
-            return reject();
-        }
-        let eq = self
-            .eq
-            .iter()
-            .map(|b| decode::<Fp>(*b).ok_or_else(rejection))
-            .collect::<Result<Vec<_>>>()?;
-        let ep = self
-            .ep
-            .iter()
-            .map(|b| decode::<Fq>(*b).ok_or_else(rejection))
-            .collect::<Result<Vec<_>>>()?;
-        for i in 0..CELLS {
-            if matches!(i, s::PREDECESSOR_STATE | s::SUCCESSOR_STATE) {
-                continue;
-            }
-            if self.eq[i] != self.ep[i] || self.eq[i][16..].iter().any(|b| *b != 0) {
-                return reject();
-            }
-        }
-        for (column, before, after) in [
-            (
-                &self.eq,
-                s::PREDECESSOR_EQ_COMPONENT_LO,
-                s::SUCCESSOR_EQ_COMPONENT_LO,
-            ),
-            (
-                &self.ep,
-                s::PREDECESSOR_EP_COMPONENT_LO,
-                s::SUCCESSOR_EP_COMPONENT_LO,
-            ),
-        ] {
-            if digest_at(column, before)? != column[s::PREDECESSOR_STATE]
-                || digest_at(column, after)? != column[s::SUCCESSOR_STATE]
-            {
-                return reject();
-            }
-        }
-        Ok((eq, ep))
-    }
-    fn digest(&self, low: usize) -> Result<DigestV1> {
-        digest_at(&self.eq, low)
-    }
-    fn integer(&self, at: usize) -> Result<u128> {
-        if at >= CELLS || self.eq[at][16..].iter().any(|b| *b != 0) {
-            return reject();
-        }
-        Ok(u128::from_le_bytes(
-            self.eq[at][..16].try_into().map_err(|_| rejection())?,
-        ))
-    }
-    fn require_digest(&self, low: usize, expected: DigestV1) -> Result<()> {
-        if self.digest(low)? != expected {
-            return reject();
-        }
-        Ok(())
-    }
-}
-
-/// Full public paired State original: exact semantic projection and both actual outer proofs/history.
-/// This is an untrusted canonical data carrier, never a decoded Native owner or DATA authority.
-#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::zk::kagemusha_v1_recursion::OrdinaryLineageStateOriginalV1",
-    frame = "iroha.kagemusha.core.v1.ordinary-lineage-state-original"
-)]
-pub struct KagemushaOrdinaryLineageStateOriginalV1 {
-    version: u16,
-    projection: KagemushaOrdinaryLineageStateProjectionV1,
-    proof: KagemushaPairedProofV1,
-}
-impl KagemushaOrdinaryLineageStateOriginalV1 {
-    /// Data-only full original from the zero selection's already-verified public instance.
-    /// The caller retains the actual Bootstrap owner; this does not convert its W into money.
-    pub(crate) fn from_bootstrap_public_inputs(
-        inputs: &super::KagemushaStateRelationPublicInputsV1,
-        proof: &KagemushaPairedProofV1,
-    ) -> Result<Self> {
-        let projection = KagemushaOrdinaryLineageStateProjectionV1::from_fields(
-            inputs.recursive_semantic_public_instances::<Fp>()?,
-            inputs.recursive_semantic_public_instances::<Fq>()?,
-        )?;
-        let value = Self {
-            version: 1,
-            projection,
-            proof: proof.clone(),
-        };
-        value.canonical_bytes()?;
-        Ok(value)
-    }
-
-    /// Copy public data from the genuine already-admitted Native candidate, granting no new loan.
-    pub(crate) fn from_admitted_candidate(
-        candidate: &super::KagemushaAuthenticatedOrdinaryCashCandidateV1,
-    ) -> Result<Self> {
-        let value = Self {
-            version: 1,
-            projection: KagemushaOrdinaryLineageStateProjectionV1::from_admitted_candidate(
-                candidate,
-            )?,
-            proof: candidate.proof().clone(),
-        };
-        value.canonical_bytes()?;
-        Ok(value)
-    }
-    /// Sole bounded complete public original, including exact current proofs and full histories.
-    /// # Errors
-    /// Refuses malformed version/scalars/proof envelope or noncanonical encoding.
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
-        if self.version != 1 {
-            return reject();
-        }
-        self.projection.fields()?;
-        self.proof
-            .validate_shape_for_semantic_digest(self.proof.semantic_digest)
-            .map_err(|e| e.to_string())?;
-        let raw = norito::encode_canonical(self).map_err(|e| e.to_string())?;
-        if raw.len() > 32 * 1024 {
-            return reject();
-        }
-        Ok(raw)
-    }
-    /// Strict bounded data decoder; callers must still admit all actual proofs and original joins.
-    /// # Errors
-    /// Refuses oversized, noncanonical or malformed public originals.
-    pub fn decode_original(raw: &[u8]) -> Result<Self> {
-        if raw.is_empty() || raw.len() > 32 * 1024 {
-            return reject();
-        }
-        let value: Self =
-            norito::decode_canonical_with_limits(raw, norito::canonical_decode_limits(raw.len()))
-                .map_err(|e| e.to_string())?;
-        if value.canonical_bytes()? != raw {
-            return reject();
-        }
-        Ok(value)
-    }
-}
 
 /// Verified mathematical lineage State; only the actual installed protocol verifier constructs it.
 /// It cannot become a Native selection or a DATA reservation without independent owner admission.
@@ -387,8 +204,8 @@ pub fn verify_ordinary_lineage_state_proof_v1(
         || challenge.normalized_guard_digest != normalized_digest
         || normalized.successor_hardware_epoch_generation != u128::from(c.hardware_epoch)
         || normalized.successor_hardware_epoch_id != epoch
-        || normalized.successor_hardware_policy_id != credential.static_binding_digest()
-        || normalized.successor_state_nonce_commitment != c.financial_authority_commitment
+        || normalized.successor_hardware_policy_id != release.provider_policy_root()
+        || normalized.successor_key_reference != c.app_key_reference
         || normalized.release_id != material.binding.release_id
         || normalized.successor_suite_id != material.binding.suite_id
         || normalized.successor_vk_digest != material.binding.vk_set_digest
@@ -399,6 +216,11 @@ pub fn verify_ordinary_lineage_state_proof_v1(
         return reject();
     }
     let zero = operation == 0;
+    require_ordinary_state_nonces(
+        normalized.predecessor_state_nonce_commitment,
+        normalized.successor_state_nonce_commitment,
+        zero,
+    )?;
     if (zero
         && (normalized.amount != 0
             || normalized.predecessor_state_commitment != [0; 32]
@@ -413,9 +235,8 @@ pub fn verify_ordinary_lineage_state_proof_v1(
                 || normalized.predecessor_hardware_epoch_id != epoch
                 || normalized.predecessor_hardware_epoch_generation
                     != u128::from(c.hardware_epoch)
-                || normalized.predecessor_hardware_policy_id != credential.static_binding_digest()
-                || normalized.predecessor_state_nonce_commitment
-                    != c.financial_authority_commitment
+                || normalized.predecessor_hardware_policy_id != release.provider_policy_root()
+                || normalized.predecessor_key_reference != c.app_key_reference
                 || normalized.predecessor_state_commitment == [0; 32]
                 || normalized.predecessor_logical_sequence.checked_add(1)
                     != Some(normalized.successor_logical_sequence)
@@ -487,6 +308,7 @@ pub fn verify_ordinary_lineage_state_proof_v1(
         prepared,
         authorization,
         challenge.operation_id,
+        None,
     )?;
     let (mut eq, mut ep) = projection.fields()?;
     let candidate_eq = canonical_terminal_authorization_candidate_digest_v1(&[eq.clone()])?;
@@ -522,6 +344,11 @@ fn operation_tag(operation: KagemushaOperationV1) -> Result<u8> {
         _ => reject(),
     }
 }
+#[derive(Clone, Copy)]
+struct IncomingStateSourceMetadata {
+    semantic: DigestV1,
+    proof_binding: DigestV1,
+}
 fn require_state_metadata(
     p: &KagemushaOrdinaryLineageStateProjectionV1,
     proof: &KagemushaPairedProofV1,
@@ -533,14 +360,23 @@ fn require_state_metadata(
     prepared: Option<&KagemushaOrdinaryPreparedOutgoingV1>,
     authorization: DigestV1,
     preparation_operation: DigestV1,
+    incoming: Option<IncomingStateSourceMetadata>,
 ) -> Result<()> {
-    let (reserved_eq, reserved_ep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+    let (reserved_eq, reserved_ep) = (
+        m.binding.outer_eq_protocol_digest,
+        m.binding.outer_ep_protocol_digest,
+    );
     let a = m.artifacts;
     if proof.eq_protocol_digest != m.binding.outer_eq_protocol_digest
         || proof.ep_protocol_digest != m.binding.outer_ep_protocol_digest
         || proof.guard_eq_credential_audit != reserved_eq
         || proof.guard_ep_credential_audit != reserved_ep
-        || p.integer(s::OPERATION)? != u128::from(operation_tag(n.operation)?)
+        || p.integer(s::OPERATION)?
+            != u128::from(match incoming {
+                Some(_) if n.operation == KagemushaOperationV1::MintFold => 1,
+                Some(_) => return reject(),
+                None => operation_tag(n.operation)?,
+            })
         || p.integer(s::AMOUNT)? != n.amount
         || p.integer(s::PROTOCOL_VERSION)? != 1
         || p.integer(s::ASSET_SCALE)? != u128::from(n.asset_scale)
@@ -586,8 +422,14 @@ fn require_state_metadata(
         (s::GUARD_EP_CREDENTIAL_AUDIT_LO, reserved_ep),
         (s::EQ_DEFERRED_AUDIT_LO, proof.eq_deferred_audit),
         (s::EP_DEFERRED_AUDIT_LO, proof.ep_deferred_audit),
-        (s::MINT_SEMANTIC_LO, [0; 32]),
-        (s::MINT_PROOF_BINDING_LO, [0; 32]),
+        (
+            s::MINT_SEMANTIC_LO,
+            incoming.map_or([0; 32], |v| v.semantic),
+        ),
+        (
+            s::MINT_PROOF_BINDING_LO,
+            incoming.map_or([0; 32], |v| v.proof_binding),
+        ),
         (s::RECEIVE_CREDIT_BINDING_LO, [0; 32]),
         (s::LIFECYCLE_LO, n.lifecycle_binding_digest),
         (
@@ -735,42 +577,33 @@ fn reject<T>() -> Result<T> {
     Err(rejection())
 }
 
+/// Private data-coordinate check; financial possession is a separate C/State proof equation.
+/// A hiding State nonce is never equated to the financial authority commitment.
+fn require_ordinary_state_nonces(before: DigestV1, after: DigestV1, zero: bool) -> Result<()> {
+    if after == [0; 32]
+        || (zero && before != [0; 32])
+        || (!zero && (before == [0; 32] || before == after))
+    {
+        return reject();
+    }
+    Ok(())
+}
 #[cfg(test)]
-mod tests {
+mod ordinary_nonce_tests {
     use super::*;
-    use ff::Field as _;
     #[test]
-    fn public_projection_rejects_noncanonical_shared_and_parity_component_cells() {
-        let value = KagemushaOrdinaryLineageStateProjectionV1::from_fields(
-            vec![Fp::ZERO; CELLS],
-            vec![Fq::ZERO; CELLS],
-        )
-        .unwrap();
-        let raw = value.canonical_bytes().unwrap();
-        assert!(KagemushaOrdinaryLineageStateProjectionV1::decode_original(&raw).is_ok());
-        for change in 0..5 {
-            let mut bad = value.clone();
-            match change {
-                0 => bad.version = 2,
-                1 => bad.ep[4][0] = 1,
-                2 => {
-                    bad.eq[4][16] = 1;
-                    bad.ep[4][16] = 1;
-                }
-                3 => bad.eq[s::PREDECESSOR_STATE][0] = 1,
-                _ => bad.ep[s::SUCCESSOR_STATE] = [0xff; 32],
-            }
-            assert!(bad.fields().is_err());
-        }
-        let mut trailing = raw;
-        trailing.push(0);
-        assert!(KagemushaOrdinaryLineageStateProjectionV1::decode_original(&trailing).is_err());
-        assert!(
-            KagemushaOrdinaryLineageStateProjectionV1::decode_original(&vec![
-                0;
-                PROJECTION_MAX + 1
-            ])
-            .is_err()
-        );
+    fn hiding_state_nonce_does_not_alias_financial_authority_or_repeat_predecessor() {
+        // Pure public coordinates, no Native owner or accepted State/proof fixture.
+        let financial_authority_commitment = [11; 32];
+        let initial_nonce = [12; 32];
+        let next_nonce = [13; 32];
+        assert_ne!(initial_nonce, financial_authority_commitment);
+        assert_ne!(next_nonce, financial_authority_commitment);
+        require_ordinary_state_nonces([0; 32], initial_nonce, true).unwrap();
+        require_ordinary_state_nonces(initial_nonce, next_nonce, false).unwrap();
+        assert!(require_ordinary_state_nonces([0; 32], next_nonce, false).is_err());
+        assert!(require_ordinary_state_nonces(initial_nonce, next_nonce, true).is_err());
+        assert!(require_ordinary_state_nonces(initial_nonce, initial_nonce, false).is_err());
+        assert!(require_ordinary_state_nonces(initial_nonce, [0; 32], false).is_err());
     }
 }

@@ -60,6 +60,13 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     try bridge.prepareAppEnrollmentPossession(originalEnrollmentChallengeHash: originalEnrollmentChallengeHash)
   }
 
+  /// Read W and S from this installed Native account session, without reserving or signing.
+  /// The opaque holder rechecks the same owner and exact original fields on every use.
+  public func currentWalletAccountSelection() throws
+    -> KagemushaNativeWalletAccountSelectionOriginalV1 {
+    try bridge.currentWalletAccountSelection()
+  }
+
   /// Read the existing native selector without creating an identity or reservation.
   public func originalEnrollmentID() throws -> Data { try bridge.originalEnrollmentID() }
 

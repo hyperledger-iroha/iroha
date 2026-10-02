@@ -222,7 +222,10 @@ mod tests {
         for (i, e) in extras.iter().enumerate() {
             let (column, point) = plan.opening_v1(i, z).unwrap();
             assert_eq!(e.group, column.group);
-            assert_eq!(e.base_column, column.column);
+            assert_eq!(
+                e.column,
+                aggregate::AggregateSupplementalColumnV1::Base(column.column)
+            );
             assert_eq!(e.point, point);
             assert_eq!(e.value, values[i]);
             assert_eq!(e.mix, mixes[i]);
@@ -232,7 +235,14 @@ mod tests {
     #[test]
     fn plan_and_all_openings_are_transcript_bound_before_mixing() {
         let (_, plan) = plan_v1(0);
-        let fresh = || new_main_transcript_after_profile_validation_v1(&[7; 32], [8; 32]).unwrap();
+        let fresh = || {
+            new_main_transcript_after_profile_validation_v1(
+                TEST_PROOF_INSTANCE_V1,
+                &[7; 32],
+                [8; 32],
+            )
+            .unwrap()
+        };
         let expected = plan.derive_alphas_v1(&mut fresh()).unwrap();
         assert_eq!(expected.len(), BLOCKS_V1);
         assert_eq!(expected.capacity(), BLOCKS_V1);
@@ -836,17 +846,6 @@ impl MainKeyJoinPlanV1 {
         }
         Ok(true)
     }
-    pub(super) fn derive_point_v1(
-        &self,
-        transcript: &mut TransparentTranscriptV1,
-        layout: &aggregate::AggregateProofLayoutV1,
-    ) -> Result<E, ZkX509StarkErrorV1> {
-        transcript
-            .challenge_fp4_where(b"zk-x509-key-join-deep-point-v1", |z| {
-                self.admissible_v1(z, layout).unwrap_or(false)
-            })
-            .map_err(map_transparent_error_v1)
-    }
     pub(super) fn absorb_openings_v1(
         values: &[E; OPENINGS_V1],
         transcript: &mut TransparentTranscriptV1,
@@ -937,7 +936,7 @@ impl MainKeyJoinPlanV1 {
             let (column, point) = self.opening_v1(i, z)?;
             openings.push(aggregate::AggregateSupplementalDeepOpeningV1 {
                 group: column.group,
-                base_column: column.column,
+                column: aggregate::AggregateSupplementalColumnV1::Base(column.column),
                 point,
                 value: values[i],
                 mix: mixes[i],

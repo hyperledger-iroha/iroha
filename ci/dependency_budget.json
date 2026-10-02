@@ -123,16 +123,68 @@
         "default_features": true,
         "features": [],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_musubi_service",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_musubi_service",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_musubi_service",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "sccp-rpc-default": {
@@ -149,21 +201,97 @@
       "sccp-wallet-default": {
         "default_features": true,
         "features": [],
-        "forbidden_features": {},
+        "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
+          "iroha_zkp_halo2": [
+            "bench",
+            "full",
+            "goldilocks_backend",
+            "parallel",
+            "schema-structural"
+          ]
+        },
         "forbidden_layers": [
           "node_execution"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_sccp_wallet",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_sccp_wallet",
+              "iroha_wallet",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_sccp_wallet",
+              "iroha_wallet",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "sdk-default": {
         "default_features": true,
         "features": [],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
+            "bench",
             "full",
+            "goldilocks_backend",
             "parallel",
-            "goldilocks_backend"
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
@@ -172,13 +300,50 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
+        "include_root_dev_dependencies": false,
         "package": "iroha",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
-      "sdk-kagemusha-ordinary-native": {
-        "default_features": true,
+      "sdk-tls-native": {
+        "default_features": false,
         "features": [
-          "kagemusha-ordinary-native"
+          "tls-native",
+          "gost",
+          "sm"
         ],
         "forbidden_features": {
           "iroha": [
@@ -218,14 +383,7 @@
         "package": "iroha",
         "package_contracts": {
           "iroha_core_zk": {
-            "features": [
-              "circuit-params",
-              "kagemusha-production-prover",
-              "proofs-halo2",
-              "zk-halo2",
-              "zk-halo2-ipa",
-              "zk-ipa-native"
-            ],
+            "features": [],
             "permitted_forbidden_features": [],
             "permitted_layer": "node_execution",
             "required_path": [
@@ -254,29 +412,6 @@
         },
         "target": "all"
       },
-      "sdk-tls-native": {
-        "default_features": false,
-        "features": [
-          "tls-native",
-          "gost",
-          "sm"
-        ],
-        "forbidden_features": {
-          "iroha_zkp_halo2": [
-            "full",
-            "parallel",
-            "goldilocks_backend"
-          ]
-        },
-        "forbidden_layers": [
-          "node_execution",
-          "node_configuration",
-          "telemetry_runtime",
-          "storage_runtime"
-        ],
-        "package": "iroha",
-        "target": "all"
-      },
       "sdk-tls-native-vendored": {
         "default_features": false,
         "features": [
@@ -285,10 +420,26 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
+            "bench",
             "full",
+            "goldilocks_backend",
             "parallel",
-            "goldilocks_backend"
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
@@ -297,7 +448,42 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
+        "include_root_dev_dependencies": false,
         "package": "iroha",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "sdk-tls-rustls-native-roots": {
@@ -308,10 +494,26 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
+            "bench",
             "full",
+            "goldilocks_backend",
             "parallel",
-            "goldilocks_backend"
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
@@ -320,7 +522,42 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
+        "include_root_dev_dependencies": false,
         "package": "iroha",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "sdk-tls-rustls-webpki-roots": {
@@ -331,10 +568,26 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
+            "bench",
             "full",
+            "goldilocks_backend",
             "parallel",
-            "goldilocks_backend"
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
@@ -343,7 +596,42 @@
           "telemetry_runtime",
           "storage_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
+        "include_root_dev_dependencies": false,
         "package": "iroha",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "service-model": {
@@ -365,17 +653,69 @@
         "default_features": true,
         "features": [],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution",
           "service_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_storage_client",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "storage-client-tls-native": {
@@ -386,17 +726,69 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution",
           "service_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_storage_client",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "storage-client-tls-native-vendored": {
@@ -407,17 +799,69 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution",
           "service_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_storage_client",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "storage-client-tls-rustls-native-roots": {
@@ -428,17 +872,69 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution",
           "service_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_storage_client",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "storage-client-tls-rustls-webpki-roots": {
@@ -449,17 +945,69 @@
           "sm"
         ],
         "forbidden_features": {
+          "iroha": [
+            "dev-tools",
+            "test-fixtures",
+            "test-network-private-settlement-evidence"
+          ],
+          "iroha_core_zk": [
+            "default",
+            "halo2-dev-tests",
+            "kagemusha-real-proof-harness",
+            "proofs-stark",
+            "test-utils",
+            "zk-stark",
+            "zk-tests"
+          ],
           "iroha_zkp_halo2": [
             "full",
             "parallel",
-            "goldilocks_backend"
+            "goldilocks_backend",
+            "bench",
+            "schema-structural"
           ]
         },
         "forbidden_layers": [
           "node_execution",
           "service_runtime"
         ],
+        "forbidden_packages": [
+          "iroha_p2p",
+          "kotodama_lang",
+          "kotodama_toolchain"
+        ],
         "package": "iroha_storage_client",
+        "package_contracts": {
+          "iroha_core_zk": {
+            "features": [],
+            "permitted_forbidden_features": [],
+            "permitted_layer": "node_execution",
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk"
+            ]
+          },
+          "iroha_zkp_halo2": {
+            "features": [
+              "default",
+              "full",
+              "model-primitives",
+              "parallel"
+            ],
+            "permitted_forbidden_features": [
+              "full",
+              "parallel"
+            ],
+            "permitted_layer": null,
+            "required_path": [
+              "iroha_storage_client",
+              "iroha",
+              "iroha_core_zk",
+              "iroha_zkp_halo2"
+            ]
+          }
+        },
         "target": "all"
       },
       "torii-wire": {
@@ -555,7 +1103,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:88adcace78d12ecc9edd735522c66ba6f5089d6212f5eaf9402b08014534f9d1",
+    "manifest_fingerprint": "sha256:1e0f10c934909c220af8595c646855962969cb35fd1ed5d936292a7984c33f03",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -588,12 +1136,12 @@
         "declared_local_packages": 75,
         "declared_path_packages": 4,
         "declared_workspace_packages": 71,
-        "required_dependency_edges": 850,
-        "required_external_dependency_edges": 493,
+        "required_dependency_edges": 856,
+        "required_external_dependency_edges": 495,
         "required_external_packages": 129,
-        "required_local_packages": 71,
+        "required_local_packages": 72,
         "required_path_packages": 4,
-        "required_workspace_packages": 67
+        "required_workspace_packages": 68
       },
       "roots": [
         "iroha_cli"
@@ -648,12 +1196,12 @@
         "declared_local_packages": 43,
         "declared_path_packages": 4,
         "declared_workspace_packages": 39,
-        "required_dependency_edges": 284,
-        "required_external_dependency_edges": 197,
-        "required_external_packages": 84,
-        "required_local_packages": 33,
-        "required_path_packages": 3,
-        "required_workspace_packages": 30
+        "required_dependency_edges": 338,
+        "required_external_dependency_edges": 228,
+        "required_external_packages": 90,
+        "required_local_packages": 39,
+        "required_path_packages": 4,
+        "required_workspace_packages": 35
       },
       "roots": [
         "iroha"
@@ -668,12 +1216,12 @@
         "declared_local_packages": 75,
         "declared_path_packages": 4,
         "declared_workspace_packages": 71,
-        "required_dependency_edges": 861,
-        "required_external_dependency_edges": 514,
+        "required_dependency_edges": 867,
+        "required_external_dependency_edges": 516,
         "required_external_packages": 136,
-        "required_local_packages": 69,
+        "required_local_packages": 70,
         "required_path_packages": 4,
-        "required_workspace_packages": 65
+        "required_workspace_packages": 66
       },
       "roots": [
         "irohad"
@@ -682,18 +1230,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1987,
-        "declared_external_dependency_edges": 1101,
+        "declared_dependency_edges": 2018,
+        "declared_external_dependency_edges": 1126,
         "declared_external_packages": 230,
-        "declared_local_packages": 115,
+        "declared_local_packages": 117,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 111,
-        "required_dependency_edges": 1817,
-        "required_external_dependency_edges": 970,
+        "declared_workspace_packages": 113,
+        "required_dependency_edges": 1850,
+        "required_external_dependency_edges": 995,
         "required_external_packages": 183,
-        "required_local_packages": 115,
+        "required_local_packages": 117,
         "required_path_packages": 4,
-        "required_workspace_packages": 111
+        "required_workspace_packages": 113
       },
       "roots": [
         "*"

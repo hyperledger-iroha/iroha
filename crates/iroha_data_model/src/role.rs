@@ -438,3 +438,85 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Role {
         Ok((value, bytes.len()))
     }
 }
+
+/// [`RoleId`] with owner [`AccountId`] attached to it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::role::RoleIdWithOwner")]
+#[derive(
+    Debug,
+    Clone,
+    derive_more::Constructor,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    norito::codec::Decode,
+    norito::codec::Encode,
+    iroha_schema::IntoSchema,
+    crate::DeriveJsonDeserialize,
+    crate::DeriveJsonSerialize,
+)]
+pub struct RoleIdWithOwner {
+    /// [`AccountId`] of the owner.
+    pub account: AccountId,
+    /// [`RoleId`]  of the given role.
+    pub id: RoleId,
+}
+impl core::fmt::Display for RoleIdWithOwner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}|{}", self.account, self.id)
+    }
+}
+impl core::str::FromStr for RoleIdWithOwner {
+    type Err = iroha_model_base::error::ParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        const SEPARATOR: char = '|';
+        let (account_raw, role_raw) =
+            s.split_once(SEPARATOR)
+                .ok_or(iroha_model_base::error::ParseError::new(
+                    "RoleIdWithOwner must be formatted as `account|role`",
+                ))?;
+        let account = AccountId::parse_encoded(account_raw).map_err(|_| {
+            iroha_model_base::error::ParseError::new("Invalid account component in RoleIdWithOwner")
+        })?;
+        let id = role_raw.parse().map_err(|_| {
+            iroha_model_base::error::ParseError::new("Invalid role component in RoleIdWithOwner")
+        })?;
+        Ok(RoleIdWithOwner { account, id })
+    }
+}
+impl norito::json::JsonKeyCodec for RoleIdWithOwner {
+    fn encode_json_key(&self, out: &mut String) {
+        norito::json::write_json_string(&self.to_string(), out);
+    }
+    fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
+        encoded
+            .parse::<RoleIdWithOwner>()
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod native_assignment_tests {
+    use super::*;
+    #[test]
+    fn sole_native_assignment_key_roundtrips_and_binds_account_and_role() {
+        let account = AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![42; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let key = RoleIdWithOwner::new(account.clone(), "ordinary_mint_purpose".parse().unwrap());
+        let raw = norito::encode_canonical(&key).unwrap();
+        let decoded: RoleIdWithOwner = norito::decode_canonical(&raw).unwrap();
+        assert_eq!(decoded, key);
+        assert_eq!(key.to_string().parse::<RoleIdWithOwner>().unwrap(), key);
+        let changed = RoleIdWithOwner::new(account, "other_role".parse().unwrap());
+        assert_ne!(
+            crate::sumeragi_finality::world_state_value_hash_v1(&key).unwrap(),
+            crate::sumeragi_finality::world_state_value_hash_v1(&changed).unwrap()
+        );
+        assert!("no_separator".parse::<RoleIdWithOwner>().is_err());
+    }
+}

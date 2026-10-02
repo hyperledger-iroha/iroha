@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .native_time_interval import NativeTimeInterval
 from .attestation import (AttestationRejected, children, der_one,
                           oid, positive_integer, primitive, require)
 from .play_integrity import PlayIntegrityPolicy, _NoRedirect, _unique
@@ -139,13 +140,13 @@ class GoogleServiceAccountTokenProvider:
     Use ``close`` at deployment shutdown. No credential path is accepted.
     """
     def __init__(self, *, public_policy_original: bytes, native_policy: PlayIntegrityPolicy,
-                 credential_fd: int, trusted_time_ms: Callable[[], int],
+                 credential_fd: int, trusted_time_interval: Callable[[], NativeTimeInterval],
                  openssl_path: Path, credential_owner_uid: int | None = None) -> None:
         self.selection = select_google_decoder(public_policy_original, native_policy)
         self._owner_uid = os.getuid() if credential_owner_uid is None else credential_owner_uid
         require(type(self._owner_uid) is int and self._owner_uid in (0,os.getuid())
                 and type(credential_fd) is int and credential_fd >= 3
-                and callable(trusted_time_ms) and openssl_path.is_absolute()
+                and callable(trusted_time_interval) and openssl_path.is_absolute()
                 and openssl_path.is_file(), "Google OAuth custody absent")
         # Code custody precedes even duplication/parsing of private credential
         # bytes. It is a local original check, not Native release admission.
@@ -153,7 +154,7 @@ class GoogleServiceAccountTokenProvider:
         try:self._fd = os.dup(credential_fd)
         except Exception:
             self._crypto_code.close();raise
-        self._clock = trusted_time_ms
+        self._clock = trusted_time_interval
         self._openssl = openssl_path
         self._lock = threading.Lock()
         self._access: str | None = None
@@ -219,10 +220,13 @@ class GoogleServiceAccountTokenProvider:
             require(hashlib.sha256(original).digest() == self._credential_digest,
                     "Google OAuth credential original changed")
             credential = self._credential(original)
-            now_ms = self._clock()
-            require(type(now_ms) is int and 0 < now_ms < (1 << 64), "invalid Google OAuth trusted time")
+            interval = self._clock()
+            require(type(interval) is NativeTimeInterval, "Google OAuth Native interval absent")
+            interval.validate()
+            now_ms = interval.lower_at_ms
             now = now_ms // 1000
-            if self._access is not None and self._issued <= now < self._refresh:
+            upper = interval.upper_at_ms // 1000
+            if self._access is not None and self._issued <= now <= upper < self._refresh:
                 return self._access
             self._access = None
             header = {"alg": "RS256", "typ": "JWT", "kid": credential["private_key_id"]}
@@ -260,9 +264,11 @@ class GoogleServiceAccountTokenProvider:
                         "invalid Google OAuth access token")
                 # Network wait may cross clock boundaries; never extend expiry
                 # from the response time or reuse a token after clock rollback.
-                after_ms = self._clock()
-                require(type(after_ms) is int and now_ms <= after_ms < (1 << 64)
-                        and after_ms // 1000 < now + value["expires_in"] - 60,
+                after = self._clock()
+                require(type(after) is NativeTimeInterval, "Google OAuth Native interval absent")
+                after.validate()
+                require(now_ms <= after.lower_at_ms
+                        and after.upper_at_ms // 1000 < now + value["expires_in"] - 60,
                         "Google OAuth trusted time changed")
                 require(self._stat() == self._metadata
                         and hashlib.sha256(self._read()).digest() == self._credential_digest,

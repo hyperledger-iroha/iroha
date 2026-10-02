@@ -2875,7 +2875,8 @@ The core remains one sans-IO state machine with explicit protocol and custody ow
 Changes preserve authenticated source binding, exact quorums, persist-before-effect ordering,
 deterministic execution and bounded resources. Specification traceability and quorum checks
 run with the crate tests; deterministic simulator scenarios and the §13.4 mutation gate
-exercise safety and liveness. Whole-node and network qualification remains required for release.
+exercise safety and liveness. Whole-node and network qualification is optional engineering
+evidence, never a release-signing or deployment prerequisite; governance owns deployment policy.
 
 ### 12.7 Reading the committed chain (application layer)
 
@@ -2941,8 +2942,8 @@ Sumeragi owns the signed layout, author/source rules, canonical availability evi
 custody transitions. Its core includes those protocol rules; the existing
 `iroha_primitives::erasure::rs16::compact` owner implements only checked codec geometry,
 encoding and reconstruction. The native driver's bounded worker performs expensive jobs
-outside the Core event loop. This integrated candidate still needs whole-node/network
-qualification before release.
+outside the Core event loop. Whole-node/network qualification of this integrated candidate
+remains open as engineering evidence, without blocking release signing or deployment.
 
 **Authenticated layout.** `EpochConfig.da_layout` is mandatory and comes from authenticated
 application state, never from received evidence or local defaults. Global epoch contexts bind
@@ -3516,8 +3517,10 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
   and elapsed off-chain runtime or a missing soak verdict is not a Sumeragi protocol or
   node-admission rule.
   Operators still enforce signed native control authority, authenticated genesis and committee,
-  safety-record provenance and custody, and live readiness/write/restart checks. Optional
-  diagnostics compute O-AGR, O-SIGN, O-LIVE and O-PERF from node logs.
+  safety-record provenance and custody, and report actual service readiness. Write, restart,
+  pulse-crossing and epoch-boundary exercises are optional diagnostics, never signing or
+  deployment prerequisites. Optional diagnostics compute O-AGR, O-SIGN, O-LIVE and O-PERF
+  from node logs.
 
 ---
 

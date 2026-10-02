@@ -361,7 +361,7 @@ fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert_eq!(
             block.execute_ordinary_output_plan(&source, None),
-            Err(ExecutionAttemptError::Deferred(reason.into()))
+            Err(ExecutionOutputAttemptError::Deferred(reason.into()))
         );
         assert!(block.retained_execution_outputs_for_test().is_err());
         assert_eq!(

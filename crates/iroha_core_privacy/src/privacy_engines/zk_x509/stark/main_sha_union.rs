@@ -33,6 +33,7 @@ pub(super) struct MainShaUnionPlanV1 {
 
 impl MainShaUnionPlanV1 {
     /// Conservative simultaneous public plan, alpha and temporary-copy charge.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) const fn public_owner_charge_v1() -> usize {
         3 * core::mem::size_of::<Self>()
             + core::mem::size_of::<Vec<E>>()

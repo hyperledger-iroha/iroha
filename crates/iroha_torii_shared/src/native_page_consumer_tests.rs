@@ -125,7 +125,10 @@ fn parliament_native_page_promotes_only_verified_matching_checkpoint() {
 fn validation_fee_native_page_rejects_unbound_witness_without_promotion() {
     let (fixture, checkpoint, evaluated) = native_page_inputs();
     let original_checkpoint = checkpoint.encode_canonical().unwrap();
-    let commitment = ValidationFeePolicySnapshotCommitmentV1::from_registry(2, None);
+    let evaluated_timestamp_ms = u64::try_from(evaluated.header().creation_time().as_millis())
+        .expect("fixture timestamp fits u64");
+    let commitment =
+        ValidationFeePolicySnapshotCommitmentV1::from_registry(2, evaluated_timestamp_ms, None);
     let policy_witness = ValidationFeePolicyWitnessProofV1 {
         key: VALIDATION_FEE_POLICY_WITNESS_KEY_V1.to_vec(),
         value: norito::encode_canonical(&commitment).unwrap(),

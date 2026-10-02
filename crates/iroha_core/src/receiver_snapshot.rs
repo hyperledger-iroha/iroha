@@ -493,6 +493,69 @@ pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
     }
     Ok((proof, ordinary_root))
 }
+/// Retain the complete native fee corpus and its fixed root/count inclusion proof.
+pub(crate) fn fee_evidence_block_proof_v1(
+    witness: &ExecWitness,
+) -> Result<
+    (
+        iroha_data_model::fee_evidence::FeeEvidenceBlockProofV1,
+        Hash,
+    ),
+    String,
+> {
+    use iroha_data_model::{
+        execution_witness::{FEE_EVIDENCE_RECORD_TAG_V1, FEE_EVIDENCE_WITNESS_KEY_V1},
+        fee_evidence::{FeeEvidenceBlockProofV1, FeeEvidenceRecordV1, FeeEvidenceWitnessProofV1},
+    };
+    let mut ordinary = BTreeMap::new();
+    let mut records = Vec::new();
+    for entry in &witness.writes {
+        if ordinary
+            .insert(entry.key.clone(), entry.value.clone())
+            .is_some()
+        {
+            return Err("duplicate ordinary witness key in native fee evidence".into());
+        }
+        if entry.key.first() == Some(&FEE_EVIDENCE_RECORD_TAG_V1) {
+            let record: FeeEvidenceRecordV1 = norito::decode_canonical(&entry.value)
+                .map_err(|e| format!("noncanonical native fee record: {e}"))?;
+            let mut expected_key = vec![FEE_EVIDENCE_RECORD_TAG_V1];
+            expected_key.extend_from_slice(Hash::new(record.key.as_ref().as_bytes()).as_ref());
+            if entry.key != expected_key {
+                return Err("native fee witness key does not bind its record".into());
+            }
+            records.push(record);
+        }
+    }
+    records.sort_by(|a, b| a.key.cmp(&b.key));
+    let ordinary = ordinary
+        .into_iter()
+        .map(|(key, value)| KvPair::new(key, value))
+        .collect::<Vec<_>>();
+    let target = ordinary
+        .iter()
+        .find(|entry| entry.key.as_slice() == FEE_EVIDENCE_WITNESS_KEY_V1)
+        .ok_or_else(|| "native fee evidence root/count write is absent".to_owned())?;
+    let root = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
+    let proof = FeeEvidenceBlockProofV1 {
+        snapshot_witness: FeeEvidenceWitnessProofV1 {
+            key: target.key.clone(),
+            value: target.value.clone(),
+            siblings: sparse_smt_siblings(&ordinary, target)?,
+        },
+        records,
+    };
+    if !proof.verify(root) {
+        return Err("native fee corpus differs from the authenticated root/count".into());
+    }
+    if norito::to_bytes(&proof).map_err(|e| e.to_string())?.len()
+        > iroha_data_model::fee_evidence::MAX_FEE_EVIDENCE_BLOCK_BYTES_V1
+    {
+        return Err("native fee corpus exceeds the bounded durable byte budget".into());
+    }
+    Ok((proof, root))
+}
+
 /// Build a fixed-depth ordinary-write proof for an already selected exact key/value.
 pub(crate) fn sparse_smt_siblings(inputs: &[KvPair], target: &KvPair) -> Result<Vec<Hash>, String> {
     let empty = Hash::new([]);
@@ -908,5 +971,109 @@ mod tests {
             };
             assert!(kagemusha_reserve_receipt_witnesses_v1(&witness).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod native_fee_evidence_tests {
+    use super::*;
+    use iroha_data_model::{block::consensus::ExecKv, execution_witness::*, fee_evidence::*};
+    #[test]
+    fn native_fee_complete_corpus_and_compact_membership_detect_tampering() {
+        let account_id = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![27; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let mut record = FeeEvidenceRecordV1 {
+            key: "retail_fee_receipts_v1/test".parse().unwrap(),
+            recorded_at_height: 19,
+            payload: FeeEvidencePayloadV1::RetailReceipt(
+                iroha_data_model::validation_fee::RetailFeeReceiptV1 {
+                    wallet_id: account_id.clone(),
+                    sequence: 1,
+                    previous_receipt_hash: None,
+                    receipt_id: [27; 32],
+                    account_id,
+                    kind: iroha_data_model::validation_fee::RetailFeeReceiptKindV1::Maintenance,
+                    billing_month_start_ms: 1_793_430_000_000,
+                    policy_revision: 1,
+                    policy_hash: [23; 32],
+                    scheduled_minor: 100,
+                    collected_minor: 30,
+                    waived_minor: 70,
+                    payment_count: 0,
+                    source_transaction_hash: None,
+                    effective_at_ms: Some(1_796_022_000_000),
+                    recorded_at_height: 19,
+                    assessment: None,
+                },
+            ),
+        };
+        if let FeeEvidencePayloadV1::RetailReceipt(r) = &record.payload {
+            record.key =
+                iroha_data_model::validation_fee::retail_fee_receipt_state_key_v1(r).unwrap();
+        }
+        let snapshot = FeeEvidenceSnapshotV1::from_records(19, &[record.clone()]).unwrap();
+        let mut record_key = vec![FEE_EVIDENCE_RECORD_TAG_V1];
+        record_key.extend_from_slice(Hash::new(record.key.as_ref().as_bytes()).as_ref());
+        let witness = ExecWitness {
+            writes: vec![
+                ExecKv {
+                    key: FEE_EVIDENCE_WITNESS_KEY_V1.to_vec(),
+                    value: norito::to_bytes(&snapshot).unwrap(),
+                },
+                ExecKv {
+                    key: record_key,
+                    value: norito::to_bytes(&record).unwrap(),
+                },
+                ExecKv {
+                    key: b"ordinary-user-write".to_vec(),
+                    value: vec![9],
+                },
+            ],
+            ..ExecWitness::default()
+        };
+        let (proof, root) = fee_evidence_block_proof_v1(&witness).unwrap();
+        assert!(proof.verify(root));
+        let compact = proof.record_proof(&record.key).unwrap();
+        assert!(compact.verify(root));
+        let decoded =
+            norito::decode_canonical::<FeeEvidenceBlockProofV1>(&norito::to_bytes(&proof).unwrap())
+                .unwrap();
+        assert_eq!(decoded, proof);
+        let mut omitted = proof.clone();
+        omitted.records.clear();
+        assert!(!omitted.verify(root));
+        let mut corrupt = compact.clone();
+        corrupt.record.recorded_at_height += 1;
+        assert!(!corrupt.verify(root));
+        let mut corrupt = compact;
+        corrupt.snapshot_witness.siblings[0] = Hash::new(b"wrong");
+        assert!(!corrupt.verify(root));
+        assert!(!proof.verify(Hash::new(b"other-block")));
+        let mut omitted = witness.clone();
+        omitted.writes.remove(1);
+        assert!(fee_evidence_block_proof_v1(&omitted).is_err());
+        let mut duplicate = witness.clone();
+        duplicate.writes.push(duplicate.writes[0].clone());
+        assert!(fee_evidence_block_proof_v1(&duplicate).is_err());
+        let mut wrong_key = witness;
+        wrong_key.writes[1].key[1] ^= 1;
+        assert!(fee_evidence_block_proof_v1(&wrong_key).is_err());
+    }
+    #[test]
+    fn native_fee_empty_block_still_requires_an_authenticated_zero_count() {
+        let snapshot = FeeEvidenceSnapshotV1::from_records(19, &[]).unwrap();
+        let witness = ExecWitness {
+            writes: vec![ExecKv {
+                key: FEE_EVIDENCE_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&snapshot).unwrap(),
+            }],
+            ..ExecWitness::default()
+        };
+        let (proof, root) = fee_evidence_block_proof_v1(&witness).unwrap();
+        assert!(proof.verify(root));
+        assert!(fee_evidence_block_proof_v1(&ExecWitness::default()).is_err());
     }
 }

@@ -3240,3 +3240,149 @@ fn permission_fanout_rejects_missing_or_nonprogressing_exhaustion_evidence() {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
+
+#[test]
+fn contract_target_read_route_preserves_absent_and_active_targets() {
+    let authority = routed_read_test_account(0xa1);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        world_with_account(&authority),
+        iroha_config::parameters::actual::Nexus::default(),
+    );
+    assert_eq!(
+        torii_contract_target_read_route(app.as_ref(), None, None).unwrap(),
+        None
+    );
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        app.state.network_id_ref(),
+        &authority,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address under actual signed genesis");
+    let route = torii_contract_target_read_route(app.as_ref(), Some(&address), None)
+        .expect("active target route")
+        .expect("explicit contract target retains its route");
+    assert_eq!(
+        route,
+        resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL).unwrap()
+    );
+    assert_eq!(route.dataspace_id, DataSpaceId::UNIVERSAL);
+    assert!(torii_lane_active_for_routing(app.as_ref(), route.lane_id));
+}
+
+#[tokio::test]
+async fn contract_state_read_refuses_known_dataspace_without_active_lane_before_local_collection() {
+    let authority = routed_read_test_account(0xa2);
+    let target = DataSpaceId::new(10);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let dataspaces = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: target,
+            alias: "contract-target".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("configured target dataspace without a matching lane");
+    nexus.dataspace_catalog = dataspaces.clone();
+    nexus.configured_dataspace_catalog = dataspaces;
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_and_nexus_for_test(
+        world_with_account(&authority),
+        nexus,
+    );
+    assert!(matches!(
+        resolve_torii_route_for_dataspace_id(app.as_ref(), target),
+        Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id }) if dataspace_id == target
+    ));
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        app.state.network_id_ref(),
+        &authority,
+        0,
+        target,
+    )
+    .expect("contract address binds original network and unavailable target");
+    let address_literal = address.to_string();
+    let query = || routing::ContractStateQuery {
+        contract_address: Some(address_literal.clone()),
+        path: Some("Counter".to_owned()),
+        ..Default::default()
+    };
+    // The local storage reader deliberately owns no lane routing decision.
+    // Its successful empty read proves why the outer target barrier must refuse first.
+    let JsonBody(local) =
+        routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(query()))
+            .await
+            .expect("local component can read the scoped absent key without choosing a lane");
+    assert_eq!(
+        local.contract_address.as_deref(),
+        Some(address_literal.as_str())
+    );
+    assert_eq!(local.path.as_deref(), Some("Counter"));
+    let route_error = torii_contract_target_read_route(app.as_ref(), Some(&address), None)
+        .expect_err("known unavailable target cannot become absent/default target");
+    assert!(matches!(
+        route_error,
+        Error::AppServiceUnavailable {
+            code: "route_unavailable",
+            ..
+        }
+    ));
+    let error = handler_get_contract_state(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxQuery(query()),
+    )
+    .await
+    .expect_err("explicit unroutable contract state request must not fall back to local storage");
+    assert!(matches!(
+        &error,
+        Error::AppServiceUnavailable {
+            code: "route_unavailable",
+            ..
+        }
+    ));
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers().get("x-iroha-reject-code").unwrap(),
+        "route_unavailable"
+    );
+    let envelope = response_error(response).await;
+    assert_eq!(envelope.code(), "route_unavailable");
+}
+
+#[test]
+fn contract_target_read_route_refuses_present_but_inactive_lane() {
+    let authority = routed_read_test_account(0xa3);
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    // This deliberately corrupt structural fixture exercises routing activity only,
+    // and claims neither signed genesis nor authenticated native finality.
+    let (lane, target) = configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+    assert!(
+        app.state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|entry| entry.id == lane && entry.dataspace_id == target)
+    );
+    assert!(!torii_lane_active_for_routing(app.as_ref(), lane));
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        app.state.network_id_ref(),
+        &authority,
+        0,
+        target,
+    )
+    .expect("structural target address");
+    let error = torii_contract_target_read_route(app.as_ref(), Some(&address), None)
+        .expect_err("inactive physical lane cannot authorize local contract fallback");
+    assert!(matches!(
+        error,
+        Error::AppServiceUnavailable {
+            code: "route_unavailable",
+            ..
+        }
+    ));
+}

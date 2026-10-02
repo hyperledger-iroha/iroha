@@ -18,6 +18,8 @@ pub(crate) mod retained_commitment;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "aggregate_stark/streaming_commitment.rs"]
 mod streaming_commitment;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::transparent_stark::map_digest_stream_error_v1;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     PrivacyOuterDigestV1, PrivacyOuterMerkleTreeV1, TransparentStarkDigestContextV1,
@@ -29,12 +31,10 @@ use super::transparent_stark::{
 };
 #[cfg(test)]
 use super::transparent_stark::{
-    ReplayableTraceMaskV1, masked_trace_coefficients_on_coset_v1,
+    ReplayableTraceMaskV1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, masked_trace_lde_column_with_mask_v1,
     privacy_outer_last_field_stream_v1, sample_trace_mask_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::transparent_stark::{goldilocks_ifft_v1, map_digest_stream_error_v1};
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
@@ -219,6 +219,27 @@ impl AggregateStarkParametersV1 {
             .checked_mul(2)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
+    /// Exact reviewed CA padding reduction. This does not offer arbitrary
+    /// relation layouts a larger native-to-LDE ratio. Thirteen trace chunks
+    /// contain base695/aux128; four separate chunks contain composition values.
+    fn compact_ca_private_padding_v1(self) -> bool {
+        self.proof_magic == *b"X5C2"
+            && self.proof_version == 1
+            && self.fri_commitment_layout == AggregateFriCommitmentLayoutV1::Paired
+            && self.security_lanes == 1
+            && self.query_count == 136
+            && self.blowup_log2 == 4
+            && self.terminal_log2 == 10
+            && self.terminal_degree_bound == 143
+            && self.composition_degree_chunks == 4
+            && self.minimum_trace_log2 == 12
+            && self.maximum_trace_log2 == 12
+            && self.maximum_trace_groups == 1
+            && self.maximum_segment_instances == 13
+            && self.maximum_base_columns_per_instance == 64
+            && self.maximum_aux_columns_per_instance == 64
+            && self.maximum_proof_bytes == 1_498_816
+    }
     /// Validate every closed proof-system dimension.
     pub(crate) fn validate(self) -> Result<(), AggregateStarkErrorV1> {
         let terminal_size = self.terminal_size()?;
@@ -233,7 +254,11 @@ impl AggregateStarkParametersV1 {
             || self.query_count
                 != usize::try_from(FASTPQ_QUERY_COUNT_V1)
                     .expect("the frozen query count fits usize")
-            || self.blowup_log2 != 3
+            || if self.proof_magic == *b"X5C2" {
+                !self.compact_ca_private_padding_v1()
+            } else {
+                self.blowup_log2 != 3
+            }
             || self.terminal_degree_bound >= terminal_size
             || self.composition_degree_chunks == 0
             || self.composition_degree_chunks > usize::from(u16::MAX)
@@ -539,6 +564,19 @@ impl AggregateProofLayoutV1 {
         parameters: AggregateStarkParametersV1,
     ) -> Result<(), AggregateStarkErrorV1> {
         parameters.validate()?;
+        if parameters.compact_ca_private_padding_v1()
+            && (self.trace_layout != AggregateTraceLayoutV1::GroupedCurrent
+                || self.common_lde_log2 != 16
+                || self.trace_groups.as_slice()
+                    != [AggregateTraceGroupLayoutV1 {
+                        native_trace_log2: 12,
+                        base_width: 695,
+                        aux_width: 128,
+                        segment_instances: 13,
+                    }])
+        {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
         let fri_mask_coefficients = self.fri_mask_coefficient_count(parameters)?;
         let minimum_fri_mask_coefficients =
             self.minimum_protocol_fri_mask_coefficients(parameters)?;
@@ -618,25 +656,26 @@ impl AggregateProofLayoutV1 {
 }
 /// Exact release certificate for the affine-batched binary-FRI theorem.
 ///
-/// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*`
-/// represents the exact code rate, and `affine_arities` is the complete list
-/// whose sum appears in the commitment-error term. The remaining fields bind
+/// `affine_coefficient_*` represents the affine-batching coefficient `3/2`
+/// replacing the general theorem's `L - 1/2`. `rho_*` bounds the code rate.
+/// `binary_fold_arity` repeated `fold_count` times specifies the complete
+/// reduction schedule whose arity sum enters the commitment error. Other fields bind
 /// the smooth domain, Fp4 field-size lower bound, fold/terminal geometry, and
 /// the implementation's distinct-query schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriTheorem2CertificateV1 {
-    /// Numerator of `L - 1`.
-    pub(crate) l_minus_one_numerator: u8,
-    /// Denominator of `L - 1`.
-    pub(crate) l_minus_one_denominator: u8,
+    /// Numerator of the affine-batching coefficient `3/2`.
+    pub(crate) affine_coefficient_numerator: u8,
+    /// Denominator of the affine-batching coefficient `3/2`.
+    pub(crate) affine_coefficient_denominator: u8,
     /// Affine batching parameter `m`.
     pub(crate) batching_parameter_m: u8,
     /// Numerator of a proved upper bound on the code rate.
     pub(crate) rho_numerator: u8,
     /// Denominator of a proved upper bound on the code rate.
     pub(crate) rho_denominator: u8,
-    /// Affine arities whose sum occurs in the theorem.
-    pub(crate) affine_arities: [u8; 3],
+    /// Arity of every reduction in the complete binary fold schedule.
+    pub(crate) binary_fold_arity: u8,
     /// Binary logarithm of the evaluation domain `|D|`.
     pub(crate) domain_log2: u8,
     /// Proven lower-bound exponent for `|F_{p^4}|`.
@@ -759,19 +798,19 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     let terminal_size = parameters.terminal_size()?;
     let fold_count = layout.fri_rounds(parameters)?;
     let degree_coefficients = layout.fri_degree_cap(parameters)?;
-    let affine_arity_sum = certificate
-        .affine_arities
-        .iter()
-        .try_fold(0_u16, |sum, arity| sum.checked_add(u16::from(*arity)))
+    let fold_arity_sum = u16::from(certificate.binary_fold_arity)
+        .checked_mul(u16::from(certificate.fold_count))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
     if parameters.security_lanes != 1
-        || certificate.l_minus_one_numerator != 3
-        || certificate.l_minus_one_denominator != 2
+        || certificate.affine_coefficient_numerator != 3
+        || certificate.affine_coefficient_denominator != 2
         || certificate.batching_parameter_m != 3
         || certificate.rho_numerator != 1
         || certificate.rho_denominator != 7
-        || certificate.affine_arities != [2, 2, 2]
-        || affine_arity_sum != 6
+        || certificate.binary_fold_arity != 2
+        || fold_count == 0
+        || fold_count > 12
+        || usize::from(fold_arity_sum) != 2 * fold_count
         || certificate.domain_log2 != layout.common_lde_log2
         || certificate.extension_field_lower_bound_bits != 252
         || certificate.base_field_two_adicity != 32
@@ -795,6 +834,10 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
             .checked_mul(usize::from(certificate.rho_denominator))
             .zip(terminal_size.checked_mul(usize::from(certificate.rho_numerator)))
             .is_none_or(|(actual, upper)| actual > upper)
+        // The loose algebraic constant below uses 1/8 <= the actual rate.
+        || degree_coefficients
+            .checked_mul(8)
+            .is_none_or(|lower| lower < domain_size)
         || degree_coefficients
             .checked_mul(usize::from(certificate.rho_denominator))
             .zip(domain_size.checked_mul(usize::from(certificate.rho_numerator)))
@@ -847,8 +890,11 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     // collision or Fiat--Shamir/QROM composition reductions.
     // Exact canonical constants conservatively bound the first commitment
     // term by `7^7 * |D|^2 / 2^252 < 2^-(252-2log|D|-20)`.
-    // The second is below
-    // `2^9 * 2^(log|D|+1) / 2^252`.
+    // The actual rate is in [1/8, 1/7], so 1/sqrt(rho) < 3. With at
+    // most twelve binary folds, the second coefficient is bounded by
+    // `7 * 3 * sum(arities) <= 7 * 3 * 24 = 504 < 2^9`.
+    // Also `|D| + 1 < 2|D|`, giving `2^9 * 2^(log|D|+1) / 2^252`.
+    // The affine coefficient is 3/2, not the general theorem's L - 1/2.
     let first_commitment_bits = certificate
         .extension_field_lower_bound_bits
         .checked_sub(u16::from(certificate.domain_log2) * 2)
@@ -1011,14 +1057,22 @@ pub(crate) struct AggregateDeepLaneMixV1 {
     /// Composition-chunk mixes.
     pub(crate) composition: Vec<E>,
 }
-/// A caller-derived additional opening of an existing authenticated base column.
-/// The caller binds the immutable point/column plan and all values before mixing.
+/// Original authenticated trace commitment selected by a supplemental opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AggregateSupplementalColumnV1 {
+    /// Column in the original base commitment.
+    Base(usize),
+    /// Column in the original auxiliary commitment.
+    Auxiliary(usize),
+}
+/// A caller-derived additional opening of an existing authenticated trace column.
+/// The caller binds the immutable family/point/column plan and all values before mixing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateSupplementalDeepOpeningV1 {
     /// Logical trace-group index.
     pub(crate) group: usize,
-    /// Base column inside the logical group.
-    pub(crate) base_column: usize,
+    /// Original commitment family and column inside the logical group.
+    pub(crate) column: AggregateSupplementalColumnV1,
     /// Nonzero out-of-domain point derived by the owning relation.
     pub(crate) point: E,
     /// Canonical claimed column value at that point.
@@ -2222,6 +2276,7 @@ impl StreamingRowCommitmentV1 {
         ))
     }
     /// Finalize the exact-width vector rows into a streaming Merkle commitment.
+    #[cfg(test)]
     pub(crate) fn finish(
         mut self,
     ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
@@ -3155,7 +3210,7 @@ pub(crate) fn recompose_composition_value_v1(
     }
     Ok(value)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
         .iter()
@@ -3174,7 +3229,7 @@ fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
             value.mul(point).add(coefficient)
         })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn base_coset_coefficients_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3216,7 +3271,7 @@ fn fp4_coset_coefficients_v1(
     Ok(coefficients)
 }
 /// Evaluate one committed base-field coset codeword at arbitrary Fp4 points.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3362,7 +3417,7 @@ pub(crate) fn evaluate_composition_chunks_at_deep_v1(
         .collect()
 }
 /// Build a DEEP payload from retained materialized common-domain codewords.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn build_materialized_deep_proof_v1(
     trace_groups: &[AggregateTraceGroupMaterialV1],
     compositions: &[Vec<Vec<E>>],
@@ -6309,7 +6364,12 @@ fn verify_deep_query_bindings_v1(
                 || layout
                     .trace_groups
                     .get(opening.group)
-                    .is_none_or(|group| opening.base_column >= group.base_width)
+                    .is_none_or(|group| match opening.column {
+                        AggregateSupplementalColumnV1::Base(column) => column >= group.base_width,
+                        AggregateSupplementalColumnV1::Auxiliary(column) => {
+                            column >= group.aux_width
+                        }
+                    })
         })
     {
         return Err(AggregateStarkErrorV1::DeepOpening);
@@ -6394,7 +6454,14 @@ fn verify_deep_query_bindings_v1(
             for extra in supplemental {
                 let value = opened_groups
                     .get(extra.group)
-                    .and_then(|group| group.base_current.get(extra.base_column))
+                    .and_then(|group| match extra.column {
+                        AggregateSupplementalColumnV1::Base(column) => {
+                            group.base_current.get(column)
+                        }
+                        AggregateSupplementalColumnV1::Auxiliary(column) => {
+                            group.aux_current.get(column)
+                        }
+                    })
                     .copied()
                     .ok_or(AggregateStarkErrorV1::DeepOpening)?;
                 let inverse = query_point
@@ -6880,12 +6947,12 @@ mod tests {
     }
     fn release_fri_certificate_v1() -> AggregateFriTheorem2CertificateV1 {
         AggregateFriTheorem2CertificateV1 {
-            l_minus_one_numerator: 3,
-            l_minus_one_denominator: 2,
+            affine_coefficient_numerator: 3,
+            affine_coefficient_denominator: 2,
             batching_parameter_m: 3,
             rho_numerator: 1,
             rho_denominator: 7,
-            affine_arities: [2, 2, 2],
+            binary_fold_arity: 2,
             domain_log2: 22,
             extension_field_lower_bound_bits: 252,
             base_field_two_adicity: 32,
@@ -6902,6 +6969,55 @@ mod tests {
         }
     }
     #[test]
+    fn affine_fri_bound_uses_every_binary_fold_and_rejects_uncovered_rates() {
+        for folds in [3_u8, 4, 5, 6, 7, 12] {
+            let native = folds + 7;
+            let mut parameters = release_fri_parameters_v1();
+            parameters.minimum_trace_log2 = native;
+            parameters.maximum_trace_log2 = native;
+            parameters.terminal_degree_bound = 143;
+            let layout = AggregateProofLayoutV1::new(
+                parameters,
+                vec![AggregateTraceGroupLayoutV1 {
+                    native_trace_log2: native,
+                    segment_instances: 1,
+                    base_width: 1,
+                    aux_width: 1,
+                }],
+            );
+            // At three/four folds the terminal cap cannot hold the existing
+            // native-row plus 272-query-mask minimum. Five folds is the first
+            // valid geometry; keep the smaller layouts as rejection controls.
+            if folds < 5 {
+                assert_eq!(layout, Err(AggregateStarkErrorV1::InvalidLayout));
+                continue;
+            }
+            let layout = layout.expect("mask-admitted release FRI layout");
+            let mut certificate = release_fri_certificate_v1();
+            certificate.domain_log2 = native + 3;
+            certificate.fold_count = folds;
+            certificate.terminal_degree_bound = 143;
+            let bound =
+                validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate).unwrap();
+            assert_eq!(
+                bound.commitment_error_bits,
+                252 - 2 * u16::from(native + 3) - 21
+            );
+            let mut wrong = certificate;
+            wrong.binary_fold_arity = 3;
+            assert!(validate_affine_batched_fri_theorem2_v1(parameters, &layout, wrong).is_err());
+            wrong = certificate;
+            wrong.fold_count += 1;
+            assert!(validate_affine_batched_fri_theorem2_v1(parameters, &layout, wrong).is_err());
+            parameters.terminal_degree_bound = 126;
+            certificate.terminal_degree_bound = 126;
+            assert!(
+                validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate).is_err()
+            );
+        }
+    }
+
+    #[test]
     fn affine_batched_fri_theorem_certificate_checks_every_precondition() {
         let parameters = release_fri_parameters_v1();
         let layout = release_fri_layout_v1(parameters);
@@ -6916,7 +7032,7 @@ mod tests {
         );
         let mutations = [
             AggregateFriTheorem2CertificateV1 {
-                l_minus_one_numerator: 2,
+                affine_coefficient_numerator: 2,
                 ..certificate
             },
             AggregateFriTheorem2CertificateV1 {
@@ -6928,7 +7044,7 @@ mod tests {
                 ..certificate
             },
             AggregateFriTheorem2CertificateV1 {
-                affine_arities: [2, 2, 1],
+                binary_fold_arity: 1,
                 ..certificate
             },
             AggregateFriTheorem2CertificateV1 {
@@ -9753,3 +9869,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "aggregate_stark_compact_ca_geometry_tests.rs"]
+mod compact_ca_geometry_tests;

@@ -11,11 +11,12 @@
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-pub(crate) use super::privacy_outer_hash::PrivacyOuterDigestV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamErrorV1;
 #[cfg(test)]
 use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
+use super::privacy_outer_hash::PrivacyOuterProofScopeV1;
+pub(crate) use super::privacy_outer_hash::{PrivacyOuterDigestV1, PrivacyOuterProofFamilyV1};
 use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
 };
@@ -67,11 +68,24 @@ const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDIL
 pub(crate) struct TransparentStarkDigestContextV1 {
     protocol: PrivacyProtocolIdV1,
     profile: &'static [u8],
+    proof_scope: Option<PrivacyOuterProofScopeV1>,
 }
 impl TransparentStarkDigestContextV1 {
     /// Construct a typed context for one final protocol/profile pair.
     pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
-        Self { protocol, profile }
+        Self {
+            protocol,
+            profile,
+            proof_scope: None,
+        }
+    }
+    /// Required typed context for a dynamic X509 proof operation.
+    pub(crate) const fn x509_scoped_v1(nonce: [u8; 32], family: PrivacyOuterProofFamilyV1) -> Self {
+        Self {
+            protocol: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            profile: b"iroha-zk-x509-stark-p256-release-profile-v1",
+            proof_scope: Some(PrivacyOuterProofScopeV1 { nonce, family }),
+        }
     }
     /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
     pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
@@ -103,6 +117,7 @@ impl TransparentStarkDigestContextV1 {
             catalog,
             protocol: self.protocol_label_v1(),
             profile: self.profile,
+            proof_scope: self.proof_scope,
             role,
             phase,
             level,
@@ -390,7 +405,6 @@ impl GoldilocksFp4V1 {
         ])
     }
     /// Decode the canonical fixed-width big-endian wire encoding.
-    #[cfg(test)]
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
         for (index, chunk) in bytes.chunks_exact(8).enumerate() {
@@ -1199,7 +1213,7 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     Ok(mask)
 }
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -1245,6 +1259,7 @@ pub(crate) fn privacy_outer_digest_frame_v1(
             catalog: &catalog,
             protocol: context.protocol_label_v1(),
             profile: context.profile,
+            proof_scope: context.proof_scope,
             role,
             phase,
             level,
@@ -1283,6 +1298,7 @@ pub(crate) fn privacy_outer_last_field_stream_v1(
             catalog: &catalog,
             protocol: context.protocol_label_v1(),
             profile: context.profile,
+            proof_scope: context.proof_scope,
             role,
             phase,
             level,
@@ -1362,6 +1378,24 @@ impl PrivacyOuterMerkleTreeV1 {
             levels.push(next);
         }
         Ok(Self { levels })
+    }
+    /// Exact allocated tree storage, including all retained vector capacities.
+    /// Callers can charge this public commitment owner alongside private LDEs.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn allocated_payload_bytes_v1(&self) -> Result<usize, TransparentStarkErrorV1> {
+        let lists = self
+            .levels
+            .capacity()
+            .checked_mul(core::mem::size_of::<Vec<PrivacyOuterDigestV1>>())
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Self>()))
+            .ok_or(TransparentStarkErrorV1::AllocationFailure)?;
+        self.levels.iter().try_fold(lists, |sum, level| {
+            level
+                .capacity()
+                .checked_mul(core::mem::size_of::<PrivacyOuterDigestV1>())
+                .and_then(|bytes| sum.checked_add(bytes))
+                .ok_or(TransparentStarkErrorV1::AllocationFailure)
+        })
     }
     /// Root digest.
     pub(crate) fn root(&self) -> PrivacyOuterDigestV1 {
@@ -3301,6 +3335,68 @@ mod tests {
         );
     }
     #[test]
+    fn x509_scoped_context_is_identical_across_scalar_prefix_and_stream_frames() {
+        for family in [
+            PrivacyOuterProofFamilyV1::Joint,
+            PrivacyOuterProofFamilyV1::Main,
+            PrivacyOuterProofFamilyV1::Ca,
+        ] {
+            for nonce in [[0; 32], [0xa7; 32]] {
+                let context = TransparentStarkDigestContextV1::x509_scoped_v1(nonce, family);
+                let catalog = context.catalog_v1();
+                let domain = context
+                    .domain_v1(&catalog, b"scope-leaf", b"scope-phase", 2, 11, 7)
+                    .unwrap();
+                let payload = [0x39; 105];
+                let scalar = privacy_outer_digest_frame_v1(
+                    context,
+                    b"scope-leaf",
+                    b"scope-phase",
+                    2,
+                    11,
+                    7,
+                    &[b"prefix", &payload],
+                )
+                .unwrap();
+                assert_eq!(
+                    PrivacyOuterFrameV1::new(domain, &[b"prefix", &payload])
+                        .unwrap()
+                        .hash(),
+                    scalar
+                );
+                assert_eq!(
+                    PrivacyOuterDomainPrefixV1::new(domain)
+                        .unwrap()
+                        .hash_at_with_counter(11, 7, &[b"prefix", &payload]),
+                    Some(scalar)
+                );
+                let mut stream = privacy_outer_last_field_stream_v1(
+                    context,
+                    b"scope-leaf",
+                    b"scope-phase",
+                    2,
+                    11,
+                    7,
+                    &[b"prefix"],
+                    payload.len(),
+                )
+                .unwrap();
+                for chunk in payload.chunks(7) {
+                    stream.update(chunk).unwrap();
+                }
+                assert_eq!(stream.finalize().unwrap(), scalar);
+                let mut wrong_catalog = catalog;
+                wrong_catalog[0] ^= 1;
+                assert!(
+                    context
+                        .domain_v1(&wrong_catalog, b"scope-leaf", b"scope-phase", 2, 11, 7)
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn digest_binds_protocol_profile_role_phase_level_index_counter_and_bytes() {
         let digest = privacy_outer_digest_frame_v1(
             TEST_DIGEST_CONTEXT_V1,
@@ -3639,6 +3735,32 @@ mod tests {
         };
         assert_eq!(search(1), Some(first_match));
         assert_eq!(search(4), Some(first_match));
+    }
+}
+
+#[cfg(test)]
+mod merkle_payload_tests {
+    use super::*;
+    #[test]
+    fn retained_tree_payload_counts_capacity_and_all_owners() {
+        // This directly constructs storage to distinguish actual capacity from
+        // logical leaf count; it need not represent a valid Merkle statement.
+        let mut leaves = Vec::with_capacity(11);
+        leaves.resize(4, PrivacyOuterDigestV1::default());
+        let mut levels = Vec::with_capacity(7);
+        levels.push(leaves);
+        levels.push(vec![PrivacyOuterDigestV1::default(); 2]);
+        levels.push(vec![PrivacyOuterDigestV1::default()]);
+        let tree = PrivacyOuterMerkleTreeV1 { levels };
+        let expected = core::mem::size_of::<PrivacyOuterMerkleTreeV1>()
+            + tree.levels.capacity() * core::mem::size_of::<Vec<PrivacyOuterDigestV1>>()
+            + tree
+                .levels
+                .iter()
+                .map(|level| level.capacity() * core::mem::size_of::<PrivacyOuterDigestV1>())
+                .sum::<usize>();
+        assert_eq!(tree.allocated_payload_bytes_v1().unwrap(), expected);
+        assert!(expected > (4 + 2 + 1) * core::mem::size_of::<PrivacyOuterDigestV1>());
     }
 }
 

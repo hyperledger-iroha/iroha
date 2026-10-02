@@ -216,6 +216,35 @@ impl KagemushaOrdinaryIssuerCircuitAdmissionV1 {
         }
         self.authenticate_for_profile(expected, &profile.hardware_profile)
     }
+    /// Verify the same complete purpose-bound admission under a threshold-authenticated identity pin.
+    /// This creates no release, Native, Current, signer or monetary owner.
+    /// # Errors
+    /// Refuses stale policy, wrong complete purpose/release/profile/hash or actual P256 signature.
+    pub fn authenticate_under_identity_policy(
+        &self,
+        expected: &KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1,
+        policy: &super::KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
+        now: u64,
+    ) -> Result<KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1, String> {
+        policy.recheck_at_trusted_time(now)?;
+        let original = policy.policy();
+        if self.subject != *expected
+            || self.subject.release_id != original.profile.planned_release_id
+            || self.subject.hardware_profile_id != original.profile.planned_hardware_profile_id
+            || !original.profile.platform_class.is_ordinary_app()
+        {
+            return Err("ordinary issuer exact admission/identity policy differs".into());
+        }
+        let public_key = original.enrollment_issuer_p256_key;
+        self.signature
+            .verify(&public_key, &self.subject.canonical_signing_bytes()?)
+            .map_err(|_| "ordinary circuit issuer identity-policy signature rejected")?;
+        Ok(KagemushaVerifiedOrdinaryIssuerCircuitAdmissionV1 {
+            original: *self,
+            transport_original: self.to_transport_bytes()?,
+            public_key,
+        })
+    }
     pub(crate) fn authenticate_for_profile(
         &self,
         expected: &KagemushaOrdinaryIssuerCircuitAdmissionSubjectV1,

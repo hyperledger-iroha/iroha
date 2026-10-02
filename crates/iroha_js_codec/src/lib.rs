@@ -1042,28 +1042,23 @@ pub fn validation_fee_policy_from_json_value(
         "previous_policy_hash",
         "ds_asset_id",
         "ds_scale",
+        "retail_schedule",
+        "effective_from_ms",
+        "notice_published_at_ms",
         "fee",
         "treasury_account_id",
         "charging_mode",
-        "effective_from_height",
-        "expires_after_height",
         "exemption_classes",
-        "treasury_payout_binding",
+        "reward_custody",
     ];
-    const PAYOUT_BINDING_FIELDS: &[&str] = &[
+    const REWARD_CUSTODY_FIELDS: &[&str] = &[
         "contract_address",
-        "code_hash",
-        "entrypoint",
         "treasury_account_id",
         "ds_asset_id",
         "xor_asset_id",
-        "pool_vault_account_id",
-        "batch_ds",
-        "min_xor_out",
-        "max_xor_out",
-        "recipients",
+        "reward_pool_account_id",
+        "validator_lane_id",
     ];
-    const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
     let json::Value::Object(fields) = &value else {
         return Err(CodecError::new(
             CodecErrorKind::InvalidArgument,
@@ -1071,81 +1066,33 @@ pub fn validation_fee_policy_from_json_value(
         ));
     };
     require_exact_json_fields(fields, POLICY_FIELDS, "validation-fee policy")?;
-    if let Some(binding) = fields.get("treasury_payout_binding")
-        && !binding.is_null()
-    {
-        let json::Value::Object(binding_fields) = binding else {
-            return Err(CodecError::new(
-                CodecErrorKind::InvalidArgument,
-                "validation-fee policy.treasury_payout_binding must be an object or null",
-            ));
-        };
-        require_exact_json_fields(
-            binding_fields,
-            PAYOUT_BINDING_FIELDS,
-            "validation-fee policy.treasury_payout_binding",
-        )?;
-        let Some(json::Value::Array(recipients)) = binding_fields.get("recipients") else {
-            return Err(CodecError::new(
-                CodecErrorKind::InvalidArgument,
-                "validation-fee policy.treasury_payout_binding.recipients must be an array",
-            ));
-        };
-        for (index, recipient) in recipients.iter().enumerate() {
-            let json::Value::Object(recipient_fields) = recipient else {
-                return Err(CodecError::new(
-                    CodecErrorKind::InvalidArgument,
-                    format!(
-                        "validation-fee policy.treasury_payout_binding.recipients[{index}] must be an object"
-                    ),
-                ));
-            };
-            require_exact_json_fields(
-                recipient_fields,
-                RECIPIENT_FIELDS,
-                &format!("validation-fee policy.treasury_payout_binding.recipients[{index}]"),
-            )?;
-        }
-    }
+    let Some(json::Value::Object(custody_fields)) = fields.get("reward_custody") else {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            "validation-fee policy.reward_custody must be an object",
+        ));
+    };
+    require_exact_json_fields(
+        custody_fields,
+        REWARD_CUSTODY_FIELDS,
+        "validation-fee policy.reward_custody",
+    )?;
     json::from_value(value).map_err(codec_error)
 }
 
-/// Validate fee policy invariants and the required payout lifecycle binding.
-///
-/// # Errors
-///
-/// Returns a [`CodecErrorKind::InvalidArgument`] error when the policy violates its
-/// invariants, when a payout-enabled policy lacks a non-zero lifecycle proposal id, or
-/// when a policy without a payout binding selects a lifecycle proposal.
-pub fn validate_validation_fee_policy_proposal(
-    policy: &ValidationFeePolicyV1,
-    payout_lifecycle_proposal_id: Option<&[u8; 32]>,
-) -> CodecResult<()> {
+/// Validate first-release fee policy invariants.
+pub fn validate_validation_fee_policy_proposal(policy: &ValidationFeePolicyV1) -> CodecResult<()> {
     if let Some(reason) = policy.policy_invariant_error() {
         return Err(CodecError::new(
             CodecErrorKind::InvalidArgument,
             format!("invalid validation-fee policy: {reason}"),
         ));
     }
-    match (
-        policy.treasury_payout_binding.as_ref(),
-        payout_lifecycle_proposal_id,
-    ) {
-        (None, None) => Ok(()),
-        (Some(_), Some(id)) if *id != [0; 32] => Ok(()),
-        (Some(_), _) => Err(CodecError::new(
-            CodecErrorKind::InvalidArgument,
-            "payout-enabled validation-fee policy requires a non-zero lifecycle proposal id",
-        )),
-        (None, Some(_)) => Err(CodecError::new(
-            CodecErrorKind::InvalidArgument,
-            "validation-fee policy without a payout binding cannot select a lifecycle proposal",
-        )),
-    }
+    Ok(())
 }
 
 fn validation_fee_policy_instruction_from_json(value: json::Value) -> CodecResult<InstructionBox> {
-    const INSTRUCTION_FIELDS: &[&str] = &["policy", "payout_lifecycle_proposal_id"];
+    const INSTRUCTION_FIELDS: &[&str] = &["policy"];
     let json::Value::Object(mut fields) = value else {
         return Err(CodecError::new(
             CodecErrorKind::InvalidArgument,
@@ -1158,20 +1105,8 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> CodecResul
         "policy",
         "ProposeValidationFeePolicy",
     )?)?;
-    let payout_lifecycle_proposal_id = match required_value(
-        &mut fields,
-        "payout_lifecycle_proposal_id",
-        "ProposeValidationFeePolicy",
-    )? {
-        json::Value::Null => None,
-        value => Some(json::from_value::<[u8; 32]>(value).map_err(codec_error)?),
-    };
-    validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
-    Ok(ProposeValidationFeePolicy {
-        policy,
-        payout_lifecycle_proposal_id,
-    }
-    .into())
+    validate_validation_fee_policy_proposal(&policy)?;
+    Ok(ProposeValidationFeePolicy { policy }.into())
 }
 
 /// Parse instruction JSON through the strict native instruction adapter.
@@ -4669,10 +4604,6 @@ fn propose_validation_fee_policy_to_json(
     inner.insert(
         "policy".to_owned(),
         json::to_value(&propose.policy).map_err(codec_error)?,
-    );
-    inner.insert(
-        "payout_lifecycle_proposal_id".to_owned(),
-        json::to_value(&propose.payout_lifecycle_proposal_id).map_err(codec_error)?,
     );
     let mut outer = json::Map::new();
     outer.insert(

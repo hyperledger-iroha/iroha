@@ -108,10 +108,11 @@ All mutable collections and byte arrays are copied on construction and access. U
   into provenance. AGP packages those generated outputs and explicitly excludes
   `src/main/jniLibs`. Every ABI uses canonical Rust 1.93.1 `cargo`, `rustc`, and
   `rustdoc`, plus `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`,
-  `CARGO_NET_OFFLINE=true`, and `RUSTC_BOOTSTRAP=1`. The Cargo command always
-  includes `--locked --offline --jobs 1 -Z unstable-options --lockfile-path`
-  with the canonical repository-root `Cargo.lock`; alternate locks and legacy
-  overrides are rejected.
+  and `CARGO_NET_OFFLINE=true`. Stock Cargo receives
+  `--locked --offline --jobs 1 --manifest-path <canonical-iroha-root>/Cargo.toml`
+  and consumes the authenticated repository-root `Cargo.lock`. Bootstrap,
+  alternate locks, and compiler or profile configuration overrides are rejected;
+  the root lock and effective Cargo configuration are rechecked after execution.
 - **ARMv7 diagnostic**: from `kotlin`, use the existing owner-only local artifact
   root, set `MOBILE_SDK_PYTHON_BINARY` to the canonical executable of Python 3.12
   (symbolic links are rejected), and run
@@ -132,6 +133,15 @@ All mutable collections and byte arrays are copied on construction and access. U
 ## Testing
 
 JUnit 5 with `@ParameterizedTest` / `@MethodSource` for data-driven tests. Test companion objects provide argument lists via `@JvmStatic` methods.
+
+The wallet's separate `:kagemusha-wallet-android:testDebugHostNative` task requires
+an explicitly rebuilt host bridge in one canonical `IROHA_NATIVE_LIBRARY_PATH`
+directory. Its sole ordered `host-native` case uses the main wallet JNI owner,
+checks ABI 25/signer contract 7 and actual startup phase 1/selection revocation
+phase 5 refusal when no genuine Native root is registered, then verifies the
+managed Core-open fence. Phase 6 does not execute after phase 1 refuses. Keep
+client test JNI doubles out of this classpath, retain missing-symbol failures,
+and never treat this host test as root/account, release or physical-device admission.
 
 ## Version Catalog
 

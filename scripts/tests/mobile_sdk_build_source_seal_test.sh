@@ -75,7 +75,7 @@ PYFIXTURE
   export NORITO_BRIDGE_BUILD_DIR="$bridge_build"
   export NORITO_BRIDGE_OUT_DIR="$bridge_output"
   export RUSTC="$exact_rustc"
-  export RUSTC_BOOTSTRAP=1
+  unset RUSTC_BOOTSTRAP
   export RUSTDOC="$exact_rustdoc"
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
@@ -132,6 +132,26 @@ PYFIXTURE
     *)
       printf '%s\n' "$invalid_lock_output" >&2
       fail "unreviewed alternate-lock failure was not explicit"
+      ;;
+  esac
+
+  # A read-only external file still needs the exact reviewed graph bytes.
+  local unreviewed_graph="$TMP_DIR/source-seal-unreviewed/Cargo.lock"
+  mkdir -p "${unreviewed_graph%/*}"
+  cp "$selected_graph" "$unreviewed_graph"
+  chmod 0600 "$unreviewed_graph"
+  printf '\n# unreviewed graph\n' >>"$unreviewed_graph"
+  chmod 0400 "$unreviewed_graph"
+  if invalid_lock_output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      bash "$root/scripts/build_norito_xcframework.sh" \
+        --lockfile-path "$unreviewed_graph" 2>&1)"; then
+    fail "expected Apple builder to reject an unreviewed external lock"
+  fi
+  case "$invalid_lock_output" in
+    *"external Cargo lock does not match the canonical reviewed graph"*) ;;
+    *)
+      printf '%s\n' "$invalid_lock_output" >&2
+      fail "unreviewed external-lock failure was not explicit"
       ;;
   esac
 

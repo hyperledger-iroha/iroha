@@ -166,7 +166,11 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         &mut self,
         key: DigestV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if self.anchor_request_sha256.is_some() || self.pending.is_some() || key == [0; 32] {
+        if self.anchor_request_sha256.is_some()
+            || self.pending.is_some()
+            || self.pending_mint.is_some()
+            || key == [0; 32]
+        {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let financial = self.publication.cash_financial();

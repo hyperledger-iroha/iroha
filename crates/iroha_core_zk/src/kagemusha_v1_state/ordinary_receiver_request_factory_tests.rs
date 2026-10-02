@@ -256,7 +256,15 @@ fn receiver_capture_roundtrip_and_capacity_charge_hold_full_secret_sources_as_pr
     let charge = decoded.reservation.capacity_charge_bytes().unwrap();
     assert!(charge >= bytes.len() as u64);
     let record = super::super::Record::ReceiverCapture(decoded);
-    let frame = super::super::encode(&record).unwrap();
-    assert_eq!(super::super::decode(&frame).unwrap(), record);
+    let maximum_payload_bytes =
+        u64::try_from(norito::canonical_frame_len(&record).unwrap()).unwrap();
+    let frame = super::super::encode(&record, maximum_payload_bytes).unwrap();
+    assert_eq!(frame.len() as u64, maximum_payload_bytes);
+    assert_eq!(
+        super::super::decode(&frame, maximum_payload_bytes).unwrap(),
+        record
+    );
+    assert!(super::super::encode(&record, maximum_payload_bytes - 1).is_err());
+    assert!(super::super::decode(&frame, maximum_payload_bytes - 1).is_err());
     assert!(!format!("{record:?}").contains("private_key"));
 }

@@ -176,6 +176,61 @@ pub struct AccountClient {
 }
 
 impl AccountClient {
+    /// Read a committed current wallet head for independent finality verification.
+    /// # Errors
+    /// Returns authentication, response-validation, transport or runtime errors.
+    pub fn retail_fee_statement_head(
+        &self,
+        account: &AccountId,
+    ) -> Result<crate::client::RetailFeeCurrentHeadResponseV1> {
+        self.runtime
+            .block_on(self.inner.retail_fee_statement_head(account))?
+    }
+    /// Read and verify a contiguous page from a previously authenticated receipt cursor.
+    /// # Errors
+    /// Returns cursor, chain-verification, authentication, transport or runtime errors.
+    pub fn retail_fee_statement_page(
+        &self,
+        account: &AccountId,
+        request: &crate::client::RetailFeeStatementRequestV1,
+    ) -> Result<crate::client::RetailFeeStatementResponseV1> {
+        self.runtime
+            .block_on(self.inner.retail_fee_statement_page(account, request))?
+    }
+    /// Read evaluated retail monthly status using this bound account and reusable runtime.
+    /// # Errors
+    /// Returns canonical authentication, transport, response validation, or runtime errors.
+    pub fn retail_fee_status(
+        &self,
+        account: &AccountId,
+    ) -> Result<crate::client::RetailFeeStatusResponseV1> {
+        self.runtime
+            .block_on(self.inner.retail_fee_status(account))?
+    }
+    /// Quote an exact ordered retail payment intent using this bound account.
+    /// # Errors
+    /// Returns canonical authentication, transport, intent validation, or runtime errors.
+    pub fn retail_fee_quote(
+        &self,
+        request: &iroha_data_model::validation_fee::RetailFeeQuoteRequestV1,
+    ) -> Result<crate::client::RetailFeeQuoteResponseV1> {
+        self.runtime
+            .block_on(self.inner.retail_fee_quote(request))?
+    }
+    /// Read bounded receipt membership evidence for independent checkpoint verification.
+    /// # Errors
+    /// Returns page validation, authentication, transport, or runtime errors.
+    pub fn retail_fee_receipts(
+        &self,
+        account: &AccountId,
+        after_receipt_id: Option<&str>,
+        limit: u32,
+    ) -> Result<crate::client::RetailFeeReceiptsResponseV1> {
+        self.runtime.block_on(
+            self.inner
+                .retail_fee_receipts(account, after_receipt_id, limit),
+        )?
+    }
     /// Own a blocking facade for an already validated asynchronous account context.
     ///
     /// # Errors

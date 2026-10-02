@@ -185,7 +185,7 @@ fn assert_empty(directory: &std::path::Path) {
 fn capture_stream_roundtrips_every_proving_key_role_and_tail_geometry() {
     let directory = tempfile::tempdir().expect("private capture directory");
     let lengths = [1, WIDTH - 1, WIDTH, WIDTH + 1, 2 * WIDTH + 23];
-    let mut cases = 0;
+    let mut cases = Vec::new();
     for role in KagemushaArtifactRoleV1::ALL {
         if KagemushaArtifactDescriptorV1::for_role(role).kind != KagemushaArtifactKindV1::ProvingKey
         {
@@ -242,10 +242,15 @@ fn capture_stream_roundtrips_every_proving_key_role_and_tail_geometry() {
             assert_eq!(second, bytes);
             assert_eq!(observed.opens.load(Ordering::SeqCst), 1);
             assert_empty(directory.path());
-            cases += 1;
+            cases.push((role, length));
         }
     }
-    assert_eq!(cases, 24 * 5);
+    let expected = super::super::tests::storage_role_catalogue()
+        .into_iter()
+        .filter(|(_, kind, _)| *kind == KagemushaArtifactKindV1::ProvingKey)
+        .flat_map(|(role, _, _)| lengths.map(|length| (role, length)))
+        .collect::<Vec<_>>();
+    assert_eq!(cases, expected);
 }
 
 #[cfg(unix)]
@@ -346,7 +351,7 @@ fn capture_rejects_role_geometry_and_original_stream_failures_before_escape() {
     let directory = tempfile::tempdir().expect("private capture directory");
     let bytes = pattern(2 * WIDTH + 13);
     let good = binding(ROLE, &bytes);
-    let mut preflights = 0;
+    let mut preflights = Vec::new();
     for role in KagemushaArtifactRoleV1::ALL {
         if KagemushaArtifactDescriptorV1::for_role(role).kind == KagemushaArtifactKindV1::ProvingKey
         {
@@ -357,9 +362,14 @@ fn capture_rejects_role_geometry_and_original_stream_failures_before_escape() {
             matches!(set.capture_proving_key(role, directory.path()), Err(KagemushaArtifactErrorV1::InvalidBinding(rejected)) if rejected == role)
         );
         assert_eq!(observed.opens.load(Ordering::SeqCst), 0);
-        preflights += 1;
+        preflights.push(role);
     }
-    assert_eq!(preflights, 26);
+    let expected = super::super::tests::storage_role_catalogue()
+        .into_iter()
+        .filter(|(_, kind, _)| *kind != KagemushaArtifactKindV1::ProvingKey)
+        .map(|(role, _, _)| role)
+        .collect::<Vec<_>>();
+    assert_eq!(preflights, expected);
     for invalid in [
         KagemushaArtifactBindingV1 {
             byte_len: 0,
@@ -492,14 +502,22 @@ fn capture_retains_all_original_identity_and_binds_spool_context() {
     // Complete retained recursion equality catches the remaining protocol inventory; the
     // explicit context fields bind its original release/manifest, not a re-authenticated fixture.
     let mut contexts = std::collections::BTreeSet::new();
+    let mut captured_roles = Vec::new();
     for role in KagemushaArtifactRoleV1::ALL {
         if KagemushaArtifactDescriptorV1::for_role(role).kind == KagemushaArtifactKindV1::ProvingKey
         {
             let original = OriginalArtifact::from_set(&set, role).unwrap();
             assert!(contexts.insert(original.context(2).unwrap()));
+            captured_roles.push(role);
         }
     }
-    assert_eq!(contexts.len(), 24);
+    let expected_roles = super::super::tests::storage_role_catalogue()
+        .into_iter()
+        .filter(|(_, kind, _)| *kind == KagemushaArtifactKindV1::ProvingKey)
+        .map(|(role, _, _)| role)
+        .collect::<Vec<_>>();
+    assert_eq!(captured_roles, expected_roles);
+    assert_eq!(contexts.len(), captured_roles.len());
     let (mut other, _) = fixture(bytes.clone(), expected, WIDTH, SourceFault::None);
     other.recursion.artifact_manifest_digest[0] ^= 1;
     let mut other_capture = other

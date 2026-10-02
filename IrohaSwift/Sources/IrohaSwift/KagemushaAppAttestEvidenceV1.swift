@@ -24,6 +24,15 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
   public let canonicalSelectionSigningBytes: Data
 
   public init(coreSelectionSigningBytes: Data) throws {
+    try self.init(coreSelectionSigningBytes: coreSelectionSigningBytes, preparation: false)
+  }
+
+  /// Internal purpose2 projection only; caller bytes cannot create a Native preparation.
+  init(corePreparationSigningBytes: Data) throws {
+    try self.init(coreSelectionSigningBytes: corePreparationSigningBytes, preparation: true)
+  }
+
+  private init(coreSelectionSigningBytes: Data, preparation: Bool) throws {
     let bytes = [UInt8](coreSelectionSigningBytes)
     let headerLength = Self.signingDomain.count + MemoryLayout<UInt64>.size
     guard bytes.count == Self.totalBytes,
@@ -41,11 +50,12 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
     let operation = bytes[Self.operationTag]
     let outgoing = operation == 2 || operation == 4
     guard bytes[Self.version].elementsEqual([1, 0]), (0...5).contains(operation),
+      !preparation || outgoing,
       Self.scopedDigests.allSatisfy({ range in bytes[range].contains(where: { $0 != 0 }) }),
       bytes[Self.policyEpoch].contains(where: { $0 != 0 }),
       bytes[Self.hardwareEpochGeneration].contains(where: { $0 != 0 }),
-      bytes[Self.candidateDigest].contains(where: { $0 != 0 }) == outgoing,
-      bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == outgoing else {
+      bytes[Self.candidateDigest].contains(where: { $0 != 0 }) == (outgoing && !preparation),
+      bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == (outgoing && !preparation) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
     if operation == 0 {

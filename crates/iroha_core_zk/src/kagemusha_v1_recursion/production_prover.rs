@@ -22,11 +22,39 @@ mod production_ordinary_preparation_reservation;
 pub(crate) use production_ordinary_preparation_reservation::GeneratedOrdinaryCashReservationOriginalsV1;
 #[path = "production_ordinary_guard.rs"]
 mod production_ordinary_guard;
+#[cfg(unix)]
+#[path = "production_ordinary_incoming_auxiliaries.rs"]
+mod production_ordinary_incoming_auxiliaries;
+#[cfg(unix)]
+#[path = "production_ordinary_incoming_state.rs"]
+mod production_ordinary_incoming_state;
+#[cfg(unix)]
+pub(crate) use production_ordinary_incoming_auxiliaries::KagemushaRetainedOrdinaryIncomingAuxiliariesV1;
+#[cfg(unix)]
+#[path = "production_ordinary_outgoing_auxiliaries.rs"]
+mod production_ordinary_outgoing_auxiliaries;
+#[cfg(unix)]
+#[path = "production_ordinary_outgoing_state.rs"]
+mod production_ordinary_outgoing_state;
+#[cfg(unix)]
+pub(crate) use production_ordinary_outgoing_auxiliaries::KagemushaRetainedOrdinaryOutgoingAuxiliariesV1;
+#[cfg(unix)]
+pub(crate) use production_ordinary_outgoing_state::{
+    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
+    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1, generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
+};
+#[path = "production_ordinary_mint.rs"]
+mod production_ordinary_mint;
 #[path = "production_ordinary_padding.rs"]
 mod production_ordinary_padding;
 #[path = "production_ordinary_state.rs"]
 mod production_ordinary_state;
 pub use production_ordinary_auxiliaries::KagemushaRetainedOrdinaryBootstrapAuxiliariesV1;
+#[cfg(unix)]
+pub(crate) use production_ordinary_incoming_state::{
+    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
+    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
+};
 pub use production_ordinary_state::{
     KagemushaOrdinaryBootstrapAuxiliaryConsumerV1, KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
 };

@@ -10,9 +10,7 @@
 use super::prover_observation::{PhaseTimerV1, PhaseV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
-    accumulator_stark::{
-        ZkX509CaAccumulatorProofErrorV1, prove_zk_x509_ca_accumulator_stark_v1_with_rng,
-    },
+    accumulator_stark::{ZkX509CaAccumulatorProofErrorV1, stages::commit_ca_through_auxiliary_v1},
     codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
     credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
     credential_stark::encode_zk_x509_credential_envelope_v1,
@@ -21,20 +19,23 @@ use super::{
         ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
         validate_reference_relation_v1,
     },
-    stark::{ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng},
+    stark::{
+        ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng, finish_joint_main_ca_v1,
+    },
 };
 use super::{
     accumulator_stark::{
-        ca_accumulator_base_root_from_proof_v1, ca_accumulator_subproof_binding_from_proof_v1,
-        ca_profile_digest_v1, ca_public_digest_v1,
+        ca_accumulator_base_root_from_proof_v1, ca_profile_digest_v1, ca_public_digest_v1,
+        joint_verifier::CaJointVerifierOraclesV1,
     },
     air::{ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1, ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1},
+    credential_joint::JointOriginalOpeningsV1,
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1, derive_zk_x509_credential_pre_aux_binding_v1,
     },
     credential_stark::{
         ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
-        decode_zk_x509_credential_envelope_v1, validate_cross_subproof_binding_v1,
+        decode_zk_x509_credential_envelope_v1,
     },
     der_air::ZkX509Rfc5280StatementV1,
     fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
@@ -55,12 +56,16 @@ use super::{
         ZK_X509_RFC5280_PROFILE_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_STARK_PROFILE_DESCRIPTOR_V1,
         ZK_X509_SUITE_V1, ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1,
     },
+    proof_instance::ZkX509ProofInstanceV1,
     sha_call_bus_stark::{
         ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1, ZkX509ShaCallPublicShapeV1,
         ZkX509ShaCallScheduleV1,
     },
     sha256_word_air::ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
-    stark::{verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1},
+    stark::{
+        MainJointVerifierOraclesV1, main_joint_auxiliary_from_proofs_v1,
+        zk_x509_main_pre_aux_from_proof_v1,
+    },
     verifier_profile::{
         ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1, ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
         compile_zk_x509_rfc_statement_from_authoritative_state_v1,
@@ -88,13 +93,13 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // schedule digests in their opaque byte order. The manifest itself uses SHA-256.
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
-// Native derivation and independent framing bind the private-terminal links,
+// Native derivation and independent framing bind the joint MAIN/CA private links,
 // quotient blinding, selected P256 inputs and RFC output metadata in this candidate.
-// TODO: complete credential binding, hiding review and resource qualification
-// before activating this profile.
+// Native diagnostics and independent framing bind the required proof-instance nonce.
+// TODO: complete native credential, hiding and resource qualification before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x15, 0xfb, 0x8b, 0x97, 0xac, 0xdd, 0x26, 0x6d, 0xb5, 0x28, 0x49, 0x3d, 0x69, 0x43, 0x36, 0x15,
-    0x1a, 0x9f, 0xc2, 0x0d, 0x84, 0x28, 0x91, 0xfb, 0x9c, 0x9f, 0x49, 0x44, 0xc2, 0x22, 0xfa, 0xc2,
+    0xf8, 0x63, 0x84, 0x3b, 0x1a, 0xc5, 0x5b, 0xda, 0x4b, 0x68, 0xe0, 0x97, 0x77, 0x7d, 0x34, 0x4a,
+    0x98, 0xf8, 0xa5, 0xa7, 0xe2, 0xee, 0x2a, 0x13, 0x72, 0xec, 0x55, 0xd8, 0xdb, 0xe5, 0x6b, 0x4f,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,10 +226,12 @@ pub enum ZkX509EngineErrorV1 {
 }
 /// Replay the complete cryptographic verifier for the bound subproof pair.
 fn verify_zk_x509_credential_subproofs_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     statement: &IrohaZkX509StarkP256StatementV1,
     consensus_public: &ZkX509ConsensusPublicInputsV1,
     main_aggregate: &[u8],
     ca_subproof: &[u8],
+    joint_openings: JointOriginalOpeningsV1,
 ) -> Result<(), ZkX509EngineErrorV1> {
     construct_zk_x509_compiled_profile_v1()?;
     let sha_shape = ZkX509ShaCallPublicShapeV1 {
@@ -235,13 +242,16 @@ fn verify_zk_x509_credential_subproofs_v1(
     };
     let sha_schedule = ZkX509ShaCallScheduleV1::new(sha_shape)
         .map_err(|_| ZkX509CredentialProofErrorV1::InvalidStatement)?;
-    let main_pre_aux =
-        zk_x509_main_pre_aux_from_proof_v1(consensus_public.credential_binding, main_aggregate)
-            .map_err(|_error| {
-                #[cfg(test)]
-                prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
-                ZkX509CredentialProofErrorV1::MainProof
-            })?;
+    let main_pre_aux = zk_x509_main_pre_aux_from_proof_v1(
+        proof_instance,
+        consensus_public.credential_binding,
+        main_aggregate,
+    )
+    .map_err(|_error| {
+        #[cfg(test)]
+        prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
+        ZkX509CredentialProofErrorV1::MainProof
+    })?;
     let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof).map_err(|_error| {
         #[cfg(test)]
         prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
@@ -251,6 +261,7 @@ fn verify_zk_x509_credential_subproofs_v1(
         main_pre_aux,
         ca_profile_digest_v1().map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
         ca_public_digest_v1(
+            proof_instance,
             consensus_public.credential_binding.ca_public_v1(),
             &sha_schedule,
         )
@@ -262,34 +273,43 @@ fn verify_zk_x509_credential_subproofs_v1(
         prover_diagnostic::record_public_verifier_error_v1("credential-cross-binding", &_error);
         ZkX509CredentialProofErrorV1::CrossSubproofMismatch
     })?;
-    let main_binding = verify_zk_x509_main_aggregate_stark_v1(
+    let auxiliary =
+        main_joint_auxiliary_from_proofs_v1(credential_binding, main_aggregate, ca_subproof)
+            .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
+    let main = MainJointVerifierOraclesV1::new_v1(
         statement,
         &consensus_public.rfc_statement,
         consensus_public.credential_binding,
         credential_binding,
+        auxiliary,
+        &sha_schedule,
         main_aggregate,
     )
-    .map_err(|_error| {
-        #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-main", &_error);
-        ZkX509CredentialProofErrorV1::MainProof
-    })?;
-    let ca_binding = ca_accumulator_subproof_binding_from_proof_v1(
+    .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    let ca = CaJointVerifierOraclesV1::new_v1(
         consensus_public.credential_binding.ca_public_v1(),
         &sha_schedule,
         main_pre_aux,
+        auxiliary,
         ca_subproof,
     )
-    .map_err(|_error| {
-        #[cfg(test)]
-        prover_diagnostic::record_public_verifier_error_v1("credential-ca", &_error);
-        ZkX509CredentialProofErrorV1::CaProof
-    })?;
-    validate_cross_subproof_binding_v1(
-        consensus_public.credential_binding,
-        main_binding,
-        ca_binding,
-    )?;
+    .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+    let point = main
+        .derive_joint_point_v1(&ca)
+        .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
+    let mut main = main
+        .open_joint_point_v1(point)
+        .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    let mut ca = ca
+        .open_joint_point_v1(point)
+        .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+    let binding = main
+        .bind_ca_openings_v1(&mut ca, joint_openings)
+        .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
+    main.finish_v1(binding)
+        .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    ca.finish_v1(binding)
+        .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
     Ok(())
 }
 /// Verify one canonical credential proof against verifier-owned consensus data.
@@ -316,10 +336,12 @@ pub fn verify_zk_x509_credential_proof_v1(
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
     }
     verify_zk_x509_credential_subproofs_v1(
+        envelope.proof_instance,
         statement,
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
+        envelope.joint_openings,
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -379,11 +401,13 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 /// completes before the entropy source is touched. The constructor then:
 ///
 /// 1. joins the exact six MAIN base groups under one authenticated root;
-/// 2. constructs and self-verifies the compact-CA proof against that root;
-/// 3. derives the sole joint `X5B1` capability from the MAIN and CA roots;
-/// 4. commits the joined MAIN auxiliary columns and completes `X5M1`;
-/// 5. wraps the ordered pair in `X5S1` and independently invokes the consensus
-///    verifier on the exact final bytes.
+/// 2. commits the CA base root, derives the joint `X5B1` capability, and commits
+///    the CA auxiliary columns using those shared challenges;
+/// 3. commits the MAIN auxiliary columns and binds both original auxiliary roots;
+/// 4. commits both compositions and FRI masks before the shared DEEP point,
+///    binds all joint openings, and completes both local FRI proofs;
+/// 5. wraps the ordered pair and 132 joint openings in `X5S1` and independently
+///    invokes the consensus verifier on the exact final bytes.
 ///
 /// There is no independently accepted subproof path and no host-side
 /// reference-relation substitute for the final self-check.
@@ -442,7 +466,9 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     #[cfg(test)]
     assembly_timer.complete_v1();
     let mut checked_rng = HealthCheckedTryCryptoRngV1::new(rng)?;
+    let proof_instance = ZkX509ProofInstanceV1::sample_v1(&mut checked_rng)?;
     let (main_phase, main_pre_aux) = commit_zk_x509_main_base_phase_v1_with_rng(
+        proof_instance,
         statement,
         &assembly,
         consensus_public.credential_binding,
@@ -450,7 +476,7 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     )?;
     #[cfg(test)]
     let ca_timer = PhaseTimerV1::start_v1(PhaseV1::CompactCa);
-    let ca_subproof = prove_zk_x509_ca_accumulator_stark_v1_with_rng(
+    let ca_phase = commit_ca_through_auxiliary_v1(
         &assembly.ca_accumulator_trace,
         &assembly.sha_schedule,
         main_pre_aux,
@@ -458,25 +484,20 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     )?;
     #[cfg(test)]
     ca_timer.complete_v1();
-    let ca_base_root = ca_accumulator_base_root_from_proof_v1(&ca_subproof)?;
-    let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
-        main_pre_aux,
-        ca_profile_digest_v1()?,
-        ca_public_digest_v1(
-            consensus_public.credential_binding.ca_public_v1(),
-            &assembly.sha_schedule,
-        )?,
-        ca_base_root,
-    )?;
-    let main_aggregate = main_phase
-        .bind_credential_pre_aux_v1_with_rng(credential_binding, &mut checked_rng)?
-        .finish_v1_with_rng(&mut checked_rng)?;
+    let main_phase =
+        main_phase.bind_joint_credential_pre_aux_v1_with_rng(&ca_phase, &mut checked_rng)?;
+    let (main_aggregate, ca_subproof, joint_openings) =
+        finish_joint_main_ca_v1(main_phase, ca_phase, &mut checked_rng)?;
     #[cfg(test)]
     let envelope_timer = PhaseTimerV1::start_v1(PhaseV1::EnvelopeAndSelfCheck);
     let encoded = encode_zk_x509_credential_envelope_v1(
+        proof_instance,
         consensus_public.credential_binding,
         &main_aggregate,
         &ca_subproof,
+        &joint_openings
+            .encode_v1()
+            .map_err(|_| ZkX509CredentialProofErrorV1::MalformedEnvelope)?,
     )?;
     #[cfg(test)]
     prover_diagnostic::capture_public_unverified_candidate_v1(&encoded);
@@ -485,7 +506,9 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         prover_diagnostic::record_public_verifier_error_v1("credential-envelope-decode", &_error);
         ZkX509EngineErrorV1::ProverSelfCheckFailed
     })?;
-    if envelope.public != consensus_public.credential_binding {
+    if envelope.proof_instance != proof_instance
+        || envelope.public != consensus_public.credential_binding
+    {
         #[cfg(test)]
         prover_diagnostic::record_public_verifier_error_v1(
             "credential-public-binding",
@@ -494,10 +517,12 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         return Err(ZkX509EngineErrorV1::ProverSelfCheckFailed);
     }
     verify_zk_x509_credential_subproofs_v1(
+        envelope.proof_instance,
         statement,
         &consensus_public,
         envelope.main_aggregate,
         envelope.ca_subproof,
+        envelope.joint_openings,
     )
     .map_err(|_error| {
         #[cfg(test)]
@@ -730,10 +755,12 @@ mod tests {
         let recomputed =
             recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
         assert_eq!(recomputed, independent);
-        if ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent) {
+        if cfg!(feature = "privacy-release-evidence")
+            || ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent)
+        {
             // These are public profile descriptors, never witness material.
-            // Retain the exact independent inputs when a deliberate first-
-            // release protocol change requires a new native pin.
+            // Release evidence retains the genuine native framing inputs even
+            // when the current stored pin already matches the constructor.
             eprintln!(
                 "zk-x509-independent-compiled-profile-sha256={}",
                 hex::encode(independent)
@@ -759,6 +786,9 @@ mod tests {
         assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
         fields[9] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1681-degree4-authenticated72-times-73-relations-38bit-slack-affine-loglookup-30-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9420938|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
         fields[10] = b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated".to_vec();
+        // Historical profiles predate the corrected CA domain descriptor.
+        // Restore its exact bytes alongside the retired relation descriptors.
+        fields[12] = b"zk-x509-credential-pre-aux-v1:X5B1:version1:profile=main-profile-digest+ca-profile-digest:public=consensus-context-digest+ca-public-digest:base-roots=exact-main1-joined-ordered-native-log5,8,15,16,18,19-then-ca1-log13:post-base-challenges=exact272-goldilocks-fields:01-sha-call=4lanes*(beta,call,role,slot,kind,word,value)=28:02-rfc=4lanes*tuple12=48:03-projection=4lanes*(copy-beta,copy-gamma,compaction-active,compaction-invocation,compaction-position,compaction-value,compaction-gamma)=28:04-io=4lanes*(beta,channel,offset,value,is-write)=20:05-der=4lanes*(tuple12-then-byte-lookup)=52:06-sha-word-memory=4lanes*(beta,address,value,is-write)=16:07-sha-word-base-fold=4:08-p256-value=4lanes*7=28:09-p256-cross=4lanes*4=16:10-p256-scalar=4lanes*5=20:11-p256-arithmetic-copy=4lanes*3=12:lane-major-within-each-family:one-private-opaque-main-post-base-capability:no-raw-constructor:bind-post-challenge-state-and-all272-canonical-challenges-into-each-local-transcript-before-aux-roots:no-caller-selected-binding".to_vec();
         fields[13] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification".to_vec();
         fields[14] =
             hex::decode("307915059aa0f173351facf134c2c08df720e365cfdb96c239eca44c07b654bb")
@@ -776,7 +806,7 @@ mod tests {
         .unwrap();
     }
     #[test]
-    fn retired_profile_restoration_freezes_sha_and_p256_manifest_fields() {
+    fn retired_profile_restoration_freezes_pre_aux_sha_and_p256_manifest_fields() {
         let sha_digests = [[0x51; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
         let p256_digest = [0x61; 48];
         let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
@@ -785,6 +815,7 @@ mod tests {
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
         let mut substituted = canonical.clone();
+        substituted[12] = b"substituted-current-pre-aux-descriptor".to_vec();
         substituted[17] = b"substituted-current-sha-call-descriptor".to_vec();
         substituted[27] = b"substituted-current-p256-descriptor".to_vec();
         substituted[28] = vec![0x91; 48];
@@ -793,7 +824,7 @@ mod tests {
         assert_eq!(substituted, canonical);
         assert_eq!(canonical[28].len(), 48);
         for (field, (retired, current)) in canonical.iter().zip(fields).enumerate() {
-            if ![9, 10, 13, 14, 17, 27, 28].contains(&field) {
+            if ![9, 10, 12, 13, 14, 17, 27, 28].contains(&field) {
                 assert_eq!(retired, current);
             }
         }
@@ -803,16 +834,15 @@ mod tests {
         let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
         let fields = compiled_profile_fields_v1(&sha, &p256);
         let profile = core::str::from_utf8(fields[9]).unwrap();
-        assert!(profile.contains("main-public-terminal-records=212-rfc4+sha208"));
+        assert!(profile.contains("main-public-terminal-records=0|ca-public-terminal-records=0"));
         assert!(
-            profile
-                .contains("main-claim-envelope-bytes=4420+includes992-key-and-digest-DEEP-values")
+            profile.contains("main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10")
         );
         assert!(profile.contains("main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224"));
         assert!(profile.contains(
-            "MAIN31-derived-key-and-digest-openings:5-power8+6-power2+20-power32:all-admissible-and-authenticated"
+            "MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux"
         ));
-        assert!(profile.contains("max-encoded-combined-bound=9413406"));
+        assert!(profile.contains("max-encoded-combined-bound=9412944"));
         assert!(profile.contains("main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411"));
         assert!(profile.contains("max-proof-bytes=9437184"));
         assert!(profile.contains("quotient-chunk-stride=fri-degree-cap-minus137"));
@@ -831,7 +861,10 @@ mod tests {
                 .contains("no-unmasked-der-rfc-source-or-p256-terminal-scalars")
         );
         let components = core::str::from_utf8(fields[13]).unwrap();
-        assert!(components.contains("private-der-source-terminal-air-links=complete"));
+        assert!(
+            components
+                .contains("rfc5280-private-source-and-CA-original-polynomial-air-links=complete")
+        );
         assert!(components.contains("private-committed-terminal-air-links=complete"));
     }
     #[test]
@@ -1030,18 +1063,21 @@ mod tests {
         let entropy = prover
             .find("HealthCheckedTryCryptoRngV1::new(rng)")
             .expect("health-checked entropy");
+        let nonce = prover
+            .find("ZkX509ProofInstanceV1::sample_v1(&mut checked_rng)")
+            .expect("disjoint public nonce before private masks");
         let main_base = prover
             .find("commit_zk_x509_main_base_phase_v1_with_rng(")
             .expect("joined MAIN base root");
         let ca = prover
-            .find("prove_zk_x509_ca_accumulator_stark_v1_with_rng(")
-            .expect("compact-CA proof");
+            .find("commit_ca_through_auxiliary_v1(")
+            .expect("original compact-CA auxiliary phase");
         let joint_binding = prover
-            .find("derive_zk_x509_credential_pre_aux_binding_v1(")
-            .expect("joint MAIN and CA root X5B1");
+            .find(".bind_joint_credential_pre_aux_v1_with_rng(")
+            .expect("joint MAIN and CA root X5B1 with retained owner admission");
         let main_aux = prover
-            .find(".bind_credential_pre_aux_v1_with_rng(")
-            .expect("bound MAIN auxiliary phase");
+            .find("finish_joint_main_ca_v1(")
+            .expect("paired original MAIN and CA composition/DEEP/FRI");
         let envelope = prover
             .find("encode_zk_x509_credential_envelope_v1(")
             .expect("X5S1 envelope");
@@ -1053,7 +1089,8 @@ mod tests {
             profile_gate < preparation
                 && preparation < assembly
                 && assembly < entropy
-                && entropy < main_base
+                && entropy < nonce
+                && nonce < main_base
                 && main_base < ca
                 && ca < joint_binding
                 && joint_binding < main_aux

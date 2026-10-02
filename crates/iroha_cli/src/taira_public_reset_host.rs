@@ -1253,10 +1253,6 @@ fn validate_prepared_mutation_progress(
         ));
     }
     let plan = host_forward_plan(admitted);
-    let first_restart = plan
-        .iter()
-        .position(|key| key.action == HostAction::Restart.label())
-        .ok_or_else(|| eyre!("host plan omits restart phase"))?;
     let first_seal = plan
         .iter()
         .position(|key| key.action == HostAction::Seal.label())
@@ -1272,10 +1268,15 @@ fn validate_prepared_mutation_progress(
                 .position(|key| key.action == HostAction::BeaconActivate.label())
                 .ok_or_else(|| eyre!("host plan omits provider activation"))?
         }
-        "pre_edge" => first_restart,
+        "pre_edge" => plan
+            .iter()
+            .position(|key| key.action == HostAction::Restart.label())
+            .ok_or_else(|| eyre!("host plan omits diagnostic restart phase"))?,
         "post_edge" => first_seal,
         phase => {
-            first_restart
+            plan.iter()
+                .position(|key| key.action == HostAction::Restart.label())
+                .ok_or_else(|| eyre!("host plan omits diagnostic restart phase"))?
                 + admitted
                     .inventory
                     .qualification_scope
@@ -5016,20 +5017,8 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
-    for validator in admitted
-        .inventory
-        .qualification_scope
-        .restart_validator_indices()
-        .iter()
-        .map(|index| &admitted.inventory.validators[*index])
-        .filter(|validator| validator.endpoint.host_identity_sha256 == identity)
-    {
-        plan.push(HostActionKeyV1 {
-            host_slug: validator.slug.clone(),
-            action: HostAction::Restart.label().to_owned(),
-            artifact_role: String::new(),
-        });
-    }
+    // Beacon activation retains its real provider restarts. Engineering
+    // restart proofs are not part of the automatic deployment frontier.
     if let Some(edge) = edge {
         for artifact in &edge.artifacts {
             plan.push(HostActionKeyV1 {
@@ -11901,62 +11890,6 @@ fn prepared_child_process_error(output: &ProcessOutput, label: &str, kind: &str)
     )
 }
 
-fn require_doctor_success(
-    output: ProcessOutput,
-    public_root: &str,
-    scope: crate::taira::DoctorScope,
-) -> Result<Vec<u8>> {
-    if !output.status.success()
-        && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
-        && value.get("command").and_then(norito::json::Value::as_str) == Some("taira_doctor")
-        && value
-            .get("public_root")
-            .and_then(norito::json::Value::as_str)
-            == Some(public_root)
-        && let Some(checks) = value.get("checks").and_then(norito::json::Value::as_array)
-        && checks.len() <= 32
-    {
-        // This config-free doctor reads public routes. Preserve its bounded
-        // single-line check diagnostic so HTTP 200 semantic failures remain
-        // actionable; never forward whole responses or arbitrary failure arrays.
-        let failures = checks
-            .iter()
-            .filter_map(|check| {
-                let name = check.get("name")?.as_str()?;
-                let status = check.get("http_status")?.as_u64()?;
-                (check.get("ok")?.as_bool()? == false
-                    && status <= 599
-                    && crate::taira::doctor_expected_checks(scope)
-                        .iter()
-                        .any(|(expected, _, _)| *expected == name))
-                .then(|| {
-                    let detail = check
-                        .get("detail")
-                        .and_then(norito::json::Value::as_str)
-                        .filter(|detail| {
-                            !detail.is_empty()
-                                && detail.len() <= 512
-                                && detail
-                                    .bytes()
-                                    .all(|byte| byte.is_ascii_graphic() || byte == b' ')
-                        });
-                    match detail {
-                        Some(detail) => format!("{name}: HTTP {status}: {detail}"),
-                        None => format!("{name}: HTTP {status}"),
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        if !failures.is_empty() {
-            return Err(eyre!(
-                "same-revision Taira doctor failed: {}",
-                failures.join(", ")
-            ));
-        }
-    }
-    require_success(output, "same-revision Taira doctor")
-}
-
 /// Keep one restart and its HTTP readiness barrier inside the same deadline.
 /// The caller retains the durable Submitted/Applied transitions; this helper
 /// never retries a restart or submits a signed mutation.
@@ -11979,7 +11912,7 @@ fn run_restart_with_validator_http_readiness(
 
 /// A running systemd process can still be initializing storage and Torii.
 /// Wait for the node's admission readiness, including completed Queue startup
-/// reconciliation. The signed convergence and public doctor checks retain
+/// reconciliation. Signed convergence and public ingress readiness retain
 /// responsibility for identity and protocol validation; idle height may be unchanged.
 fn wait_for_validator_http_readiness(
     origins: &[String],
@@ -14804,7 +14737,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .stream_file(&self.admitted.inventory.validators[0].slug, "iroha_cli")?;
         let cli = inherited_file_path(&cli_file)?;
         inherited_files.push(cli_file);
-        // All owned CLI calls use explicit config custody or the config-free doctor.
+        // All owned CLI calls use explicit config custody.
         // Machine mode removes the startup banner from structured stderr diagnostics.
         args.insert(0, OsString::from("--machine"));
         self.runner.run(&ProcessSpec {
@@ -14816,36 +14749,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             inherited_files,
             deadline,
         })
-    }
-
-    fn doctor(&mut self, timeout_secs: u64) -> Result<()> {
-        self.doctor_with_mode(timeout_secs, false)
-    }
-
-    fn doctor_with_mode(&mut self, timeout_secs: u64, recovery_only: bool) -> Result<()> {
-        let scope = match self.admitted.inventory.qualification_scope {
-            super::QualificationScopeV1::CoreTestnet => crate::taira::DoctorScope::Basic,
-            super::QualificationScopeV1::FullInrou => crate::taira::DoctorScope::Full,
-        };
-        let args = vec![
-            "taira".into(),
-            "doctor".into(),
-            "--scope".into(),
-            scope.as_str().into(),
-            "--public-root".into(),
-            PUBLIC_ROOT.into(),
-            "--json".into(),
-        ];
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("doctor deadline overflow"))?;
-        if !recovery_only {
-            require_forward_lease_budget(self.admitted, timeout_secs)?;
-        }
-        let output = self.run_local_cli_process_until(args, Vec::new(), deadline, recovery_only)?;
-        let output = require_doctor_success(output, PUBLIC_ROOT, scope)?;
-        let value = parse_json_report(&output, "same-revision Taira doctor")?;
-        validate_doctor_report(&value, PUBLIC_ROOT, scope)
     }
 
     fn run_journaled_write_canary_child(
@@ -15395,24 +15298,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         Ok(outcome)
     }
 
-    fn run_journaled_inrou_prepared_child(
-        &mut self,
-        progress: &mut dyn RecoveryProgress,
-        mutation_index: usize,
-        timeout_secs: u64,
-        phase: &str,
-        kind: &str,
-    ) -> Result<()> {
-        self.run_journaled_prepared_child(
-            progress,
-            mutation_index,
-            timeout_secs,
-            phase,
-            kind,
-            PreparedChildProtocol::Inrou,
-        )
-    }
-
     fn prepare_inrou_child_until(
         &mut self,
         deadline: Instant,
@@ -15893,25 +15778,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             previous = current;
         }
         Ok(previous)
-    }
-
-    fn require_fresh_inrou_check(
-        &mut self,
-        receipt_name: &str,
-        timeout_secs: u64,
-        recovery_only: bool,
-    ) -> Result<()> {
-        let had_prior_receipt = self
-            .validate_existing_local_receipt(receipt_name, validate_retained_inrou_check_report)?;
-        require_fresh_liveness_report(
-            self,
-            had_prior_receipt,
-            |transport| {
-                transport.run_inrou_check_report_with_mode(timeout_secs, recovery_only, None)
-            },
-            |value, transport| validate_fresh_inrou_check_report(value, transport.admitted),
-            |transport, value| transport.publish_local_receipt(receipt_name, value),
-        )
     }
 
     fn run_inrou_check_report_with_mode(
@@ -16426,10 +16292,6 @@ pub(super) fn build_recovery_intent(
                 )
             })
             .collect(),
-        ExecutionStep::EdgeVerify => ["onboarding", "faucet", "write_canary"]
-            .into_iter()
-            .map(|kind| recovery_child_mutation(nonce, "post_edge", kind, None))
-            .collect(),
         _ => return None,
     };
     Some(RecoveryIntentV1 {
@@ -16615,16 +16477,6 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 })();
                 return classify_inrou_restart_recovery_outcome(result);
             }
-            ExecutionStep::EdgeVerify => {
-                self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
-                if inventory.qualification_scope.includes_inrou() {
-                    self.require_fresh_inrou_check(
-                        "inrou-post-edge.json",
-                        inventory.timeouts.canary_secs,
-                        true,
-                    )?;
-                }
-            }
             _ => {
                 return Ok(RecoveryOutcome::Rejected("recovery_step_kind".to_owned()));
             }
@@ -16663,34 +16515,10 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     super::recovery_ready_to_resume_beacon_activation(intent, step),
                     deadline,
                 )?;
-                // Provider activation restarts validators one at a time. A
-                // resumed canary may also begin directly at the write loop.
+                // This retained phase executes only the required eight-child
+                // bootstrap prefix. Provider activation restarts validators
+                // one at a time; confirm the mesh after that actual operation.
                 self.wait_for_validator_mesh(inventory, deadline)?;
-                for (index, kind) in inventory
-                    .qualification_scope
-                    .canary_kinds()
-                    .iter()
-                    .enumerate()
-                    .skip(next_mutation.max(8))
-                {
-                    match *kind {
-                        "onboarding" | "faucet" | "write_canary" => self
-                            .run_journaled_write_canary_child(
-                                progress,
-                                index,
-                                inventory.timeouts.canary_secs,
-                                "pre_edge",
-                                kind,
-                            )?,
-                        _ => self.run_journaled_inrou_prepared_child(
-                            progress,
-                            index,
-                            inventory.timeouts.canary_secs,
-                            "pre_edge",
-                            kind,
-                        )?,
-                    }
-                }
                 Ok(())
             }
             ExecutionStep::RestartProof => {
@@ -16755,35 +16583,6 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 }
                 if inventory.qualification_scope.includes_inrou() {
                     self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
-                }
-                Ok(())
-            }
-            ExecutionStep::EdgeVerify => {
-                self.bootstrap_and_dispatch_edge(
-                    &inventory.edge,
-                    HostAction::EdgeVerify,
-                    inventory.timeouts.edge_secs,
-                )?;
-                self.doctor(inventory.timeouts.canary_secs)?;
-                for (index, kind) in ["onboarding", "faucet", "write_canary"]
-                    .into_iter()
-                    .enumerate()
-                    .skip(next_mutation)
-                {
-                    self.run_journaled_write_canary_child(
-                        progress,
-                        index,
-                        inventory.timeouts.canary_secs,
-                        "post_edge",
-                        kind,
-                    )?;
-                }
-                if inventory.qualification_scope.includes_inrou() {
-                    self.require_fresh_inrou_check(
-                        "inrou-post-edge.json",
-                        inventory.timeouts.canary_secs,
-                        false,
-                    )?;
                 }
                 Ok(())
             }
@@ -16902,6 +16701,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::Preflight => HostAction::Preflight,
             ExecutionStep::EdgeStage => HostAction::EdgeStage,
             ExecutionStep::EdgeCutover => HostAction::EdgeCutover,
+            ExecutionStep::EdgeVerify => HostAction::EdgeVerify,
             other => return Err(eyre!("edge received invalid step `{}`", other.label())),
         };
         self.bootstrap_and_dispatch_edge(&inventory.edge, action, timeout_secs)?;
@@ -18149,89 +17949,6 @@ fn validate_common_report(
     Ok(())
 }
 
-fn validate_doctor_report(
-    value: &norito::json::Value,
-    public_root: &str,
-    scope: crate::taira::DoctorScope,
-) -> Result<()> {
-    validate_common_report(value, "taira_doctor", public_root)?;
-    let object = value.as_object().expect("common report checked object");
-    require_exact_json_fields(
-        object,
-        &[
-            "command",
-            "status",
-            "public_root",
-            "scope",
-            "checks",
-            "warnings",
-            "failures",
-        ],
-        "Taira doctor report",
-    )?;
-    if object.get("scope").and_then(norito::json::Value::as_str) != Some(scope.as_str()) {
-        return Err(eyre!(
-            "Taira doctor report scope does not match signed qualification"
-        ));
-    }
-    require_empty_report_array(object, "failures", "Taira doctor report")?;
-    let warnings = object
-        .get("warnings")
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("Taira doctor warnings must be an array"))?;
-    if warnings.len() > 32
-        || warnings.iter().any(|warning| {
-            warning.as_str().is_none_or(|warning| {
-                warning.is_empty()
-                    || warning.len() > 1_024
-                    || warning.bytes().any(|byte| byte.is_ascii_control())
-            })
-        })
-    {
-        return Err(eyre!(
-            "Taira doctor warnings are outside the exact V1 bound"
-        ));
-    }
-    let checks = object
-        .get("checks")
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
-    let expected_checks = crate::taira::doctor_expected_checks(scope);
-    if checks.len() != expected_checks.len() {
-        return Err(eyre!(
-            "Taira doctor report must contain exactly {} checks",
-            expected_checks.len()
-        ));
-    }
-    for (check, (name, http_status, detail)) in checks.iter().zip(expected_checks) {
-        let check = check
-            .as_object()
-            .ok_or_else(|| eyre!("Taira doctor check must be an object"))?;
-        require_exact_json_fields(
-            check,
-            if detail.is_some() {
-                &["name", "http_status", "ok", "detail"]
-            } else {
-                &["name", "http_status", "ok"]
-            },
-            "Taira doctor check",
-        )?;
-        if check.get("name").and_then(norito::json::Value::as_str) != Some(name)
-            || check
-                .get("http_status")
-                .and_then(norito::json::Value::as_u64)
-                != Some(http_status)
-            || check.get("ok").and_then(norito::json::Value::as_bool) != Some(true)
-            || detail.as_deref().is_some_and(|detail| {
-                check.get("detail").and_then(norito::json::Value::as_str) != Some(detail)
-            })
-        {
-            return Err(eyre!("Taira doctor check `{name}` is not exact V1"));
-        }
-    }
-    Ok(())
-}
-
 fn require_fresh_liveness_report<C>(
     context: &mut C,
     had_prior_receipt: bool,
@@ -19377,28 +19094,6 @@ mod tests {
         )
         .expect_err("expired authorization");
         assert_eq!(error.to_string(), "authorization expired");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn doctor_failure_reports_bounded_public_check_diagnostics() {
-        use std::os::unix::process::ExitStatusExt as _;
-        let output = ProcessOutput {
-            status: ExitStatus::from_raw(1 << 8),
-            stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"response too large"},{"name":"untrusted-label","http_status":200,"ok":false},{"name":"mcp_tools_list","http_status":200,"ok":false,"detail":"unsafe\nmultiline"}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
-            stderr: b"generic CLI failure".to_vec(),
-        };
-        let error = require_doctor_success(
-            output,
-            "https://taira.sora.org",
-            crate::taira::DoctorScope::Basic,
-        )
-        .expect_err("doctor failure")
-        .to_string();
-        assert!(error.contains("status: HTTP 502: response too large"));
-        assert!(error.contains("mcp_tools_list: HTTP 200"));
-        assert!(!error.contains("unsafe") && !error.contains("multiline"));
-        assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
     }
 
     #[cfg(unix)]
@@ -21405,12 +21100,9 @@ mod tests {
             .iter()
             .position(|key| key.action == HostAction::BeaconActivate.label())
             .unwrap();
-        let restart = plan
-            .iter()
-            .position(|key| key.action == HostAction::Restart.label())
-            .unwrap();
+        let after_activation = activation + 4;
         assert_eq!(
-            plan[activation..restart]
+            plan[activation..after_activation]
                 .iter()
                 .map(|key| (key.host_slug.as_str(), key.action.as_str()))
                 .collect::<Vec<_>>(),
@@ -21437,8 +21129,8 @@ mod tests {
         }
         admitted.request.mutation_kind = "inrou_bundle_pin".into();
         assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
-        progress.next_forward_ordinal = u16::try_from(restart).unwrap();
-        validate_prepared_mutation_progress(&admitted, &progress).unwrap();
+        progress.next_forward_ordinal = u16::try_from(after_activation).unwrap();
+        assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
         admitted.request.mutation_kind = "write_canary".into();
         assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
         select_target(&mut admitted, "taira-validator-1");
@@ -23696,166 +23388,6 @@ time.sleep(30)
             .expect("current producer service identity");
     }
 
-    fn exact_doctor_report_fixture(
-        public_root: &str,
-        scope: crate::taira::DoctorScope,
-    ) -> norito::json::Value {
-        let checks = crate::taira::doctor_expected_checks(scope)
-            .into_iter()
-            .map(|(name, http_status, detail)| {
-                let mut check = norito::json::Map::new();
-                check.insert("name".to_owned(), name.into());
-                check.insert("http_status".to_owned(), http_status.into());
-                check.insert("ok".to_owned(), true.into());
-                if let Some(detail) = detail {
-                    check.insert("detail".to_owned(), detail.into());
-                }
-                norito::json::Value::Object(check)
-            })
-            .collect::<Vec<_>>();
-        norito::json!({
-            "command": "taira_doctor",
-            "status": "ok",
-            "public_root": public_root,
-            "scope": (scope.as_str()),
-            "checks": checks,
-            "warnings": [],
-            "failures": [],
-        })
-    }
-
-    #[test]
-    fn doctor_report_requires_the_exact_first_release_check_surface() {
-        let public_root = "https://taira.sora.org";
-        let canonical = exact_doctor_report_fixture(public_root, crate::taira::DoctorScope::Basic);
-        validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Basic)
-            .expect("exact doctor report");
-
-        let error =
-            validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Full)
-                .expect_err("basic report must not satisfy full qualification");
-        assert_eq!(
-            error.to_string(),
-            "Taira doctor report scope does not match signed qualification"
-        );
-        let mut without_wallet = canonical.clone();
-        without_wallet
-            .get_mut("checks")
-            .and_then(norito::json::Value::as_array_mut)
-            .unwrap()
-            .retain(|check| {
-                !matches!(
-                    check["name"].as_str(),
-                    Some("account_capabilities" | "account_faucet_policy")
-                )
-            });
-        assert!(
-            validate_doctor_report(
-                &without_wallet,
-                public_root,
-                crate::taira::DoctorScope::Basic
-            )
-            .is_err(),
-            "a report omitting wallet prerequisites cannot qualify deployment"
-        );
-
-        for scope in [
-            crate::taira::DoctorScope::Basic,
-            crate::taira::DoctorScope::Full,
-        ] {
-            let mut disabled = exact_doctor_report_fixture(public_root, scope);
-            validate_doctor_report(&disabled, public_root, scope)
-                .expect("enabled faucet qualifies in each doctor scope");
-            let faucet = disabled
-                .as_object_mut()
-                .and_then(|root| root.get_mut("checks"))
-                .and_then(norito::json::Value::as_array_mut)
-                .and_then(|checks| {
-                    checks.iter_mut().find(|check| {
-                        check.get("name").and_then(norito::json::Value::as_str)
-                            == Some("account_faucet_policy")
-                    })
-                })
-                .and_then(norito::json::Value::as_object_mut)
-                .expect("each doctor scope requires the faucet policy check");
-            assert_eq!(
-                faucet
-                    .get("http_status")
-                    .and_then(norito::json::Value::as_u64),
-                Some(200)
-            );
-            assert_eq!(
-                faucet.get("ok").and_then(norito::json::Value::as_bool),
-                Some(true)
-            );
-            faucet.insert("http_status".to_owned(), 503_u64.into());
-            disabled.as_object_mut().expect("doctor object").insert(
-                "warnings".to_owned(),
-                norito::json!([
-                    "account_faucet_policy: Account faucet disabled; funding is unavailable"
-                ]),
-            );
-            validate_common_report(&disabled, "taira_doctor", public_root)
-                .expect("a warning-only report passes the common envelope checks");
-            let error = validate_doctor_report(&disabled, public_root, scope)
-                .expect_err("release qualification requires an enabled faucet despite the warning");
-            assert_eq!(
-                error.to_string(),
-                "Taira doctor check `account_faucet_policy` is not exact V1"
-            );
-        }
-
-        let mut sparse = canonical.clone();
-        sparse
-            .as_object_mut()
-            .expect("doctor object")
-            .remove("warnings");
-        let _error = validate_doctor_report(&sparse, public_root, crate::taira::DoctorScope::Basic)
-            .expect_err("sparse doctor report must fail closed");
-
-        let mut extra = canonical.clone();
-        extra
-            .as_object_mut()
-            .expect("doctor object")
-            .insert("legacy_routes".to_owned(), norito::json!([]));
-        let _error = validate_doctor_report(&extra, public_root, crate::taira::DoctorScope::Basic)
-            .expect_err("unknown doctor report fields must fail closed");
-
-        let mut nonfinal_mcp = canonical.clone();
-        let mcp_get = nonfinal_mcp
-            .as_object_mut()
-            .and_then(|root| root.get_mut("checks"))
-            .and_then(norito::json::Value::as_array_mut)
-            .and_then(|checks| {
-                checks.iter_mut().find(|check| {
-                    check
-                        .as_object()
-                        .and_then(|check| check.get("name"))
-                        .and_then(norito::json::Value::as_str)
-                        == Some("mcp_get")
-                })
-            })
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("MCP GET doctor check");
-        mcp_get.insert("http_status".to_owned(), 204_u64.into());
-        let _error =
-            validate_doctor_report(&nonfinal_mcp, public_root, crate::taira::DoctorScope::Basic)
-                .expect_err("MCP GET must require exact HTTP 405");
-
-        let mut substituted = canonical;
-        substituted
-            .as_object_mut()
-            .and_then(|root| root.get_mut("checks"))
-            .and_then(norito::json::Value::as_array_mut)
-            .and_then(|checks| checks.first_mut())
-            .and_then(norito::json::Value::as_object_mut)
-            .expect("first doctor check")
-            .insert("name".to_owned(), "health".into());
-        let _error =
-            validate_doctor_report(&substituted, public_root, crate::taira::DoctorScope::Basic)
-                .expect_err("substituted doctor route name must fail closed");
-    }
-
     #[test]
     fn remote_command_grammar_has_one_fixed_dispatcher_shape() {
         assert!(
@@ -24607,7 +24139,7 @@ time.sleep(30)
     }
 
     #[test]
-    fn host_frontier_preserves_four_beacon_activations_before_restart() {
+    fn host_frontier_preserves_four_beacon_activations_before_cutover() {
         let admitted = progress_admission();
         let plan = host_forward_plan(&admitted);
         let positions = |action: HostAction| {
@@ -24623,11 +24155,8 @@ time.sleep(30)
                 .iter()
                 .all(|i| *i < activations[0])
         );
-        assert!(
-            positions(HostAction::Restart)
-                .iter()
-                .all(|i| *i > activations[3])
-        );
+        assert!(positions(HostAction::Restart).is_empty());
+        assert!(positions(HostAction::EdgeStage)[0] > activations[3]);
         for action in [
             "epoch_supervisor_pause",
             "epoch_supervisor_start",
@@ -24639,7 +24168,7 @@ time.sleep(30)
         }
         let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary).unwrap();
         assert_eq!(canary.mutations[7].kind, "beacon_provider_4");
-        assert_eq!(canary.mutations[8].kind, "inrou_bundle_pin");
+        assert_eq!(canary.mutations.len(), 8);
         assert!(
             canary
                 .mutations
@@ -24653,7 +24182,7 @@ time.sleep(30)
         let inventory = super::super::sample_inventory_fixture();
         let canary = build_recovery_intent(&inventory, ExecutionStep::Canary)
             .expect("canary recovery intent");
-        assert_eq!(canary.mutations.len(), 12);
+        assert_eq!(canary.mutations.len(), 8);
         assert_eq!(
             canary
                 .mutations
@@ -24669,10 +24198,6 @@ time.sleep(30)
                 "beacon_provider_2",
                 "beacon_provider_3",
                 "beacon_provider_4",
-                "inrou_bundle_pin",
-                "inrou_guest_pin",
-                "inrou_discovery_pin",
-                "inrou_canary",
             ]
         );
         let restart = build_recovery_intent(&inventory, ExecutionStep::RestartProof)
@@ -24688,9 +24213,7 @@ time.sleep(30)
                 ["onboarding", "faucet", "write_canary"]
             );
         }
-        let edge = build_recovery_intent(&inventory, ExecutionStep::EdgeVerify)
-            .expect("edge recovery intent");
-        assert_eq!(edge.mutations.len(), 3);
+        assert!(build_recovery_intent(&inventory, ExecutionStep::EdgeVerify).is_none());
     }
 
     #[test]
@@ -24734,14 +24257,12 @@ time.sleep(30)
                 .collect::<Vec<_>>(),
             "all four validators retain artifact custody, staging, start and seal actions"
         );
-        assert_eq!(
+        assert!(
             core_plan
                 .iter()
-                .filter(|key| key.action == HostAction::Restart.label())
-                .map(|key| key.host_slug.as_str())
-                .collect::<Vec<_>>(),
-            [super::super::VALIDATOR_SLUGS[0]],
-            "the signed core plan restarts only the first canonical validator"
+                .chain(&full_plan)
+                .all(|key| key.action != HostAction::Restart.label()),
+            "neither deployment scope schedules diagnostic restarts"
         );
         assert!(!admitted.inventory.qualification_scope.includes_inrou());
         let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
@@ -24763,8 +24284,8 @@ time.sleep(30)
                 "beacon_provider_4"
             ]
         );
-        assert!(!recovery_intent_identity_matches(&canary, &full_canary));
-        assert!(!recovery_intent_identity_matches(&full_canary, &canary));
+        assert!(recovery_intent_identity_matches(&canary, &full_canary));
+        assert!(recovery_intent_identity_matches(&full_canary, &canary));
         let restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
             .expect("core restart intent");
         assert_eq!(restart.mutations.len(), 4);
@@ -24816,25 +24337,16 @@ time.sleep(30)
         assert!(
             super::super::validate_recovery_intent(&overrun, ExecutionStep::RestartProof).is_err()
         );
-        let edge = build_recovery_intent(&admitted.inventory, ExecutionStep::EdgeVerify)
-            .expect("core post-edge intent");
-        assert_eq!(
-            edge.mutations
-                .iter()
-                .map(|mutation| mutation.kind.as_str())
-                .collect::<Vec<_>>(),
-            ["onboarding", "faucet", "write_canary"]
-        );
+        assert!(build_recovery_intent(&admitted.inventory, ExecutionStep::EdgeVerify).is_none());
         let envelopes = canary
             .mutations
             .iter()
             .chain(&restart.mutations)
-            .chain(&edge.mutations)
             .filter(|mutation| mutation.kind != "host_restart")
             .count();
         assert_eq!(
-            envelopes, 14,
-            "initial beacon install, four providers, single postrestart, and public-edge workflows retain immutable recovery evidence"
+            envelopes, 11,
+            "bootstrap and explicitly constructed restart intent retain immutable custody"
         );
         admitted.request.mutation_kind = "write_canary".to_owned();
         for phase in ["pre_edge", "restart-wave-1", "post_edge"] {
@@ -25317,7 +24829,7 @@ time.sleep(30)
     }
 
     #[test]
-    fn cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace() {
+    fn cohost_mutation_boundaries_share_the_bootstrap_plan_and_lock_namespace() {
         for scope in [
             super::super::QualificationScopeV1::CoreTestnet,
             super::super::QualificationScopeV1::FullInrou,
@@ -25338,7 +24850,7 @@ time.sleep(30)
                 .inventory
                 .validators
                 .iter()
-                .map(|v| v.slug.clone())
+                .map(|validator| validator.slug.clone())
                 .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
                 .collect::<Vec<_>>();
             for slug in slugs {
@@ -25350,33 +24862,17 @@ time.sleep(30)
                     "{slug}"
                 );
             }
-            let first_restart = plan
-                .iter()
-                .position(|key| key.action == HostAction::Restart.label())
-                .expect("first restart");
-            let first_seal = plan
-                .iter()
-                .position(|key| key.action == HostAction::Seal.label())
-                .expect("first seal");
-            assert_eq!(
-                plan[first_restart..first_restart + scope.restart_validator_indices().len()]
-                    .iter()
-                    .map(|key| key.host_slug.as_str())
-                    .collect::<Vec<_>>(),
-                scope
-                    .restart_validator_indices()
-                    .iter()
-                    .map(|index| super::super::VALIDATOR_SLUGS[*index])
-                    .collect::<Vec<_>>()
+            assert!(
+                plan.iter()
+                    .all(|key| key.action != HostAction::Restart.label())
             );
             let first_beacon = plan
                 .iter()
                 .position(|key| key.action == HostAction::BeaconActivate.label())
                 .expect("first provider activation");
             assert_eq!(plan[first_beacon - 1].action, HostAction::Start.label());
-            assert_eq!(first_restart, first_beacon + 4);
             assert_eq!(
-                plan[first_beacon..first_restart]
+                plan[first_beacon..first_beacon + 4]
                     .iter()
                     .map(|key| (key.action.as_str(), key.host_slug.as_str()))
                     .collect::<Vec<_>>(),
@@ -25385,66 +24881,36 @@ time.sleep(30)
                     .map(|slug| (HostAction::BeaconActivate.label(), *slug))
                     .collect::<Vec<_>>()
             );
+            let first_seal = plan
+                .iter()
+                .position(|key| key.action == HostAction::Seal.label())
+                .expect("first seal");
             assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
-            let phases = ["onboarding", "faucet", "write_canary"]
-                .into_iter()
-                .map(|kind| ("pre_edge".to_owned(), kind, first_beacon))
-                .chain(
-                    [
-                        "inrou_bundle_pin",
-                        "inrou_guest_pin",
-                        "inrou_discovery_pin",
-                        "inrou_canary",
-                    ]
-                    .into_iter()
-                    .filter(|_| scope.includes_inrou())
-                    .map(|kind| ("pre_edge".to_owned(), kind, first_restart)),
-                )
-                .chain((1..=scope.restart_validator_indices().len()).map(|wave| {
-                    (
-                        format!("restart-wave-{wave}"),
-                        "write_canary",
-                        first_restart + wave,
-                    )
-                }))
-                .chain(std::iter::once((
-                    "post_edge".to_owned(),
-                    "write_canary",
-                    first_seal,
-                )));
-            for (phase, kind, ordinal) in phases {
-                admitted.request.mutation_phase = phase.clone();
+            admitted.request.mutation_phase = "pre_edge".to_owned();
+            for kind in ["onboarding", "faucet", "write_canary"] {
                 admitted.request.mutation_kind = kind.to_owned();
                 let mut progress = initial_host_progress(&admitted);
-                progress.next_forward_ordinal = u16::try_from(ordinal).expect("bounded plan");
+                progress.next_forward_ordinal = u16::try_from(first_beacon).expect("bounded plan");
                 validate_prepared_mutation_progress(&admitted, &progress)
-                    .expect("exact complete-host boundary");
-                for wrong in [ordinal - 1, ordinal + 1] {
-                    progress.next_forward_ordinal =
-                        u16::try_from(wrong).expect("bounded wrong ordinal");
-                    assert!(
-                        validate_prepared_mutation_progress(&admitted, &progress).is_err(),
-                        "{phase} ordinal={wrong}"
-                    );
+                    .expect("exact bootstrap boundary requires no diagnostic restart phase");
+                for wrong in [first_beacon - 1, first_beacon + 1] {
+                    progress.next_forward_ordinal = u16::try_from(wrong).expect("bounded ordinal");
+                    assert!(validate_prepared_mutation_progress(&admitted, &progress).is_err());
                 }
             }
-            admitted.request.mutation_phase = format!(
-                "restart-wave-{}",
-                scope.restart_validator_indices().len() + 1
-            );
+            admitted.request.mutation_kind = "write_canary".to_owned();
+            admitted.request.mutation_phase = "restart-wave-1".to_owned();
             let mut progress = initial_host_progress(&admitted);
-            progress.next_forward_ordinal =
-                u16::try_from(first_restart + scope.restart_validator_indices().len() + 1)
-                    .expect("bounded unselected wave");
+            progress.next_forward_ordinal = u16::try_from(first_beacon + 4).expect("bounded plan");
             assert!(
                 validate_prepared_mutation_progress(&admitted, &progress).is_err(),
-                "unselected restart waves cannot borrow an edge-action boundary"
+                "a diagnostic restart cannot borrow the deployment frontier"
             );
         }
     }
 
     #[test]
-    fn shared_host_plan_cuts_over_edge_after_all_candidate_restarts() {
+    fn shared_host_plan_cuts_over_edge_after_required_beacon_activations() {
         let admitted = progress_admission();
         let plan = host_forward_plan(&admitted);
         let first = |action: HostAction| {
@@ -25458,12 +24924,16 @@ time.sleep(30)
             .expect("last local validator start");
         assert!(last_start < first(HostAction::EdgeStage));
         assert!(first(HostAction::EdgeStage) < first(HostAction::EdgeCutover));
-        assert!(last_start < first(HostAction::Restart));
-        let last_restart = plan
+        assert!(
+            plan.iter()
+                .all(|key| key.action != HostAction::Restart.label())
+        );
+        let last_activation = plan
             .iter()
-            .rposition(|key| key.action == HostAction::Restart.label())
-            .expect("last local validator restart");
-        assert!(last_restart < first(HostAction::EdgeStage));
+            .rposition(|key| key.action == HostAction::BeaconActivate.label())
+            .expect("last provider activation");
+        assert!(last_start < first(HostAction::BeaconActivate));
+        assert!(last_activation < first(HostAction::EdgeStage));
         assert!(first(HostAction::EdgeCutover) < first(HostAction::EdgeVerify));
     }
 

@@ -546,7 +546,14 @@ mod tests {
         assert!(plan.weighted_coefficients_v1(&[F(u64::MAX)]).is_err());
         assert!(plan.quotient_v1(5, &source, &target).is_err());
         assert!(plan.quotient_v1(0, &[F::ZERO; 8], &[F::ZERO; 32]).is_ok());
-        let fresh = || new_main_transcript_after_profile_validation_v1(&[7; 32], [8; 32]).unwrap();
+        let fresh = || {
+            new_main_transcript_after_profile_validation_v1(
+                TEST_PROOF_INSTANCE_V1,
+                &[7; 32],
+                [8; 32],
+            )
+            .unwrap()
+        };
         let state = |p: MainDigestJoinPlanV1| {
             let mut t = fresh();
             p.absorb_plan_v1(&mut t).unwrap();

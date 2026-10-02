@@ -49,6 +49,81 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertFalse(self.destination.exists())
 
+    def manifest(self, selected=None):
+        return subprocess.run(
+            ["/bin/bash", "-c", 'source "$1"; privacy_sdk_assert_stock_cargo_manifest "$2" "$3" "$4"',
+             "manifest-test", str(HELPER), str(self.source),
+             str(selected or self.source / "Cargo.toml"), sys.executable],
+            capture_output=True, text=True, check=False,
+        )
+
+    def write_manifest_fixture(self):
+        (self.source / "Cargo.toml").write_text(
+            '[workspace]\nmembers = ["members/*"]\nexclude = ["members/excluded"]\n'
+        )
+        member = self.source / "members/allowed/Cargo.toml"
+        member.parent.mkdir(parents=True)
+        member.write_text('[package]\nname = "allowed"\nversion = "0.1.0"\n')
+        return member
+
+    def test_stock_manifest_accepts_root_and_explicit_member(self):
+        member = self.write_manifest_fixture()
+        for candidate in (self.source / "Cargo.toml", member):
+            result = self.manifest(candidate)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stock_manifest_rejects_graph_redirects(self):
+        member = self.write_manifest_fixture()
+        outside = self.root / "outside/Cargo.toml"
+        outside.parent.mkdir()
+        outside.write_text('[workspace]\n')
+        excluded = self.source / "members/excluded/Cargo.toml"
+        excluded.parent.mkdir()
+        excluded.write_text('[package]\nname="excluded"\n')
+        unlisted = self.source / "other/Cargo.toml"
+        unlisted.parent.mkdir()
+        unlisted.write_text('[package]\nname="other"\n')
+        linked = self.source / "members/linked/Cargo.toml"
+        linked.parent.mkdir()
+        linked.symlink_to(member)
+        for candidate in (outside, excluded, unlisted, linked, Path("Cargo.toml"),
+                          member.parent / "missing.toml"):
+            with self.subTest(candidate=candidate):
+                result = self.manifest(candidate)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not bound to the authenticated root", result.stderr)
+
+    def test_stock_manifest_rejects_nested_and_redirected_workspaces(self):
+        member = self.write_manifest_fixture()
+        for contents in ('[workspace]\n', '[package]\nworkspace="../../../"\n'):
+            with self.subTest(contents=contents):
+                member.write_text(contents)
+                result = self.manifest(member)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not bound to the authenticated root", result.stderr)
+        member.write_text('[package]\nname="allowed"\n')
+        (member.parent.parent / "Cargo.toml").write_text('[workspace]\n')
+        result = self.manifest(member)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("intermediate workspace", result.stderr)
+
+    def test_stock_manifest_accepts_explicit_original_workspace(self):
+        member = self.write_manifest_fixture()
+        member.write_text('[package]\nworkspace="../.."\n')
+        result = self.manifest(member)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stock_cargo_policy_rejects_every_bootstrap_assignment(self):
+        for value in ("", "0", "1"):
+            with self.subTest(value=value):
+                result = subprocess.run(
+                    ["/bin/bash", "-c", 'source "$1"; privacy_sdk_reject_cargo_policy_environment "$2"',
+                     "policy-test", str(HELPER), sys.executable],
+                    env=dict(os.environ, RUSTC_BOOTSTRAP=value), capture_output=True, text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("RUSTC_BOOTSTRAP", result.stderr)
+
     def test_snapshot_preserves_bytes_with_independent_readonly_inode(self):
         before = self.lock.stat()
         result = self.invoke()
@@ -63,6 +138,7 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
         # Preceding reviewed digests are rejected fixtures, never alternate
         # selectors. Even a correct current physical seal cannot authorize them.
         stale_digests = (
+            "c766e96ceedbad8f0a457746590ec5e5795934793bfc507aa3a5c3f2effee631",
             "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd",
             "398cd15f1b51bc25d673acc766f98c8910446246a2ba33b0e97f17332bf57d40",
         )

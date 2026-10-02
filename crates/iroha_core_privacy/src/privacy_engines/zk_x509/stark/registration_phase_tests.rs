@@ -213,9 +213,13 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
     let digest: [u8; 32] = Sha256::digest(proof).into();
+    eprintln!(
+        "zk-x509-native-projection-proof-sha256={}",
+        hex::encode(digest)
+    );
     assert_eq!(
         hex::encode(digest),
-        "e3acff9ebb2e4166768308152400b1d01fa5ed3796103c148356cff9a064afa0",
+        "3c1ff5e0de8634ecc6de1def1551022edc48d93ab5885d979e9924436e2b17d5",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -271,9 +275,10 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
         .collect::<BTreeSet<_>>();
     assert_eq!(indices.len(), QUERY_COUNT);
     let digest: [u8; 32] = Sha256::digest(proof).into();
+    eprintln!("zk-x509-native-io-proof-sha256={}", hex::encode(digest));
     assert_eq!(
         hex::encode(digest),
-        "7efdef5f968f33a391d8a374d6f656ca4432cbf05bb2230cc0aa0c2f034f53b1",
+        "855645e0bec0be899beec625f4e7ee8474b35891692e65f32ea579855f2d5df9",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -780,7 +785,7 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
             ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
         )
         .expect("canonical compact-CA capacity"),
-        (34_851, 9_215)
+        (3 * (4_096 + 2_099) + 2 * (4_096 - 1) - 4_096, 9_215)
     );
     assert_eq!(
         checked_compact_ca_degree_capacity_v1(
@@ -789,7 +794,7 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
             2,
         )
         .expect("lower-degree compact-CA capacity"),
-        (25_964, 9_215)
+        (2 * (4_096 + 2_099) + 2 * (4_096 - 1) - 4_096, 9_215)
     );
     for (trace_log2, lde_log2, constraint_degree) in [
         (
@@ -820,25 +825,48 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         (
             ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
             ZK_X509_CA_FRI_LDE_LOG2_V1,
-            4,
+            6,
         ),
     ] {
         assert!(
             checked_compact_ca_degree_capacity_v1(trace_log2, lde_log2, constraint_degree,)
                 .is_err(),
-            "adjacent compact-CA geometry ({trace_log2}, {lde_log2}, \
+            "invalid compact-CA capacity ({trace_log2}, {lde_log2}, \
                  {constraint_degree}) must fail closed"
         );
     }
-    assert!(
+    // Both numeric bounds can fit after reducing CA padding. They remain
+    // different profiles; adapter validation owns the exact CA degree/domain.
+    assert_ne!(
         checked_segment_degree_capacity_v1(
             ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
             ZK_X509_CA_FRI_LDE_LOG2_V1,
             ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
         )
-        .is_err(),
-        "compact-CA must not be accepted under the MAIN mask and terminal profile"
+        .unwrap(),
+        checked_compact_ca_degree_capacity_v1(
+            ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
+            ZK_X509_CA_FRI_LDE_LOG2_V1,
+            ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
+        )
+        .unwrap(),
     );
+    let canonical_ca = SegmentLayoutV1::for_ca_accumulator().unwrap();
+    for changed in [
+        SegmentLayoutV1 {
+            constraint_degree: 4,
+            ..canonical_ca
+        },
+        SegmentLayoutV1 {
+            lde_log2: canonical_ca.trace_log2 + BLOWUP_LOG2,
+            ..canonical_ca
+        },
+    ] {
+        assert!(
+            changed.validate().is_err(),
+            "CA must reject a foreign degree or MAIN padding"
+        );
+    }
     let layout = accumulator_aggregate_layout();
     layout
         .validate_accumulator_registration_v1()
@@ -852,12 +880,12 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         .registered_segment(SegmentAdapterIdV1::CaAccumulator, 0)
         .expect("compact-CA registration");
     assert_eq!(registration.segment.active_rows, 13);
-    assert_eq!(registration.segment.trace_log2, 13);
+    assert_eq!(registration.segment.trace_log2, 12);
     assert_eq!(registration.segment.lde_log2, ZK_X509_CA_FRI_LDE_LOG2_V1);
     assert_eq!(registration.segment.base_width, 695);
     assert_eq!(registration.segment.aux_width, 128);
     assert_eq!(registration.segment.fixed_width, 80);
-    assert_eq!(registration.segment.constraint_count, 1_379);
+    assert_eq!(registration.segment.constraint_count, 1_363);
     assert_eq!(registration.segment.constraint_degree, 3);
     assert_eq!(registration.column_chunks, ZK_X509_CA_ACCUMULATOR_CHUNKS_V1);
     assert_eq!(
@@ -2191,7 +2219,12 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     let canonical_layout =
         AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     assert!(matches!(
-        ZkX509MainBaseCommitmentSessionV1::new_v1(&canonical_layout, [0xB1; 32], unpinned_profile,),
+        ZkX509MainBaseCommitmentSessionV1::new_v1(
+            TEST_PROOF_INSTANCE_V1,
+            &canonical_layout,
+            [0xB1; 32],
+            unpinned_profile,
+        ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let isolated =
@@ -2199,6 +2232,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
             .expect("isolated I/O layout");
     assert!(matches!(
         ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
             &isolated,
             [0xB1; 32],
             TEST_COMPILED_PROFILE_DIGEST_V1,
@@ -2210,6 +2244,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     wrong_layout.trace_groups.swap(0, 1);
     assert!(matches!(
         ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
             &wrong_layout,
             [0xB1; 32],
             TEST_COMPILED_PROFILE_DIGEST_V1,
@@ -2218,6 +2253,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     ));
     assert!(matches!(
         ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
             &layout,
             [0_u8; 32],
             TEST_COMPILED_PROFILE_DIGEST_V1,
@@ -2226,7 +2262,10 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     ));
     assert!(matches!(
         ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
-            &layout, [0xB1; 32], [0_u8; 32],
+            TEST_PROOF_INSTANCE_V1,
+            &layout,
+            [0xB1; 32],
+            [0_u8; 32],
         ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
@@ -2332,7 +2371,7 @@ fn main_joined_row_order_and_base_aux_phase_are_domain_bound() {
         .collect::<Vec<_>>();
     let hash = |rows: &[Vec<F>]| {
         plan.leaf_hash_v1(
-            AGGREGATE_DOMAINS_V1,
+            main_domains_v1(TEST_PROOF_INSTANCE_V1),
             7,
             &rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
@@ -2373,7 +2412,7 @@ fn main_joined_row_order_and_base_aux_phase_are_domain_bound() {
         .collect::<Vec<_>>();
     let auxiliary = aux
         .leaf_hash_v1(
-            AGGREGATE_DOMAINS_V1,
+            main_domains_v1(TEST_PROOF_INSTANCE_V1),
             7,
             &aux_rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
@@ -2632,9 +2671,10 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     add_main_composition_coefficient_chunks_v1(&mut second_then_first, &first, coefficient_cap)
         .expect("first contribution second");
     assert_eq!(first_then_second, second_then_first);
-    assert!(
-        first_then_second[0][2].is_empty(),
-        "exact cancellation must remove the retained tail"
+    assert_eq!(
+        first_then_second[0][2],
+        vec![E::ZERO],
+        "exact cancellation must preserve the public contributor extent"
     );
     let canonical = first_then_second.clone();
     let mut wrong_lanes = second.clone();
@@ -2677,6 +2717,114 @@ fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent()
     assert_eq!(first_then_second, canonical);
 }
 #[test]
+fn main_coefficient_accumulator_geometry_is_independent_of_values_and_cancellation() {
+    let coefficient_cap = 8;
+    let public_extents = [[8, 5, 0, 3, 1, 7], [6, 8, 4, 0, 1, 2], [8, 8, 4, 3, 1, 7]];
+    assert_eq!(COMPOSITION_DEGREE_CHUNKS, public_extents[0].len());
+    let evaluate = |coefficients: &[E], point: E| {
+        coefficients
+            .iter()
+            .rev()
+            .fold(E::ZERO, |sum, coefficient| sum.mul(point).add(*coefficient))
+    };
+    let mut expected_geometry = None;
+    // Equal public extents cover zero, dense and exact-cancellation secrets.
+    for mode in 0..3 {
+        let mut accumulator = ZeroizingExtensionLanesV1::new(
+            empty_main_composition_chunks_v1(),
+            zeroize_extension_lanes_v1,
+        );
+        for chunk in accumulator.iter_mut().flatten() {
+            chunk.try_reserve_exact(coefficient_cap).unwrap();
+        }
+        let allocations: Vec<_> = accumulator
+            .iter()
+            .flatten()
+            .map(|chunk| (chunk.as_ptr(), chunk.capacity()))
+            .collect();
+        let mut expected =
+            vec![vec![vec![E::ZERO; coefficient_cap]; COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES];
+        let mut retained_extents = [0; COMPOSITION_DEGREE_CHUNKS];
+        let mut geometry = Vec::new();
+        for (stage, extents) in public_extents.iter().enumerate() {
+            let mut contribution = ZeroizingExtensionLanesV1::new(
+                empty_main_composition_chunks_v1(),
+                zeroize_extension_lanes_v1,
+            );
+            for lane in 0..SECURITY_LANES {
+                for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                    for degree in 0..extents[chunk] {
+                        let coefficient = if mode == 0 {
+                            E::ZERO
+                        } else if mode == 2 && stage == 2 {
+                            expected[lane][chunk][degree].neg()
+                        } else {
+                            let value = (stage * 100 + lane * 50 + chunk * 8 + degree + 1) as u64;
+                            E::canonical([value, value + 1, value + 2, value + 3]).unwrap()
+                        };
+                        contribution[lane][chunk].push(coefficient);
+                        expected[lane][chunk][degree] =
+                            expected[lane][chunk][degree].add(coefficient);
+                    }
+                }
+            }
+            add_main_composition_coefficient_chunks_v1(
+                &mut accumulator,
+                &contribution,
+                coefficient_cap,
+            )
+            .unwrap();
+            for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                retained_extents[chunk] = retained_extents[chunk].max(extents[chunk]);
+            }
+            for lane in 0..SECURITY_LANES {
+                for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+                    assert_eq!(
+                        accumulator[lane][chunk].as_slice(),
+                        &expected[lane][chunk][..retained_extents[chunk]]
+                    );
+                    for point in [E::ZERO, E::ONE, E::from_base(F(53))] {
+                        assert_eq!(
+                            evaluate(&accumulator[lane][chunk], point),
+                            evaluate(&expected[lane][chunk], point)
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .map(|chunk| (chunk.as_ptr(), chunk.capacity()))
+                    .collect::<Vec<_>>(),
+                allocations
+            );
+            geometry.push(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .map(|chunk| (chunk.len(), chunk.capacity()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        if mode == 2 {
+            assert!(
+                accumulator
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .all(|value| *value == E::ZERO)
+            );
+            assert!(accumulator.iter().flatten().any(|chunk| !chunk.is_empty()));
+        }
+        if let Some(expected_geometry) = &expected_geometry {
+            assert_eq!(&geometry, expected_geometry);
+        } else {
+            expected_geometry = Some(geometry);
+        }
+    }
+}
+#[test]
 fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let shared = layout.as_shared().expect("shared MAIN layout");
@@ -2685,7 +2833,7 @@ fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
     let chunks =
         composition_coefficient_chunks_v1(&coefficients, 2, &shared).expect("zero high tail");
     assert_eq!(chunks.len(), COMPOSITION_DEGREE_CHUNKS);
-    assert_eq!(chunks[0], vec![value(1), value(2), value(3)]);
+    assert_eq!(chunks[0], coefficients);
     coefficients[5] = value(1);
     assert!(matches!(
         composition_coefficient_chunks_v1(&coefficients, 2, &shared),
@@ -2700,15 +2848,14 @@ fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
 fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() {
     let source = include_str!("main_aggregate.rs");
     let finish_start = source
-        .find("pub(crate) fn finish_v1_with_rng")
-        .expect("MAIN finish");
+        .find("fn finish_original_openings_v1")
+        .expect("original MAIN FRI and query finalizer");
     let finish_end = source[finish_start..]
         .find("/// Exact six-provider registry")
         .map(|offset| finish_start + offset)
         .expect("MAIN finish end");
     let finish = &source[finish_start..finish_end];
     assert!(finish.contains("commit_joined_v1"));
-    assert!(finish.contains("self.composition_material_v1(rng)"));
     assert!(finish.contains("MainTraceReplaySourcesV1::Bound"));
     let base_replay = finish
         .find("let base_openings = self.base_polynomials.commit_joined_v1")
@@ -2727,19 +2874,25 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .expect("opening publication");
     assert!(base_replay < base_root_check && aux_replay < base_root_check);
     assert!(base_root_check < publish && aux_root_check < publish);
-    let material_start = source
-        .find("fn composition_material_v1<R: TryRngCore>")
-        .expect("retained composition material");
-    let material_end = source[material_start..]
-        .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
-        .map(|offset| material_start + offset)
-        .expect("retained composition material end");
-    assert!(
-        source[material_start..material_end]
-            .contains("main_composition_material_from_polynomials_v1")
-    );
+    let joint_source = include_str!("main_joint.rs");
+    let joint_start = joint_source
+        .find("pub(crate) fn commit_joint_oracles_v1")
+        .expect("mandatory joint composition owner");
+    let joint_end = joint_source[joint_start..]
+        .find("impl<'a> MainAwaitingJointPointV1")
+        .map(|offset| joint_start + offset)
+        .expect("joint point transition");
+    let joint = &joint_source[joint_start..joint_end];
+    assert!(joint.contains("main_composition_material_with_ca_v1("));
+    assert!(joint.contains("MainTraceReplaySourcesV1::Bound"));
+    assert!(joint.contains("Some(MainCaCompositionContributionV1"));
+    assert!(joint_source.contains("self.oracles.phase.finish_original_openings_v1("));
+    assert!(joint_source.contains("Some(MainCaDeepContributionV1"));
+    assert!(!source.contains("fn finish_v1_with_rng"));
+    assert!(!source.contains("fn composition_material_v1"));
+    assert!(!source.contains("fn main_composition_material_from_polynomials_v1"));
     let combined_start = source
-        .find("fn main_composition_material_from_polynomials_v1<R: TryRngCore>")
+        .find("fn main_composition_material_with_ca_v1<R: TryRngCore>")
         .expect("canonical MAIN composition owner");
     let combined = &source[combined_start..];
     let links = combined
@@ -2765,21 +2918,21 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
             "MAIN finish must not use {forbidden}"
         );
     }
-    let verifier_start = source
-        .find("pub(crate) fn verify_zk_x509_main_aggregate_stark_v1")
-        .expect("complete MAIN verifier");
-    let verifier = &source[verifier_start..];
+    let verifier_source = include_str!("main_joint.rs");
+    let verifier = &verifier_source[verifier_source
+        .find("impl MainJointVerifierDeepV1")
+        .unwrap()..];
     let grinding = verifier
         .find("verify_grinding_nonce_v1")
         .expect("grinding verification");
     let queries = verifier
-        .find("let expected_indices = query_indices_v1")
+        .find("let indices = query_indices_v1")
         .expect("post-grinding queries");
     let fixed = verifier
         .find("prepare_complete_oods_fixed_v1")
         .expect("verifier-derived fixed openings");
     let constraints = verifier
-        .find("main_oods::verify_main_deep_constraints_v1")
+        .find("main_oods::verify_main_deep_constraints_with_ca_v1")
         .expect("complete MAIN out-of-domain relation");
     let authenticated_queries = verifier
         .find("verify_opened_query_relations_after_complete_oods_v1")
@@ -2795,9 +2948,10 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     let engine_production = &engine[..engine
         .find("\n#[cfg(test)]\nmod tests {")
         .expect("engine production/test boundary")];
-    assert!(engine_production.contains("verify_zk_x509_main_aggregate_stark_v1"));
-    assert!(engine_production.contains("ca_accumulator_subproof_binding_from_proof_v1"));
-    assert!(engine_production.contains("validate_cross_subproof_binding_v1"));
+    assert!(engine_production.contains("MainJointVerifierOraclesV1::new_v1"));
+    assert!(engine_production.contains("CaJointVerifierOraclesV1::new_v1"));
+    assert!(engine_production.contains(".bind_ca_openings_v1"));
+    assert_eq!(engine_production.matches(".finish_v1(binding)").count(), 2);
     assert!(!engine_production.contains("ConsensusVerifierUnavailable"));
 }
 #[test]
@@ -2837,32 +2991,44 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
         test_stark_digest_v1(0xB1),
     )
     .expect("binding under a hostile joined MAIN root");
-    let claims = main_log19_terminal_claims_fixture_v1();
     let alpha = |order: u8, binding: ZkX509CredentialPreAuxBindingV1| {
         let mut transcript = new_main_transcript_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
             &[0x81; 32],
             TEST_COMPILED_PROFILE_DIGEST_V1,
         )
         .expect("test MAIN transcript");
-        absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)
-            .expect("MAIN layout");
+        absorb_aggregate_layout_v1(
+            TEST_PROOF_INSTANCE_V1,
+            &mut transcript,
+            MAIN_LAYOUT_DOMAIN_V1,
+            &layout,
+        )
+        .expect("MAIN layout");
         if order == 1 {
             absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
                 .expect("premature binding still frames distinctly");
         }
-        aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &base_roots)
-            .expect("ordered base roots");
+        aggregate::absorb_base_roots_v1(
+            &mut transcript,
+            main_domains_v1(TEST_PROOF_INSTANCE_V1),
+            &base_roots,
+        )
+        .expect("ordered base roots");
         if order == 0 {
             absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
                 .expect("canonical binding");
         }
-        aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &base_roots)
-            .expect("ordered aux roots");
+        aggregate::absorb_aux_roots_v1(
+            &mut transcript,
+            main_domains_v1(TEST_PROOF_INSTANCE_V1),
+            &base_roots,
+        )
+        .expect("ordered aux roots");
         if order == 2 {
             absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
                 .expect("late binding still frames distinctly");
         }
-        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, claims).expect("terminal claims");
         derive_constraint_alphas_v1(&mut transcript, &layout).expect("alphas")[0][0][0]
     };
     let canonical = alpha(0, binding);

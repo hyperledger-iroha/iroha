@@ -4,8 +4,8 @@
 //! Q_i + X^s T_i - T_{i-1}. The recomposed quotient is unchanged, while each
 //! chunk stays below the original FRI cap D by choosing s = D - h. Here h is
 //! the number of FRI queries plus the one extension-field DEEP query.
-//! TODO: complete the joint mixed-native-domain transcript hiding argument;
-//! this algebraic repair does not hide the remaining public terminal claims.
+//! TODO: complete the joint mixed-native-domain transcript hiding argument,
+//! including adaptive openings, full FRI terminals, and construction failures.
 
 use crate::privacy_engines::aggregate_stark::{
     AggregateProofLayoutV1, AggregateStarkErrorV1 as Error, AggregateStarkParametersV1,
@@ -122,11 +122,10 @@ mod prover {
                     .ok_or(Error::InvalidLayout)?
                     .min(coefficients.len());
                 if start < end {
-                    let retained = coefficients[start..end]
-                        .iter()
-                        .rposition(|value| *value != E::ZERO)
-                        .map_or(start, |index| start + index + 1);
-                    chunk.extend_from_slice(&coefficients[start..retained]);
+                    // Keep the public slice geometry even when private high
+                    // coefficients vanish. Trimming by value exposes their
+                    // position through scan work and the last chunk's length.
+                    chunk.extend_from_slice(&coefficients[start..end]);
                 }
                 chunks.push(chunk.into_vec());
             }
@@ -332,6 +331,37 @@ mod prover {
                 0
             );
             assert!(geometry.split_v1(&coefficients).is_ok());
+        }
+
+        #[test]
+        fn private_coefficient_values_do_not_change_chunk_geometry_or_mask_consumption() {
+            let geometry = QuotientChunkGeometryV1::from_dimensions_v1(16, 4, 3).unwrap();
+            for length in [0, 1, geometry.stride + 1, geometry.stride * geometry.chunks] {
+                let zero = vec![E::ZERO; length];
+                let dense: Vec<_> = (0..length).map(value).collect();
+                let mut sparse = vec![E::ZERO; length];
+                if let Some(first) = sparse.first_mut() {
+                    *first = value(11);
+                }
+                let mut expected = None;
+                for coefficients in [&zero, &sparse, &dense] {
+                    let mut chunks =
+                        PrivateTableV1::new(geometry.split_v1(coefficients).unwrap(), erase_chunks);
+                    let before: Vec<_> = chunks.iter().map(|v| (v.len(), v.capacity())).collect();
+                    let mut rng = StdRng::from_seed([43; 32]);
+                    geometry.blind_v1(&mut chunks, &mut rng).unwrap();
+                    let after: Vec<_> = chunks.iter().map(|v| (v.len(), v.capacity())).collect();
+                    let observed = (before, after, rng.next_u64());
+                    if let Some(expected) = &expected {
+                        assert_eq!(&observed, expected);
+                    } else {
+                        expected = Some(observed);
+                    }
+                    let actual = recompose(&chunks, geometry.stride);
+                    assert_eq!(&actual[..length], coefficients.as_slice());
+                    assert!(actual[length..].iter().all(|v| *v == E::ZERO));
+                }
+            }
         }
 
         #[test]

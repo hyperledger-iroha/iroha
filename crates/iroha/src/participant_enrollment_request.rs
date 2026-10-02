@@ -651,8 +651,12 @@ pub(crate) fn authenticate_fi_current_request_cut(
     Ok(verified)
 }
 
+/// Purpose-specific exact HTTP metadata codec; decoding establishes no FI or Native owner.
+#[path = "participant_enrollment_http.rs"]
+pub mod http;
+
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(all(test, unix))]
 pub(crate) use tests::NativeCustodyFixture;

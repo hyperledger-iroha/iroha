@@ -390,6 +390,45 @@ fn validate_authenticated_guard_protocol_binding_v1(
     Ok(())
 }
 
+/// Required semantic family of the four MintAuthorization artifact roles.
+/// The signed native profile pins this discriminator, exact concrete mode, and public width.
+/// Hardware and ordinary app relations require independently generated keys; no reader fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaMintAuthorizationFamilyV1 {
+    /// Recursive hardware credential/recipient transport relation (84 public cells).
+    RecursiveHardware84,
+    /// Ordinary app pre-debit leaf relation (113 public cells, including empty history).
+    OrdinaryPreDebit113,
+}
+impl KagemushaMintAuthorizationFamilyV1 {
+    /// Exact required profile tag. Unknown or omitted tags cannot select a family.
+    /// # Errors
+    /// Rejects every value outside the two concrete maintained families.
+    pub fn from_profile_tag(tag: u8) -> Result<Self, String> {
+        match tag {
+            1 => Ok(Self::RecursiveHardware84),
+            2 => Ok(Self::OrdinaryPreDebit113),
+            _ => Err("unsupported MintAuthorization circuit family".to_owned()),
+        }
+    }
+    /// Sole family byte included in the signed profile transcript.
+    #[must_use]
+    pub const fn profile_tag(self) -> u8 {
+        match self {
+            Self::RecursiveHardware84 => 1,
+            Self::OrdinaryPreDebit113 => 2,
+        }
+    }
+    fn public_instance_count(self) -> usize {
+        match self {
+            Self::RecursiveHardware84 => MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+            Self::OrdinaryPreDebit113 => {
+                super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1
+            }
+        }
+    }
+}
+
 /// Exact `halo2-base` layouts for authenticated outer and private recursive proof roles.
 ///
 /// These values are covered by [`Self::canonical_digest`], which must equal the release
@@ -397,6 +436,8 @@ fn validate_authenticated_guard_protocol_binding_v1(
 /// not safely self-describe a circuit configuration.
 #[derive(Clone, Debug)]
 pub struct KagemushaRecursiveVerifierProfileV1 {
+    /// Required signed family of the four semantic MintAuthorization keys.
+    pub mint_authorization_family: KagemushaMintAuthorizationFamilyV1,
     /// Eq private recursive aggregate-state carrier layout.
     pub inner_state_eq: BaseCircuitParams,
     /// Ep private recursive aggregate-state carrier layout.
@@ -468,6 +509,14 @@ impl KagemushaRecursiveVerifierProfileV1 {
     ///
     /// Returns an error if a host `usize` cannot be represented in the canonical `u64` profile.
     pub fn canonical_digest(&self) -> Result<[u8; 32], String> {
+        Ok(Sha256::digest(self.canonical_original()?).into())
+    }
+
+    /// Encode the exact existing released layout digest preimage as a complete public original.
+    /// No release key, proof, account, FI identity or qualification is created by this encoder.
+    /// # Errors
+    /// Rejects unsupported profiles or host values that cannot be represented as u64.
+    pub fn canonical_original(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(RECURSIVE_PROFILE_DOMAIN_V1);
@@ -525,7 +574,105 @@ impl KagemushaRecursiveVerifierProfileV1 {
             bytes.push(tag);
             bytes.extend_from_slice(&digest);
         }
-        Ok(Sha256::digest(bytes).into())
+        bytes.push(30);
+        bytes.push(self.mint_authorization_family.profile_tag());
+        bytes.extend_from_slice(
+            &(self.mint_authorization_family.public_instance_count() as u64).to_le_bytes(),
+        );
+        Ok(bytes)
+    }
+
+    /// Decode the sole bounded complete layout original. Re-encoding must match every input byte.
+    /// The caller must still join its digest to the threshold-authenticated release artifacts.
+    /// # Errors
+    /// Rejects truncation, trailing bytes, unknown tags, unbounded vectors, nonaddressable values,
+    /// omitted family/instance tags or unsupported layouts.
+    pub fn from_canonical_original(original: &[u8], maximum_bytes: usize) -> Result<Self, String> {
+        if maximum_bytes == 0
+            || maximum_bytes > 16 * 1024 * 1024
+            || original.is_empty()
+            || original.len() > maximum_bytes
+        {
+            return Err("recursive profile original bound rejected".into());
+        }
+        let mut reader = RecursiveProfileOriginalReaderV1 {
+            bytes: original,
+            at: 0,
+        };
+        reader.expect(RECURSIVE_PROFILE_DOMAIN_V1)?;
+        reader.expect(&[0])?;
+        reader.expect(&1_u32.to_le_bytes())?;
+        let inner_state_eq = reader.params(1)?;
+        let inner_state_ep = reader.params(2)?;
+        let state_eq = reader.params(3)?;
+        let state_ep = reader.params(4)?;
+        let guard_eq = reader.params(5)?;
+        let guard_ep = reader.params(6)?;
+        let terminal_authorization_eq = reader.params(7)?;
+        let terminal_authorization_ep = reader.params(8)?;
+        let commit_wrapper_eq = reader.params(9)?;
+        let commit_wrapper_ep = reader.params(10)?;
+        let mint_authorization_eq = reader.params(11)?;
+        let mint_authorization_ep = reader.params(12)?;
+        let mint_eq = reader.params(13)?;
+        let mint_ep = reader.params(14)?;
+        let mint_eq_protocol_digest = reader.digest(15)?;
+        let mint_ep_protocol_digest = reader.digest(16)?;
+        let mint_genesis_authorization_id = reader.digest(17)?;
+        let inner_mint_authorization_eq = reader.params(18)?;
+        let inner_mint_authorization_ep = reader.params(19)?;
+        let inner_mint_eq = reader.params(20)?;
+        let inner_mint_ep = reader.params(21)?;
+        let mint_hash_shard_eq = reader.params(22)?;
+        let mint_hash_shard_ep = reader.params(23)?;
+        let mint_hash_claim_eq = reader.params(24)?;
+        let mint_hash_claim_ep = reader.params(25)?;
+        let mint_hash_shard_eq_protocol_digest = reader.digest(26)?;
+        let mint_hash_shard_ep_protocol_digest = reader.digest(27)?;
+        let mint_hash_claim_eq_protocol_digest = reader.digest(28)?;
+        let mint_hash_claim_ep_protocol_digest = reader.digest(29)?;
+        reader.expect(&[30])?;
+        let mint_authorization_family =
+            KagemushaMintAuthorizationFamilyV1::from_profile_tag(reader.byte()?)?;
+        if reader.value()? != mint_authorization_family.public_instance_count() {
+            return Err("recursive profile family instance count rejected".into());
+        }
+        let result = Self {
+            mint_authorization_family,
+            inner_state_eq,
+            inner_state_ep,
+            state_eq,
+            state_ep,
+            guard_eq,
+            guard_ep,
+            terminal_authorization_eq,
+            terminal_authorization_ep,
+            commit_wrapper_eq,
+            commit_wrapper_ep,
+            mint_authorization_eq,
+            mint_authorization_ep,
+            mint_eq,
+            mint_ep,
+            inner_mint_authorization_eq,
+            inner_mint_authorization_ep,
+            inner_mint_eq,
+            inner_mint_ep,
+            mint_hash_shard_eq,
+            mint_hash_shard_ep,
+            mint_hash_claim_eq,
+            mint_hash_claim_ep,
+            mint_eq_protocol_digest,
+            mint_ep_protocol_digest,
+            mint_hash_shard_eq_protocol_digest,
+            mint_hash_shard_ep_protocol_digest,
+            mint_hash_claim_eq_protocol_digest,
+            mint_hash_claim_ep_protocol_digest,
+            mint_genesis_authorization_id,
+        };
+        if reader.at != original.len() || result.canonical_original()? != original {
+            return Err("recursive profile original framing rejected".into());
+        }
+        Ok(result)
     }
 
     /// Authenticate the complete layout before any parameter-driven artifact decoding.
@@ -640,6 +787,7 @@ impl KagemushaRecursiveVerifierProfileV1 {
 /// Raw proof diagnostics and the independent consensus-backed mint-finality verifier do not
 /// establish device authority. Loading artifacts alone leaves monetary acceptance unavailable.
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
+    mint_authorization_family: KagemushaMintAuthorizationFamilyV1,
     authenticated_release:
         Option<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
     native_profile_digest: [u8; 32],
@@ -687,6 +835,46 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     terminal_authorization_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_eq_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
+}
+
+pub(super) struct OrdinaryMintMaterialV1<'a> {
+    pub(super) eq_parameters: &'a halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    pub(super) ep_parameters: &'a halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    pub(super) eq_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_protocol_digest: DigestV1,
+    pub(super) ep_protocol_digest: DigestV1,
+    pub(super) provider_policy_root: DigestV1,
+    pub(super) release_id: DigestV1,
+    pub(super) suite_id: DigestV1,
+    pub(super) vk_set_digest: DigestV1,
+    pub(super) artifact_manifest_digest: DigestV1,
+}
+impl KagemushaAuthenticatedRecursiveVerifierV1 {
+    pub(super) fn ordinary_mint_material(&self) -> Result<OrdinaryMintMaterialV1<'_>, String> {
+        self.monetary_release()?;
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113
+            || self.eq_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+            || self.ep_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+        {
+            return Err("ordinary MintAuthorization113 family is not loaded".into());
+        }
+        Ok(OrdinaryMintMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            eq_protocol: &self.eq_mint_authorization_protocol,
+            ep_protocol: &self.ep_mint_authorization_protocol,
+            eq_protocol_digest: self.mint_authorization_eq_protocol_digest,
+            ep_protocol_digest: self.mint_authorization_ep_protocol_digest,
+            provider_policy_root: self.provider_policy_root,
+            release_id: self.release_id,
+            suite_id: self.suite_id,
+            vk_set_digest: self.vk_set_digest,
+            artifact_manifest_digest: self.artifact_manifest_digest,
+        })
+    }
 }
 
 pub(super) struct OrdinaryBootstrapAuxiliaryMaterialV1<'a> {
@@ -813,20 +1001,37 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .as_ref(),
             profile.commit_wrapper_ep,
         )?;
-        let eq_mint_authorization_vk = read_eq_mint_authorization_vk(
-            artifacts
-                .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?
-                .as_ref(),
-            profile.mint_authorization_eq,
-            provider_policy_root,
-        )?;
-        let ep_mint_authorization_vk = read_ep_mint_authorization_vk(
-            artifacts
-                .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?
-                .as_ref(),
-            profile.mint_authorization_ep,
-            provider_policy_root,
-        )?;
+        let mint_authorization_family = profile.mint_authorization_family;
+        let eq_mint_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?;
+        let ep_mint_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?;
+        let (eq_mint_authorization_vk, ep_mint_authorization_vk) = match mint_authorization_family {
+            KagemushaMintAuthorizationFamilyV1::RecursiveHardware84 => (
+                read_eq_mint_authorization_vk(
+                    eq_mint_bytes.as_ref(),
+                    profile.mint_authorization_eq,
+                    provider_policy_root,
+                )?,
+                read_ep_mint_authorization_vk(
+                    ep_mint_bytes.as_ref(),
+                    profile.mint_authorization_ep,
+                    provider_policy_root,
+                )?,
+            ),
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113 => (
+                read_eq_ordinary_mint_authorization_vk(
+                    eq_mint_bytes.as_ref(),
+                    profile.mint_authorization_eq,
+                    provider_policy_root,
+                    artifacts.ordinary_issuer_table(),
+                )?,
+                read_ep_ordinary_mint_authorization_vk(
+                    ep_mint_bytes.as_ref(),
+                    profile.mint_authorization_ep,
+                    provider_policy_root,
+                    artifacts.ordinary_issuer_table(),
+                )?,
+            ),
+        };
         let eq_mint_vk = read_eq_mint_vk(
             artifacts
                 .resolve(KagemushaArtifactRoleV1::MintCreditVkEq)?
@@ -1021,13 +1226,13 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             &eq_parameters,
             &eq_mint_authorization_vk,
             snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
+                .with_num_instance(vec![mint_authorization_family.public_instance_count()]),
         );
         let ep_mint_authorization_protocol = compile(
             &ep_parameters,
             &ep_mint_authorization_vk,
             snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
+                .with_num_instance(vec![mint_authorization_family.public_instance_count()]),
         );
         let mint_authorization_eq_protocol_digest = native_parent_protocol_digest_v1(
             &eq_mint_authorization_protocol,
@@ -1105,6 +1310,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ));
         }
         let verifier = Self {
+            mint_authorization_family,
             authenticated_release: None,
             native_profile_digest: artifacts.native_profile_digest(),
             eq_parameters,
@@ -1187,6 +1393,12 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             release.purpose(),
             ReleaseAdmissionV1::ProductionMonetary,
         )?;
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113
+        {
+            return Err(
+                "ordinary monetary release requires ordinary MintAuthorization keys".to_owned(),
+            );
+        }
         let ordinary = super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
             &release,
             self.state_checkpoint_artifacts
@@ -1555,6 +1767,12 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         authorization: &KagemushaMintAuthorizationV1,
         release: &iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1,
     ) -> Result<(), String> {
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::RecursiveHardware84
+        {
+            return Err(
+                "hardware MintAuthorization proof cannot use ordinary leaf keys".to_owned(),
+            );
+        }
         require_authenticated_release_network_v1(
             release.network_id(),
             authorization.statement.context.network_id,
@@ -2057,6 +2275,80 @@ fn validate_payment_receiver_profile_v1(
         .map_err(|error| format!("Kagemusha payment receiver credential rejected: {error}"))
 }
 
+// All allocation counts are checked before allocation. These are the existing u64 digest
+// preimage fields, not a new circuit layout or an alternate artifact decoder.
+struct RecursiveProfileOriginalReaderV1<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl RecursiveProfileOriginalReaderV1<'_> {
+    fn take(&mut self, n: usize) -> Result<&[u8], String> {
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or("recursive profile size overflow")?;
+        let out = self
+            .bytes
+            .get(self.at..end)
+            .ok_or("truncated recursive profile")?;
+        self.at = end;
+        Ok(out)
+    }
+    fn expect(&mut self, expected: &[u8]) -> Result<(), String> {
+        if self.take(expected.len())? != expected {
+            return Err("recursive profile tag rejected".into());
+        }
+        Ok(())
+    }
+    fn byte(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+    fn value(&mut self) -> Result<usize, String> {
+        let raw = u64::from_le_bytes(
+            self.take(8)?
+                .try_into()
+                .map_err(|_| "profile u64 rejected")?,
+        );
+        usize::try_from(raw).map_err(|_| "recursive profile value not addressable".into())
+    }
+    fn vector(&mut self) -> Result<Vec<usize>, String> {
+        let count = self.value()?;
+        // Exact zero-filled phase tails remain part of the original. The complete input
+        // cap and remaining bytes bound allocation without relabeling those layouts.
+        if count == 0 || count > (self.bytes.len() - self.at) / 8 {
+            return Err("recursive profile phase vector rejected".into());
+        }
+        (0..count).map(|_| self.value()).collect()
+    }
+    fn params(&mut self, tag: u8) -> Result<BaseCircuitParams, String> {
+        self.expect(&[tag])?;
+        let k = self.value()?;
+        let num_advice_per_phase = self.vector()?;
+        let num_fixed = self.value()?;
+        let num_lookup_advice_per_phase = self.vector()?;
+        let lookup_bits = match self.byte()? {
+            0 => None,
+            1 => Some(self.value()?),
+            _ => return Err("recursive profile option rejected".into()),
+        };
+        let num_instance_columns = self.value()?;
+        Ok(BaseCircuitParams {
+            k,
+            num_advice_per_phase,
+            num_fixed,
+            num_lookup_advice_per_phase,
+            lookup_bits,
+            num_instance_columns,
+        })
+    }
+    fn digest(&mut self, tag: u8) -> Result<[u8; 32], String> {
+        self.expect(&[tag])?;
+        self.take(32)?
+            .try_into()
+            .map_err(|_| "recursive profile digest rejected".into())
+    }
+}
+
 fn append_base_params(bytes: &mut Vec<u8>, params: &BaseCircuitParams) -> Result<(), String> {
     append_usize(bytes, params.k)?;
     append_usize_slice(bytes, &params.num_advice_per_phase)?;
@@ -2250,6 +2542,59 @@ pub(super) fn read_ep_commit_wrapper_vk(
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
     read_ep_recursive_vk::<KagemushaCommitWrapperEpCircuitV1>(bytes, params, "commit-wrapper")
+}
+
+pub(super) fn read_eq_ordinary_mint_authorization_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary Mint provider root absent".into(),
+        ));
+    }
+    let params = super::ordinary_mint_circuit::KagemushaOrdinaryMintCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EqAffine,
+        super::ordinary_mint_circuit::KagemushaOrdinaryMintEqCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq ordinary pre-debit MintAuthorization113",
+    )
+}
+pub(super) fn read_ep_ordinary_mint_authorization_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary Mint provider root absent".into(),
+        ));
+    }
+    let params = super::ordinary_mint_circuit::KagemushaOrdinaryMintCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EpAffine,
+        super::ordinary_mint_circuit::KagemushaOrdinaryMintEpCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep ordinary pre-debit MintAuthorization113",
+    )
 }
 
 fn read_eq_mint_authorization_vk(
@@ -2674,6 +3019,7 @@ mod checked_loader_tests {
 
     fn profile() -> KagemushaRecursiveVerifierProfileV1 {
         KagemushaRecursiveVerifierProfileV1 {
+            mint_authorization_family: KagemushaMintAuthorizationFamilyV1::RecursiveHardware84,
             inner_state_eq: base_params(),
             inner_state_ep: base_params(),
             state_eq: base_params(),
@@ -2703,6 +3049,111 @@ mod checked_loader_tests {
             mint_hash_claim_eq_protocol_digest: crate::kagemusha_v1_poseidon::encode(Fp::from(6)),
             mint_hash_claim_ep_protocol_digest: crate::kagemusha_v1_poseidon::encode(Fq::from(7)),
             mint_genesis_authorization_id: [3; 32],
+        }
+    }
+
+    #[test]
+    fn released_profile_original_preserves_existing_digest_and_family() {
+        let mut original_profile = profile();
+        original_profile.mint_authorization_family =
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113;
+        let original = original_profile.canonical_original().unwrap();
+        let decoded =
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(&original, original.len())
+                .unwrap();
+        assert_eq!(decoded.canonical_original().unwrap(), original);
+        assert_eq!(
+            decoded.canonical_digest().unwrap(),
+            original_profile.canonical_digest().unwrap()
+        );
+        assert_eq!(
+            decoded.mint_authorization_family,
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113
+        );
+    }
+
+    #[test]
+    fn released_profile_original_long_zero_tails_keep_identity_under_selected_bound() {
+        let mut layout = profile();
+        layout.state_eq.num_advice_per_phase.extend(vec![0; 4096]);
+        let original = layout.canonical_original().unwrap();
+        assert!(original.len() > 16 * 1024);
+        let decoded =
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(&original, original.len())
+                .unwrap();
+        assert_eq!(
+            decoded.canonical_digest().unwrap(),
+            layout.canonical_digest().unwrap()
+        );
+        assert_eq!(decoded.canonical_original().unwrap(), original);
+        assert!(
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                &original,
+                original.len() - 1
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn released_profile_original_refuses_framing_and_allocation_substitution() {
+        let original = profile().canonical_original().unwrap();
+        for length in [0, 1, original.len() - 1] {
+            assert!(
+                KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                    &original[..length],
+                    original.len()
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = original.clone();
+        trailing.push(0);
+        assert!(
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(&trailing, trailing.len())
+                .is_err()
+        );
+        let mut length = original.clone();
+        let first_count = RECURSIVE_PROFILE_DOMAIN_V1.len() + 1 + 4 + 1 + 8;
+        length[first_count..first_count + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(&length, length.len())
+                .is_err()
+        );
+        let mut family = original.clone();
+        let family_tag = family.len() - 9;
+        family[family_tag] = 255;
+        assert!(
+            KagemushaRecursiveVerifierProfileV1::from_canonical_original(&family, family.len())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checked_profile_pins_exact_mint_family_and_has_no_unknown_tag_fallback() {
+        let mut ordinary = profile();
+        let hardware_digest = ordinary.canonical_digest().unwrap();
+        ordinary.mint_authorization_family =
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113;
+        assert_ne!(hardware_digest, ordinary.canonical_digest().unwrap());
+        assert_eq!(
+            ordinary.mint_authorization_family.public_instance_count(),
+            113
+        );
+        assert_eq!(
+            KagemushaMintAuthorizationFamilyV1::RecursiveHardware84.public_instance_count(),
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        );
+        for tag in [0, 3, 255] {
+            assert!(KagemushaMintAuthorizationFamilyV1::from_profile_tag(tag).is_err());
+        }
+        for tag in [1, 2] {
+            assert_eq!(
+                KagemushaMintAuthorizationFamilyV1::from_profile_tag(tag)
+                    .unwrap()
+                    .profile_tag(),
+                tag
+            );
         }
     }
 
@@ -3021,12 +3472,86 @@ mod checked_loader_tests {
     }
 
     #[test]
+    fn checked_profile_both_families_bind_required_canonical_tag_width_and_python_goldens() {
+        for (family, tag, width, golden) in [
+            (
+                KagemushaMintAuthorizationFamilyV1::RecursiveHardware84,
+                1_u8,
+                84_u64,
+                "5b14e09f3f4d83ceea1a1fd4e293e524a0338940d29b18fa394d28099ab7c413",
+            ),
+            (
+                KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113,
+                2_u8,
+                113_u64,
+                "dbe397f8f5e842cc83b446903357d31e69d1363a0b800a5a3c5bdb5fdfeee221",
+            ),
+        ] {
+            let mut selected = profile();
+            selected.mint_authorization_family = family;
+            let original = selected.canonical_original().unwrap();
+            assert_eq!(original.len(), 1749);
+            let family_start = original.len() - 10;
+            let mut suffix = vec![30, tag];
+            suffix.extend_from_slice(&width.to_le_bytes());
+            assert_eq!(&original[family_start..], suffix);
+            assert_eq!(hex::encode(selected.canonical_digest().unwrap()), golden);
+            let decoded = KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                &original,
+                original.len(),
+            )
+            .unwrap();
+            assert_eq!(decoded.mint_authorization_family, family);
+            assert_eq!(decoded.canonical_original().unwrap(), original);
+            // Family is required and its public width is fixed by the native contract.
+            assert!(
+                KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                    &original[..family_start],
+                    original.len(),
+                )
+                .is_err()
+            );
+            for count in [width - 1, width + 1, 0, u64::MAX] {
+                let mut wrong = original.clone();
+                wrong[family_start + 2..].copy_from_slice(&count.to_le_bytes());
+                assert!(
+                    KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                        &wrong,
+                        wrong.len(),
+                    )
+                    .is_err()
+                );
+            }
+            for invalid in [0, 3, u8::MAX] {
+                let mut wrong = original.clone();
+                wrong[family_start + 1] = invalid;
+                assert!(
+                    KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                        &wrong,
+                        wrong.len(),
+                    )
+                    .is_err()
+                );
+            }
+            let mut substituted = original.clone();
+            substituted[family_start + 1] = if tag == 1 { 2 } else { 1 };
+            assert!(
+                KagemushaRecursiveVerifierProfileV1::from_canonical_original(
+                    &substituted,
+                    substituted.len(),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn checked_profile_uses_native_identity_and_matches_python_golden() {
         let profile = profile();
         let digest = profile.canonical_digest().expect("valid native layout");
         assert_eq!(
             hex::encode(digest),
-            "4cafcb7a8658d0cd082f187fe33ba042930fb846c9caa7462887675bf71721cf"
+            "5b14e09f3f4d83ceea1a1fd4e293e524a0338940d29b18fa394d28099ab7c413"
         );
         let reads = Arc::new(AtomicUsize::new(0));
         // This fixture tests digest selection and preflight only. The data-model release tests
@@ -3050,7 +3575,6 @@ mod checked_loader_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn checked_profile_generation_rejects_phase_holes_before_artifact_reads() {
         let reads = Arc::new(AtomicUsize::new(0));
@@ -3084,7 +3608,6 @@ mod checked_loader_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn checked_profile_generation_rejects_inner_phase_holes_before_artifact_reads() {
         let reads = Arc::new(AtomicUsize::new(0));
@@ -3118,7 +3641,6 @@ mod checked_loader_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn checked_profile_generation_rejects_unauthenticated_profile_before_artifact_reads() {
         let reads = Arc::new(AtomicUsize::new(0));

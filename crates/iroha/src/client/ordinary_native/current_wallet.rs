@@ -28,7 +28,10 @@ impl KagemushaNativeCurrentWalletReadV1 {
         let body = request.canonical_wire()?;
         let mut first: Option<Original> = None;
         let mut statements = Vec::with_capacity(4);
-        for client in &transport.nodes {
+        let ClockNodes::AccountContext(nodes) = &transport.nodes else {
+            return Err(eyre!("Native current wallet account transports absent"));
+        };
+        for client in nodes.iter() {
             self.inventory.recheck()?;
             let interval = self
                 .clock

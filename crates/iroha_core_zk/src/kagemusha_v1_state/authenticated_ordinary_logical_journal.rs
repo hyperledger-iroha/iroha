@@ -1238,6 +1238,8 @@ mod tests {
         drop(ExactConsumedCreditIndex::empty());
         let mut fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
+        let fi_issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let core = SigningKey::from_bytes((&[9; 32]).into()).unwrap();
         let core_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -1249,6 +1251,7 @@ mod tests {
                 fixture.selection.owner.clone(),
                 fixture.release.clone(),
                 fixture.issuer_policy.clone(),
+                Arc::clone(&fixture.ordinary_policy),
                 fixture.trust.clone(),
                 fixture.app_authority.clone(),
                 fixture.selection.preparation.challenge.hardware_profile_id,
@@ -1272,9 +1275,16 @@ mod tests {
         c.financial_authority_commitment = carrier.financial_authority_commitment;
         c.issued_at_ms = 300;
         let c = *c;
-        fixture.selection.preparation.signature =
-            EdSignature::try_new(issuer.private_key(), &c.canonical_signing_bytes().unwrap())
-                .unwrap();
+        fixture.selection.preparation.signature = EdSignature::try_new(
+            core_issuer.private_key(),
+            &c.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
+        // Retain the actual reserved nonce/financial commitment and Core-signed C before
+        // deriving the checked model preparation. No stale fixture C selects expected scope.
+        reservation
+            .retain_preparation(&fixture.selection.preparation.to_transport_bytes().unwrap())
+            .unwrap();
         let message = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &c,
             &fixture.selection.issuance.credential.subject.app_public_key,
@@ -1323,15 +1333,20 @@ mod tests {
             &fixture.challenge.account_signing_payload().unwrap(),
         )
         .unwrap();
+        let retained = reservation.original_preparation().unwrap();
+        assert_eq!(retained, &fixture.selection.preparation);
+        let checked_preparation = fixture
+            .ordinary_policy
+            .identity_policy()
+            .authenticate_preparation(retained, &retained.challenge, 300)
+            .unwrap();
         let app = fixture
             .selection
             .issuance
             .credential
             .authenticate(
-                &fixture.release,
-                &fixture.trust,
-                &fixture.app_authority,
-                &c,
+                fixture.ordinary_policy.identity_policy(),
+                &checked_preparation,
                 &fixture.selection.issuance.credential.subject.app_public_key,
                 300,
             )
@@ -1352,13 +1367,10 @@ mod tests {
         fixture.certificate.subject.challenge_evidence_digest = possession.evidence_digest();
         fixture.certificate.subject.ordinary_app_credential_digest = app.digest();
         fixture.certificate.signature = SignatureOf::try_new(
-            issuer.private_key(),
+            fi_issuer.private_key(),
             &fixture.certificate.subject.approval_payload().unwrap(),
         )
         .unwrap();
-        reservation
-            .retain_preparation(&fixture.selection.preparation.to_transport_bytes().unwrap())
-            .unwrap();
         let enrollment = Arc::new(fixture.verify(300).unwrap());
         let financial = reservation.complete_enrollment(enrollment).unwrap();
         financial.recheck().unwrap();
@@ -1619,7 +1631,6 @@ mod tests {
                 .is_err()
         );
     }
-    #[cfg(feature = "kagemusha-production-prover")]
     #[test]
     fn ordinary_bootstrap_platform_receipt_binds_credential_and_survives_replay() {
         for apple in [false, true] {

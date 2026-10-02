@@ -20,7 +20,12 @@ use iroha_data_model::kagemusha::{
 #[path = "ordinary_lineage_received_output_admission.rs"]
 mod received_output_admission;
 pub(crate) use received_output_admission::{
-    KagemushaVerifiedOrdinaryReceivedCashOutputV1, verify_ordinary_received_cash_output_v1,
+    KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+    readmit_historical_ordinary_received_cash_output_v1, verify_ordinary_received_cash_output_v1,
+};
+pub use received_output_admission::{
+    KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1,
+    verify_service_ordinary_received_cash_output_v1,
 };
 
 const COMPACT_META_MAX: usize = 256 * 1024;
@@ -711,7 +716,7 @@ pub fn verify_ordinary_lineage_commit_v1(
         terminal_guard_original_sha256: Sha256::digest(&bundle.terminal_guard_original).into(),
     })
 }
-fn terminal_public(
+pub(in crate::kagemusha_v1_recursion) fn terminal_public(
     m: &OrdinaryCashTerminalMaterialV1<'_>,
     n: &KagemushaNormalizedGuardStatementV1,
     body_digest: DigestV1,

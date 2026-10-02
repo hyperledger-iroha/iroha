@@ -381,6 +381,17 @@ fn check_budget(
     Ok(())
 }
 
+/// Immutable original-ledger publication receipt; public counters cannot recreate it.
+/// Retaining the existing Arc prevents address reuse from acquiring this identity.
+#[derive(Debug)]
+pub(super) struct ReservationCommitSeal {
+    identity: Arc<()>,
+    context: ReservationContext,
+    policy: ReservationPolicy,
+    applied_generation: u64,
+    usage: SourceUsage,
+}
+
 /// Block-owned reservations with exclusive, journaled physical transactions.
 /// Private IDs/generations never enter canonical ordering, serialization or hashes.
 pub(crate) struct ReservationLedger {
@@ -388,6 +399,8 @@ pub(crate) struct ReservationLedger {
     context: ReservationContext,
     policy: ReservationPolicy,
     next_generation: u64,
+    /// Original transaction generation of the most recent nonempty publication.
+    applied_generation: u64,
     owners: BTreeMap<u64, OwnerState>,
     maxima: BTreeMap<u64, u64>,
     usage: SourceUsage,
@@ -412,6 +425,7 @@ impl ReservationLedger {
             context,
             policy,
             next_generation: 1,
+            applied_generation: 0,
             owners: BTreeMap::new(),
             maxima: BTreeMap::new(),
             usage: SourceUsage::ZERO,
@@ -442,15 +456,32 @@ impl ReservationLedger {
             ));
         }
         let generation = self.take_generation()?;
-        #[cfg(not(test))]
-        let _ = generation;
         Ok(ReservationTransaction {
             ledger: self,
             journal: Vec::new(),
-            #[cfg(test)]
             generation,
             committed: false,
         })
+    }
+
+    /// Retain the original allocation and last applied transaction without new backing.
+    fn retain_commit_seal(&self) -> ReservationCommitSeal {
+        ReservationCommitSeal {
+            identity: Arc::clone(&self.identity),
+            context: self.context,
+            policy: self.policy,
+            applied_generation: self.applied_generation,
+            usage: self.usage,
+        }
+    }
+
+    /// Validate original custody, frozen limits and exact applied journal lineage.
+    fn matches_commit_seal(&self, seal: &ReservationCommitSeal) -> bool {
+        Arc::ptr_eq(&self.identity, &seal.identity)
+            && self.context == seal.context
+            && self.policy == seal.policy
+            && self.applied_generation == seal.applied_generation
+            && self.usage == seal.usage
     }
 
     /// Exact committed usage when no physical transaction holds the exclusive borrow.
@@ -491,7 +522,6 @@ impl Undo {
 pub(crate) struct ReservationTransaction<'a> {
     ledger: &'a mut ReservationLedger,
     journal: Vec<Undo>,
-    #[cfg(test)]
     generation: u64,
     committed: bool,
 }
@@ -803,6 +833,13 @@ impl ReservationTransaction<'_> {
 
     /// Retain all changes; State must commit the matching WSV/transcript fragment too.
     pub(crate) fn commit(mut self) -> SourceUsage {
+        if !self.journal.is_empty() {
+            // This original token was allocated with checked_add before the scope
+            // opened. It never wraps, and rollback never restores its allocator.
+            // Equal final usage cannot conceal an applied replacement. Empty and
+            // fully rolled-back scopes retain the previous publication identity.
+            self.ledger.applied_generation = self.generation;
+        }
         self.committed = true;
         self.ledger.usage
     }

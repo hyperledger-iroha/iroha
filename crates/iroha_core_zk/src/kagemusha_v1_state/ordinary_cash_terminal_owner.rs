@@ -11,13 +11,14 @@ use crate::kagemusha_v1_recursion::{
     verify_ordinary_preparation_guard_v1,
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
-    KagemushaEncryptedCreditEnvelopeV1, KagemushaOrdinaryCashClockContextV1,
-    KagemushaOrdinaryCashTerminalBodyV1, KagemushaOrdinaryCashTerminalIntentV1,
-    KagemushaOrdinaryCashTerminalRecordV1, KagemushaOrdinaryPaymentOutputV1,
-    KagemushaOrdinaryPaymentRequestV1, KagemushaOrdinaryPreparedOutgoingV1,
-    kagemusha_asset_identity_digest_v1, kagemusha_ciphertext_digest_v1,
-    kagemusha_ordinary_payment_body_digest_v1, kagemusha_ordinary_sealed_recovery_seeds_digest_v1,
+    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
+    KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1, KagemushaEncryptedCreditEnvelopeV1,
+    KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryCashTerminalBodyV1,
+    KagemushaOrdinaryCashTerminalIntentV1, KagemushaOrdinaryCashTerminalRecordV1,
+    KagemushaOrdinaryPaymentOutputV1, KagemushaOrdinaryPaymentRequestV1,
+    KagemushaOrdinaryPreparedOutgoingV1, kagemusha_asset_identity_digest_v1,
+    kagemusha_ciphertext_digest_v1, kagemusha_ordinary_payment_body_digest_v1,
+    kagemusha_ordinary_sealed_recovery_seeds_digest_v1,
     kagemusha_ordinary_sealed_transition_inputs_digest_v1,
     kagemusha_ordinary_terminal_guard_commit_binding_digest_v1,
     kagemusha_ordinary_transition_nullifier_v1,
@@ -41,7 +42,7 @@ pub(super) enum TransportOriginals {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalSelectionOriginalsV1"
 )]
@@ -50,6 +51,7 @@ struct SelectionOriginals {
     financial_control: CapturedFinancialControlIdentity,
     prepared: KagemushaOrdinaryPreparedOutgoingV1,
     state_proof: KagemushaPairedProofV1,
+    private_state_checkpoint_original: Vec<u8>,
     preparation_guard_original: Vec<u8>,
     intent: KagemushaOrdinaryCashTerminalIntentV1,
     body: KagemushaOrdinaryCashTerminalBodyV1,
@@ -60,6 +62,18 @@ struct SelectionOriginals {
     transport: TransportOriginals,
     transition_stream: Vec<u8>,
     recovery_stream: Vec<u8>,
+}
+
+impl core::fmt::Debug for SelectionOriginals {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SelectionOriginals").finish_non_exhaustive()
+    }
+}
+impl Drop for SelectionOriginals {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.private_state_checkpoint_original.zeroize();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
@@ -136,11 +150,59 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<
 }
 
 impl TerminalJournal {
+    // Private retained identity data only; a genuine proof loan still requires the
+    // common custody checks and the control owner's exact historical original borrow.
+    pub(super) fn proving_financial_control_identity(
+        &self,
+    ) -> Option<CapturedFinancialControlIdentity> {
+        self.pending.as_ref().map(|p| p.originals.financial_control)
+    }
     pub(super) fn new() -> Self {
         Self {
             pending: None,
             used_operations: BTreeSet::new(),
         }
+    }
+    /// Consume only the captured terminal admitted by the exact genuine Commit capability.
+    /// The caller already verified the real global CAS acknowledgment before StateAdvance.
+    pub(super) fn consume_actual_commit(
+        &mut self,
+        generated: &crate::kagemusha_v1_recursion::GeneratedOrdinaryCashCommitOriginalsV1,
+        receipt: &KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1<'_>,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck()?;
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let (record, approval) = pending
+            .captured
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let commit = generated.commit();
+        receipt.recheck_historical(financial).map_err(material)?;
+        if receipt.commit().map_err(material)? != commit {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        if !pending.fenced
+            || commit.reservation.successor.state_commitment
+                != pending.candidate.successor_state().state_commitment
+            || commit.reservation.successor.logical_sequence
+                != pending.candidate.successor_state().logical_sequence
+            || generated.selected_successor_state() != pending.candidate.successor_state()
+            || commit.purpose1_approval_original_sha256
+                != <DigestV1>::from(Sha256::digest(approval.original()))
+            || commit.terminal_record_original_sha256
+                != <DigestV1>::from(Sha256::digest(
+                    norito::encode_canonical(record).map_err(material)?,
+                ))
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        // Used operation identities and monotonic logical floors are deliberately retained.
+        self.pending = None;
+        self.recheck()
     }
     pub(super) fn has_pending(&self) -> bool {
         self.pending.is_some()
@@ -185,8 +247,9 @@ impl TerminalJournal {
                 let candidate = verify_ordinary_cash_candidate_v1(
                     &preparation,
                     &guard,
-                    originals.prepared,
+                    originals.prepared.clone(),
                     originals.state_proof.clone(),
+                    &originals.private_state_checkpoint_original,
                 )?;
                 let (receiver, receiver_lease) = match &originals.transport {
                     TransportOriginals::Redeem { .. } => (None, None),
@@ -336,7 +399,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .terminal
             .as_ref()
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        if terminal.pending.is_some() {
+        if terminal.pending.is_some() || self.pending_mint.is_some() {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         // W1 selects a separately acknowledged actual FI original after slow W2 proving.
@@ -512,6 +575,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             financial_control,
             prepared,
             state_proof: candidate.proof().clone(),
+            private_state_checkpoint_original: candidate.private_checkpoint_original().to_vec(),
             preparation_guard_original: guard.original().to_vec(),
             intent,
             body,
@@ -707,7 +771,8 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     pub(crate) fn recheck_selected_originals_and_current_custody(
         &self,
     ) -> Result<(), KagemushaStateErrorV1> {
-        self.owner.recheck_proving_history()?;
+        self.owner
+            .recheck_proving_history(ProvingHistoryOperation::TerminalApproval)?;
         if self.cash_prefix != self.owner.prefix {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
@@ -1216,6 +1281,7 @@ fn require_selection(
     if originals.prepared != *candidate.prepared_record()
         || originals.preparation_guard_original != guard.original()
         || originals.state_proof != *candidate.proof()
+        || originals.private_state_checkpoint_original != candidate.private_checkpoint_original()
         || intent.predecessor_descriptor_prefix_digest
             != financial_prefix_digest(owner, originals.preselection_cash_prefix)?
         || intent.sender_credential_digest != preparation.enrollment().app_credential().digest()
@@ -1687,5 +1753,72 @@ mod tests {
             )
             .unwrap()
         );
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn retained_outgoing_terminal_challenge(
+        &self,
+        candidate: &KagemushaAuthenticatedOrdinaryCashCandidateV1,
+        guard: &KagemushaAuthenticatedOrdinaryPreparationGuardV1,
+    ) -> Result<Option<KagemushaAppOperationApprovalChallengeV1>, KagemushaStateErrorV1> {
+        self.require_current_financial_control()?;
+        let Some(pending) = self.terminal.as_ref().and_then(|t| t.pending.as_ref()) else {
+            return Ok(None);
+        };
+        let preparation = self.captured_preparation()?;
+        candidate.recheck_preparation_selection(&preparation, guard)?;
+        pending
+            .candidate
+            .recheck_preparation_selection(&preparation, &pending.guard)?;
+        if candidate.prepared_record() != pending.candidate.prepared_record()
+            || candidate.proof() != pending.candidate.proof()
+            || candidate.private_checkpoint_original()
+                != pending.candidate.private_checkpoint_original()
+            || guard.original() != pending.guard.original()
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let (challenge, _, _, _) = self.outgoing_terminal_platform_state()?;
+        Ok(Some(challenge))
+    }
+    pub(super) fn outgoing_terminal_platform_state(
+        &self,
+    ) -> Result<
+        (
+            KagemushaAppOperationApprovalChallengeV1,
+            bool,
+            Option<Vec<u8>>,
+            bool,
+        ),
+        KagemushaStateErrorV1,
+    > {
+        let pending = self.terminal_pending()?;
+        if pending.captured.is_some() {
+            self.captured_terminal()?
+                .recheck_selected_originals_and_current_custody()?;
+        } else {
+            self.require_live_terminal(pending.originals.intent.native_operation_id)?;
+        }
+        let challenge = pending.originals.challenge;
+        if challenge.purpose != KagemushaAppOperationApprovalPurposeV1::MonetaryTransition {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let original = pending
+            .captured
+            .as_ref()
+            .map(|(_, a)| a.original().to_vec())
+            .or_else(|| {
+                pending
+                    .retained
+                    .as_ref()
+                    .map(|(_, a)| a.original().to_vec())
+            });
+        Ok((
+            challenge,
+            pending.fenced,
+            original,
+            pending.captured.is_some(),
+        ))
     }
 }

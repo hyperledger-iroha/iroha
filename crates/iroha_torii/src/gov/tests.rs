@@ -2250,7 +2250,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
         iroha_data_model::governance::types::ValidationFeePolicyProposal {
             proposal_operator: ALICE_ID.clone(),
             policy: iroha_data_model::validation_fee::ValidationFeePolicyV1 {
-                schema_version:
+                retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(), effective_from_ms: 1793451600000, notice_published_at_ms: 1790859600000, schema_version:
                     iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_SCHEMA_VERSION,
                 network_id: *state.network_id_ref(),
                 policy_version: 1,
@@ -2260,13 +2260,18 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
                 fee: Quantity::zero(),
                 treasury_account_id: ALICE_ID.clone(),
                 charging_mode:
-                    iroha_data_model::validation_fee::ValidationFeeChargingMode::Disabled,
-                effective_from_height: 1,
-                expires_after_height: None,
+                    iroha_data_model::validation_fee::ValidationFeeChargingMode::RetailMonthlyAllowance,
+
                 exemption_classes: Vec::new(),
-                treasury_payout_binding: None,
+                reward_custody: iroha_data_model::validation_fee::ValidationFeeRewardCustodyV1 {
+                    contract_address: sample_contract_address(),
+                    treasury_account_id: sample_contract_address().subject_id(),
+                    ds_asset_id: state.gov.voting_asset_id.clone(),
+                    xor_asset_id: state.gov.voting_asset_id.clone(),
+                    reward_pool_account_id: ALICE_ID.clone(),
+                    validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+                },
             },
-            payout_lifecycle_proposal_id: None,
         },
     );
     let proposal_id = kind.fingerprint();

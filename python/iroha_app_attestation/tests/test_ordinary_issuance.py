@@ -1,3 +1,4 @@
+from iroha_app_attestation.native_time_interval import NativeTimeInterval
 """Real Core/P256 equations and durable issuer transactions with public mocks.
 
 The tests use a synthetic OEM chain, a simulated deployment policy holder,
@@ -141,7 +142,7 @@ class OrdinaryIssuanceTests(unittest.TestCase):
 
     def make_provider(self, policy=None):
         return GovernedOrdinaryEvidenceProvider(policies=(policy or self.policy,),
-            trusted_time_ms=lambda:self.now,recheck_native_policy=self.recheck,openssl_path=self.openssl,
+            trusted_time_interval=lambda:NativeTimeInterval(self.now,self.now),recheck_native_policy=self.recheck,openssl_path=self.openssl,
             play_integrity=GooglePlayIntegrityVerifier(lambda:'synthetic-service-access-token'))
 
     def verdict(self):
@@ -155,6 +156,14 @@ class OrdinaryIssuanceTests(unittest.TestCase):
     def rows(self):
         with closing(sqlite3.connect(self.path)) as connection:
             return connection.execute('SELECT operation_id,google_original,google_verified_at_ms,signing_request,certificate FROM ordinary_app_attempts').fetchall()
+
+    def test_actual_interval_refuses_future_not_before_and_upper_expiry(self):
+        # Genuine public challenge/P256/Ed fixture; this interval data grants no Native owner.
+        for lower,upper in ((self.subject.issued_at_ms-1,self.subject.issued_at_ms+1),
+                            (self.subject.expires_at_ms-1,self.subject.expires_at_ms)):
+            self.provider._clock=lambda:NativeTimeInterval(lower,upper)
+            with self.subTest(lower=lower,upper=upper),self.assertRaises(AttestationRejected):
+                self.provider.prepare_raw(self.request.raw_request(),fresh=True)
 
     def test_retained_raw_encoder_fd_uses_only_dedicated_purpose_and_closes_duplicate(self):
         from iroha_app_attestation.ordinary_raw_admission import signing_request

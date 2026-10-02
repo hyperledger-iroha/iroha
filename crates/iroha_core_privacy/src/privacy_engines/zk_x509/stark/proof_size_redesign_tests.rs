@@ -6,9 +6,7 @@ fn complete_oods_bytes(layout: &AggregateProofLayoutV1) -> usize {
     let parameters = layout.parameters_v1();
     let shared = layout.as_shared().unwrap();
     let full_rows =
-        aggregate::AggregateProofLayoutV1::new(parameters, shared.trace_groups().to_vec()).unwrap();
-    let before =
-        aggregate::maximum_encoded_proof_with_deep_bytes_v1(parameters, &full_rows).unwrap();
+        aggregate::AggregateProofLayoutV1::new(parameters, shared.trace_groups().to_vec());
     let q = parameters.query_count;
     let groups = layout.trace_groups.len();
     let width = layout
@@ -19,6 +17,51 @@ fn complete_oods_bytes(layout: &AggregateProofLayoutV1) -> usize {
     let frontier = |opened| {
         aggregate::maximum_multiproof_frontier_len_v1(layout.common_lde_size(), opened).unwrap()
     };
+    let lanes = parameters.security_lanes;
+    let chunks = parameters.composition_degree_chunks;
+    let rounds = shared.fri_rounds(parameters).unwrap();
+    let deep_bytes = (2 * width + lanes * chunks) * 32;
+    assert_eq!(
+        parameters.fri_commitment_layout,
+        aggregate::AggregateFriCommitmentLayoutV1::Paired
+    );
+    // Count the hypothetical grouped current/next wire directly. The closed CA
+    // profile deliberately rejects that alternate layout, so it cannot serve
+    // as an accepted proof object merely to calculate the byte reduction.
+    let roots = 2 * groups + 2 * lanes + lanes * (rounds + 1);
+    let query_bytes = q * (4 + 2 * width * 8 + lanes * (chunks + 1 + 2 * rounds) * 32);
+    let fri_frontiers = (0..rounds)
+        .map(|round| {
+            let leaves = shared.common_lde_size() >> (round + 1);
+            aggregate::maximum_multiproof_frontier_len_v1(leaves, q.min(leaves)).unwrap()
+        })
+        .sum::<usize>();
+    let frontier_hashes =
+        2 * groups * frontier(2 * q) + 2 * lanes * frontier(q) + lanes * fri_frontiers;
+    let full_row_count = 8
+        + roots * 48
+        + lanes * parameters.terminal_size().unwrap() * 32
+        + 8
+        + query_bytes
+        + frontier_hashes * 48
+        + deep_bytes;
+    let before = if parameters.proof_magic == *b"X5C2" {
+        assert_eq!(
+            full_rows.unwrap_err(),
+            aggregate::AggregateStarkErrorV1::InvalidLayout
+        );
+        full_row_count
+    } else {
+        let full_rows = full_rows.unwrap();
+        let actual =
+            aggregate::maximum_encoded_proof_with_deep_bytes_v1(parameters, &full_rows).unwrap();
+        assert_eq!(actual, full_row_count);
+        assert_eq!(
+            aggregate::exact_deep_opening_bytes_v1(parameters, &shared).unwrap(),
+            aggregate::exact_deep_opening_bytes_v1(parameters, &full_rows).unwrap()
+        );
+        actual
+    };
     let independently_counted = before
         - q * width * 8
         - 2 * groups * (frontier(2 * q) - frontier(q)) * 48
@@ -27,7 +70,7 @@ fn complete_oods_bytes(layout: &AggregateProofLayoutV1) -> usize {
     assert_eq!(current, independently_counted);
     assert_eq!(
         aggregate::exact_deep_opening_bytes_v1(parameters, &shared).unwrap(),
-        aggregate::exact_deep_opening_bytes_v1(parameters, &full_rows).unwrap()
+        deep_bytes
     );
     current
 }
@@ -55,16 +98,40 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
                 ..parameters
             },
             &shared,
-        )
-        .unwrap();
+        );
         assert_eq!(implemented, expected);
-        assert_eq!(scalar - implemented, saving);
+        if parameters.proof_magic == *b"X5C2" {
+            assert!(
+                scalar.is_err(),
+                "the closed CA profile must reject scalar FRI wire"
+            );
+        } else {
+            assert_eq!(scalar.unwrap() - implemented, saving);
+        }
+        // Pairing changes only FRI Merkle frontier sizes. Count the theoretical
+        // savings without manufacturing an accepted alternate CA parameter set.
+        let mut frontier_saving = 0;
+        for round in 0..shared.fri_rounds(parameters).unwrap() {
+            let rows = shared.common_lde_size() >> round;
+            let scalar_frontier = aggregate::maximum_multiproof_frontier_len_v1(
+                rows,
+                (2 * parameters.query_count).min(rows),
+            )
+            .unwrap();
+            let paired_frontier = aggregate::maximum_multiproof_frontier_len_v1(
+                rows / 2,
+                parameters.query_count.min(rows / 2),
+            )
+            .unwrap();
+            frontier_saving += (scalar_frontier - paired_frontier) * 48 * parameters.security_lanes;
+        }
+        assert_eq!(frontier_saving, saving);
         implemented_total += implemented;
     }
-    let framing = super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
-        + super::super::profile::ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1 as usize
+    let framing = super::super::profile::ZK_X509_MAIN_FRAME_BYTES_V1 as usize
+        + super::super::profile::ZK_X509_CA_FRAME_BYTES_V1 as usize
         + super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
-    assert_eq!(framing, 5_822);
+    assert_eq!(framing, 5_360);
     assert_eq!(
         implemented_total + framing,
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
@@ -72,8 +139,8 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
     assert_eq!(complete_oods_bytes(&main), 7_908_768);
     assert_eq!(complete_oods_bytes(&ca), 1_498_816);
     let candidate = complete_oods_bytes(&main) + complete_oods_bytes(&ca) + framing;
-    assert_eq!(candidate, 9_413_406);
-    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 23_778);
+    assert_eq!(candidate, 9_412_944);
+    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 24_240);
     assert_eq!(super::super::profile::validate_profile_v1(), Ok(()));
     // Fitting bytes is not independent crypto/resource qualification.
     assert!(!super::super::profile::zk_x509_activation_readiness_v1().is_complete());
@@ -108,7 +175,7 @@ fn sha_polynomial_selector_degree_fits_the_unchanged_profile() {
     }
     assert_eq!(
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-        9_413_406
+        9_412_944
     );
     assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1, 9_437_184);
 }
@@ -178,20 +245,17 @@ fn joined_main_plan_retains_every_registered_column_and_native_group_slice() {
 
 #[test]
 fn private_terminal_frame_removal_is_exact_without_changing_proof_limits() {
-    // Eight DER scalars, eight addressed RFC records, and the complete
-    // addressed five-signature P-256 frame leave the public envelope.
-    let removed_der = 8 * 8;
-    let removed_rfc = 8 * (2 + 2 + 2 + 2 + 8);
-    let removed_p256 = 12 + 348 * (2 + 2 + 2 + 2 + 8);
-    assert_eq!(8 + 8 + 348, 364);
-    assert_eq!(4 + 208, 212);
-    assert_eq!(32 * 16, 512);
-    assert_eq!(80 * 16, 1_280);
-    assert_eq!(60 * 16, 960);
-    assert_eq!(removed_der + removed_rfc + removed_p256, 5_772);
+    // The final 212 MAIN and 108 CA field products have no public codec.
+    // The shared transcript carries only masked original-polynomial Fp4 values.
+    assert_eq!(4 + 13 * 4 * 4 + 13 * 4 * 2 + 4, 320);
     assert_eq!(
-        11_952 - removed_der - removed_rfc - removed_p256 - 60 * 16 - 32 * 16 - 80 * 16 + 31 * 32,
-        super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
+        super::super::profile::ZK_X509_MAIN_FRAME_BYTES_V1,
+        4 + 2 + 31 * 32 + 4
+    );
+    assert_eq!(super::super::profile::ZK_X509_CA_FRAME_BYTES_V1, 4 + 2 + 4);
+    assert_eq!(
+        super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1,
+        108 + 132 * 32 + 2 * 8
     );
     assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1, 9_437_184);
     assert_eq!(COMPOSITION_DEGREE_CHUNKS, 6);

@@ -7386,57 +7386,6 @@ public sealed record class ToriiContractVerifiedSourceJob
     public ToriiContractVerifiedSourceReference? VerifiedSourceReference { get; init; }
 }
 
-public sealed record class ToriiMultisigProposeRequest
-{
-    private string[]? instructions = Array.Empty<string>();
-
-    [JsonPropertyName("multisig_account_id")]
-    public string? MultisigAccountId { get; init; }
-
-    [JsonPropertyName("multisig_account_alias")]
-    public string? MultisigAccountAlias { get; init; }
-
-    [JsonPropertyName("signer_account_id")]
-    public string SignerAccountId { get; init; } = string.Empty;
-
-    [JsonPropertyName("public_key_hex")]
-    public string? PublicKeyHex { get; init; }
-
-    [JsonPropertyName("signature_b64")]
-    public string? SignatureBase64 { get; init; }
-
-    [JsonPropertyName("creation_time_ms")]
-    public ulong? CreationTimeMilliseconds { get; init; }
-
-    [JsonPropertyName("fee_payment")]
-    public FeePaymentIntent FeePayment { get; init; } = null!;
-
-    [JsonPropertyName("validation_fee_policy_version")]
-    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
-    public ulong? ValidationFeePolicyVersion { get; init; }
-
-    [JsonPropertyName("validation_fee_policy_hash")]
-    public string? ValidationFeePolicyHash { get; init; }
-
-    [JsonPropertyName("validation_fee_hijiri_fee_quote_hash")]
-    public string? ValidationFeeHijiriFeeQuoteHash { get; init; }
-
-    [JsonPropertyName("validation_fee_instruction_index")]
-    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
-    public ulong? ValidationFeeInstructionIndex { get; init; }
-
-    [JsonPropertyName("validation_fee_transfer_entry_index")]
-    [JsonNumberHandling(JsonNumberHandling.WriteAsString)]
-    public ulong? ValidationFeeTransferEntryIndex { get; init; }
-
-    [JsonPropertyName("instructions")]
-    public IReadOnlyList<string>? Instructions
-    {
-        get => ToriiListSnapshots.Copy(instructions);
-        init => instructions = ToriiListSnapshots.CopyNonNullItems(value, nameof(Instructions));
-    }
-}
-
 public sealed record class ToriiMultisigContractCallProposeRequest
 {
     private JsonNode? payload;

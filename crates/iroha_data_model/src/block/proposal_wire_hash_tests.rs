@@ -940,3 +940,23 @@ fn merged_projection_preserves_signatures_merge_authority_and_all_original_input
         );
     }
 }
+
+#[test]
+fn parent_service_original_changes_complete_proposal_commitment() {
+    let mut left = plain_signed_block();
+    let mut right = left.clone();
+    let mut effects = crate::consensus::NposConsensusEffects::default();
+    effects.parent_service_commit_qc = Some(vec![0x21, 0x32]);
+    left.set_npos_consensus_effects(Some(effects.clone()));
+    effects.parent_service_commit_qc = Some(vec![0x21, 0x33]);
+    right.set_npos_consensus_effects(Some(effects));
+    left.validate_proposal_commitments().unwrap();
+    right.validate_proposal_commitments().unwrap();
+    assert_ne!(
+        left.header().npos_effects_hash(),
+        right.header().npos_effects_hash()
+    );
+    assert_ne!(left.hash(), right.hash());
+    assert_checked_comparison_matches_wire(&left, &right);
+    assert_ne!(left.checked_raw_resultless_payload_len().unwrap(), 0);
+}

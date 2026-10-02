@@ -109,8 +109,11 @@ pub(super) enum ExecutionOutputPlanState {
     Poisoned,
 }
 
+#[path = "output_attempt.rs"]
+mod attempt;
 #[path = "output_producer.rs"]
 mod producer;
+pub(crate) use attempt::ExecutionOutputAttemptError;
 pub(crate) use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 impl StateBlock<'_> {

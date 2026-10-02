@@ -17,7 +17,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
     /// No caller supplies an event, index, descriptor, result or skip count.
     pub(super) fn execute_scheduled_time_outputs(
         &mut self,
-    ) -> Result<(), ExecutionAttemptError<String>> {
+    ) -> Result<(), ExecutionOutputAttemptError> {
         let result = (|| {
             if self.failed || self.time_started || self.network_resolved.iter().any(|done| !done) {
                 return Err("Time phase is repeated or has unresolved prior work".into());
@@ -35,7 +35,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .map_err(|_| "Time timestamp exceeds u64")?;
             let mut matched = Vec::new();
             matched.try_reserve_exact(maximum).map_err(|_| {
-                ExecutionAttemptError::Deferred(
+                ExecutionOutputAttemptError::Deferred(
                     ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
                 )
             })?;

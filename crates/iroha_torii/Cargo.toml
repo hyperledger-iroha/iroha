@@ -120,7 +120,7 @@ iroha_sumeragi = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_core = { workspace = true, default-features = false, features = ["app_api", "runtime"] }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_core_zk = { workspace = true, default-features = false }
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
@@ -209,7 +209,7 @@ kotodama_lang = { workspace = true }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2", "test-utils"] }
+iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_test_samples = { path = "../iroha_test_samples" }
 rand_core_06 = { workspace = true }
 rcgen = "0.14.5"

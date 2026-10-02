@@ -41,24 +41,31 @@ class KagemushaOrdinaryBootstrapApprovalOriginalsV1 internal constructor(enrollm
 /** The shared Android enrollment workflow, backed by one already installed Native account/release owner.
  * Native selects and durably retains the financial secret, C challenge, platform key intent,
  * E possession invocation, wallet invocation and FI originals. The product supplies its protected
- * HTTP transport and separately protected wallet signer. No applet or OEM provisioning is involved.
+ * HTTP transport. The public Android constructor uses only the installed Native
+ * account/session custody for retail signing. No applet or OEM provisioning is involved.
  * Keep this workflow for explicit retries; uncertain invocations require Native original recovery.
  */
+// The internal primary constructor is an inert workflow-test seam, never a product
+// constructor or a way to install a Native account/session from a managed signer.
 class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private val native: KagemushaNativeAppApprovalCoordinatorV1,
     private val transport: KagemushaOrdinaryIdentityOriginalTransportV1,
-    private val walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
+    private val walletSigner: KagemushaOrdinaryWalletAccountSignerV1?,
     private val requireOriginalOwner: () -> Unit,
     private val collectOriginal: (KagemushaNativePreparedOrdinaryAppIdentityV1) -> Unit,
     private val proveOriginal: (KagemushaNativePreparedAppEnrollmentPossessionV1) -> Unit,
     private val integrity: KagemushaAndroidPlayIntegrityProviderV1,
     private val approveBootstrapOriginal: ((KagemushaNativePreparedOrdinaryBootstrapApprovalV1) -> ByteArray)? = null,
+    private val nativeWalletSelection: KagemushaNativeWalletAccountSelectionOriginalV1? = null,
 ) {
+    /** Native-account path requiring the same opaque current session, with no managed signer fallback. */
     constructor(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
-        transport: KagemushaOrdinaryIdentityOriginalTransportV1, walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
-        requireOriginalOwner: () -> Unit) : this(coordinator.appIdentityOperations(), transport, walletSigner,
+        transport: KagemushaOrdinaryIdentityOriginalTransportV1,
+        selection: KagemushaNativeWalletAccountSelectionOriginalV1,
+        requireOriginalOwner: () -> Unit) : this(coordinator.appIdentityOperations(), transport, null,
             requireOriginalOwner, originalCollector(context), originalPossessionSigner(context),
-            KagemushaAndroidPlayIntegrityProviderV1(context.applicationContext), originalBootstrapSigner(context))
+            KagemushaAndroidPlayIntegrityProviderV1(context.applicationContext), originalBootstrapSigner(context),
+            selection.also { coordinator.appIdentityOperations().requireCurrentWalletAccountSelection(it) })
     private val mutex = Mutex()
     private var reservation: KagemushaNativeReservedOrdinaryAppIdentityV1? = null
     private var identity: KagemushaNativePreparedOrdinaryAppIdentityV1? = null
@@ -73,32 +80,36 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
 
     /** Complete the same Native ceremony, reusing complete originals and refusing uncertain platform/wallet work. */
     suspend fun beginOrResume(): KagemushaOrdinaryEnrollmentOriginalsV1 = mutex.withLock {
-        requireOriginalOwner()
+        requireWorkflowOwner()
         requireBootstrapStage()
         completed?.let { original ->
             checkNotNull(retail).originalRetailCertificate().also {
                 check(java.security.MessageDigest.isEqual(it, original.originalRetailCertificate()))
             }
-            requireOriginalOwner()
+            requireWorkflowOwner()
             return@withLock original
         }
         val reserved = reservation ?: native.reserveOriginalIdentity().also { reservation = it }
-        requireOriginalOwner()
+        nativeWalletSelection?.let {
+            native.requireCurrentWalletAccountSelection(it)
+            check(it.walletAccountId() == reserved.accountId()) { "Original reservation differs from the current Native W" }
+        }
+        requireWorkflowOwner()
         val prepared = identity ?: reserved.prepare(guardedTransport()).also { identity = it }
-        requireOriginalOwner()
+        requireWorkflowOwner()
         collectOriginal(prepared)
-        requireOriginalOwner()
+        requireWorkflowOwner()
         prepared.admitOriginalAttestation(guardedTransport())
-        requireOriginalOwner()
+        requireWorkflowOwner()
         val heldPossession = possession ?: native.prepareEnrollmentPossession(native.originalEnrollmentAttemptId())
             .also { possession = it }
-        requireOriginalOwner()
+        requireWorkflowOwner()
         proveOriginal(heldPossession)
-        requireOriginalOwner()
+        requireWorkflowOwner()
         val token = if (reserved.originalPlayIntegrityPolicyBytes().isEmpty()) null else {
             val pending = integrityOriginal ?: heldPossession.requestOriginalIntegrityToken(reserved, prepared, integrity)
                 .also { integrityOriginal = it }
-            try { pending.originalResult().also { requireOriginalOwner() } }
+            try { pending.originalResult().also { requireWorkflowOwner() } }
             catch (failure: Throwable) {
                 if (integrity.invalidatedPreparedProviderOriginal(failure) && integrityOriginal === pending) {
                     integrityOriginal = null
@@ -107,19 +118,26 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
             }
         }
         heldPossession.issueOriginalCredential(reserved, prepared, token, guardedTransport())
-        requireOriginalOwner()
+        requireWorkflowOwner()
         val heldRetail = retail ?: heldPossession.prepareOriginalRetailEnrollment(reserved, prepared, guardedTransport())
             .also { retail = it }
-        requireOriginalOwner()
-        heldRetail.signOriginalAccount { message ->
-            requireOriginalOwner()
-            walletSigner.signOriginal(message).also { requireOriginalOwner() }
+        requireWorkflowOwner()
+        val selectedNativeAccount = nativeWalletSelection
+        if (selectedNativeAccount != null) {
+            native.requireCurrentWalletAccountSelection(selectedNativeAccount)
+            heldRetail.signOriginalNativeAccount(selectedNativeAccount)
+            native.requireCurrentWalletAccountSelection(selectedNativeAccount)
+        } else {
+            heldRetail.signOriginalAccount { message ->
+                requireWorkflowOwner()
+                checkNotNull(walletSigner).signOriginal(message).also { requireWorkflowOwner() }
+            }
         }
-        requireOriginalOwner()
+        requireWorkflowOwner()
         val id = heldRetail.completeOriginalEnrollment(guardedTransport())
-        requireOriginalOwner()
+        requireWorkflowOwner()
         KagemushaOrdinaryEnrollmentOriginalsV1(id, heldRetail.originalRetailCertificate())
-            .also { requireOriginalOwner(); completed = it }
+            .also { requireWorkflowOwner(); completed = it }
     }
 
     /** Capture the original zero-index Bootstrap W after the same FI ceremony, with no money readiness claim.
@@ -129,7 +147,7 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     suspend fun beginOrResumeBootstrapApproval(): KagemushaOrdinaryBootstrapApprovalOriginalsV1 {
         val enrollment = beginOrResume()
         return mutex.withLock {
-            requireOriginalOwner()
+            requireWorkflowOwner()
             requireBootstrapStage()
             val signer = checkNotNull(approveBootstrapOriginal) { "Actual hardware Bootstrap signer is unavailable" }
             val heldRetail = checkNotNull(retail)
@@ -139,16 +157,16 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
                     enrollment.originalRetailCertificate())
             val held = bootstrap ?: native.prepareOrdinaryBootstrapApproval(operation, checkNotNull(identity), heldRetail)
                 .also { bootstrap = it }
-            requireOriginalOwner()
+            requireWorkflowOwner()
             capturedBootstrap?.let { captured ->
                 check(java.security.MessageDigest.isEqual(checkNotNull(held.recoverOriginalApproval()), captured.originalApprovalReceipt()))
-                requireOriginalOwner()
+                requireWorkflowOwner()
                 return@withLock captured
             }
             val receipt = signer(held)
-            requireOriginalOwner()
+            requireWorkflowOwner()
             KagemushaOrdinaryBootstrapApprovalOriginalsV1(enrollment, operation, held.signingBytes(),
-                held.bootstrapSelectionOriginal(), receipt).also { requireOriginalOwner(); capturedBootstrap = it }
+                held.bootstrapSelectionOriginal(), receipt).also { requireWorkflowOwner(); capturedBootstrap = it }
         }
     }
 
@@ -160,12 +178,12 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     suspend fun beginOrResumeInitialStatePublication(): KagemushaOrdinaryInitialStatePublicationOriginalsV1 {
         beginOrResumeBootstrapApproval()
         return mutex.withLock {
-            requireOriginalOwner()
+            requireWorkflowOwner()
             requireBootstrapStage()
             val held = checkNotNull(bootstrap)
             val published = if (publishedInitialState == null) held.publishOriginalInitialState()
                 else held.recoverOriginalInitialStatePublication()
-            requireOriginalOwner()
+            requireWorkflowOwner()
             publishedInitialState = published
             published
         }
@@ -177,14 +195,19 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
      * Keep this workflow through retries: after retirement old entry points refuse locally.
      */
     suspend fun prepareCurrentFinancialControlHandoff() {
-        val needsPublication = mutex.withLock { requireOriginalOwner(); !bootstrapRetiredForCash }
+        val needsPublication = mutex.withLock { requireWorkflowOwner(); !bootstrapRetiredForCash }
         if (needsPublication) beginOrResumeInitialStatePublication()
         mutex.withLock {
-            requireOriginalOwner()
+            requireWorkflowOwner()
             checkNotNull(publishedInitialState) { "The authentic initial publication is unavailable" }
             bootstrapRetiredForCash = true
-            requireOriginalOwner()
+            requireWorkflowOwner()
         }
+    }
+
+    private fun requireWorkflowOwner() {
+        requireOriginalOwner()
+        nativeWalletSelection?.let(native::requireCurrentWalletAccountSelection)
     }
 
     private fun requireBootstrapStage() {
@@ -192,8 +215,8 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     }
 
     private fun guardedTransport() = KagemushaOrdinaryIdentityOriginalTransportV1 { original ->
-        requireOriginalOwner(); original.requireCurrent()
-        transport.exchange(original).also { requireOriginalOwner(); original.requireCurrent() }
+        requireWorkflowOwner(); original.requireCurrent()
+        transport.exchange(original).also { requireWorkflowOwner(); original.requireCurrent() }
     }
     // Retain the same Google future across cancellation/HTTP retry. A complete opaque token is
     // never replaced to repair an issuer ambiguity, and cancellation does not erase its original.

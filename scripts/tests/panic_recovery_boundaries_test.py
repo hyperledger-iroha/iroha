@@ -1684,3 +1684,337 @@ def test_source_closure_rejects_symlinked_auto_build_script(tmp_path: Path) -> N
     failures = module.torii_source_path_failures(tmp_path)
     assert any("symlink is forbidden" in failure for failure in failures)
     assert any("auto-discovered package build script escapes the audited source roots" in failure for failure in failures)
+
+
+
+def test_token_issuance_finalized_policy_worker_accepts_nonsemantic_growth() -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    source = (root / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs").read_text(encoding="utf-8")
+    assert module._token_issuance_worker_policy_failures(source) == []
+    grown = source.replace("let policy = account", "/* " + "\n" * 25_000 + " */\nlet policy = account", 1)
+    assert len(grown) > len(source) + 25_000
+    assert module._token_issuance_worker_policy_failures(grown) == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("let worker_state = state.state.clone();", "let worker_state = detached_state;"),
+    ("let worker_issuer = Arc::clone(&issuer);", "let worker_issuer = issuer;"),
+    ("let policy = account", "let policy = other_account"),
+    (".transpose()?;", ".transpose().unwrap_or(None);"),
+    ("let issued = worker_issuer.issue_token(", "let issued = detached_issuer.issue_token("),
+    ("policy.as_ref(),", "None,"),
+    ("if let Some(account) = &account {", "if false { let account = &account;"),
+    ("if Some(current_account_read_policy(", "if Some(stale_account_read_policy("),
+    ("            )?) != policy", "            ).ok()) != policy"),
+    ("            )?) != policy", "            )?) == policy"),
+    ("account-read policy changed during token issuance", "ignore changed policy"),
+    ("StatusCode::FORBIDDEN,\n                    \"account-read policy changed", "StatusCode::OK,\n                    \"account-read policy changed"),
+    ("        Ok(issued)\n    })", "        Ok(foreign_issued)\n    })"),
+    ("        Ok(issued) => issued,\n        Err(response) => return response,\n    };", "        Ok(issued) => issued,\n        Err(_response) => Ok(fallback_token()),\n    };"),
+])
+def test_token_issuance_finalized_policy_worker_refuses_owner_and_policy_mutations(old: str, new: str) -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    source = (root / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs").read_text(encoding="utf-8")
+    assert old in source
+    mutated = source.replace(old, new, 1)
+    assert mutated != source
+    assert module._token_issuance_worker_policy_failures(mutated) == [
+        "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs: token issuance lost its bounded owned pre/post policy worker"
+    ]
+
+
+def test_token_issuance_policy_reads_cannot_be_reordered_or_move_outside_worker() -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    source = (root / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs").read_text(encoding="utf-8")
+    prefix = source.index("        let policy = account")
+    issue = source.index("        let issued = worker_issuer.issue_token(", prefix)
+    recheck = source.index("        // Issuance can await external custody.", issue)
+    result = source.index("        Ok(issued)", recheck)
+    policy = source[prefix:issue]
+    issuance = source[issue:recheck]
+    check = source[recheck:result]
+    suffix = source[result:]
+    mutations = [
+        source[:prefix] + issuance + policy + check + suffix,
+        source[:prefix] + policy + check + issuance + suffix,
+        check + source[:recheck] + suffix,
+        source[:recheck] + suffix + check,
+        "/* " + check + " */\n" + source[:recheck] + suffix,
+    ]
+    for mutated in mutations:
+        assert mutated != source
+        assert module._token_issuance_worker_policy_failures(mutated)
+
+
+@pytest.mark.parametrize("relative", [
+    "crates/iroha_core/src/executor_stream_token_gateway_direct_source_tests.rs",
+    "crates/iroha_core/src/executor_stream_token_gateway_permission_tests.rs",
+    "crates/iroha_core/src/executor_stream_token_gateway_check_permission_tests.rs",
+    "crates/iroha_core/src/executor/private_fees.rs",
+])
+def test_current_core_recovery_children_are_explicit_finite_support_paths(tmp_path: Path, relative: str) -> None:
+    module = load_guard_module()
+    assert module.CORE_RECOVERY_SUPPORT_PATHS.count(Path(relative)) == 1
+    assert module.AUDITED_SOURCE_PATHS.count(Path(relative)) == 1
+    assert Path("crates/iroha_core/src") not in module.AUDITED_SOURCE_PATHS
+    test_core_recovery_support_seals_exact_permission_include(tmp_path, relative)
+
+
+def test_current_raw_review_accepts_complete_shared_owner_move_and_refuses_legacy_return(
+    tmp_path: Path,
+) -> None:
+    """Bind a reviewed current source move without an invented Git history chain."""
+    module = load_guard_module()
+    crate = tmp_path / "crates/iroha_core_zk"
+    source = crate / "src"
+    source.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        '[package]\nname = "current_raw_move_fixture"\nversion = "0.0.0"\n'
+        '[lib]\npath = "src/lib.rs"\n',
+        encoding="utf-8",
+    )
+    (source / "lib.rs").write_text("mod claim;\n", encoding="utf-8")
+    claim = source / "claim.rs"
+    claim.write_text(
+        "mod streaming;\npub(crate) fn run() { streaming::original_policy(); }\n",
+        encoding="utf-8",
+    )
+    legacy = source / "claim/streaming.rs"
+    legacy.parent.mkdir()
+    implementation = "pub(crate) fn original_policy() { let checked = true; assert!(checked); }\n"
+    legacy.write_text(implementation, encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "crates/iroha_core_zk"], cwd=tmp_path, check=True)
+    original = module.torii_boundary_inventory(tmp_path)
+    assert original[2] == {kind: 0 for kind in module.BOUNDARY_IDENTIFIERS}
+    assert module.closed_torii_boundary_inventory_failures(
+        tmp_path, original[0], observed_inventory=original,
+    ) == []
+
+    # The caller now uses the one shared implementation; the retired path is gone.
+    shared = source / "carrier.rs"
+    shared.write_text(implementation, encoding="utf-8")
+    legacy.unlink()
+    (source / "lib.rs").write_text("mod carrier;\nmod claim;\n", encoding="utf-8")
+    claim.write_text(
+        "pub(crate) fn run() { crate::carrier::original_policy(); }\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "--all", "crates/iroha_core_zk"], cwd=tmp_path, check=True)
+    sources, errors = module.torii_rust_source_closure(tmp_path)
+    assert errors == []
+    assert shared.resolve() in sources
+    assert legacy not in sources
+    current = module.torii_boundary_inventory(tmp_path)
+    assert current[2] == original[2]
+    assert current[1] != original[1]
+    assert any("source inventory drifted" in failure for failure in
+        module.closed_torii_boundary_inventory_failures(
+            tmp_path, original[0], observed_inventory=current,
+        ))
+
+    # Approval is the exact current raw census, rather than unavailable historical
+    # commits. The fixture deliberately has no HEAD or commit objects.
+    no_head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=tmp_path,
+        capture_output=True, text=True, check=False,
+    )
+    assert no_head.returncode != 0
+    reviewed = tmp_path / module.REVIEWED_TORII_BOUNDARY_INVENTORY
+    reviewed.parent.mkdir(parents=True)
+    reviewed.write_text("\n".join(current[0]) + "\n", encoding="utf-8")
+    assert module.closed_torii_boundary_inventory_failures(
+        tmp_path, observed_inventory=current,
+    ) == []
+
+    # Neither a parallel retired source nor a changed non-boundary caller can be
+    # accepted merely because catch/task/blocking/upgrade counts still match.
+    legacy.write_text(implementation, encoding="utf-8")
+    returned = module.torii_boundary_inventory(tmp_path)
+    assert returned[2] == current[2]
+    assert any("source inventory drifted" in failure for failure in
+        module.closed_torii_boundary_inventory_failures(
+            tmp_path, observed_inventory=returned,
+        ))
+    legacy.unlink()
+    claim.write_text(
+        "pub(crate) fn run() { let ignored = true; assert!(ignored); }\n",
+        encoding="utf-8",
+    )
+    changed_caller = module.torii_boundary_inventory(tmp_path)
+    assert changed_caller[2] == current[2]
+    assert any("source inventory drifted" in failure for failure in
+        module.closed_torii_boundary_inventory_failures(
+            tmp_path, observed_inventory=changed_caller,
+        ))
+
+
+def test_reviewed_native_sns_attempt_include_seals_full_raw_caller(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    executor = parent / "executor.rs"
+    included = parent / "executor_sns_attempt_tests.rs"
+    executor.write_text('#[cfg(test)] mod tests { include!("executor_sns_attempt_tests.rs"); }\n', encoding="utf-8")
+    included.write_text("fn native_attempt_caller() { original_permission(); }\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert included.resolve() in sources
+    assert Path("crates/iroha_core/src/executor_sns_attempt_tests.rs") in module.CORE_RECOVERY_SUPPORT_PATHS
+    records, _, counts = module.torii_boundary_inventory(tmp_path, sources)
+    included.write_text("fn native_attempt_caller() { substituted_permission(); }\n", encoding="utf-8")
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts
+    failures = module.closed_torii_boundary_inventory_failures(tmp_path, records, observed_inventory=observed)
+    assert any("source inventory drifted" in error for error in failures), failures
+
+
+def test_nested_amx_support_resolves_from_original_tests_module_directory(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    scope = parent / "executor/root_scope.rs"
+    tests = parent / "executor/root_scope/tests.rs"
+    actual = parent / "executor/root_scope/tests/amx_roles.rs"
+    actual.parent.mkdir(parents=True)
+    (parent / "executor.rs").write_text("pub(crate) mod root_scope;\n", encoding="utf-8")
+    scope.write_text("#[cfg(test)] mod tests;\n", encoding="utf-8")
+    tests.write_text("#[cfg(test)] mod amx_roles;\n", encoding="utf-8")
+    actual.write_text("fn original_amx_role() { permission_matrix(); }\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert {scope.resolve(), tests.resolve(), actual.resolve()} <= set(sources)
+    assert Path("crates/iroha_core/src/executor/root_scope/tests/amx_roles.rs") in module.CORE_RECOVERY_SUPPORT_PATHS
+    assert Path("crates/iroha_core/src/executor/root_scope/amx_roles.rs") not in module.CORE_RECOVERY_SUPPORT_PATHS
+    records, _, counts = module.torii_boundary_inventory(tmp_path, sources)
+    actual.write_text("fn original_amx_role() { substituted_permission_matrix(); }\n", encoding="utf-8")
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts
+    failures = module.closed_torii_boundary_inventory_failures(tmp_path, records, observed_inventory=observed)
+    assert any("source inventory drifted" in error for error in failures), failures
+
+
+def test_nested_amx_support_refuses_missing_original_even_with_guessed_sibling(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    scope = parent / "executor/root_scope.rs"
+    tests = parent / "executor/root_scope/tests.rs"
+    guessed = parent / "executor/root_scope/amx_roles.rs"
+    tests.parent.mkdir(parents=True)
+    (parent / "executor.rs").write_text("pub(crate) mod root_scope;\n", encoding="utf-8")
+    scope.write_text("#[cfg(test)] mod tests;\n", encoding="utf-8")
+    tests.write_text("#[cfg(test)] mod amx_roles;\n", encoding="utf-8")
+    guessed.write_text("fn guessed_unreviewed_role() {}\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert guessed.resolve() not in sources
+    assert failures == ["crates/iroha_core/src/executor/root_scope/tests.rs:1: mod must name one static local source file"]
+
+
+def test_ordinary_mint_permission_include_seals_full_original_caller(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    executor = parent / "executor.rs"
+    included = parent / "executor_ordinary_mint_permission_tests.rs"
+    executor.write_text(
+        '#[cfg(test)] mod tests { include!("executor_ordinary_mint_permission_tests.rs"); }\n',
+        encoding="utf-8",
+    )
+    included.write_text("fn mint_permission() { original_root_and_scope(); }\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert included.resolve() in sources
+    assert Path("crates/iroha_core/src/executor_ordinary_mint_permission_tests.rs") in module.CORE_RECOVERY_SUPPORT_PATHS
+    records, _, counts = module.torii_boundary_inventory(tmp_path, sources)
+    included.write_text("fn mint_permission() { substituted_root_and_scope(); }\n", encoding="utf-8")
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts
+    failures = module.closed_torii_boundary_inventory_failures(
+        tmp_path, records, observed_inventory=observed,
+    )
+    assert any("source inventory drifted" in error for error in failures), failures
+
+
+def test_ordinary_mint_permission_include_refuses_absence_and_guessed_sibling(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    executor = parent / "executor.rs"
+    original = parent / "executor_ordinary_mint_permission_tests.rs"
+    guessed = parent / "executor_ordinary_mint_permissions_tests.rs"
+    executor.write_text(
+        '#[cfg(test)] mod tests { include!("executor_ordinary_mint_permission_tests.rs"); }\n',
+        encoding="utf-8",
+    )
+    guessed.write_text("fn guessed_permission() {}\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert original.resolve() not in sources
+    assert guessed.resolve() not in sources
+    assert Path("crates/iroha_core/src/executor_ordinary_mint_permissions_tests.rs") not in module.CORE_RECOVERY_SUPPORT_PATHS
+    assert failures == [
+        "crates/iroha_core/src/executor.rs:1: include! source path is missing "
+        "or not a regular file: executor_ordinary_mint_permission_tests.rs"
+    ]
+
+
+@pytest.mark.parametrize("spacing", ("", " // retained test-only ownership\n"))
+def test_halo2_parameter_source_boundary_requires_actual_test_only_containment(spacing: str) -> None:
+    module = load_guard_module()
+    source = (
+        "#[cfg(test)]" + spacing + "mod halo2_ipa_parameter_source_tests {\n"
+        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
+        "}\n"
+    )
+    assert module._halo2_parameter_source_test_boundary_failures(source) == []
+
+
+@pytest.mark.parametrize("mutation", (
+    "no_test_gate", "production_alternative", "conditional_test_gate", "outside_call",
+    "nested_call", "duplicate_module", "second_raw_call", "comment_only_module",
+))
+def test_halo2_parameter_source_boundary_rejects_gate_and_call_substitution(mutation: str) -> None:
+    module = load_guard_module()
+    source = (
+        "#[cfg(test)] mod halo2_ipa_parameter_source_tests {\n"
+        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
+        "}\n"
+    )
+    if mutation == "no_test_gate":
+        source = source.replace("#[cfg(test)]", "")
+    elif mutation == "production_alternative":
+        source = source.replace("cfg(test)", 'cfg(any(test, feature = "production"))')
+    elif mutation == "conditional_test_gate":
+        source = source.replace("cfg(test)", 'cfg_attr(feature = "optional", cfg(test))')
+    elif mutation == "outside_call":
+        source = source.replace("std::panic::catch_unwind(|| work());", "work();")
+        source += "fn shipping() { std::panic::catch_unwind(|| work()); }\n"
+    elif mutation == "nested_call":
+        source = source.replace(" fn rejects_unbounded_k()", " mod unreviewed { fn rejects_unbounded_k()")
+        source += "}\n"
+    elif mutation == "duplicate_module":
+        source += "#[cfg(test)] mod halo2_ipa_parameter_source_tests {}\n"
+    elif mutation == "second_raw_call":
+        source += "fn unreviewed() { std::panic::catch_unwind(|| work()); }\n"
+    elif mutation == "comment_only_module":
+        source = "/* #[cfg(test)] mod halo2_ipa_parameter_source_tests {} */\n"
+        source += "fn shipping() { std::panic::catch_unwind(|| work()); }\n"
+    assert module._halo2_parameter_source_test_boundary_failures(source)
+
+
+@pytest.mark.parametrize("wrapper", ("function", "block", "macro"))
+def test_halo2_parameter_source_boundary_rejects_nonmodule_brace_owners(wrapper: str) -> None:
+    module = load_guard_module()
+    source = (
+        "#[cfg(test)] mod halo2_ipa_parameter_source_tests {\n"
+        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
+        "}\n"
+    )
+    if wrapper == "function":
+        source = "fn outer() { " + source + " }\n"
+    elif wrapper == "block":
+        source = "fn outer() { { " + source + " } }\n"
+    elif wrapper == "macro":
+        source = "unreviewed_macro! { " + source + " }\n"
+    assert module._halo2_parameter_source_test_boundary_failures(source)

@@ -508,6 +508,7 @@ impl<'a> PenaltyApplier<'a> {
         let (evidence_admissions, penalty_actions, _index) =
             self.derive_from_stable_parent(block_header, true)?;
         Ok(NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions,
             penalty_actions,
         })
@@ -3425,6 +3426,7 @@ mod tests {
         .derive_npos_penalty_actions(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let effects = NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions: Vec::new(),
             penalty_actions,
         };
@@ -3628,6 +3630,7 @@ mod tests {
             .unwrap();
         let mut tx = block.consensus_effects_transaction().unwrap();
         let effects = NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions: Vec::new(),
             penalty_actions: actions,
         };

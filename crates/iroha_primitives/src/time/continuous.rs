@@ -100,7 +100,7 @@ fn platform_nanos() -> io::Result<u128> {
         tv_nsec: 0,
     };
     // SAFETY: this initialized libc timespec is writable for the synchronous native call.
-    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut reading) } != 0 {
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &raw mut reading) } != 0 {
         return Err(io::Error::last_os_error());
     }
     if reading.tv_sec < 0 || !(0..1_000_000_000).contains(&reading.tv_nsec) {

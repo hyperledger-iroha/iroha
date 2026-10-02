@@ -26,7 +26,6 @@ required-features = ["kagemusha-real-proof-harness"]
 
 [[example]]
 name = "confidential_redemption"
-required-features = ["zk-halo2-ipa"]
 
 [[test]]
 name = "iroha_core_zk_group"
@@ -38,21 +37,14 @@ name = "kagemusha_recovery_storage"
 path = "tests/kagemusha_recovery_storage.rs"
 
 [features]
-# Mirrors iroha_core's default proof surface for standalone crate tests and the
-# release harness. Dependents disable defaults (workspace entry) and receive
-# features through iroha_core's forwarding or `proofs-halo2`.
-default = ["proofs-halo2", "proofs-stark", "zk-preverify"]
-proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
+# Every build includes genuine Halo2/Pasta IPA proving and verification. Defaults
+# additionally select STARK and advisory pre-verification; test fixtures and the
+# externally guarded real-proof harness remain separately selected.
+default = ["proofs-stark", "zk-preverify"]
 proofs-stark = ["zk-stark"]
-# ZK verifier feature flags; iroha_core forwards its features of the same name.
-zk-halo2 = ["dep:kaigi_zk"]
-# Transparent Halo2 (IPA over Pasta).
-zk-halo2-ipa = ["zk-ipa-native"]
-# Native IPA polynomial-opening verifier (no external halo2 libs).
-zk-ipa-native = []
+# Halo2, Pasta IPA and Native opening/proving are mandatory in every build.
+# STARK remains a separately selected algorithm.
 zk-stark = ["dep:fastpq_prover"]
-# Temporary helper to match halo2's default circuit-params toggle.
-circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
 zk-preverify = []
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
@@ -65,10 +57,7 @@ zk-tests = ["test-utils"]
 # Non-shipping entrypoint for the single externally memory-guarded Kagemusha real-proof
 # qualification. Keeping it out of `cfg(test)` avoids code-generating the full unit-test
 # harness merely to execute this one proof.
-kagemusha-real-proof-harness = ["zk-halo2-ipa"]
-# Genuine native proving from an authenticated Core selection and release-pinned keys.
-# This enables neither key generation nor experimental/test qualification constructors.
-kagemusha-production-prover = ["zk-halo2-ipa"]
+kagemusha-real-proof-harness = []
 
 [dependencies]
 iroha_primitives = { workspace = true }
@@ -83,7 +72,7 @@ fastpq_prover = { workspace = true, optional = true }
 fastpq_isi = { path = "../fastpq_isi" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
-halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 ff = "0.13.1"
 # Kagemusha V1's paired-Pasta recursive backend uses the Axiom Poseidon
 # transcript and IPA verifier in production. These revisions are pinned by the
@@ -94,7 +83,7 @@ halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_zkp_poseidon = { workspace = true }
-kaigi_zk = { path = "../kaigi_zk", optional = true }
+kaigi_zk = { path = "../kaigi_zk" }
 base64 = { workspace = true }
 blake3 = "1.8.2"
 ciborium = { version = "0.2.2", default-features = false, features = ["std"] }

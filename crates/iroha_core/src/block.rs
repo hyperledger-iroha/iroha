@@ -5006,8 +5006,8 @@ pub(crate) mod valid {
                 timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
             }
             if let Err(error) = state_block
-                .capture_exec_witness()
-                .map_err(Self::execution_context_error)
+                .capture_exec_witness_attempt()
+                .map_err(Self::execution_capture_attempt_error)
             {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -5435,6 +5435,21 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn execution_capture_attempt_error(
+            error: crate::state::WitnessCaptureError,
+        ) -> BlockValidationError {
+            match error {
+                crate::state::WitnessCaptureError::Rejected(error) => {
+                    Self::execution_context_error(error)
+                }
+                crate::state::WitnessCaptureError::Deferred(reason) => {
+                    BlockValidationError::ExecutionDeferred(reason)
+                }
+                crate::state::WitnessCaptureError::StorageAdmission(error) => {
+                    BlockValidationError::StateStorageAdmission(error)
+                }
+            }
+        }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
@@ -6261,6 +6276,48 @@ pub(crate) mod valid {
             block
                 .validate_proposal_commitments()
                 .map_err(Self::execution_context_error)?;
+            // Authenticate the common offered parent proof before any overlay mutation.
+            // Original source loss and decoder refusal remain local retry outcomes.
+            let parent_service = if block.header().height().get() <= 2 {
+                if block
+                    .npos_consensus_effects()
+                    .and_then(|effects| effects.parent_service_commit_qc.as_ref())
+                    .is_some()
+                {
+                    return Err(Self::execution_context_error(
+                        "genesis has no native parent service proof",
+                    ));
+                }
+                None
+            } else {
+                let reader =
+                    crate::sumeragi::certified_chain::CertifiedChain::new_for_parent_service(
+                        &*state_block,
+                    )
+                    .map_err(|error| match error {
+                        crate::sumeragi::certified_chain::ParentServiceError::Deferred(reason) => {
+                            BlockValidationError::ExecutionDeferred(reason)
+                        }
+                        error => BlockValidationError::LocalStorageRecoveryRequired {
+                            reason: error.to_string(),
+                        },
+                    })?;
+                reader
+                    .authenticate_parent_service(block, |_, _| Ok(()))
+                    .map_err(|error| match error {
+                        crate::sumeragi::certified_chain::ParentServiceError::Invalid(reason) => {
+                            Self::execution_context_error(reason)
+                        }
+                        crate::sumeragi::certified_chain::ParentServiceError::Source(error) => {
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: error.to_string(),
+                            }
+                        }
+                        crate::sumeragi::certified_chain::ParentServiceError::Deferred(reason) => {
+                            BlockValidationError::ExecutionDeferred(reason)
+                        }
+                    })?
+            };
             Self::validate_sccp_exempt_cap(block, state_block)?;
             let advertised_fragments = block.committed_fragment_count();
             let advertised_policy = block.axt_policy_snapshot().cloned();
@@ -6317,6 +6374,26 @@ pub(crate) mod valid {
                     "retired SoraFS pins at the block consensus timestamp"
                 );
             }
+            // Materialize bounded native fee state before admitting customer outputs.
+            // Missing parent finality defers the block; it never fabricates service.
+            crate::retail_fee::process_idle_accounts(state_block)
+                .map_err(BlockValidationError::StateStorageAdmission)?;
+            crate::validation_fee_rewards::process_finalized_service(
+                state_block,
+                block,
+                parent_service.as_ref(),
+            )
+            .map_err(|error| match error {
+                crate::state::ExecutionOutputAttemptError::Storage(error) => {
+                    BlockValidationError::StateStorageAdmission(error)
+                }
+                crate::state::ExecutionOutputAttemptError::Deferred(reason) => {
+                    BlockValidationError::ExecutionDeferred(reason)
+                }
+                crate::state::ExecutionOutputAttemptError::Owner(reason) => {
+                    Self::execution_context_error(reason)
+                }
+            })?;
             let finalize = |state: &mut StateBlock<'_>,
                             source: &SignedBlock,
                             routes: &[crate::queue::RoutingDecision]| {
@@ -6426,8 +6503,8 @@ pub(crate) mod valid {
             Self::execute_and_record_canonical_outputs(block, state_block, None, None)?;
             validate_axt_envelopes(block, state_block)?;
             state_block
-                .capture_exec_witness()
-                .map_err(Self::execution_context_error)
+                .capture_exec_witness_attempt()
+                .map_err(Self::execution_capture_attempt_error)
         }
         #[cfg(any(test, feature = "iroha-core-tests"))]
         /// Add additional signature for [`Self`]

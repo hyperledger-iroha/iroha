@@ -1128,6 +1128,7 @@ object ContractManifestJsonParser {
                     "description",
                     "owned_by",
                     "total_quantity",
+                    "numeric_scale",
                     "metadata",
                 ) ||
                 !leafAt(nodes, start + 1, EntrypointValueKindV1.ASSET_DEFINITION_ID) ||
@@ -1136,12 +1137,14 @@ object ContractManifestJsonParser {
                 !leafAt(nodes, start + 4, EntrypointValueKindV1.STRING) ||
                 !leafAt(nodes, start + 5, EntrypointValueKindV1.ACCOUNT_ID) ||
                 !leafAt(nodes, start + 6, EntrypointValueKindV1.QUANTITY) ||
-                !leafAt(nodes, start + 7, EntrypointValueKindV1.JSON) ||
-                subtreeEnd(nodes, start) != start + 8
+                nodes.getOrNull(start + 7)?.kind != EntrypointValueTypeNodeKindV1.OPTION ||
+                !leafAt(nodes, start + 8, EntrypointValueKindV1.INT) ||
+                !leafAt(nodes, start + 9, EntrypointValueKindV1.JSON) ||
+                subtreeEnd(nodes, start) != start + 10
             ) {
                 return null
             }
-            return CoreViewRange(start + 8)
+            return CoreViewRange(start + 10)
         }
         val fields = checkNotNull(expected)
         if (struct.fields != fields.map { it.first }) return null

@@ -192,10 +192,11 @@ fn native_evidence_rejects_removed_authority_wrapper_and_malformed_frames() {
     }
 }
 #[test]
-fn native_effects_require_both_vectors_and_reject_retired_slots() {
+fn native_effects_require_parent_service_and_both_vectors_and_reject_retired_slots() {
     let empty = NposConsensusEffects::default();
     assert!(empty.is_empty());
     let effects = NposConsensusEffects {
+        parent_service_commit_qc: None,
         evidence_admissions: vec![record().evidence],
         penalty_actions: Vec::new(),
     };
@@ -209,7 +210,11 @@ fn native_effects_require_both_vectors_and_reject_retired_slots() {
         norito::json::from_value::<NposConsensusEffects>(json.clone()).unwrap(),
         effects
     );
-    for field in ["evidence_admissions", "penalty_actions"] {
+    for field in [
+        "parent_service_commit_qc",
+        "evidence_admissions",
+        "penalty_actions",
+    ] {
         let mut missing = json.clone();
         missing.as_object_mut().unwrap().remove(field);
         assert!(
@@ -292,4 +297,26 @@ fn lane_attribution_roundtrip_preserves_native_height_and_original_root_cut() {
         .unwrap()
         .insert("global_offence_height".into(), 9_u64.into());
     assert!(norito::json::from_value::<LaneEvidenceScope>(substituted).is_err());
+}
+
+#[test]
+fn native_parent_service_original_is_required_nonempty_bundle_input() {
+    let effects = NposConsensusEffects {
+        parent_service_commit_qc: Some(vec![0x19, 0x2a, 0x3b]),
+        ..Default::default()
+    };
+    assert!(!effects.is_empty());
+    assert_eq!(
+        NposConsensusEffects::decode_all(&mut effects.encode().as_slice()).unwrap(),
+        effects
+    );
+    let json = norito::json::to_value(&effects).unwrap();
+    assert_eq!(
+        norito::json::from_value::<NposConsensusEffects>(json).unwrap(),
+        effects
+    );
+    assert_ne!(
+        iroha_crypto::HashOf::new(&effects),
+        iroha_crypto::HashOf::new(&NposConsensusEffects::default())
+    );
 }

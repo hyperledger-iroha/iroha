@@ -50,6 +50,25 @@ impl Default for PrivacyOuterDigestV1 {
     }
 }
 
+/// Closed proof-family identity within one X509 proof instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivacyOuterProofFamilyV1 {
+    /// Shared MAIN/CA transcript operations.
+    Joint = 0,
+    /// Original MAIN commitments and local transcript.
+    Main = 1,
+    /// Original compact-CA commitments and local transcript.
+    Ca = 2,
+}
+/// Public instance coordinates; these bytes are never counted as secret entropy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyOuterProofScopeV1 {
+    pub(crate) nonce: [u8; 32],
+    pub(crate) family: PrivacyOuterProofFamilyV1,
+}
+const PROOF_INSTANCE_PROFILE_MARKER_V1: &[u8; 5] = b"\0X5I1";
+const PROOF_INSTANCE_PROFILE_SUFFIX_BYTES_V1: usize = 5 + 1 + 32;
+
 /// Exact coordinates of a privacy outer hash frame.
 #[derive(Clone, Copy)]
 pub(crate) struct PrivacyOuterDomainV1<'a> {
@@ -59,6 +78,8 @@ pub(crate) struct PrivacyOuterDomainV1<'a> {
     pub(crate) protocol: &'a [u8],
     /// Compiled proof-profile byte label.
     pub(crate) profile: &'a [u8],
+    /// Required scope for dynamic X509 proof hashes; absent for fixed metadata.
+    pub(crate) proof_scope: Option<PrivacyOuterProofScopeV1>,
     /// Domain-separation role byte label.
     pub(crate) role: &'a [u8],
     /// Protocol-phase byte label.
@@ -111,12 +132,22 @@ impl Drop for WipingSha3V1 {
 
 fn prefix_bytes_v1(domain: PrivacyOuterDomainV1<'_>) -> Option<usize> {
     let mut bytes = FRAME_MAGIC_V1.len().checked_add(48)?;
-    for label in [domain.protocol, domain.profile, domain.role, domain.phase] {
+    for (index, label) in [domain.protocol, domain.profile, domain.role, domain.phase]
+        .into_iter()
+        .enumerate()
+    {
         if label.is_empty() {
             return None;
         }
-        u16::try_from(label.len()).ok()?;
-        bytes = bytes.checked_add(2)?.checked_add(label.len())?;
+        let length = label
+            .len()
+            .checked_add(if index == 1 && domain.proof_scope.is_some() {
+                PROOF_INSTANCE_PROFILE_SUFFIX_BYTES_V1
+            } else {
+                0
+            })?;
+        u16::try_from(length).ok()?;
+        bytes = bytes.checked_add(2)?.checked_add(length)?;
     }
     bytes.checked_add(24)
 }
@@ -130,10 +161,20 @@ fn field_bytes_v1(lengths: &[usize]) -> Option<usize> {
 fn write_domain_prefix_v1(state: &mut WipingSha3V1, domain: PrivacyOuterDomainV1<'_>) {
     state.update(FRAME_MAGIC_V1);
     state.update(domain.catalog);
-    for label in [domain.protocol, domain.profile, domain.role, domain.phase] {
+    for (index, label) in [domain.protocol, domain.profile, domain.role, domain.phase]
+        .into_iter()
+        .enumerate()
+    {
         // Construction validates every conversion before any hashing.
-        state.update(&(label.len() as u16).to_be_bytes());
+        let scope = if index == 1 { domain.proof_scope } else { None };
+        let length = label.len() + scope.map_or(0, |_| PROOF_INSTANCE_PROFILE_SUFFIX_BYTES_V1);
+        state.update(&(length as u16).to_be_bytes());
         state.update(label);
+        if let Some(scope) = scope {
+            state.update(PROOF_INSTANCE_PROFILE_MARKER_V1);
+            state.update(&[scope.family as u8]);
+            state.update(&scope.nonce);
+        }
     }
     state.update(&domain.level.to_be_bytes());
 }
@@ -396,6 +437,7 @@ mod tests {
     }
     fn domain(catalog: &[u8; 48]) -> PrivacyOuterDomainV1<'_> {
         PrivacyOuterDomainV1 {
+            proof_scope: None,
             catalog,
             protocol: b"protocol",
             profile: b"profile",
@@ -433,6 +475,122 @@ mod tests {
     }
 
     #[test]
+    fn scoped_x509_frames_match_independent_bytes_and_all_stream_owners() {
+        let catalog = [0x37; 48];
+        let mut observed = std::collections::BTreeSet::new();
+        for family in [
+            PrivacyOuterProofFamilyV1::Joint,
+            PrivacyOuterProofFamilyV1::Main,
+            PrivacyOuterProofFamilyV1::Ca,
+        ] {
+            for nonce in [[0; 32], [1; 32], [0xff; 32]] {
+                let mut scoped = domain(&catalog);
+                scoped.proof_scope = Some(PrivacyOuterProofScopeV1 { nonce, family });
+                scoped.level = 7;
+                scoped.index = 42;
+                scoped.counter = 13;
+                // Encode the required effective profile independently of the production writer.
+                let mut profile = b"profile".to_vec();
+                profile.extend_from_slice(b"\0X5I1");
+                profile.push(family as u8);
+                profile.extend_from_slice(&nonce);
+                for length in [0, 1, 103, 104, 105, 208] {
+                    let payload = vec![0x29; length];
+                    let fields: [&[u8]; 2] = [b"prefix", &payload];
+                    let mut bytes = b"iroha:privacy:stark:sha3-384:frame:v1\0".to_vec();
+                    bytes.extend_from_slice(&catalog);
+                    for label in [
+                        b"protocol".as_slice(),
+                        profile.as_slice(),
+                        b"role",
+                        b"phase",
+                    ] {
+                        bytes.extend_from_slice(&u16::try_from(label.len()).unwrap().to_be_bytes());
+                        bytes.extend_from_slice(label);
+                    }
+                    for coordinate in [7_u64, 42, 13] {
+                        bytes.extend_from_slice(&coordinate.to_be_bytes());
+                    }
+                    bytes.extend_from_slice(&2_u32.to_be_bytes());
+                    for field in fields {
+                        bytes.extend_from_slice(&u64::try_from(field.len()).unwrap().to_be_bytes());
+                        bytes.extend_from_slice(field);
+                    }
+                    let expected =
+                        PrivacyOuterDigestV1::from_bytes(Sha3_384::digest(&bytes).into());
+                    assert_eq!(
+                        PrivacyOuterFrameV1::new(scoped, &fields).unwrap().hash(),
+                        expected
+                    );
+                    assert_eq!(
+                        PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(scoped, &[6, length]),
+                        Some(bytes.len())
+                    );
+                    assert_eq!(
+                        PrivacyOuterDomainPrefixV1::new(scoped)
+                            .unwrap()
+                            .hash_at_with_counter(42, 13, &fields),
+                        Some(expected)
+                    );
+                    for chunk_size in [1, 7, 104] {
+                        assert_cached_stream_v1(
+                            scoped,
+                            &[b"prefix"],
+                            &payload,
+                            chunk_size,
+                            expected,
+                        );
+                        let mut stream =
+                            PrivacyOuterLastFieldStreamV1::new(scoped, &[b"prefix"], length)
+                                .unwrap();
+                        for chunk in payload.chunks(chunk_size) {
+                            stream.update(chunk).unwrap();
+                        }
+                        assert_eq!(stream.finalize(), Ok(expected));
+                    }
+                    assert!(observed.insert(expected));
+                    let mut fixed = scoped;
+                    fixed.proof_scope = None;
+                    assert_ne!(
+                        PrivacyOuterFrameV1::new(fixed, &fields).unwrap().hash(),
+                        expected
+                    );
+                    assert_eq!(
+                        PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(fixed, &[6, length]),
+                        Some(bytes.len() - 38)
+                    );
+                }
+            }
+        }
+        assert_eq!(observed.len(), 54);
+    }
+
+    #[test]
+    fn scoped_profile_length_checks_include_the_complete_nonce_suffix() {
+        let catalog = [0; 48];
+        let maximum = vec![b'x'; usize::from(u16::MAX) - 38];
+        let oversized = vec![b'x'; maximum.len() + 1];
+        let mut scoped = domain(&catalog);
+        scoped.proof_scope = Some(PrivacyOuterProofScopeV1 {
+            nonce: [0; 32],
+            family: PrivacyOuterProofFamilyV1::Main,
+        });
+        scoped.profile = &maximum;
+        assert!(PrivacyOuterFrameV1::new(scoped, &[]).is_some());
+        assert!(PrivacyOuterDomainPrefixV1::new(scoped).is_some());
+        scoped.profile = &oversized;
+        assert!(PrivacyOuterFrameV1::new(scoped, &[]).is_none());
+        assert!(PrivacyOuterDomainPrefixV1::new(scoped).is_none());
+        assert!(PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(scoped, &[]).is_none());
+        assert!(matches!(
+            PrivacyOuterLastFieldStreamV1::new(scoped, &[], 0),
+            Err(PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded)
+        ));
+        scoped.proof_scope = None;
+        assert!(PrivacyOuterFrameV1::new(scoped, &[]).is_some());
+    }
+
+    #[test]
     fn sha3_frame_fourteen_reference_vectors_match_scalar_prefix_and_stream() {
         // Exact inputs and outputs from the independently implemented Python SHA3 specification.
         // This native control must pass on every supported CPU/assembly feature configuration.
@@ -447,6 +605,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -499,6 +658,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -551,6 +711,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -603,6 +764,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -655,6 +817,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -707,6 +870,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -759,6 +923,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -811,6 +976,7 @@ mod tests {
             let phase = hex("726f777378");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -863,6 +1029,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -915,6 +1082,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -967,6 +1135,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -1019,6 +1188,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -1073,6 +1243,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -1127,6 +1298,7 @@ mod tests {
             let phase = hex("726f7773");
             let catalog: [u8; 48] = catalog.try_into().unwrap();
             let domain = PrivacyOuterDomainV1 {
+                proof_scope: None,
                 catalog: &catalog,
                 protocol: &protocol,
                 profile: &profile,
@@ -1213,6 +1385,7 @@ mod tests {
             stream.finalize().unwrap(),
             PrivacyOuterFrameV1::new(
                 PrivacyOuterDomainV1 {
+                    proof_scope: None,
                     index: 1,
                     counter: 2,
                     ..domain
@@ -1294,6 +1467,7 @@ mod tests {
         ));
         let maximum = vec![b'x'; usize::from(u16::MAX)];
         let valid = PrivacyOuterDomainV1 {
+            proof_scope: None,
             protocol: &maximum,
             ..base
         };

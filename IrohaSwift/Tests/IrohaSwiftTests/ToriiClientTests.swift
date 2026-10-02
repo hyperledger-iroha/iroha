@@ -16187,7 +16187,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ),
             (
                 "AssetDefinitionView",
-                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
                 [
                     leaf("AssetDefinitionId"),
                     leaf("String"),
@@ -16195,6 +16195,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     leaf("String"),
                     leaf("AccountId"),
                     leaf("Quantity"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("Int"),
                     leaf("Json"),
                 ]
             ),
@@ -16275,7 +16277,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ("AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]),
             (
                 "AssetDefinitionView",
-                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
                 [
                     leaf("AssetDefinitionId"),
                     leaf("String"),
@@ -16283,6 +16285,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     leaf("String"),
                     leaf("AccountId"),
                     leaf("Quantity"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("Int"),
                     leaf("Json"),
                 ]
             ),
@@ -16300,6 +16304,17 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         for (name, fields, children) in views {
             let validView = [structNode(name, fields)] + children
+            if name == "AssetDefinitionView" {
+                let retiredFields = fields.filter { $0 != "numeric_scale" }
+                let retiredChildren = Array(children.prefix(6)) + [children[8]]
+                reject([structNode(name, retiredFields)] + retiredChildren, "retired six-field definition")
+                var requiredPrecision = validView
+                requiredPrecision.remove(at: 7)
+                reject(requiredPrecision, "required numeric precision")
+                var decimalPrecision = validView
+                decimalPrecision[8] = leaf("Decimal")
+                reject(decimalPrecision, "decimal numeric precision")
+            }
             var wrongFields = fields
             wrongFields[wrongFields.count - 1] = "forged"
             reject(
@@ -17577,104 +17592,58 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testProposeMultisigEncodesValidationFeePolicyMetadataAsCanonicalStrings() throws {
+    func testProposeMultisigEncodesTheExactTypedRetailFeeAssessment() throws {
+        struct Fixture: Decodable { let assessment: RetailFeeAssessmentV1 }
+        let fixtureURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "retail_fee_codec_v1",
+            withExtension: "json"
+        ))
+        let assessment = try JSONDecoder().decode(
+            Fixture.self,
+            from: Data(contentsOf: fixtureURL)
+        ).assessment
         let signer = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         let request = ToriiMultisigProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
             signerAccountId: signer,
-            validationFeePolicyVersion: 7,
-            validationFeePolicyHash: "0X" + String(repeating: "AB", count: 32),
-            validationFeeHijiriFeeQuoteHash: "0X" + String(repeating: "CD", count: 32),
-            validationFeeInstructionIndex: 1,
-            validationFeeTransferEntryIndex: 2,
+            validationFeeAssessment: assessment,
             instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")],
             feePayment: .authority(chargeLimits: [], gasLimit: nil)
         )
-
+        let native = try ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+            signerAccountId: signer,
+            validationFeeAssessment: assessment,
+            noritoInstructionBoxBytes: [Data([0x01, 0x02, 0x03])],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil)
+        )
+        XCTAssertEqual(native.validationFeeAssessment, assessment)
+        XCTAssertEqual(native.instructions, request.instructions)
         let payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
         )
-        XCTAssertEqual(payload["validation_fee_policy_version"] as? String, "7")
-        XCTAssertEqual(payload["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
-        XCTAssertEqual(
-            payload["validation_fee_hijiri_fee_quote_hash"] as? String,
-            String(repeating: "cd", count: 32)
+        let encodedAssessment = try XCTUnwrap(
+            payload["validation_fee_assessment"] as? [String: Any]
         )
-        XCTAssertEqual(payload["validation_fee_instruction_index"] as? String, "1")
-        XCTAssertEqual(payload["validation_fee_transfer_entry_index"] as? String, "2")
-    }
-
-    func testProposeMultisigRejectsIncompleteValidationFeePolicyMetadata() throws {
-        let signer = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        let instruction = try ToriiMultisigProposeInstruction(base64: "AQID")
-        let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
-        let hash = String(repeating: "ab", count: 32)
-        let malformedRequests = [
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeePolicyVersion: 7,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeePolicyHash: hash,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeeHijiriFeeQuoteHash: hash,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeeInstructionIndex: 1,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeePolicyVersion: 7,
-                validationFeePolicyHash: hash,
-                validationFeeTransferEntryIndex: 2,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeePolicyVersion: 7,
-                validationFeePolicyHash: "not-a-policy-hash",
-                validationFeeInstructionIndex: 0,
-                instructions: [instruction],
-                feePayment: feePayment
-            ),
-            ToriiMultisigProposeRequest(
-                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
-                signerAccountId: signer,
-                validationFeePolicyVersion: 7,
-                validationFeePolicyHash: hash,
-                validationFeeHijiriFeeQuoteHash: "not-a-hijiri-quote-hash",
-                validationFeeInstructionIndex: 0,
-                instructions: [instruction],
-                feePayment: feePayment
-            )
-        ]
-
-        for request in malformedRequests {
-            XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-                guard case ToriiClientError.invalidPayload = error else {
-                    return XCTFail("Expected invalidPayload, got \(error)")
-                }
-            }
-        }
+        let expectedAssessment = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(assessment)) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(encodedAssessment.keys),
+            Set([
+                "account_id", "retail_enrolled", "billing_month_start_ms",
+                "policy_revision", "payments_used_before", "qualifying_payments",
+                "fee_minor", "state_commitment", "intent_hash", "expires_at_ms"
+            ])
+        )
+        XCTAssertEqual(encodedAssessment as NSDictionary, expectedAssessment as NSDictionary)
+        XCTAssertEqual(
+            Set(payload.keys),
+            Set([
+                "multisig_account_id", "signer_account_id", "fee_payment",
+                "validation_fee_assessment", "instructions"
+            ])
+        )
     }
 
     func testProposeMultisigSendsWholeNoritoDtoBody() {

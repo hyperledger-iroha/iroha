@@ -302,6 +302,7 @@ impl MainProverBufferPlanV1 {
         // Sources construct serially. The eight-way parallel interpolation
         // starts only after all native columns have clearing owners.
         let scratch = small_scratch
+            .max(super::super::super::rfc5280_stark::zk_x509_rfc_aux_replay_scratch_bytes_v1())
             .max(P256MainBaseSourceV1::replay_scratch_forecast_v1()?)
             .max(
                 ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(shape)
@@ -403,7 +404,8 @@ impl MainProverBufferPlanV1 {
             sum(&[segment.trace_size(), MASK_DEGREE + 1])?,
             stripe.count,
             budget,
-        )
+        )?
+        .prioritize_registration_v1(registration)
     }
 
     pub(super) fn new_v1(layout: &AggregateProofLayoutV1) -> Result<Self, ZkX509StarkErrorV1> {

@@ -225,7 +225,7 @@ impl FrameStack {
                 }
                 let capacity = capacity
                     .saturating_mul(2)
-                    .clamp(1, crate::contract_return_stack::MAX_CONTRACT_CALL_DEPTH + 1);
+                    .clamp(1, crate::limits::MAX_CONTRACT_CALL_DEPTH + 1);
                 if backing
                     .as_ref()
                     .is_some_and(|owner| owner.as_slice().len() == capacity)

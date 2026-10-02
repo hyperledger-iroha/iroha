@@ -46,7 +46,10 @@ implemented by this runtime and are rejected. The in-process native test now
 passes paid catalog/bootstrap/namespace execution and a real three-of-four BLS
 private-lane certificate through production storage and global merge. The focused
 CLI dataspace suite passes 111 tests; the four-daemon deployment rehearsal
-remains a qualification gate. This source change performs no live deployment.
+is an optional engineering diagnostic, never a signing or deployment prerequisite
+for Taira or production. Full regression suites and fixed-duration fault runs,
+including 24-hour tests, are likewise optional. This source change performs no
+live deployment.
 The rest of this design includes planned network rendering, owner committees
 and teardown work.
 
@@ -596,7 +599,7 @@ public_root = "https://taira.sora.org"
 | `iroha network plan <DEF> [--release V\|PATH] [--state DIR] [--repin <host>] [--json]` | Read-only preview. | 1. Loads the definition and profile and verifies the release.<br>2. Opens one pinned SSH session per host. Unpinned hosts get a fingerprint prompt, or ready-to-paste `host_key` lines for edge-bearing networks.<br>3. Runs agent `Facts` and reads attested chain facts.<br>4. Prints actions by resource, the strategy (`fresh`, `rolling`, `coordinated`, `remediate`, `restart`, `identity-move`) and blocking preconditions, or `requires reset` when the consensus digest changed.<br>5. `--repin` replaces one host pin after a rebuild (with a prompt).<br>Exit codes: 0 converged, 2 changes pending, 1 blocked. |
 | `iroha network apply <DEF> [--release V\|PATH\|local] [--rotate <secret>] [--state DIR] [--yes]` | Converge: first deploy onto vacant hosts, upgrades, config, toggle, edge and grant changes, Inrou enablement, identity move, secret rotation. | 1. Takes the controller lock, plans, prints and asks y/N. `--yes` never accepts unpinned hosts.<br>2. Re-observes and compares the decision hash.<br>3. Runs idempotent actions in dependency order, in parallel across hosts. Creates genesis only if no node has a `GENERATION`.<br>4. Runs the gates. Any failure before proof captures diagnostics and rolls back automatically.<br>Exit codes: 0 sealed, 1 failed and rolled back (gate named), 3 rollback incomplete. |
 | `iroha network reset <DEF> [--release …] [--state DIR] [--abort]` | The only ledger-destroying verb. Creates generation G+1 and moves G to `previous/G`. | 1. Shows the observed NetworkId, heights, retention effects, and the runtime dataspaces and external committee peers that the reset will destroy.<br>2. Requires typing the network name. `--yes` never skips this.<br>3. Before proof, failure restores G automatically. `--abort` restores from the host records on any machine holding the SSH key. |
-| `iroha network verify <DEF\|URL> [--read-only] [--full] [--json]` | On-demand qualification. Given a URL it replaces `iroha taira doctor`. | Runs the applicable gates (§9). `--read-only` skips writes and restarts. `--full` adds G7 and G8. Exit 0 or 1, naming the node and predicate. |
+| `iroha network verify <DEF\|URL> [--read-only] [--full] [--json]` | Optional on-demand diagnostics. Given a URL it replaces `iroha taira doctor`. | Runs the applicable read-only checks (§9). `--full` explicitly adds write, restart and boundary diagnostics G6–G8; `--read-only` always omits them. Exit 0 or 1, naming the node and predicate; the result never authorizes or blocks deployment. |
 | `iroha network status <DEF\|URL> [--json] [--watch]` | Summary; never fails the shell. | Per node: release, height, lag, peers, readyz, blocks to the next pulse and session coverage, disk. Also any unfinished op and gateway and TLS expiry. |
 | `iroha network up [<DEF>] [--nodes N] [--no-start] [--target host\|container] [--seed-file PATH\|--seed-fd N] [--genesis-time MS] [--state DIR]` | S3: local disposable network. | `apply` with the local driver. `--nodes` must be 3f+1. The seed options make every local key and the chain id deterministic, for fixtures and the scaling generator. `--target container` renders container-correct configs (§6.3) for `kagami docker`. |
 | `iroha network down [<DEF>] [--keep-state] [--purge]` | Decommission. | Local: stops the supervisor and deletes state unless `--keep-state`.<br>Remote: stops, disables and removes units, gateways, edge config and watch timers. Data, secrets and releases are kept unless `--purge`, which requires typing the name. |
@@ -698,15 +701,15 @@ $ iroha network apply networks/taira.toml --release 2026.10.0   # shows the plan
     - `EnsureUnit`, installed but not yet enabled.
     - Start the validators.
 11. **Mesh.** G1 identity. G2 readiness, where only `MissingSession` is tolerated. G3 equal heights, with each node seeing n−1 peers.
-12. **Drive heights.** Iroha makes no empty blocks. An ephemeral canary key claims from the PoW faucet and submits `Log` transactions (G6, exact-wire journaled, Applied on every validator) until tip ≥ `finalized_at_height`.
+12. **Bootstrap heights.** Iroha makes no empty blocks. The authorized bootstrap account submits exact-wire journaled, fee-paying transactions until tip ≥ `finalized_at_height`, as required by beacon installation. This is a protocol action, without a G6 diagnostic prerequisite.
 13. **Install the beacon.**
     - `SignInstallRange` on 2f+1 hosts, one agent call each: each host signs the lifecycle-certificate preimages for effective heights tip+1 … tip+16 with its own BLS key.
     - The controller assembles and submits the certificate for tip+1. `verify_threshold_key_lifecycle_certificate_v1` requires `effective_height == current_height` and exactly 2f+1 signatures (`state.rs:776-835`). If another block lands first, it submits the next pre-signed certificate.
-    - The canary account signs the transaction and pays its fee. The certificate is the authorization, as with today's canary-paid install (`taira_public_reset_beacon.rs:2519-2560`). Replay is impossible because a session installs only once.
+    - The bootstrap account signs the transaction and pays its fee. The certificate is the authorization, as with today's canary-paid install (`taira_public_reset_beacon.rs:2519-2560`). Replay is impossible because a session installs only once.
     - Afterwards G2 is strict and G4 passes.
 14. **Inrou**, when enabled: §5 S1-D and G10.
-15. **G7 restart proof.** Wait until each validator reports a snapshot newer than its start. `snapshot.create_every_ms` is 10 min in `sora-nexus-v1`, and the nodes wait in parallel. Then restart the validators one at a time: each must restore from a snapshot, catch up, and pass G6. Beacon credentials are loaded at first start, so there are no separate post-DKG restart waves.
-16. **Pre-edge verify:** G1–G7 and G11.
+15. **Record serving state.** Beacon credentials are loaded at first start. Do not wait for a snapshot or run a restart proof before deployment; G7 remains an explicitly requested diagnostic.
+16. **Pre-edge observation:** G1–G5 and G11, without G6–G8 diagnostics.
 17. **Edge.** Render the per-node gateways (§6.1) and the edge: upstreams over mTLS, per-node vhosts, CORS allowlist, `X-Forwarded-For` overwrite, alias routes, explorer vhost with a generated `runtime-config.json` (chain id, NetworkId, Torii URL), and the `.well-known` card and genesis. `EnsureEdge` writes the config, runs `nginx -t` and reloads. G9 runs against the edge IP with pinned TLS SNI, so DNS can move afterwards.
 18. **Seal.**
     - `GENERATION.proven = true`.
@@ -749,7 +752,7 @@ $ iroha network apply networks/taira.toml --release 2026.10.1
 2. `iroha3d --check-storage` with the new binary. The node must be stopped because Kura holds an exclusive store-root lock (`kura.rs:2514-2530, 2701`). It returns the tip, the Kura prefix hash at the latest snapshot height, and a snapshot-restore dry run. On failure: restart on the old release and abort with "release cannot open this ledger; use `iroha network reset`".
 3. Swap the `release` symlink with `rename(2)` and start.
 4. Catch up to lag ≤ 2. The prefix hash must equal the old binary's reading.
-5. G6 Applied on all validators.
+5. Record actual readiness and catch-up without a G6 write diagnostic.
 
 Then G1–G5, and G9 and G10 when configured. A failure rolls back only the touched nodes.
 
@@ -763,7 +766,7 @@ Then G1–G5, and G9 and G10 when configured. A failure rolls back only the touc
 5. Swap all, start all.
 6. Verify, then bring the edge live.
 
-On failure, every node stops, its checkpoint and old release are restored, it starts, and G1–G3 are verified. Only tool-generated G6 writes can be lost, because the edge was in maintenance. After seal, checkpoints are removed.
+On failure, every node stops, its checkpoint and old release are restored, it starts, and G1–G3 are verified. The edge remains in maintenance throughout this operation; no G6 diagnostic writes are required. After seal, checkpoints are removed.
 
 When owner dataspaces exist, the plan lists every lane whose committee runs a different release. For coordinated upgrades it warns that those lanes stall until their owners run `dataspace apply`.
 
@@ -877,7 +880,7 @@ $ iroha dataspace apply dataspaces/acme.toml
 ```
 $ cargo build --release -p irohad --bin iroha3d -p iroha_cli --bin iroha
 $ target/release/iroha network up                   # or: up networks/dev.toml --nodes 7
-$ target/release/iroha network verify dev --full    # crosses a mandatory pulse and an epoch boundary
+$ target/release/iroha network verify dev --full    # optional pulse, epoch and restart diagnostics
 $ target/release/iroha network down
 ```
 
@@ -886,7 +889,7 @@ $ target/release/iroha network down
 - Generates identities, genesis and the beacon deal through the same code paths as Taira, with a fresh chain id, or a deterministic one from `--seed-file` or `--seed-fd`.
 - Renders configs with `lifecycle.exit_on_stdin_close = true`.
 - Spawns the detached `iroha network supervise`, which starts n `iroha3d` children.
-- Drives heights, installs the beacon, and runs G1–G7. G7 is fast on the qual profile because snapshots are taken every 30 s.
+- Drives the protocol-required bootstrap heights, installs the beacon, and observes G1–G5. G6–G8 run only when explicitly requested through `verify --full`.
 
 It needs no root, KVM, pidfd or Python, and works on macOS and Linux, x86_64 and aarch64. `up` takes about 60–90 s and `verify --full` about 2 min. An `apply` after a rebuild exercises the upgrade strategies locally. `[inrou] enabled = true` is refused unless the machine runs Linux with KVM API 12 as root.
 
@@ -1211,22 +1214,29 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
 | **G6 Applied write** | Ephemeral key, PoW faucet claim, `Log` transaction, all exact-wire journaled through the now-public `iroha_wallet::operation_journal`. Applied on every validator with committed wire equal to prepared wire. One work-scaled deadline, honouring `Retry-After`. Onboarding is exercised when a credential exists. |
 | **G7 Restart proof** | Wait for a snapshot newer than each node's start, then restart the nodes one at a time. Each must restore from the snapshot and pass G2, G3 and G6. |
 | **G8 Pulse crossing** | Runs on qual and dev profiles, or when `blocks_to_pulse ≤ 200`. Writes drive the chain across the next mandatory pulse and an epoch boundary. `/readyz` stays 200. On `sora-nexus-v1` with a distant pulse it is skipped with a note. |
-| **G9 Public surface** | The former doctor: route posture codes, MCP (GET 405, discover, tools/list), time health, KAGEMUSHA readiness, faucet policy equal to genesis, TLS certificate valid for 14 days or more, card and genesis served, explorer runtime config. Runs against the edge IP with pinned SNI before DNS moves. Includes the external P2P probe. |
+| **G9 Public service** | Actual primary ingress readiness, expected release and network identity, valid TLS and curated MCP health. Runs against the edge IP with pinned SNI before DNS moves. The broad doctor, product-route posture, explorer configuration, expiry-horizon and external-probe exercises remain separately requested optional diagnostics. |
 | **G10 Inrou** | Replicas equal the number of validators, decoded with the typed `/v1/soracloud/status` DTO. Replica identities are distinct and manifest digests equal the per-ISA release pin. `StoppedInrouReconcile` stays clean. |
 | **G11 Host health** | Headroom; journald cap; units enabled after seal; NRestarts delta; gateway and TLS certificate expiry; no foreign process on managed ports. |
-| **G12 Dataspace** | Catalog entry present. Committee equals the expected set. The public lane certificate advances with exactly 2f+1 signers from that committee. An owner write is Applied. Anonymous reads are filtered. Budget accounting is consistent. |
+| **G12 Dataspace** | Actual registration is committed. Catalog entry and active native lane match the expected committee and scope. Supplied lane certificates verify exactly 2f+1 signers from that committee. Routing, read permissions and budget accounting follow committed state. Additional owner-write exercises are optional diagnostics. |
 
 **When each gate runs:**
+G6–G8 are optional engineering diagnostics. They run only when explicitly requested through
+`verify`; their absence or verdict never blocks signing, `apply`, `reset`, sealing or public
+cutover on Taira or production. Protocol-required bootstrap transactions remain ordinary
+authenticated chain actions; they do not require a canary, restart rehearsal or boundary
+crossing test before deployment.
+
 - `plan`: G0–G5 and G11, read-only.
-- `apply` on a fresh generation: G0; after start G1–G3; G6 to drive heights; strict G2 and G4 after the install; G10; G7; G9; then seal.
+- `apply` on a fresh generation: G0; after start G1–G3; strict G2 and G4 after the install; G10; G9; then seal.
 - `apply` for an upgrade or config change:
   1. G0–G5 and G11, then classification.
   2. The G4 margin before each restart.
   3. `--check-storage`.
-  4. G6 per node.
+  4. Record the actual node start and serving state without a write diagnostic.
   5. G1–G5, G9 and G10.
 - `reset`: the same as a fresh generation.
-- `verify`: every applicable gate. `--read-only` drops G6–G8, and `--full` adds G7 and G8.
+- `verify`: every applicable read-only check. An explicit write diagnostic adds G6;
+  `--full` adds G6–G8. `--read-only` always omits G6–G8.
 - `status`: displays G1–G4 and G11.
 - Dataspace: G1–G5 against the parent over public routes only, G1–G4 on the owner nodes, and G12.
 
@@ -1492,7 +1502,7 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 
 All phases land on the `network-deploy` branch, and nothing is released or deployed to Taira until P9. From P0 on, the old Taira toolchain is frozen: no fixes, no new features. P8 deletes it on the branch, so the release carries only the new path.
 
-Taira gets exactly one ledger replacement: the P9 restore. Its genesis already carries the dataspace protocol content (D-3), and Inrou is on from the start. Every phase ends green on `cargo test -p <touched crates>`, `cargo clippy -D warnings` and `cargo fmt`.
+Taira gets exactly one ledger replacement: the P9 restore. Its genesis already carries the dataspace protocol content (D-3), and Inrou is on from the start. Focused tests, lint and formatting checks are engineering diagnostics; their completion or verdict is never a signing or deployment prerequisite for Taira or production.
 
 Line estimates count new or moved production lines. Tests are extra: about 12k lines for tooling and about 5k for the protocol.
 

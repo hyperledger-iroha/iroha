@@ -334,6 +334,8 @@ class DurableOrdinaryCredentialIssuer:
         # Header4 + selectors576 + actual SEC1 point65 + two scope epochs16.
         issued = int.from_bytes(request[5+661:5+669], "little")
         expires = int.from_bytes(request[5+669:5+677], "little")
+        if fresh:
+            evidence.trusted_time_interval.require_window(issued,expires)
         integrity = self._provider.retained_integrity(evidence, row[2],
             verified_at_ms=row[4], fresh=fresh)
         require(evidence.signing_request(issued, expires, integrity) == request,
@@ -365,8 +367,9 @@ class DurableOrdinaryCredentialIssuer:
             issued=self._lookup(connection,evidence)
             require(issued is not None and issued[6] is not None,"refresh requires an issued original credential")
             signing=self._checked_saved_input(connection,evidence,issued,fresh=False)
-            point=selected.select_issued_original(signing_request=signing,certificate=issued[6],
-                policy=evidence.policy,now_ms=evidence.trusted_time_ms,fresh=fresh)
+            for now in evidence.trusted_time_interval.endpoints():
+                point=selected.select_issued_original(signing_request=signing,certificate=issued[6],
+                    policy=evidence.policy,now_ms=now,fresh=fresh)
             self._recheck_database()
             return evidence,signing,issued[6],point
 

@@ -77,7 +77,7 @@ object KagemushaCoreCoordinatorFrameV1 {
         return encode(retained, MAXIMUM_RESPONSE_BYTES)
     }
 
-    /** Encode the dedicated phase8 Bootstrap selector or its original ticket phases2–7. */
+    /** Encode the dedicated Bootstrap selector, ticket actions or initial publication reads. */
     @JvmStatic
     fun encodeOrdinaryBootstrapApprovalRequest(fields: List<ByteArray>): ByteArray {
         encodedSize(fields, MAXIMUM_REQUEST_BYTES)
@@ -265,8 +265,10 @@ object KagemushaCoreCoordinatorFrameV1 {
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
                 bounded(fields, 3, 8 * 1024)
+                val previous = number(fields, 4).toUInt()
+                require(previous != UInt.MAX_VALUE) { "App Attest counter is exhausted" }
                 KagemushaSelectionFrameV1.requireAppAttestSubject(selection)
-                require(KagemushaAppAttestOriginalV1.counter(field(fields, 3)) > number(fields, 4).toUInt()) {
+                require(KagemushaAppAttestOriginalV1.counter(field(fields, 3)) > previous) {
                     "App Attest counter did not advance beyond the retained floor"
                 }
                 digest(fields, 5); digest(fields, 6)

@@ -292,7 +292,16 @@ impl KagemushaAppOperationApprovalChallengeV1 {
     pub fn canonical_subject_signing_bytes(&self) -> Result<Vec<u8>, String> {
         match self.purpose {
             KagemushaAppOperationApprovalPurposeV1::MonetaryTransition => {
-                self.subject.canonical_signing_bytes()
+                if matches!(
+                    self.subject.operation_kind,
+                    super::KagemushaOperationKindV1::MintFold
+                        | super::KagemushaOperationKindV1::ReceiveFold
+                ) {
+                    self.subject
+                        .canonical_ordinary_incoming_terminal_signing_bytes()
+                } else {
+                    self.subject.canonical_signing_bytes()
+                }
             }
             KagemushaAppOperationApprovalPurposeV1::PrepareTransition => {
                 self.subject.canonical_prepare_signing_bytes()

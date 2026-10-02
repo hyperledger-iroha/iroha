@@ -7,7 +7,7 @@ use their actual owners directly.
 
 | Boundary | Current design |
 | --- | --- |
-| VM and compiler | IVM and artifact admission use the compiler-independent ABI/surface. `kotodama_lang` owns compilation; `kotodama_toolchain` owns compiler tools. Core uses the compiler only for tests. Torii's contract-source API remains a compiler consumer, so compiler edits can still rebuild the daemon graph. |
+| VM and compiler | IVM and artifact admission use the compiler-independent ABI/surface. `kotodama_lang` owns compilation; `kotodama_toolchain` owns compiler tools. Core uses the compiler only for tests. Torii's contract-source API and JavaScript's `compileKotodama` API directly consume the compiler, so compiler edits can rebuild the daemon and JS host graphs. |
 | Privacy verification | `iroha_core_privacy` owns state-free engines, profiles, proof records and verification. Core retains committed-state admission and authenticated authority construction. Fixtures and negative source controls follow the moved implementation. |
 | Timed OVN | `iroha_core_timed_ovn` owns public evidence, archive/casting data and TLE verification. Core retains state reads, authenticated constructors, opaque authorizations and signing. Public data construction does not grant authority. |
 | Executable metadata | Thin `irohad` and `iroha_cli` packages provide compiled metadata to `irohad_lib` and `iroha_cli_lib`, whose extern crate names remain `irohad` and `iroha_cli`. Build scripts belong to executables. Version, source and wire identity diagnostics use the injected metadata. The CLI library always includes Core/node, crypto/consensus and Norito/node-codec; `cli` and `dev-tools` select binary targets. |
@@ -23,26 +23,30 @@ non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
 source TODO records the remaining direct-owner migration.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
-moved compiler/model and all six Norito grouped harnesses. The earlier retained ordinary privacy
-harness registers 2,264 tests, including 52 ignored qualification cases. Twelve
+moved compiler/model and all six Norito grouped harnesses. Twelve
 rewritten private-terminal controls map to the original field-mutation and forgery
 coverage. Core authority and bridge controls retain their recorded passes and
 source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. The current target inventory admits 101 declared binaries and 23 defaults;
-certificate, attestation, preparation and SDK inventory assembly tools require
+graphs. Current target-inventory validation admits 105 declared binaries and 23
+defaults, including the installed-context developer tool. Certificate, attestation,
+preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
 IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
-retired-codec pattern check. The SDK native-custody feature has an exact shipping pin; FASTPQ is selected by
-the existing STARK feature, reducing the measured Halo2-only Native dependency
-graph from 418 to 403 packages. This graph reduction does not establish a build
-speedup. A separate shipping Native configuration admits only the reviewed
-CoreZK/Halo2 profiles and ownership paths; ordinary SDK configurations keep their
-existing denials. Native policy validation passes 128 guard tests, all 22 dependency
-configurations and the source budgets. Dependency ceilings account for the committed deployment and
-optional proving paths without speculative growth headroom. The normal production-feature
+retired-codec pattern check. SDK Native custody and genuine production proving are
+mandatory even with SDK defaults disabled; assembly tools remain explicit
+`dev-tools` targets. FASTPQ is selected by the existing STARK feature. The retained
+Halo2-only Native graph observation fell from 418 to 403 packages; it does not
+establish a current frontend result or build speedup. Current owner-boundary checks
+admit the exact CoreZK/Halo2 profiles and SDK paths for default/TLS selections and
+the fixed Musubi, SCCP wallet and storage-client consumers, retaining their runtime,
+P2P, compiler and test-feature denials. Feature hygiene, the ownership-guard suite
+and all 21 configured dependency boundaries pass. Current source budgets also
+pass with the updated developer-tool manifest fingerprint; dependency ceilings
+remain unchanged and include mandatory custody and proving costs without
+speculative growth headroom. The normal production-feature
 Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
 tests pass for the one first-release boxed-challenge layout, including canonical
@@ -57,24 +61,28 @@ scoped non-test real-proof-harness frontend check passes with all 22 focused
 source pins unchanged. Broader source and merged-candidate qualification remain
 incomplete. Unused terminal
 reference helpers now compile only for tests, preserving their assertion bodies
-and the production private-product/local-AIR path. Strict privacy lint remains open.
-The retained privacy acceptance run passes 136 selected controls. It selects none
-of the three failures in the earlier retained ordinary suite, which finishes with
-2,209 passed, three failed and 52 original ignored tests. The fresh harness
-registers 2,356 tests, including 56 ignored cases. Its composite-child control
-passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
-remain resource-held. The original build capture remains unqualified because of
-two foreign CoreZK census races. An independent closure check supports the single
-composite result while preserving that failed capture; full ordinary-suite and
-merged-candidate qualification remain incomplete.
+and the production private-product/local-AIR path. Primary-owner Privacy library
+strict lint passes with defaults, `privacy-release-evidence` and
+`privacy-release-evidence,test-utils` in an unchanged source/Git interval.
+The current joint MAIN/CA and proof-instance candidate has a fresh debug-profile
+Privacy libtest build. Its registry contains 2,479 tests, including 61 ignored
+cases. All 22 selected controls pass; independent framing of all 29 native profile
+fields matches the current source pin. The retained artifact has 475 source,
+literal, manifest and build-control inputs, including 417 actual dep-info inputs,
+unchanged across the build and selected runtime intervals. Current descriptors
+include 192 endpoint, 17 key/digest, 20 SHA-union and 108 CA-link alpha phases and
+the 39-relation RFC inventory. Genuine IO, Projection and CA proof checks, the
+optimized constructor, full ordinary suite, upstream strict lint and merged-source
+qualification remain open. Maximum-proof external time/RSS evidence and enforced
+address-space limits remain separate cryptographic release gates.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
 Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
-fails with concurrent source changes and library rebuilds. The latest workspace
+fails with concurrent source changes and library rebuilds. The last recorded workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-The shared merge has no unresolved entries but remains open. The separate repair
-chat owns its closure and remaining protocol integration repairs. Workspace validation,
+The separate repair chat also owns concurrent merge completion and the remaining
+protocol integration repairs; final validation requires a stable merged source interval. Workspace validation,
 metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.

@@ -81,14 +81,7 @@ where
     C: Circuit<Scalar>,
     C::Params: Default,
 {
-    #[cfg(feature = "circuit-params")]
-    {
-        VerifyingKey::read::<_, C>(reader, SerdeFormat::Processed, C::Params::default())
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        VerifyingKey::read::<_, C>(reader, SerdeFormat::Processed)
-    }
+    { VerifyingKey::read::<_, C>(reader, SerdeFormat::Processed, C::Params::default()) }
 }
 /// Assign advice through the canonical vendored Halo2 API shape.
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]

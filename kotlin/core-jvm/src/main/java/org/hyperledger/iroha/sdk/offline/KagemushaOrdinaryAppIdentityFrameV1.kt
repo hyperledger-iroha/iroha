@@ -22,7 +22,7 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
     fun requireRequest(fields: List<ByteArray>) {
         when (phase(fields)) {
             1 -> require(false) { "Implicit ordinary preparation is retired" }
-            11, 12 -> count(fields, 1)
+            11, 12, 15 -> count(fields, 1)
             2, 4, 7, 8, 9, 14 -> { count(fields, 2); ticket(fields[1]) }
             6 -> { count(fields, 3); ticket(fields[1]); require(fields[2].size == 314) }
             13 -> { count(fields, 3); ticket(fields[1]); signedPreparation(fields[2]) }
@@ -39,6 +39,10 @@ object KagemushaOrdinaryAppIdentityFrameV1 {
 
     fun requireResponse(request: List<ByteArray>, fields: List<ByteArray>) {
         when (phase(request)) {
+            15 -> {
+                count(fields, 3); ticket(fields[0]); text(fields[1], 2048); text(fields[2], 2048)
+                require(!MessageDigest.isEqual(fields[1], fields[2])) { "Native selected wallet W and member S must remain distinct" }
+            }
             12 -> reservation(fields)
             13 -> preparation(request[2], fields)
             14 -> { count(fields, 1); require(fields[0].size <= 16 * 1024) }

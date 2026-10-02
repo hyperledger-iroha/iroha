@@ -63,16 +63,21 @@ mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod game;
+/// Original Google ID-token verification DATA for first-device hardware evidence.
+#[cfg(unix)]
+pub mod google_identity_original_v1;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
 mod kagemusha_commands;
 mod kagemusha_state;
 mod ledger_state_finality;
+mod multisig_execution_evidence;
 mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod ordinary_mint_issuer_purpose;
 mod ordinary_wallet_current;
 #[cfg(feature = "app_api")]
 mod parliament_tle_release;
@@ -19605,7 +19610,16 @@ fn torii_contract_target_read_route(
             .transpose()?
             .flatten(),
     };
-    Ok(dataspace_id.and_then(|id| resolve_torii_route_for_dataspace_id(app, id).ok()))
+    dataspace_id
+        .map(|id| {
+            resolve_torii_route_for_dataspace_id(app, id).map_err(|error| {
+                Error::AppServiceUnavailable {
+                    code: "route_unavailable",
+                    message: format!("failed to resolve target-contract route: {error}"),
+                }
+            })
+        })
+        .transpose()
 }
 #[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {
@@ -27744,7 +27758,7 @@ async fn handler_post_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposeDto>,
+    request: NoritoJson<crate::routing::MultisigProposeDtoV1>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
@@ -38819,6 +38833,9 @@ impl Torii {
     /// Mandatory KAGEMUSHA monetary and recovery routes in every Torii build.
     fn add_kagemusha_routes(&self, builder: &mut RouterBuilder) {
         let transaction_max_content_len = self.transaction_max_content_len;
+        mount_catalog_route_rows!(builder, multisig_execution_evidence;
+            GET => public_get(multisig_execution_evidence::handler);
+        );
         let kagemusha_top_up_body_limit_bytes =
             kagemusha_top_up_body_limit(transaction_max_content_len);
         let kagemusha_redeem_body_limit_bytes =
@@ -38833,6 +38850,7 @@ impl Torii {
             RESOURCE_NAMES_STATE => canonical_signature_get(kagemusha_state::handle_resource_names);
             AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
             ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
+            ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
         );
     }
     /// App-facing typed and protocol-native endpoints.
@@ -39505,7 +39523,11 @@ impl Torii {
                 GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(handler_gov_parliament_tle_partial_release, app_state, 1);
                 GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
-                VALIDATION_FEE_HIJIRI_QUOTE => canonical_account_post(validation_fee_api::handler_hijiri_quote, app_state, iroha_torii_shared::validation_fee_api::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1);
+                VALIDATION_FEE_RETAIL_QUOTE => canonical_account_post(validation_fee_api::handler_retail_quote, app_state, 256 * 1024);
+                VALIDATION_FEE_RETAIL_STATUS => canonical_account_get(validation_fee_api::handler_retail_status, app_state, 0);
+                VALIDATION_FEE_RETAIL_RECEIPTS => canonical_account_get(validation_fee_api::handler_retail_receipts, app_state, 0);
+                VALIDATION_FEE_RETAIL_STATEMENT_HEAD => canonical_account_get(validation_fee_api::handler_retail_statement_head, app_state, 0);
+                VALIDATION_FEE_RETAIL_STATEMENT => canonical_account_post(validation_fee_api::handler_retail_statement, app_state, 16 * 1024);
                 VALIDATION_FEE_PROPOSALS => canonical_account_get(validation_fee_api::handler_proposals, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);

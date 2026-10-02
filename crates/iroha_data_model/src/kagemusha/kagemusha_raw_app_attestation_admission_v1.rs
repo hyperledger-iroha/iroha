@@ -12,7 +12,7 @@ use sha2::{Digest as _, Sha256};
 /// Single pending raw-attestation issuer signing domain, including the final NUL.
 pub const KAGEMUSHA_RAW_APP_ATTESTATION_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:raw-app-attestation-admission\0";
-/// Sole fixed subject width, distinct from C451/E371/W275.
+/// Sole fixed subject width, distinct from C451/E371 and the operation-approval body307.
 pub const KAGEMUSHA_RAW_APP_ATTESTATION_ADMISSION_BODY_BYTES_V1: usize = 250;
 /// Sole purpose-specific private encoder request prefix, never a generic signing oracle.
 pub const KAGEMUSHA_RAW_APP_ATTESTATION_SIGNING_REQUEST_MAGIC_V1: &[u8; 6] = b"KRAC01";
@@ -53,7 +53,7 @@ pub struct KagemushaRawAppAttestationAdmissionSubjectV1 {
     pub app_public_key: KagemushaDevicePublicKeyV1,
     /// SHA256 of that exact uncompressed SEC1 point.
     pub attested_key_id: [u8; 32],
-    /// SHA256 of full original raw chain/attestation bytes authenticated by the issuer.
+    /// SHA256 of the exact model-owned canonical ordered DER/Apple CBOR original container.
     pub raw_platform_evidence_digest: [u8; 32],
     /// Actual allowed app signer/RP digest from raw verification and original policy.
     pub app_signing_identity_digest: [u8; 32],
@@ -264,13 +264,65 @@ pub struct KagemushaRawAppAttestationAdmissionV1 {
 /// Opaque authenticated raw-attestation original, not final identity or money.
 pub struct KagemushaVerifiedRawAppAttestationAdmissionV1 {
     subject: KagemushaRawAppAttestationAdmissionSubjectV1,
+    app_release_digest: [u8; 32],
+    identity_policy_id: [u8; 32],
+    enrollment_issuer_key: iroha_crypto::PublicKey,
+    preparation_original: Vec<u8>,
+    identity_policy_original: Vec<u8>,
+    identity_authority_original: Vec<u8>,
+    platform_original: super::KagemushaPlatformAttestationOriginalV1,
+    platform_original_bytes: Vec<u8>,
     original: Vec<u8>,
+    authenticated_at_ms: u64,
 }
 impl KagemushaVerifiedRawAppAttestationAdmissionV1 {
+    /// Original preparation issuer independently admitted by ordinary governance.
+    #[must_use]
+    pub fn enrollment_issuer_key(&self) -> &iroha_crypto::PublicKey {
+        &self.enrollment_issuer_key
+    }
+    /// Exact previously issuer-authenticated C515 retained before raw admission/E exposure.
+    #[must_use]
+    pub fn preparation_original(&self) -> &[u8] {
+        &self.preparation_original
+    }
+
+    /// Exact independently threshold-admitted ordinary identity policy.
+    #[must_use]
+    pub const fn identity_policy_id(&self) -> [u8; 32] {
+        self.identity_policy_id
+    }
+    /// Original signed policy retained before E exposure.
+    #[must_use]
+    pub fn identity_policy_original(&self) -> &[u8] {
+        &self.identity_policy_original
+    }
+    /// Original independently held authority/genesis anchors used at admission.
+    #[must_use]
+    pub fn identity_authority_original(&self) -> &[u8] {
+        &self.identity_authority_original
+    }
+
+    /// Borrow the exact decoded original container, not a platform-verification grant.
+    #[must_use]
+    pub const fn platform_original(&self) -> &super::KagemushaPlatformAttestationOriginalV1 {
+        &self.platform_original
+    }
+    /// Full canonical original whose SHA joins raw314 and E; inner DER/CBOR bytes are untouched.
+    #[must_use]
+    pub fn platform_original_bytes(&self) -> &[u8] {
+        &self.platform_original_bytes
+    }
     /// Exact independently authenticated pending key/evidence selection.
     #[must_use]
     pub const fn subject(&self) -> &KagemushaRawAppAttestationAdmissionSubjectV1 {
         &self.subject
+    }
+    /// Independently governed release pin retained from the admitted original authority policy.
+    /// This is not read from raw platform evidence or supplied by a possession caller.
+    #[must_use]
+    pub const fn app_release_digest(&self) -> [u8; 32] {
+        self.app_release_digest
     }
     /// Original issuer bytes, retained before E generation.
     #[must_use]
@@ -281,7 +333,10 @@ impl KagemushaVerifiedRawAppAttestationAdmissionV1 {
     /// # Errors
     /// Rejects before issue or at/after original expiry.
     pub fn recheck_at_trusted_time(&self, now: u64) -> Result<(), String> {
-        if now < self.subject.issued_at_ms || now >= self.subject.expires_at_ms {
+        if now < self.authenticated_at_ms
+            || now < self.subject.issued_at_ms
+            || now >= self.subject.expires_at_ms
+        {
             return Err("raw app admission expired".into());
         }
         Ok(())
@@ -321,29 +376,41 @@ impl KagemushaRawAppAttestationAdmissionV1 {
         Ok(value)
     }
 
-    /// Authenticate pending raw evidence under actual release/profile and independent issuer policy.
-    /// The release/profile association selects scope; it does not require or confer hardware
-    /// one-use/non-forking qualification. The issuer must have verified actual raw platform bytes.
+    /// Authenticate pending raw evidence under independent ordinary policy and checked full C.
+    /// No monetary release/catalog/one-use/rollback prerequisite is accepted or inferred.
     /// # Errors
-    /// Rejects mixed C/key/evidence/issuer/platform/level/policy or expired original time.
+    /// Rejects policy/C/key/evidence/issuer/platform/lifetime substitutions.
     pub fn authenticate(
         &self,
-        release: &super::KagemushaAuthenticatedReleaseV1,
-        trust: &super::KagemushaOrdinaryAppTrustPolicyV1,
-        authority: &super::KagemushaAppAttestationAuthorityPolicyV1,
-        expected: &super::KagemushaOrdinaryAppEnrollmentChallengeV1,
+        policy: &super::KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
+        preparation: &super::KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1,
+        original_platform: &[u8],
         now: u64,
     ) -> Result<KagemushaVerifiedRawAppAttestationAdmissionV1, String> {
-        let enabled = release
-            .enabled_profile(expected.hardware_profile_id)
-            .ok_or("raw admission profile absent")?;
-        trust.validate_for_profile(&enabled.hardware_profile, authority)?;
+        preparation.require_policy_original(policy, now)?;
+        preparation.recheck_at_trusted_time(now)?;
+        let original = policy.policy();
+        let profile = &original.profile;
+        let trust = &original.trust;
+        let authority = original.app_authority();
+        let expected = preparation.challenge();
+        trust.validate_for_identity_profile(profile, &authority)?;
         let s = &self.subject;
         let message = s.canonical_signing_bytes()?;
-        if expected.release_id != release.release_id()
-            || expected.network_id != *release.network_id().as_bytes()
-            || expected.suite_id != enabled.suite_id
-            || expected.policy_epoch != enabled.policy_epoch
+        let platform_original =
+            super::KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(
+                original_platform,
+            )?;
+        if platform_original.platform_class() != expected.platform_class
+            || s.raw_platform_evidence_digest != <[u8; 32]>::from(Sha256::digest(original_platform))
+        {
+            return Err("raw admission differs from exact platform original container".into());
+        }
+        if expected.hardware_profile_id != profile.planned_hardware_profile_id
+            || expected.release_id != profile.planned_release_id
+            || expected.suite_id != profile.planned_suite_id
+            || expected.platform_class != profile.platform_class
+            || expected.policy_epoch != profile.policy_epoch
             || s.enrollment_challenge_digest != expected.attestation_challenge()?
             || s.authority_policy_digest != expected.app_authority_policy_digest
             || s.authority_policy_digest != authority.canonical_digest()?
@@ -354,8 +421,8 @@ impl KagemushaRawAppAttestationAdmissionV1 {
             || s.issued_at_ms != expected.issued_at_ms
             || s.expires_at_ms != expected.expires_at_ms
             || s.expires_at_ms - s.issued_at_ms > authority.maximum_lifetime_ms
-            || s.issued_at_ms < enabled.hardware_profile.valid_from_ms
-            || s.expires_at_ms > enabled.hardware_profile.expires_at_ms
+            || s.issued_at_ms < profile.valid_from_ms
+            || s.expires_at_ms > profile.expires_at_ms
             || self.signature.payload().len() != 64
             || authority.authority_key.algorithm() != iroha_crypto::Algorithm::Ed25519
             || (s.platform_class == KagemushaHardwarePlatformClassV1::AndroidKeyMint
@@ -371,7 +438,16 @@ impl KagemushaRawAppAttestationAdmissionV1 {
         let original = self.to_transport_bytes()?;
         let checked = KagemushaVerifiedRawAppAttestationAdmissionV1 {
             subject: *s,
+            app_release_digest: authority.app_release_digest,
+            identity_policy_id: policy.policy_id(),
+            enrollment_issuer_key: policy.policy().enrollment_issuer_key.clone(),
+            preparation_original: preparation.original().to_vec(),
+            identity_policy_original: policy.original().to_vec(),
+            identity_authority_original: policy.authority_original().to_vec(),
+            platform_original,
+            platform_original_bytes: original_platform.to_vec(),
             original,
+            authenticated_at_ms: now,
         };
         checked.recheck_at_trusted_time(now)?;
         Ok(checked)
@@ -420,7 +496,12 @@ mod tests {
             let (f, original) = raw(apple);
             let expected = &f.selection.preparation.challenge;
             let checked = original
-                .authenticate(&f.release, &f.trust, &f.app_authority, expected, 300)
+                .authenticate(
+                    f.ordinary_policy.identity_policy(),
+                    &f.checked_preparation().unwrap(),
+                    &f.proof.raw_attestation,
+                    300,
+                )
                 .unwrap();
             assert_eq!(checked.subject(), &original.subject);
             assert_eq!(checked.original(), original.to_transport_bytes().unwrap());
@@ -462,7 +543,12 @@ mod tests {
             }
             assert!(
                 changed
-                    .authenticate(&f.release, &f.trust, &f.app_authority, c, 300)
+                    .authenticate(
+                        f.ordinary_policy.identity_policy(),
+                        &f.checked_preparation().unwrap(),
+                        &f.proof.raw_attestation,
+                        300
+                    )
                     .is_err()
             );
         }
@@ -476,11 +562,34 @@ mod tests {
                 2 => substituted.suite_id[0] ^= 1,
                 _ => substituted.trust_policy_digest[0] ^= 1,
             }
-            assert!(
-                original
-                    .authenticate(&f.release, &f.trust, &f.app_authority, &substituted, 300)
-                    .is_err()
-            );
+            let signed = super::super::KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
+                challenge: substituted,
+                signature: Signature::try_new(
+                    KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519).private_key(),
+                    &substituted.canonical_signing_bytes().unwrap(),
+                )
+                .unwrap(),
+            };
+            match f
+                .ordinary_policy
+                .identity_policy()
+                .authenticate_preparation(&signed, &substituted, 100)
+            {
+                Ok(checked) => assert!(
+                    original
+                        .authenticate(
+                            f.ordinary_policy.identity_policy(),
+                            &checked,
+                            &f.proof.raw_attestation,
+                            300,
+                        )
+                        .is_err()
+                ),
+                Err(error) => assert_eq!(
+                    error,
+                    "ordinary C differs from independently admitted identity policy"
+                ),
+            }
         }
         let mut changed = original;
         let foreign = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
@@ -491,7 +600,12 @@ mod tests {
         .unwrap();
         assert!(
             changed
-                .authenticate(&f.release, &f.trust, &f.app_authority, c, 300)
+                .authenticate(
+                    f.ordinary_policy.identity_policy(),
+                    &f.checked_preparation().unwrap(),
+                    &f.proof.raw_attestation,
+                    300
+                )
                 .is_err()
         );
     }

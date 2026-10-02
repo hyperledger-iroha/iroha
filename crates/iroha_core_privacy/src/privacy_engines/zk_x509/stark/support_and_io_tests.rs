@@ -1,5 +1,6 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
 use super::*;
+use crate::privacy_engines::zk_x509::proof_instance::TEST_PROOF_INSTANCE_V1;
 use crate::privacy_engines::zk_x509::{
     der_air::ZkX509DerEkuV1, der_stark::ZkX509DerStarkPrivateShapeV1, io_air::ZkX509IoEndpointV1,
     p256_aggregate_adapter::p256_main_base_source_fixture_for_test_v1,
@@ -36,40 +37,39 @@ fn proof_guard() -> std::sync::MutexGuard<'static, ()> {
 fn extension_v1(value: F) -> E {
     E::from_base(value)
 }
-const TERMINAL_TEST_HEADER_BYTES_V1: usize = 12;
-const TERMINAL_TEST_RECORD_BYTES_V1: usize = 16;
-const TERMINAL_TEST_VALUE_OFFSET_V1: usize = 8;
 const TEST_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [0x93; 32];
-fn overwrite_main_terminal_record_value_v1(
-    encoded: &mut [u8],
-    frame_offset: usize,
-    record: usize,
-    value: F,
-) {
-    let start = frame_offset
-        + TERMINAL_TEST_HEADER_BYTES_V1
-        + record * TERMINAL_TEST_RECORD_BYTES_V1
-        + TERMINAL_TEST_VALUE_OFFSET_V1;
-    encoded[start..start + 8].copy_from_slice(&value.0.to_be_bytes());
-}
+
 #[test]
 fn main_transcript_is_release_only_and_domain_separated() {
     let public_digest = [0x71; 32];
     assert!(matches!(
-        new_main_transcript_after_profile_validation_v1(&public_digest, [0_u8; 32]),
+        new_main_transcript_after_profile_validation_v1(
+            TEST_PROOF_INSTANCE_V1,
+            &public_digest,
+            [0_u8; 32]
+        ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let first_release_digest = [0xa5; 32];
     let second_release_digest = [0x5a; 32];
-    let first =
-        new_main_transcript_after_profile_validation_v1(&public_digest, first_release_digest)
-            .expect("candidate release transcript");
-    let second =
-        new_main_transcript_after_profile_validation_v1(&public_digest, second_release_digest)
-            .expect("distinct candidate release transcript");
-    let changed_public =
-        new_main_transcript_after_profile_validation_v1(&[0x72; 32], first_release_digest)
-            .expect("public-bound release transcript");
+    let first = new_main_transcript_after_profile_validation_v1(
+        TEST_PROOF_INSTANCE_V1,
+        &public_digest,
+        first_release_digest,
+    )
+    .expect("candidate release transcript");
+    let second = new_main_transcript_after_profile_validation_v1(
+        TEST_PROOF_INSTANCE_V1,
+        &public_digest,
+        second_release_digest,
+    )
+    .expect("distinct candidate release transcript");
+    let changed_public = new_main_transcript_after_profile_validation_v1(
+        TEST_PROOF_INSTANCE_V1,
+        &[0x72; 32],
+        first_release_digest,
+    )
+    .expect("public-bound release transcript");
     let focused = new_transcript_v1(&test_stark_digest_v1(0x71)).expect("focused transcript");
     assert_ne!(first.state(), second.state());
     assert_ne!(first.state(), changed_public.state());
@@ -355,7 +355,7 @@ fn fixture_statement() -> ZkX509IoStarkStatementV1 {
 }
 fn io_challenges_fixture_v1() -> ZkX509IoChallengesV1 {
     let mut transcript = TransparentTranscriptV1::new(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        TEST_PROOF_INSTANCE_V1.main_context_v1(),
         b"zk-x509-io-logical-active-tests-v1",
         &test_stark_digest_v1(0x63),
         &test_stark_digest_v1(0xA7),
@@ -1419,6 +1419,7 @@ fn projection_provider_post_base_v1(
 fn main_base_commitment_session_fixture_v1() -> ZkX509MainBaseCommitmentSessionV1 {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
+        TEST_PROOF_INSTANCE_V1,
         &layout,
         [0xB1; 32],
         TEST_COMPILED_PROFILE_DIGEST_V1,
@@ -1454,7 +1455,7 @@ fn accumulator_aggregate_layout() -> AggregateProofLayoutV1 {
 }
 fn p256_aggregate_challenges_fixture() -> P256AggregateChallengesV1 {
     let mut transcript = TransparentTranscriptV1::new(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        TEST_PROOF_INSTANCE_V1.main_context_v1(),
         b"p256-aggregate-test",
         &test_stark_digest_v1(0x31),
         &test_stark_digest_v1(0x57),
@@ -1598,13 +1599,6 @@ pub(super) fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
         disclosed_attribute_indices: Vec::new(),
     }
 }
-pub(super) fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
-    let sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
-    ZkX509MainTerminalClaimsV1 {
-        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
-        sha,
-    }
-}
 fn main_log19_source_fixture_v1(
     layout: &AggregateProofLayoutV1,
 ) -> MainLog19VerifierConstraintSourceV1 {
@@ -1612,7 +1606,6 @@ fn main_log19_source_fixture_v1(
         layout,
         &main_log19_statement_fixture_v1(),
         p256_main_provider_post_base_fixture_v1(),
-        main_log19_terminal_claims_fixture_v1(),
     )
     .expect("closed mixed log19 verifier source")
 }

@@ -212,7 +212,9 @@ pub mod isi {
                 ));
             }
             {
-                let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
+                let mut asset_definition = state_transaction
+                    .world
+                    .asset_definition_metadata_mut(&object)?;
                 if asset_definition.owned_by() != &source {
                     return Err(Error::Find(FindError::Account(source)));
                 }
@@ -243,6 +245,14 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if key.as_ref() == iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY
+            {
+                if value.try_into_any_norito::<bool>().ok() != Some(true) {
+                    return Err(Error::InvariantViolation("retail enrollment accepts only true; account classification cannot be removed".into()));
+                }
+                return crate::retail_fee::enroll(state_transaction, authority, &account_id)
+                    .map_err(Into::into);
+            }
             if key.as_ref() == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
             {
                 return Err(Error::InvariantViolation(
@@ -309,6 +319,13 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if self.key().as_ref()
+                == iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY
+            {
+                return Err(Error::InvariantViolation(
+                    "retail enrollment is consensus-owned and cannot be removed".into(),
+                ));
+            }
             if self.key().as_ref()
                 == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
             {

@@ -16,15 +16,12 @@ use crate::kagemusha_v1_recursion::{
 mod bootstrap_proving;
 pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
 
-#[cfg(feature = "kagemusha-production-prover")]
 #[path = "authenticated_ordinary_bootstrap_owner.rs"]
 mod ordinary_bootstrap_owner;
 #[path = "authenticated_ordinary_enrollment.rs"]
 mod ordinary_enrollment;
-#[cfg(feature = "kagemusha-production-prover")]
 pub use ordinary_bootstrap_owner::KagemushaNativeOrdinaryBootstrapOwnerV1;
 pub(crate) use ordinary_enrollment::KagemushaAuthenticatedOrdinaryHistoricalApprovalV1;
-#[cfg(feature = "kagemusha-production-prover")]
 pub(crate) use ordinary_enrollment::verify_ordinary_bootstrap_guard_v1;
 pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryApprovalV1,
@@ -32,13 +29,19 @@ pub use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryCapturedBootstrapApprovalV1,
     KagemushaAuthenticatedOrdinaryCredentialFloorV1,
     KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaNativeOrdinaryCashOwnerV1,
-    KagemushaOrdinaryLogicalApprovalJournalV1,
+    KagemushaNativeOrdinaryPreparedCashApprovalV1, KagemushaOrdinaryLogicalApprovalJournalV1,
 };
 pub(crate) use ordinary_enrollment::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
+    KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
+    KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 
 #[path = "authenticated_core_dispatch.rs"]

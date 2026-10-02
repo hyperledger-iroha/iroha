@@ -479,3 +479,58 @@ fn native_stark_proves_shift_sign_fill_and_rejects_changed_statement_or_stage() 
     forged_columns[NOTE_COPY_WIDTH_V1 + STAGE_OFFSET + WORD_BITS + 63][0] = F::ZERO;
     assert!(prove_proof_managed_note_stark_v1(&adapter, &forged_columns).is_err());
 }
+
+#[test]
+fn shared_shift_appends_original_residues_and_fixed_position_digit_witnesses() {
+    for opcode in REGISTER_OPCODES.into_iter().chain(IMMEDIATE_OPCODES) {
+        let kind = ShiftKind::from_word(ivm::encoding::wide::encode_rr(opcode, 3, 1, 2)).unwrap();
+        for amount in (0..256).chain([u64::MAX, 0x1234_5678_9abc_def0]) {
+            let left = 0x8000_1234_5678_9abc;
+            let bank = bank_witness(opcode, left, amount);
+            for stage in 0..STAGES {
+                let digit = (amount >> (2 * stage)) & 3;
+                for position in 0..4 {
+                    assert_eq!(
+                        bank[SELECTORS + 4 * stage + position],
+                        F(u64::from(position as u64 == digit))
+                    );
+                }
+            }
+            let bits = word::witness(left, amount);
+            let sources = Sources::new(&bits);
+            let kinds = kind_selectors(kind);
+            let mut appended = vec![F(0x4321)];
+            append_bank_residues(&mut appended, &bank, sources, kinds);
+            assert_eq!(appended[0], F(0x4321));
+            assert_eq!(appended.len(), 1 + BANK_CONSTRAINTS);
+            assert!(appended[1..].iter().all(|value| *value == F::ZERO));
+            assert_eq!(appended[1..], bank_residues(&bank, sources, kinds));
+        }
+    }
+}
+
+#[test]
+fn shared_shift_bank_with_private_kind_selectors_has_degree_three() {
+    let measured = measured_maximum_affine_degree_v1(
+        [0x57; 32],
+        [BANK_WIDTH + word::WIDTH + 4, 0, 0, 0, 0],
+        8,
+        MAXIMUM_DEGREE,
+        |row, _, _, _, _| {
+            let sources = Sources::new(&row[BANK_WIDTH..BANK_WIDTH + word::WIDTH]);
+            let selected = &row[BANK_WIDTH + word::WIDTH..];
+            let kinds = [
+                F::ONE.sub(selected.iter().copied().fold(F::ZERO, F::add)),
+                selected[0],
+                selected[1],
+                selected[2],
+                selected[3],
+            ];
+            let mut out = Vec::new();
+            sources.append_residues(&mut out);
+            append_bank_residues(&mut out, &row[..BANK_WIDTH], sources, kinds);
+            Ok::<_, core::convert::Infallible>(out)
+        },
+    );
+    assert_eq!(measured, 3);
+}

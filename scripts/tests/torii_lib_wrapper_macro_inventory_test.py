@@ -268,8 +268,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 576
-ROUTE_TUPLE_SHA256 = "b0a3005f7cfd2e945d9dd10936121da92a2e02c32b06e45b9784c196f57a4382"
+ROUTE_ROW_COUNT = 577
+ROUTE_TUPLE_SHA256 = "52f51134b9beed712bd266fae4a4b8b054a7bdb73b86a39a6bfad8fb370129cb"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1235,9 +1235,10 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
         self.assertEqual([row[2].rsplit("::", 1)[1] for row in rows], [
             "READINESS", "TOP_UP", "REDEEM", "OPERATION", "AUTHORITY_STATE",
             "RESOURCE_NAMES_STATE", "AUTHORITY_ORIGINALS", "ORDINARY_WALLET_CURRENT",
+            "ORDINARY_MINT_ISSUER_PURPOSE",
         ])
         self.assertTrue(all(row[0] == "always" for row in rows))
-        self.assertEqual(rows[-1], (
+        self.assertEqual(rows[-2], (
             "always", "POST", "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT",
             "ordinary_wallet_current::handler",
             "max(iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1)",
@@ -1258,6 +1259,47 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 self.assertNotEqual(changed, self.source)
                 with self.assertRaises(GuardError):
                     validate_source(changed)
+
+    def test_mint_issuer_purpose_requires_exact_signed_post_limit_and_order(self) -> None:
+        """The new original-data reader preserves authentication, bounds and ordered ownership."""
+        expected = (
+            "always", "POST", "route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE",
+            "ordinary_mint_issuer_purpose::handler",
+            "max(iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1)",
+            "handler:CanonicalAccountSignature",
+        )
+        rows = _route_table_rows(self.source)
+        self.assertEqual(rows.count(expected), 1)
+        kagemusha = [row for row in rows if row[2].startswith("route_catalog::kagemusha::")]
+        self.assertEqual(kagemusha[-1], expected)
+        wallet = next(row for row in rows if row[2] == "route_catalog::kagemusha::ORDINARY_WALLET_CURRENT")
+        self.assertEqual(rows.index(expected), rows.index(wallet) + 1)
+        mount = "ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);"
+        for changed in (
+            "",
+            mount + "\n            " + mount,
+            mount.replace("limited_canonical_signature_post", "limited_post", 1),
+            mount.replace("limited_canonical_signature_post", "canonical_signature_get", 1),
+            mount.replace("ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1", "ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1", 1),
+            mount.replace("ORDINARY_MINT_ISSUER_PURPOSE =>", "ORDINARY_WALLET_CURRENT =>", 1),
+            mount.replace("ordinary_mint_issuer_purpose::handler", "ordinary_wallet_current::handler", 1),
+        ):
+            with self.subTest(changed=changed):
+                self.assertEqual(self.source.count(mount), 1)
+                self.assertNotEqual(changed, mount)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(mount, changed, 1))
+        declaration = "    fn add_kagemusha_routes(&self, builder: &mut RouterBuilder)"
+        self.assertEqual(self.source.count(declaration), 1)
+        with self.assertRaises(GuardError):
+            validate_source(self.source.replace(declaration, '    #[cfg(feature = "app_api")]\n' + declaration, 1))
+        wallet_mount = "ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);"
+        self.assertEqual(self.source.count(wallet_mount), 1)
+        reordered = self.source.replace(wallet_mount, "__wallet_mint_swap__", 1)
+        reordered = reordered.replace(mount, wallet_mount, 1).replace("__wallet_mint_swap__", mount, 1)
+        self.assertNotEqual(reordered, self.source)
+        with self.assertRaises(GuardError):
+            validate_source(reordered)
 
     def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
         mutations = (

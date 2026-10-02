@@ -10,7 +10,7 @@ separate work; inspect current SCCP state before touching adjacent code.
 | O1: Finish compiler and Core ZK ownership | In progress | IVM's normal graph excludes the compiler; compiler/toolchain/VM and proof tests pass; source guards and external imports use their actual owners. |
 | O2: Extract state-free privacy verification | In progress | Separate privacy crate, original proof/wire fixtures and all tests preserved; Core retains state authority; native/Python/JS consumers drop the validator execution graph. |
 | O3: Extract state-free timed-OVN verification | Complete | Public evidence, casting archive and TLE verification have a separate owner; authenticated constructors, state reads and signers stay in Core; bridge tests preserve authorization and replay checks. |
-| O4: Isolate executable build metadata | In progress | Thin daemon/CLI packages supply compiled identity to build-script-free libraries; executable names/features remain coherent; metadata-only changes leave libraries fresh. |
+| O4: Isolate executable build metadata | In progress | Thin daemon/CLI packages supply compiled identity to libraries whose builds are free of executable build metadata; executable names/features remain coherent; metadata-only changes leave libraries fresh. |
 | O5: Remove production parsing of large test bodies | Complete | Four cohesive P2P/compiler/model test modules moved without dropping tests or fixtures; source guards and each preserved runtime harness pass, including the transparent model assertions. |
 | O6: Complete codec and merged-source validation | In progress | Norito/IVM-only, feature, dependency and target guards, focused tests, merged workspace check and applicable lint/test gates pass; actual exit codes and unresolved external failures are recorded. |
 | O7: Measure improvements | In progress | Warm same-package check timings compared with the September 27 baseline; source/toolchain and competing build load recorded. Optional further extraction/router work requires measured benefit. |
@@ -28,11 +28,11 @@ tests; 48 dependency-budget tests; Cargo feature hygiene, workspace target
 inventory and every configured feature-resolved dependency boundary. Separate
 source/fixture suites retain their own logs and counts. The normal graphs
 exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
-The earlier retained ordinary privacy registry has 2,264 names and 52 ignored qualification cases;
-twelve rewritten private-terminal controls map to original field-mutation and
+Twelve rewritten private-terminal controls map to original field-mutation and
 forgery coverage. Recorded normal
 native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
-inventory now admits 101 declared targets and 23 defaults. Recorded IVM-only,
+inventory now admits 105 declared targets and 23 defaults, including the installed-context
+developer tool. Recorded IVM-only,
 feature-hygiene, dependency-boundary and retired-codec pattern guards pass.
 The normal production-feature Core ZK frontend and both test-feature harnesses
 have recorded builds, limited by concurrent source changes. Component journal
@@ -44,28 +44,39 @@ selected controls in total, with source changes limiting current qualification. 
 source pins unchanged. Broader source and merged-candidate qualification remain
 incomplete. Unused
 terminal reference helpers now compile only for tests, preserving their assertions
-and production private-product/local-AIR path; strict privacy lint remains open. The retained privacy acceptance run passes 136 selected controls. It selects
-none of the three failures in the earlier retained ordinary suite, which finishes
-with 2,209 passed, three failed and 52 original ignored tests. The fresh harness
-registers 2,356 tests, including 56 ignored cases. Its composite-child control
-passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
-remain resource-held. The original build capture remains unqualified because of
-two foreign CoreZK census races; the independently checked composite result does
-not qualify the full suite or merged candidate. Eight focused parameter tests pass with the scoped inline-policy
+and production private-product/local-AIR path. Primary-owner Privacy library
+strict lint passes with defaults, `privacy-release-evidence` and
+`privacy-release-evidence,test-utils` in an unchanged source/Git interval.
+The current joint MAIN/CA and proof-instance candidate has a fresh debug-profile
+Privacy libtest build. Its registry contains 2,479 tests, including 61 ignored
+cases. All 22 selected controls pass; independent framing of all 29 native profile
+fields matches the current source pin. The retained artifact has 475 source,
+literal, manifest and build-control inputs, including 417 actual dep-info inputs,
+unchanged across the build and selected runtime intervals. Current descriptors
+include 192 endpoint, 17 key/digest, 20 SHA-union and 108 CA-link alpha phases and
+the 39-relation RFC inventory. Genuine IO, Projection and CA proof checks, the
+optimized constructor, full ordinary suite, upstream strict lint and merged-source
+qualification remain open. Maximum-proof external time/RSS evidence and enforced
+address-space limits remain separate cryptographic release gates.
+Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
 compile with matching package/features; the freshness check fails with concurrent
-source changes and library rebuilds. The latest workspace check reaches Core test
-compile errors owned by the separate repair chat. The current shared merge has
-no unresolved entries but remains open. The separate repair chat owns its closure
-and remaining protocol integration repairs.
-New SDK native-custody and assembly tools have explicit feature/target owners;
-FASTPQ belongs to existing STARK activation; the measured Native dependency
-graph fell from 418 to 403 packages. The shipping Native configuration pins
-reviewed proof-owner profiles and paths while retaining all 21 existing
-configurations. Native policy validation passes 128 guard tests, all 22 dependency
-configurations and the source budgets. Exact ceilings account for the committed deployment and optional
-proving costs; current native frontend qualification remains open. Workspace validation, metadata freshness qualification
+source changes and library rebuilds. The last recorded workspace check reaches
+Core test compile errors owned by the separate repair chat. That chat also owns
+concurrent merge completion and the remaining protocol integration repairs.
+Final validation still requires a stable merged source interval.
+SDK Native custody and genuine production proving are mandatory even with SDK
+defaults disabled; assembly tools remain explicit `dev-tools` targets. FASTPQ
+belongs to existing STARK activation. The retained Native graph observation fell
+from 418 to 403 packages and does not establish a current frontend result or
+compile speedup. Exact CoreZK/Halo2 owner contracts cover default/TLS SDK selections
+and the fixed Musubi, SCCP wallet and storage-client consumers, retaining their
+runtime, P2P, compiler and test-feature denials. Feature hygiene, the ownership-guard
+suite and all 21 configured dependency boundaries pass. Current source budgets
+also pass with the updated developer-tool manifest fingerprint. Unchanged exact
+ceilings include mandatory custody and proving costs; current native frontend qualification
+remains open. Workspace validation, metadata freshness qualification
 and observational warm timings remain pending. The
 [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
 describes the remaining controls. All evidence retains its scoped source and

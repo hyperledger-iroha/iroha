@@ -34,15 +34,12 @@ fn selected(f: &Fixture, now: u64) -> Arc<KagemushaOrdinaryPreparationSelectedOr
         key.verifying_key().to_encoded_point(false).as_bytes(),
     )
     .unwrap();
-    let mut issuer_policy = f.issuer_policy.clone();
-    issuer_policy.issuer_public_key = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519)
-        .public_key()
-        .clone();
     Arc::new(
         KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
             f.selection.owner.clone(),
             f.release.clone(),
-            issuer_policy,
+            f.issuer_policy.clone(),
+            Arc::clone(&f.ordinary_policy),
             f.trust.clone(),
             f.app_authority.clone(),
             f.selection.preparation.challenge.hardware_profile_id,

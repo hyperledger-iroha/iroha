@@ -258,15 +258,21 @@ fn trace_layout_is_bound_before_roots_and_joined_scalar_savings_are_exact() {
 
 #[test]
 fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
-    complete_oods_fixture_with_supplemental_v1(false);
+    complete_oods_fixture_with_supplemental_v1(None);
 }
 
 #[test]
 fn supplemental_openings_of_nonconstant_columns_bind_through_real_fri() {
-    complete_oods_fixture_with_supplemental_v1(true);
+    complete_oods_fixture_with_supplemental_v1(Some(AggregateSupplementalColumnV1::Base(0)));
 }
 
-fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
+#[test]
+fn supplemental_openings_of_original_auxiliary_columns_bind_through_real_fri() {
+    complete_oods_fixture_with_supplemental_v1(Some(AggregateSupplementalColumnV1::Auxiliary(0)));
+}
+
+fn complete_oods_fixture_with_supplemental_v1(selected: Option<AggregateSupplementalColumnV1>) {
+    let with_supplemental = selected.is_some();
     use rand::{SeedableRng as _, rngs::StdRng};
     for trace_layout in [
         AggregateTraceLayoutV1::GroupedCurrent,
@@ -307,7 +313,7 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
         };
         let domain_root = goldilocks_primitive_root_v1(layout.common_lde_log2).unwrap();
         let base_polynomial = |point: E| {
-            if with_supplemental {
+            if selected == Some(AggregateSupplementalColumnV1::Base(0)) {
                 E::from_base(F(7))
                     .add(point.mul_base(F(13)))
                     .add(point.mul(point).mul_base(F(17)))
@@ -323,7 +329,23 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
                 })
                 .collect::<Vec<_>>(),
         ];
-        let aux = vec![vec![F(11); rows]];
+        let aux_polynomial = |point: E| {
+            if selected == Some(AggregateSupplementalColumnV1::Auxiliary(0)) {
+                E::from_base(F(11))
+                    .add(point.mul_base(F(19)))
+                    .add(point.mul(point).mul_base(F(23)))
+            } else {
+                E::from_base(F(11))
+            }
+        };
+        let aux = vec![
+            (0..rows)
+                .map(|index| {
+                    let x = F(GOLDILOCKS_GENERATOR_V1).mul(domain_root.pow(index as u128));
+                    aux_polynomial(E::from_base(x)).coefficients()[0]
+                })
+                .collect::<Vec<_>>(),
+        ];
         let material = vec![AggregateTraceGroupMaterialV1 {
             base_tree: row_tree_v1(
                 DOMAINS.digest_context,
@@ -386,7 +408,6 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
             .unwrap();
         absorb_fri_mask_roots_v1(&mut transcript, parameters, DOMAINS, &fri_mask_roots).unwrap();
         let point = derive_deep_point_v1(&mut transcript, parameters, &layout).unwrap();
-        let wire = |value| E::from_base(F(value)).coefficients().map(F::value);
         let deep = AggregateDeepProofV1 {
             trace_groups: vec![AggregateDeepTraceGroupOpeningV1 {
                 base_current: vec![base_polynomial(point).coefficients().map(F::value)],
@@ -395,8 +416,12 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
                         .coefficients()
                         .map(F::value),
                 ],
-                aux_current: vec![wire(11)],
-                aux_next: vec![wire(11)],
+                aux_current: vec![aux_polynomial(point).coefficients().map(F::value)],
+                aux_next: vec![
+                    aux_polynomial(point.mul_base(goldilocks_primitive_root_v1(8).unwrap()))
+                        .coefficients()
+                        .map(F::value),
+                ],
             }],
             composition_values: vec![
                 vec![[0; 4]; parameters.composition_degree_chunks];
@@ -407,11 +432,27 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
         let supplemental = if with_supplemental {
             let target = point.pow(2).mul_base(F(13));
             assert!(deep_point_is_admissible_v1(target, parameters, &layout).unwrap());
-            let value = base_polynomial(target);
+            let (column, family, value) = match selected.unwrap() {
+                AggregateSupplementalColumnV1::Base(index) => (
+                    AggregateSupplementalColumnV1::Base(index),
+                    0_u8,
+                    base_polynomial(target),
+                ),
+                AggregateSupplementalColumnV1::Auxiliary(index) => (
+                    AggregateSupplementalColumnV1::Auxiliary(index),
+                    1_u8,
+                    aux_polynomial(target),
+                ),
+            };
             transcript
                 .absorb(
                     b"public-test-supplemental-values",
-                    &[&target.to_be_bytes(), &value.to_be_bytes()],
+                    &[
+                        &[family],
+                        &0_u64.to_be_bytes(),
+                        &target.to_be_bytes(),
+                        &value.to_be_bytes(),
+                    ],
                 )
                 .unwrap();
             let mix = transcript
@@ -419,7 +460,7 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
                 .unwrap();
             vec![AggregateSupplementalDeepOpeningV1 {
                 group: 0,
-                base_column: 0,
+                column,
                 point: target,
                 value,
                 mix,
@@ -428,8 +469,9 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
             Vec::new()
         };
 
-        // Independently constant base/aux polynomials and zero quotient chunks
-        // have zero DEEP divided differences at both distinct opening points.
+        // Only the selected original commitment family is nonconstant. The
+        // independent closed divided-difference polynomial below binds that
+        // family's current, next and supplemental openings through real FRI.
         let mixes = vec![
             AggregateDeepLaneMixV1 {
                 trace_groups: vec![AggregateDeepTraceGroupMixV1 {
@@ -460,17 +502,26 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
                                 let x = E::from_base(
                                     F(GOLDILOCKS_GENERATOR_V1).mul(domain_root.pow(index as u128)),
                                 );
-                                // For P(X)=7+13X+17X², (P(X)-P(t))/(X-t)=13+17(X+t).
-                                // This independent closed polynomial never calls the verifier quotient helper.
-                                let divided = |t| E::from_base(F(13)).add(x.add(t).mul_base(F(17)));
+                                // For P(X)=a+bX+cX², the divided difference is
+                                // b+c(X+t). This independent polynomial never
+                                // calls the verifier quotient helper.
+                                let (linear, quadratic, current_mix, next_mix) = match selected
+                                    .unwrap()
+                                {
+                                    AggregateSupplementalColumnV1::Base(_) => (13, 17, 2, 3),
+                                    AggregateSupplementalColumnV1::Auxiliary(_) => (19, 23, 5, 7),
+                                };
+                                let divided = |t| {
+                                    E::from_base(F(linear)).add(x.add(t).mul_base(F(quadratic)))
+                                };
                                 masked
-                                    .add(divided(point).mul_base(F(2)))
+                                    .add(divided(point).mul_base(F(current_mix)))
                                     .add(
                                         divided(
                                             point
                                                 .mul_base(goldilocks_primitive_root_v1(8).unwrap()),
                                         )
-                                        .mul_base(F(3)),
+                                        .mul_base(F(next_mix)),
                                     )
                                     .add(divided(supplemental[0].point).mul(supplemental[0].mix))
                             })
@@ -564,15 +615,34 @@ fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
         };
         verify(&proof, &deep, &betas, &terminals).unwrap();
         if with_supplemental {
-            for variant in 0..6 {
+            for variant in 0..7 {
                 let mut changed = supplemental.clone();
                 match variant {
                     0 => changed[0].value = changed[0].value.add(E::ONE),
                     1 => changed[0].point = changed[0].point.add(E::ONE),
                     2 => changed[0].mix = changed[0].mix.add(E::ONE),
                     3 => changed[0].group = 1,
-                    4 => changed[0].base_column = 1,
-                    _ => changed[0].point = E::ZERO,
+                    4 => {
+                        changed[0].column = match selected.unwrap() {
+                            AggregateSupplementalColumnV1::Base(_) => {
+                                AggregateSupplementalColumnV1::Base(1)
+                            }
+                            AggregateSupplementalColumnV1::Auxiliary(_) => {
+                                AggregateSupplementalColumnV1::Auxiliary(1)
+                            }
+                        }
+                    }
+                    5 => changed[0].point = E::ZERO,
+                    _ => {
+                        changed[0].column = match selected.unwrap() {
+                            AggregateSupplementalColumnV1::Base(index) => {
+                                AggregateSupplementalColumnV1::Auxiliary(index)
+                            }
+                            AggregateSupplementalColumnV1::Auxiliary(index) => {
+                                AggregateSupplementalColumnV1::Base(index)
+                            }
+                        }
+                    }
                 }
                 assert!(
                     verify_opened_query_relations_after_complete_oods_v1(

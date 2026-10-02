@@ -123,12 +123,12 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         return prepared.admitOriginalAttestation(transport)
     }
 
-    /** Sign the exact native-owned W once; returned bytes are the original non-monetary native receipt. */
+    /** Sign only the exact Native-held purpose2 cash preparation. The internal validator runs
+     * before the durable fence; the separate Bootstrap holder retains its fixed purpose1 path.
+     * The returned original receipt grants no State proof, funds, finality or release qualification.
+     */
     fun approve(prepared: KagemushaNativePreparedAppApprovalV1): ByteArray =
-        prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->
-            signNativeOriginal(alias, generationChallenge, point, keyId, message, policy,
-                KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL, guard)
-        }.copyOf()
+        approveNativeOrdinaryPreparationOriginalV1(prepared, ::signNativeOriginal)
 
     /** Capture the exact Bootstrap W only through its separate same-FI Native holder. */
     fun approveOrdinaryBootstrap(prepared: KagemushaNativePreparedOrdinaryBootstrapApprovalV1): ByteArray =
@@ -137,12 +137,23 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
                 KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL, guard)
         }.copyOf()
 
+    /** Sign only the independently selected opaque purpose1 cash W1, after its real Reserve. */
+    fun approveOrdinaryTerminal(prepared: org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryTerminalApprovalV1): ByteArray =
+        approveNativeOrdinaryTerminalOriginalV1(prepared, ::signNativeOriginal)
+
     /** Prove possession over the separate native-owned E without creating a monetary qualification. */
     fun proveEnrollmentPossession(prepared: KagemushaNativePreparedAppEnrollmentPossessionV1): ByteArray =
         prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->
             signNativeOriginal(alias, generationChallenge, point, keyId, message, policy,
                 KagemushaAndroidAppSignaturePurposeV1.IDENTITY_ENROLLMENT_POSSESSION, guard)
         }.copyOf()
+
+    /** Distinct first-device E purpose; it cannot borrow financial W/E or raw DTO selectors. */
+    fun proveFirstDeviceHardwarePossession(prepared: org.hyperledger.iroha.sdk.offline.KagemushaFirstDeviceHardwareEvidenceSessionV1) =
+        prepared.performHardwarePossession { selected, guard ->
+            signNativeOriginal(selected.key.alias, selected.key.challenge(), selected.point(), selected.keyId(),
+                selected.message(), selected.key.policy, KagemushaAndroidAppSignaturePurposeV1.FIRST_DEVICE_HARDWARE_POSSESSION, guard)
+        }
 
     // Only the native opaque prepared capability can enter this method. The native owner
     // durably fences invocation and retains original DER before consuming the approval.

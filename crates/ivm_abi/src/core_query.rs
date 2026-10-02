@@ -237,6 +237,8 @@ pub struct AssetDefinitionView {
     pub owned_by: AccountId,
     /// Canonical total quantity currently in existence.
     pub total_quantity: QuantityV1,
+    /// Maximum fractional decimal places; `None` permits the full numeric domain.
+    pub numeric_scale: Option<i64>,
     /// Canonical JSON representation of asset-definition metadata.
     pub metadata: Json,
 }
@@ -770,6 +772,7 @@ mod tests {
             description: Option<String>,
             owned_by: AccountId,
             total_quantity: QuantityV1,
+            numeric_scale: Option<i64>,
             metadata: Json,
         }
         let view = AssetDefinitionView {
@@ -780,6 +783,7 @@ mod tests {
             total_quantity: QuantityV1::from(
                 "1.25".parse::<Quantity>().expect("canonical quantity"),
             ),
+            numeric_scale: Some(2),
             metadata: Json::default(),
         };
         let expected = FieldOrderOracle {
@@ -788,6 +792,7 @@ mod tests {
             description: view.description.clone(),
             owned_by: view.owned_by.clone(),
             total_quantity: view.total_quantity.clone(),
+            numeric_scale: view.numeric_scale,
             metadata: view.metadata.clone(),
         };
         assert_eq!(bare(&view), bare(&expected));
@@ -809,6 +814,7 @@ mod tests {
             description: full.description.clone(),
             owned_by: full.owned_by.clone(),
             total_quantity: full.total_quantity.clone().into(),
+            numeric_scale: full.spec.scale().map(i64::from),
             metadata: Json::new(full.metadata.clone()),
         };
         let full_bytes = norito::to_bytes(&full).expect("encode full asset definition");
@@ -841,6 +847,7 @@ mod tests {
                 description: None,
                 owned_by: owner.clone(),
                 total_quantity: quantity,
+                numeric_scale: None,
                 metadata: Json::default(),
             }],
             None,

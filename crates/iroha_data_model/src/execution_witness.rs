@@ -1,9 +1,9 @@
 //! Canonical key namespace for the ordinary execution-witness sparse tree.
 //!
-//! All key producers reserve their first byte here. Distinct enum discriminants
-//! make overlapping families a compile error, including fixed synthetic writes
-//! and families selected by their first byte. The enum is a key-construction
-//! registry, not a separately serialized Norito value.
+//! Tagged recorder and synthetic families reserve their first byte here. Distinct
+//! enum discriminants make overlapping tagged families a compile error. Existing
+//! text-domain-separated lane and private-dataspace keys keep their complete
+//! namespaces. The enum is not a separately serialized Norito value.
 
 /// Disjoint first-byte namespaces for execution-witness keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,9 +37,15 @@ pub enum ExecutionWitnessKeyTagV1 {
     KagemushaReserveReceipt = 0xD6,
     /// Fixed ordinary FASTPQ source-statement manifest, derived by validator execution.
     FastpqOrdinarySourceStatements = 0xD7,
-    /// AMX record by kind and transaction id (`crate::sumeragi_amx::amx_record_witness_key`).
-    /// `0xD8` is the SCCP state-delta key of the node's executor.
+    /// Fixed SCCP state-delta witness; the exact SCCP key bytes remain unchanged.
+    SccpStateDelta = 0xD8,
+    /// AMX records bind begin/commit/abort, replay and terminal witnesses.
+    /// `0xD8` remains owned by the SCCP state-delta witness family.
     AmxRecord = 0xD9,
+    /// Certified post-block retail fee evidence snapshot.
+    FeeSnapshot = 0xDA,
+    /// A canonical retained retail receipt or validator allocation original.
+    FeeRecord = 0xDB,
 }
 
 const fn tagged_fixed_key<const N: usize>(
@@ -114,7 +120,10 @@ mod tests {
             ParliamentTimedOvnCasting,
             KagemushaReserveReceipt,
             FastpqOrdinarySourceStatements,
+            SccpStateDelta,
             AmxRecord,
+            FeeSnapshot,
+            FeeRecord,
         ];
         let distinct = tags
             .into_iter()
@@ -147,3 +156,11 @@ mod tests {
         }
     }
 }
+
+/// Fixed per-block native fee accounting snapshot key.
+pub const FEE_EVIDENCE_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
+    ExecutionWitnessKeyTagV1::FeeSnapshot,
+    *b"\0iroha:fee-evidence:root:v1",
+);
+/// Reserved family for native fee record bytes in an execution witness.
+pub const FEE_EVIDENCE_RECORD_TAG_V1: u8 = ExecutionWitnessKeyTagV1::FeeRecord as u8;

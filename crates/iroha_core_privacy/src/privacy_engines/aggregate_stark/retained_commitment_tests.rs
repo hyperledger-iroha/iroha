@@ -240,3 +240,87 @@ fn partial_complete_and_unwound_cuts_erase_original_backings() {
     let observed = CUT_CLEARS.with(|slot| slot.borrow_mut().take().unwrap());
     assert_eq!(observed, vec![1, 4]);
 }
+
+#[test]
+fn compact_selected_columns_match_the_independent_full_row_oracle() {
+    for rows in [16, 32, 64, 128] {
+        let values = columns(rows);
+        let (_, cut) = full(&values, &[]).finish_retaining_cut_v1().unwrap();
+        for indices in [
+            vec![0],
+            vec![rows - 1],
+            vec![0, rows - 1],
+            (0..rows).collect(),
+        ] {
+            let expected = selected(&values, &indices, &cut).finish_v1().unwrap();
+            let mut actual = SelectedRowCommitmentV1::new_v1(
+                context(),
+                LEAF,
+                NODE,
+                usize::from(u16::MAX),
+                rows,
+                values.len(),
+                &indices,
+                &cut,
+            )
+            .unwrap();
+            for batch in values.chunks(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+                let compact = batch
+                    .iter()
+                    .map(|column| {
+                        ZeroizingFieldColumnV1::from_vec_v1(
+                            actual
+                                .selected_rows_v1()
+                                .iter()
+                                .map(|&row| column[row])
+                                .collect(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                actual.absorb_selected_columns_v1(&compact).unwrap();
+            }
+            assert_eq!(actual.finish_v1().unwrap(), expected);
+        }
+    }
+}
+
+#[test]
+fn compact_width_coordinate_count_and_noncanonical_values_reject() {
+    let values = columns(64);
+    let (_, cut) = full(&values, &[]).finish_retaining_cut_v1().unwrap();
+    for mutation in 0..3 {
+        let mut out = SelectedRowCommitmentV1::new_v1(
+            context(),
+            LEAF,
+            NODE,
+            usize::from(u16::MAX),
+            64,
+            9,
+            &[17],
+            &cut,
+        )
+        .unwrap();
+        let mut compact = values[..8]
+            .iter()
+            .map(|column| {
+                out.selected_rows_v1()
+                    .iter()
+                    .map(|&row| column[row])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        match mutation {
+            0 => {
+                compact[0].pop();
+            }
+            1 => {
+                compact.push(compact[0].clone());
+            }
+            2 => {
+                compact[0][15] = F(u64::MAX);
+            }
+            _ => unreachable!(),
+        }
+        assert!(out.absorb_selected_columns_v1(&compact).is_err());
+    }
+}

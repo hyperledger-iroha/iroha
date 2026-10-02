@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from .attestation import AttestationRejected, require
+from .native_time_interval import NativeTimeInterval
 from .google_oauth import GoogleServiceAccountTokenProvider, _json
 from .native_policy_projection import decode_native_policy_projection
 from .ordinary_issuance import (CanonicalOrdinaryCredentialEncoder, CanonicalRawAppAdmissionEncoder,
@@ -27,6 +28,7 @@ from .ordinary_provider import GovernedOrdinaryEvidenceProvider
 from .ordinary_service import OrdinaryCredentialService, PATH, RAW_PATH, REFRESH_PATH, MAX_BODY_BYTES
 from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
 from .play_integrity import GooglePlayIntegrityVerifier
+from .hardware_evidence_worker import NativeHardwareEvidenceVerifier
 from .service import _decode_base64, _decode_hex32
 from .private_process import (close_unrelated_worker_descriptors, disable_core_dumps,
                               protect_darwin_process, require_worker_role_originals)
@@ -59,7 +61,7 @@ class NativeParentChannel:
                 and input_fd != output_fd, "Native parent channel absent")
         self._input = os.dup(input_fd); self._output = os.dup(output_fd)
         os.set_blocking(self._input,False); os.set_blocking(self._output,False)
-        self._request = None; self._sequence = 0; self._time = 0; self._projection = None
+        self._request = None; self._sequence = 0; self._time = 0; self._interval = None; self._projection = None
         self._deadline = time.monotonic()+60
 
     def _transfer(self, *, writing: bool, value: bytes | int) -> bytes:
@@ -95,7 +97,7 @@ class NativeParentChannel:
     def begin(self,request_id:str,projection_sha256:bytes) -> None:
         _decode_hex32(request_id,"Native worker request ID")
         require(type(projection_sha256) is bytes and len(projection_sha256)==32,"Native projection pin absent")
-        self._request=request_id;self._projection=projection_sha256;self._sequence=0
+        self._request=request_id;self._projection=projection_sha256;self._sequence=0;self._interval=None
         self._deadline=time.monotonic()+60
 
     def recheck(self) -> None:
@@ -103,18 +105,20 @@ class NativeParentChannel:
         self._sequence+=1
         self.send({"kind":"recheck","request_id":self._request,"sequence":self._sequence})
         value=self.receive()
-        require(set(value)=={"kind","request_id","sequence","trusted_time_ms","projection_sha256"}
+        require(set(value)=={"kind","request_id","sequence","lower_at_ms","upper_at_ms","projection_sha256"}
                 and value["kind"]=="current" and value["request_id"]==self._request
                 and type(value["sequence"]) is int and value["sequence"]==self._sequence
                 and _decode_hex32(value["projection_sha256"],"current Native projection")==self._projection
-                and type(value["trusted_time_ms"]) is int and 0 < value["trusted_time_ms"] < (1<<64)
-                and value["trusted_time_ms"] >= self._time,
+                and type(value["lower_at_ms"]) is int and type(value["upper_at_ms"]) is int
+                and 0 < value["lower_at_ms"] <= value["upper_at_ms"] < (1<<64)
+                and value["lower_at_ms"] >= self._time,
                 "Native current release/clock response differs")
-        self._time=value["trusted_time_ms"]
+        self._interval=NativeTimeInterval(value["lower_at_ms"],value["upper_at_ms"]).validate()
+        self._time=self._interval.lower_at_ms
 
-    def trusted_time_ms(self) -> int:
-        require(self._time>0,"Native trusted clock absent")
-        return self._time
+    def trusted_time_interval(self) -> NativeTimeInterval:
+        require(type(self._interval) is NativeTimeInterval,"Native interval absent")
+        return self._interval.validate()
 
     def close(self) -> None:
         for name in ("_input","_output"):
@@ -144,17 +148,17 @@ def _command_path(command: dict) -> str:
     require(type(command) is dict
             and set(command)=={"schema","request_id","phase","body_base64"}
             and command["schema"]==REQUEST_SCHEMA
-            and command["phase"] in ("raw","credential","refresh"),
+            and command["phase"] in ("raw","credential","refresh","hardware_raw","hardware_integrity"),
             "Native worker request layout differs")
-    return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}[command["phase"]]
+    return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}.get(command["phase"])
 
 
 def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> None:
-    oauth=None;encoder=None;raw_encoder=None
+    oauth=None;encoder=None;raw_encoder=None;hardware=None
     try:
         startup=channel.receive()
         require(set(startup)=={"schema","version","request_id","projection_base64","projection_sha256",
-            "encoder_sha256","raw_encoder_sha256","authority_public_key","credential_owner_uid","google_credential_present","store_directory"}
+            "encoder_sha256","raw_encoder_sha256","authority_public_key","credential_owner_uid","google_credential_present","store_directory","hardware_projection"}
             and startup["schema"]==STARTUP_SCHEMA and type(startup["version"]) is int and startup["version"]==1
             and type(startup["credential_owner_uid"]) is int and startup["credential_owner_uid"]==0
             and type(startup["google_credential_present"]) is bool,
@@ -175,14 +179,14 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
         if projection.google_public_originals:
             policy,original=projection.google_public_originals[0]
             oauth=GoogleServiceAccountTokenProvider(public_policy_original=original,native_policy=policy,
-                credential_fd=13,trusted_time_ms=channel.trusted_time_ms,openssl_path=openssl,credential_owner_uid=0)
+                credential_fd=13,trusted_time_interval=channel.trusted_time_interval,openssl_path=openssl,credential_owner_uid=0)
         encoder=CanonicalOrdinaryCredentialEncoder(encoder_fd=14,
             encoder_sha256=_decode_hex32(startup["encoder_sha256"],"Native encoder pin"),
             authority_key_fd=12,authority_public_key=authority,credential_owner_uid=0)
         raw_encoder=CanonicalRawAppAdmissionEncoder(encoder_fd=18,
             encoder_sha256=_decode_hex32(startup["raw_encoder_sha256"],"Native raw encoder pin"),
             authority_key_fd=12,authority_public_key=authority,credential_owner_uid=0)
-        provider=GovernedOrdinaryEvidenceProvider(policies=projection.policies,trusted_time_ms=channel.trusted_time_ms,
+        provider=GovernedOrdinaryEvidenceProvider(policies=projection.policies,trusted_time_interval=channel.trusted_time_interval,
             recheck_native_policy=channel.recheck,openssl_path=openssl,
             play_integrity=GooglePlayIntegrityVerifier(oauth) if oauth is not None else None)
         issuer=DurableOrdinaryCredentialIssuer(path=store/"ordinary-app-attempts.sqlite",provider=provider,
@@ -191,6 +195,9 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
         refresh=DurableOrdinaryIntegrityRefreshIssuer(issuer)
         service=OrdinaryCredentialService(issuer=issuer,refresh_issuer=refresh,
             authorize_core_call=lambda offered:offered is transport_owner)
+        if startup["hardware_projection"] is not None:
+            require(startup["google_credential_present"], "hardware Google credential custody absent")
+            hardware=NativeHardwareEvidenceVerifier(startup["hardware_projection"],channel,credential_fd=13)
         channel.recheck();channel.send({"kind":"ready","request_id":startup["request_id"],"projection_sha256":pin.hex()})
         while True:
             # An idle worker holds no current financial capability. Only an
@@ -201,9 +208,16 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
             channel.begin(command["request_id"],pin)
             body=_decode_base64(command["body_base64"],"Core original request",MAX_BODY_BYTES)
             channel.recheck();_store_directory(startup["store_directory"],17)
-            status,result=service.handle(method="POST",path=path,
-                                         body=body,content_type="application/json",
-                                         transport_context=transport_owner)
+            if path is None:
+                require(hardware is not None,"hardware issuer source absent")
+                try:
+                    result=hardware.handle(command["phase"],body);status=200
+                except AttestationRejected:
+                    status=400;result=b'{"error":"hardware evidence rejected"}'
+            else:
+                status,result=service.handle(method="POST",path=path,
+                                             body=body,content_type="application/json",
+                                             transport_context=transport_owner)
             channel.recheck();_store_directory(startup["store_directory"],17)
             channel.send({"kind":"result","request_id":command["request_id"],"status":status,
                           "body_base64":base64.b64encode(result).decode("ascii")})
@@ -211,6 +225,7 @@ def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> No
         if encoder is not None:encoder.close()
         if raw_encoder is not None:raw_encoder.close()
         if oauth is not None:oauth.close()
+        if hardware is not None:hardware.close()
 
 
 def main() -> int:

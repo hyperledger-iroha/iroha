@@ -271,6 +271,87 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         })
     }
 
+    /// Canonical global rows for the exact original cut subtrees.
+    pub(crate) fn selected_rows_v1(&self) -> &[usize] {
+        &self.selected_rows
+    }
+
+    pub(crate) fn absorb_selected_columns_v1<C: AsRef<[F]> + Sync>(
+        &mut self,
+        columns: &[C],
+    ) -> Result<(), AggregateStarkErrorV1> {
+        let inner = &mut self.inner;
+        if inner.failed
+            || columns.is_empty()
+            || columns.len() > MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || inner
+                .received_columns
+                .checked_add(columns.len())
+                .is_none_or(|end| end > inner.width)
+            || columns
+                .iter()
+                .any(|column| column.as_ref().len() != self.selected_rows.len())
+        {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        // Every supplied compact value is checked. The transform owner validates
+        // all original coefficients and all device words before selecting rows.
+        if columns.iter().any(|column| {
+            column
+                .as_ref()
+                .iter()
+                .any(|value| F::canonical(value.0).is_none())
+        }) {
+            return Err(AggregateStarkErrorV1::NonCanonicalField);
+        }
+        inner.failed = true;
+        let failure = inner
+            .digest_streams
+            .par_iter_mut()
+            .zip(&self.selected_rows)
+            .enumerate()
+            .map(|(selected, (stream, &row))| {
+                let mut packed =
+                    zeroize::Zeroizing::new([0u8; MASKED_TRACE_LDE_COLUMN_BATCH_V1 * 8]);
+                for (index, column) in columns.iter().enumerate() {
+                    packed[index * 8..(index + 1) * 8]
+                        .copy_from_slice(&column.as_ref()[selected].0.to_be_bytes());
+                }
+                stream
+                    .update(&packed[..columns.len() * 8])
+                    .err()
+                    .map(|error| (row, error))
+            })
+            .reduce(
+                || None,
+                |left, right| match (left, right) {
+                    (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+                    (left, right) => left.or(right),
+                },
+            );
+        if let Some((_, error)) = failure {
+            return Err(map_transparent_error_v1(map_digest_stream_error_v1(error)));
+        }
+        for &index in &inner.opening_indices {
+            let selected = self
+                .selected_rows
+                .binary_search(&index)
+                .map_err(|_| AggregateStarkErrorV1::InternalInvariant)?;
+            let row = inner
+                .opened_rows
+                .get_mut(&index)
+                .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
+            for column in columns {
+                row.push(column.as_ref()[selected]);
+            }
+        }
+        inner.received_columns += columns.len();
+        inner.failed = false;
+        Ok(())
+    }
+
+    // Independent pre-optimization full-row oracle for retained-root tests.
+    #[cfg(test)]
     pub(crate) fn absorb_columns_v1<C: AsRef<[F]> + Sync>(
         &mut self,
         columns: &[C],

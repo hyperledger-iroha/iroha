@@ -1,6 +1,5 @@
 // Lexically included by `zk::tests` to preserve the existing libtest paths.
 // Constrained Pow5 test circuits (IPA): commit-open and merkle2.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 mod ipa_fixture {
     use super::*;
     use halo2_proofs::{
@@ -177,7 +176,6 @@ mod ipa_fixture {
         ]
     }
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_constrained_commit_open_ipa() {
     let instances = [ipa_fixture::commit_open_instance()];
@@ -185,7 +183,6 @@ fn halo2_constrained_commit_open_ipa() {
         ipa_fixture::build_with_instances(6, pasta_tiny::CommitOpen::default(), &[&instances]);
     assert!(proof.verify_single("halo2/pasta/ipa/tiny-commit-open", &instances));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_constrained_merkle2_ipa() {
     let instances = [pasta_tiny::merkle2_sample_root()];
@@ -193,7 +190,6 @@ fn halo2_constrained_merkle2_ipa() {
     assert!(proof.verify_single("halo2/pasta/ipa/tiny-merkle2", &instances));
 }
 // Depth-8 end-to-end checks for vote/transfer circuits (IPA)
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_ipa() {
     let instances = ipa_fixture::vote_instances(8);
@@ -204,7 +200,6 @@ fn halo2_verify_vote_bool_commit_merkle8_ipa() {
     );
     assert!(proof.verify_two_columns("halo2/pasta/ipa/vote-bool-commit-merkle8", &instances,));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_ipa() {
     let instances = ipa_fixture::anon_instances(8);
@@ -216,7 +211,6 @@ fn halo2_verify_anon_transfer_2x2_merkle8_ipa() {
     assert!(proof.verify_six_columns("halo2/pasta/ipa/anon-transfer-2x2-merkle8", &instances,));
 }
 // Test-only Pow5-tagged variants: vote/transfer @ depth-8.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa() {
     let instances = ipa_fixture::vote_instances(8);
@@ -228,7 +222,6 @@ fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa() {
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(proof.verify_two_columns(&backend, &instances));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn retired_poseidon_backend_label_is_not_a_pow5_alias() {
     let instances = ipa_fixture::vote_instances(8);
@@ -242,7 +235,6 @@ fn retired_poseidon_backend_label_is_not_a_pow5_alias() {
         &instances,
     ));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
@@ -394,7 +386,6 @@ fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_permutation_harness() {
         run_case(steps, *ok);
     }
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_malformed_inst() {
     let proof = ipa_fixture::build_without_instances(
@@ -409,7 +400,6 @@ fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_malformed_inst() {
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_truncated_prof() {
     let proof = ipa_fixture::build_without_instances(
@@ -419,7 +409,6 @@ fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_truncated_prof() {
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(!proof.verify_envelope(&backend, proof.truncated_proof_envelope()));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1() {
     let instances = ipa_fixture::vote_instances(16);
@@ -431,7 +420,6 @@ fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1() {
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(proof.verify_two_columns(&backend, &instances));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1() {
     let instances = ipa_fixture::anon_instances(16);
@@ -443,7 +431,6 @@ fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1() {
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(proof.verify_six_columns(&backend, &instances));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_malformed_inst() {
     let proof = ipa_fixture::build_without_instances(
@@ -458,7 +445,6 @@ fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_malformed_inst() {
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof() {
     let proof = ipa_fixture::build_without_instances(
@@ -468,7 +454,6 @@ fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof() {
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof.truncated_proof_envelope()));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical() {
     use ff::{Field as _, PrimeField as _};
@@ -489,7 +474,6 @@ fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical() {
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_invalid_header() {
     let proof = ipa_fixture::build_without_instances(
@@ -503,7 +487,6 @@ fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_invalid_header() {
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
@@ -675,7 +658,6 @@ fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_permutation_harness() {
     }
 }
 // Minimal randomized harness for depth-16 (ZK1). Few cases to keep runtime reasonable.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_randomized_min() {
     use halo2_proofs::{
@@ -807,7 +789,6 @@ fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_randomized_min() {
     }
 }
 // ZK1 permutation harness for depth-16 anon (6-column), trimmed cases
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{

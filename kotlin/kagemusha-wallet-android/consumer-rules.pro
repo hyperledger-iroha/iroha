@@ -22,7 +22,9 @@
     native <methods>;
 }
 
-# Exact shared ordinary startup/current-FI JNI names are native-only custody entrypoints.
+# Exact shared ordinary startup/current-FI and Application/retirement JNI names must survive R8.
+# nativeBindApplicationV1(android.app.Application): boolean retains identity only;
+# nativeRetireOriginalV1(): boolean is deny-only and accepts no account/root/secret frame.
 -keep class org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryRuntimeJniV1 {
     native <methods>;
 }

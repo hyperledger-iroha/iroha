@@ -4,6 +4,7 @@ set -euo pipefail
 
 PATH=/usr/bin:/bin
 export PATH
+unset RUSTC_BOOTSTRAP
 
 ROOT_DIR="$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd -P)"
 APPLE_BUILDER="$ROOT_DIR/scripts/build_norito_xcframework.sh"
@@ -254,7 +255,6 @@ expect_failure_containing \
     CARGO_NET_OFFLINE=true \
     CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
     RUSTC="$APPLE_RUSTC" \
-    RUSTC_BOOTSTRAP=1 \
     RUSTDOC="$APPLE_RUSTDOC" \
     /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 
@@ -271,7 +271,6 @@ expect_failure_containing \
     CARGO_NET_OFFLINE=true \
     CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
     RUSTC="$APPLE_RUSTC" \
-    RUSTC_BOOTSTRAP=1 \
     RUSTDOC="$APPLE_RUSTDOC" \
     /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 
@@ -296,8 +295,7 @@ for deployment_case in wrong empty; do
       CARGO_NET_OFFLINE=true \
       CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
       RUSTC="$APPLE_RUSTC" \
-      RUSTC_BOOTSTRAP=1 \
-      RUSTDOC="$APPLE_RUSTDOC" \
+        RUSTDOC="$APPLE_RUSTDOC" \
       /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 done
 
@@ -317,7 +315,6 @@ expect_failure_containing \
     CARGO_NET_OFFLINE=true \
     CARGO_TARGET_DIR="$OVERLAP_DIR" \
     RUSTC="$APPLE_RUSTC" \
-    RUSTC_BOOTSTRAP=1 \
     RUSTDOC="$APPLE_RUSTDOC" \
     /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 [[ "$(<"$OVERLAP_DIR/target-sentinel")" == "preserve" ]] \

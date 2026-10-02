@@ -47,13 +47,14 @@ const CORE_QUERY_VIEWS = new Map([
   [
     "AssetDefinitionView",
     {
-      fields: ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      fields: ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
       children: [
         (TEXT_ASSETDEFINITIONID),
         "string",
         (TEXT_OPTION + "<string>"),
         (TEXT_ACCOUNTID),
         "quantity",
+        "Option<int>",
         "Json",
       ],
     },

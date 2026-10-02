@@ -97,7 +97,12 @@ impl ValidatorSetCheckpoint {
         }
     }
 }
-/// Deterministic `NPoS` state effects embedded in a signed block.
+/// Finite protocol ceiling for one canonical parent service CommitQC original.
+/// The complete verifier still checks the actual bitmap, signature, attestation
+/// geometry and independently authenticated epoch; byte size grants no authority.
+pub const PARENT_SERVICE_COMMIT_QC_MAX_BYTES: usize = 512 * 1024;
+
+/// Deterministic native service and `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every
 /// peer replays the same native evidence and penalty state. Beacon authority is
@@ -116,6 +121,10 @@ impl ValidatorSetCheckpoint {
 )]
 #[norito(deny_unknown_fields)]
 pub struct NposConsensusEffects {
+    /// Original parent CommitQC selected by this proposal. It is consensus input,
+    /// never the replica's local certificate. None is valid only before H3.
+    #[norito(required)]
+    pub parent_service_commit_qc: Option<Vec<u8>>,
     /// Original native evidence admitted in canonical evidence-key order.
     pub evidence_admissions: Vec<crate::block::consensus::Evidence>,
     /// Penalty and marker actions applied by this block.
@@ -125,7 +134,9 @@ impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.evidence_admissions.is_empty() && self.penalty_actions.is_empty()
+        self.parent_service_commit_qc.is_none()
+            && self.evidence_admissions.is_empty()
+            && self.penalty_actions.is_empty()
     }
 }
 impl Ord for NposConsensusEffects {

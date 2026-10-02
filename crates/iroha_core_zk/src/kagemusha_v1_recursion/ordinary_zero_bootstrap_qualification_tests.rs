@@ -11,14 +11,9 @@ use super::super::{
         RecursiveStateConstructionV1,
     },
     mint_authority::KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
-    mint_authorization::{
-        MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
-    },
+    ordinary_cash_terminal_verifier::ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1 as TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
     ordinary_guard_circuit::OrdinaryGuardWitnessV1,
-    ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1,
-    terminal_authorization::{
-        TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, public_instance as incoming_slot,
-    },
+    ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,
 };
 use super::*;
 use halo2_base::gates::{
@@ -78,8 +73,8 @@ fn incoming_column<F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>(
     let mut cells = column::<F>(TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, history);
     let eq = crate::kagemusha_v1_poseidon::digest_limbs::<F>(eq);
     let ep = crate::kagemusha_v1_poseidon::digest_limbs::<F>(ep);
-    cells[0][incoming_slot::EQ_PROTOCOL_LO..incoming_slot::EQ_PROTOCOL_LO + 2].copy_from_slice(&eq);
-    cells[0][incoming_slot::EP_PROTOCOL_LO..incoming_slot::EP_PROTOCOL_LO + 2].copy_from_slice(&ep);
+    cells[0][45..47].copy_from_slice(&eq);
+    cells[0][47..49].copy_from_slice(&ep);
     cells
 }
 
@@ -149,6 +144,7 @@ fn qualify() {
                 approval: &f.approval,
                 previous_app_attest_counter: f.previous_counter,
                 integrity_lease: None,
+                incoming_terminal_body: None,
             },
             f.state.device_policy_binding.hardware_policy_id,
             &f.issuer_table,
@@ -164,9 +160,9 @@ fn qualify() {
         let ep_incoming =
             mathematical_protocol(&ep_params, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
         let eq_authorization =
-            mathematical_protocol(&eq_params, MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
+            mathematical_protocol(&eq_params, ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1);
         let ep_authorization =
-            mathematical_protocol(&ep_params, MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1);
+            mathematical_protocol(&ep_params, ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1);
         let eq_mint = mathematical_protocol(
             &eq_params,
             KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
@@ -194,26 +190,10 @@ fn qualify() {
                 &ep_zero,
             )
             .expect("same production zero-Bootstrap parser constructor");
-        let eq_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fp>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                eq_zero.as_bytes(),
-            )
-            .unwrap(),
-        ];
-        let ep_authorization_instances = vec![
-            mint_authorization_public_instances_v1::<Fq>(
-                &authorization.statement,
-                authorization.proof.guard_ep_credential_audit,
-                authorization.proof.eq_deferred_audit,
-                authorization.proof.ep_deferred_audit,
-                ep_zero.as_bytes(),
-            )
-            .unwrap(),
-        ];
+        let eq_authorization_instances =
+            column::<Fp>(ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1, eq_zero.as_bytes());
+        let ep_authorization_instances =
+            column::<Fq>(ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1, ep_zero.as_bytes());
         let request = super::super::KagemushaMintFinalityHelperVerificationRequestV1 {
             eq_protocol_digest: credit.proof.eq_protocol_digest,
             ep_protocol_digest: credit.proof.ep_protocol_digest,
@@ -312,7 +292,7 @@ fn qualify() {
             incoming_column::<Fp>(incoming_eq_digest, incoming_ep_digest, eq_zero.as_bytes());
         let ep_incoming_instances =
             incoming_column::<Fq>(incoming_eq_digest, incoming_ep_digest, ep_zero.as_bytes());
-        let (reserved_eq, reserved_ep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+        let (reserved_eq, reserved_ep) = (protocol_eq(&eq_parent), protocol_ep(&ep_parent));
         let relation = KagemushaStateRelationWitnessV1 {
             operation: KagemushaOperationV1::Bootstrap,
             predecessor: None,
@@ -366,6 +346,23 @@ fn qualify() {
                 integrity_lease: None,
                 previous_app_attest_counter: f.previous_counter,
                 prepared: None,
+                incoming_mint: None,
+                incoming_receive: None,
+                outer_parent: Some(KagemushaOrdinaryRecursiveOuterParentWitnessV1 {
+                    public_original: None,
+                    eq_protocol: &eq_parent,
+                    ep_protocol: &ep_parent,
+                    eq_instances: &eq_parent_instances,
+                    ep_instances: &ep_parent_instances,
+                    eq_proof: &eq_parent_proof,
+                    ep_proof: &ep_parent_proof,
+                    eq_history: &eq_zero,
+                    ep_history: &ep_zero,
+                    eq_history_fold: &eq_fold,
+                    ep_history_fold: &ep_fold,
+                    eq_merge_fold: &eq_fold,
+                    ep_merge_fold: &ep_fold,
+                }),
             }),
             eq_parent_protocol: &eq_parent,
             ep_parent_protocol: &ep_parent,
@@ -516,6 +513,69 @@ fn qualify() {
         witness.ep_parent_proof = &ep_inner_padding;
         witness.state.eq_protocol_digest = generated.inner_eq_protocol_digest;
         witness.state.ep_protocol_digest = generated.inner_ep_protocol_digest;
+        witness.state.guard_eq_credential_audit = generated.eq_protocol_digest;
+        witness.state.guard_ep_credential_audit = generated.ep_protocol_digest;
+        let eq_outer_vk = VerifyingKey::<EqAffine>::read::<
+            _,
+            crate::kagemusha_v1_recursion::transport_decider::KagemushaTransportDeciderEqCircuitV1,
+        >(
+            &mut Cursor::new(generated.eq.verifying_key.as_ref()),
+            SerdeFormat::Processed,
+            generated.eq_circuit_params.clone(),
+        )
+        .unwrap();
+        let ep_outer_vk = VerifyingKey::<EpAffine>::read::<
+            _,
+            crate::kagemusha_v1_recursion::transport_decider::KagemushaTransportDeciderEpCircuitV1,
+        >(
+            &mut Cursor::new(generated.ep.verifying_key.as_ref()),
+            SerdeFormat::Processed,
+            generated.ep_circuit_params.clone(),
+        )
+        .unwrap();
+        let eq_outer = compile(
+            &eq_params,
+            &eq_outer_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![recursive_public_instance_count()]),
+        );
+        let ep_outer = compile(
+            &ep_params,
+            &ep_outer_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![recursive_public_instance_count()]),
+        );
+        assert_eq!(protocol_eq(&eq_outer), generated.eq_protocol_digest);
+        assert_eq!(protocol_ep(&ep_outer), generated.ep_protocol_digest);
+        let eq_outer_padding = dummy_ordinary_proof_bytes(
+            &eq_outer,
+            EqAffine::generator().to_bytes().as_ref(),
+            KagemushaPastaParityV1::Eq,
+        )
+        .unwrap();
+        let ep_outer_padding = dummy_ordinary_proof_bytes(
+            &ep_outer,
+            EpAffine::generator().to_bytes().as_ref(),
+            KagemushaPastaParityV1::Ep,
+        )
+        .unwrap();
+        witness.ordinary_selection.as_mut().unwrap().outer_parent =
+            Some(KagemushaOrdinaryRecursiveOuterParentWitnessV1 {
+                public_original: None,
+                eq_protocol: &eq_outer,
+                ep_protocol: &ep_outer,
+                eq_instances: &eq_parent_instances,
+                ep_instances: &ep_parent_instances,
+                eq_proof: &eq_outer_padding,
+                ep_proof: &ep_outer_padding,
+                eq_history: &eq_zero,
+                ep_history: &ep_zero,
+                eq_history_fold: &eq_fold,
+                ep_history_fold: &ep_fold,
+                eq_merge_fold: &eq_fold,
+                ep_merge_fold: &ep_fold,
+            });
+
         // Signed originals and public protocol identities are immutable. If converged
         // parent parser structure changes a SHA operand, retain a newly proved complete
         // claim and new merge from the original Guard-complete history, never stale SHA.

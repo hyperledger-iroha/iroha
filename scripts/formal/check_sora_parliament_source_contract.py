@@ -15,7 +15,9 @@ share one proposal-wide fresh-randomness redraw ceiling across successor
 attempts, sortition/Confirmation generations, and timed-OVN ballot retries;
 committed transport replay must remain state-idempotent.
 The first-release `Executable::IvmProved` transaction shape remains typed and
-fee-checked, but private execution admission stays closed until the complete
+fee-checked through native signed-assessment admission and actual User payment
+recording. Opaque signed committee/staking authority is checked independently
+before optional policy lookup. Private execution admission stays closed until the complete
 native STARK relation exists. The retired binding-only Torii producer must not
 re-enter the proof-carrying governance corridor.
 It also keeps the PR model run bound to archived copies of its exact inputs and
@@ -326,7 +328,7 @@ def require_parliament_broker_primitives(source: str) -> None:
     )
     ordinal_test = section(
         source,
-        "fn post_soracloud_operation_ids_are_exact_and_contiguous() {",
+        "fn post_soracloud_operation_ids_are_exact_and_ordered() {",
         "\n}\n",
         relative,
     )
@@ -336,7 +338,7 @@ def require_parliament_broker_primitives(source: str) -> None:
         (
             "(OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1, 124)",
             "(OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1, 125)",
-            "for (index, (operation, expected)) in exact.into_iter().enumerate() {",
+            "for (operation, expected) in exact {",
             "assert_eq!(operation, expected);",
             "assert!(super::super::operation_is_known(operation));",
         ),
@@ -632,10 +634,20 @@ def require_block_start_construction(state: str) -> None:
 def require_block_start_enactment_phases(state: str) -> None:
     """Bind original ordered start ownership to bounded borrowed phase helpers."""
     state_path = "crates/iroha_core/src/state.rs"
-    constructor = section(
+    wrapper = compact_rust(mask_rust(rust_item(
         state,
         "    fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>(",
-        "    /// Release expired private locks inside their original block transaction.",
+        state_path,
+    )))
+    delegate = (
+        "self.block_with_owned_start_stages_with_carrier("
+        "curr_block,None,before_start,after_start)"
+    )
+    if wrapper.count(delegate) != 1 or not wrapper.endswith("{" + delegate + "}"):
+        raise RuntimeError(f"{state_path}: start phases must retain their original carrier delegate")
+    constructor = rust_item(
+        state,
+        "    fn block_with_owned_start_stages_with_carrier<'state, E: std::fmt::Debug, T, R>(",
         state_path,
     )
     phases = section(
@@ -652,8 +664,7 @@ def require_block_start_enactment_phases(state: str) -> None:
         "let now_h = sb._curr_block.height().get();"
         "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)"
         ".map_err(StateBlockStartError::Storage)?;"
-        "Self::apply_block_start_parliament_enactments(&mut sb, now_h)"
-        ".map_err(StateBlockStartError::Storage)?;"
+        "Self::apply_block_start_parliament_enactments(&mut sb, now_h)?;"
         "let sccp_header = sb._curr_block;"
         "crate::smartcontracts::isi::sccp::hook::apply_block_start(&mut sb, &sccp_header)"
         ".map_err(StateBlockStartError::Storage)?;"
@@ -675,9 +686,14 @@ def require_block_start_enactment_phases(state: str) -> None:
     ordered = (
         "letacquired=self.acquire_canonical_runtime_block(false)?;",
         "letmutsb=self.construct_acquired_block(acquired,curr_block,Box::new);",
+        "sb.ordinary_carrier_membership_source=ordinary_source;",
+        "sb.network_policy_routes=policy_routes;",
+        "sb.freeze_fastpq_source_context();",
+        "sb.require_storage_admission()?;",
+        "sb.freeze_axt_block_start();",
         "letcontinuation=before_start(&mutsb).map_err(StateBlockStartError::Stage)?;",
         "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
-        "Self::apply_block_start_parliament_enactments(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
+        "Self::apply_block_start_parliament_enactments(&mutsb,now_h)?;",
         "letsccp_header=sb._curr_block;",
         "crate::smartcontracts::isi::sccp::hook::apply_block_start(&mutsb,&sccp_header).map_err(StateBlockStartError::Storage)?;",
         "sb.start_of_block_effects_applied=true;",
@@ -700,10 +716,9 @@ def require_block_start_enactment_phases(state: str) -> None:
         ".reconcile_expired_private_settlement_staged_locks_v1()",
         "expiry.apply();",
     ))
-    due_enactment = section(
+    due_enactment = rust_item(
         state,
-        "    fn apply_block_start_parliament_enactments(",
-        "    /// Apply scheduled world transitions within their shared transaction.",
+        "    fn apply_block_start_parliament_enactments<E: std::fmt::Debug>(",
         state_path,
     )
     require_all(
@@ -725,7 +740,16 @@ def require_block_start_enactment_phases(state: str) -> None:
             f"{state_path}: block-start enactment selection regressed to an unbounded Parliament attempt scan"
         )
 
-    compact_due = re.sub(r"\s+", "", due_enactment)
+    compact_due = compact_rust(mask_rust(due_enactment))
+    deferred = (
+        "crate::execution_attempt::ExecutionAttemptError::Deferred(reason)"
+        "=>StateBlockStartError::ExecutionDeferred(reason)"
+    )
+    if ("Result<(),StateBlockStartError<E>>" not in compact_due
+            or compact_due.count(deferred) != 2
+            or compact_due.count(".map_err(|error|matcherror{") != 2
+            or compact_due.count("})?") != 2):
+        raise RuntimeError(f"{state_path}: start phases must propagate both original execution deferrals")
     ordered_due = (
         "letmutenactment=sb.try_transaction()?;",
         "execute_due_parliament_certificate_v1(",
@@ -890,7 +914,10 @@ def require_parliament_commit_publication(state: str) -> None:
         raise RuntimeError(f"{path}: retained World validation must propagate refusal before publication")
     kagemusha = section(compact, "letverifier:&dynstd::any::Any=", "iftiered_snapshot.is_none()", path)
     authority_checks = (
-        "runtime_matches_governed_registry(",
+        "letruntime_check=world.kagemusha_verifier_registry.get().validate()"
+        ".map_err(str::to_owned).and_then(|()|{"
+        "crate::smartcontracts::isi::kagemusha::validate_runtime_cache_for_publication("
+        "verifier,state_ref.network_id,)})",
         "returnErr(TransactionsBlockError::KagemushaVerifierAuthority);",
         "letpredecessor=state_ref.world.kagemusha_verifier_registry.view();",
         "authorization.validate_for_state_commit(",
@@ -1602,56 +1629,214 @@ def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
     ))
 
 
-def require_signed_staking_fee_boundary(
-    fee: str, committee: str, staking: str
+def require_signed_deferred_authority_and_native_fees(
+    fee: str, authority: str, retail: str, asset: str, transaction: str, core: str
 ) -> None:
-    """Reject opaque staking before policy lookup and count its actual transfer legs."""
+    """Bind signed staking authority and fees to their separate current owners.
+
+    Opaque committee/staking checks precede optional policy resolution. Native
+    User payments retain one signed assessment and finish in the transaction's
+    original overlay; protocol custody movements are not customer payments.
+    """
     fee_path = "crates/iroha_core/src/validation_fee.rs"
-    committee_path = "crates/iroha_core/src/validation_fee/committee_effects.rs"
-    staking_path = "crates/iroha_core/src/validation_fee/staking_effects.rs"
-    deferred = section(
-        fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(",
-        "\n#[cfg(test)]\nfn enforce_opaque_deferred_policy(", fee_path,
-    )
-    before_policy = section(
-        deferred, "    let mut committee_proposals =", "    let registry = validated_policy_registry(",
-        fee_path,
-    )
-    require_all(fee_path, before_policy, (
+    authority_path = "crates/iroha_core/src/deferred_authority.rs"
+    retail_path = "crates/iroha_core/src/retail_fee.rs"
+    asset_path = "crates/iroha_core/src/smartcontracts/isi/asset.rs"
+    tx_path = "crates/iroha_core/src/tx.rs"
+    core_path = "crates/iroha_core/src/lib.rs"
+
+    def item(source: str, declaration: str, path: str) -> str:
+        return re.sub(r"\s+", "", mask_rust(rust_item(source, declaration, path)))
+
+    def require(path: str, source: str, bindings: tuple[str, ...]) -> None:
+        require_all(path, source, tuple(re.sub(r"\s+", "", x) for x in bindings))
+
+    core_code = mask_rust(core)
+    for module in ("deferred_authority", "retail_fee", "validation_fee", "tx"):
+        declarations = list(re.finditer(
+            rf"(?m)^pub(?:\(crate\))? mod {module};$", core_code
+        ))
+        if len(declarations) != 1 or core_code[:declarations[0].start()].rstrip().endswith("]"):
+            raise RuntimeError(f"{core_path}: native fee owner {module!r} must be unconditional")
+
+    deferred = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(", fee_path)
+    require(fee_path, deferred, (
+        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;"
+        "let registry = validated_policy_registry(stx)",
+        "active_policy_from_validated_registry(registry.as_ref(), stx)",
+    ))
+    authoritative = item(authority, "pub(crate) fn reject_opaque_deferred_authority(", authority_path)
+    require(authority_path, authoritative, (
         "for instructions in instruction_groups.values()",
-        "committee_effects::reject_opaque_committee_operations_with(",
-        "live_proposal_instructions_for_approval(",
-        ".map_err(admission_rejection)?;",
+        "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
+        "live_proposal_instructions_for_approval(state_transaction, approve)",
+        "TransactionRejectionReason::Validation(ValidationFail::NotPermitted(",
     ))
-    require_all(committee_path, committee, (
-        "staking_effects::monetary_staking_wire_id(instruction)",
-        "ValidationFeeAdmissionError::OpaqueDeferredStakingOperation",
+    classifier = item(authority, "fn monetary_staking_wire_id(", authority_path)
+    require(authority_path, classifier, (
+        "instruction.as_any().downcast_ref::<$ty>().is_some()",
+        "return iroha_data_model::isi::instruction_wire_id(instruction);",
+        "classify!(RegisterPublicLaneCandidate, RegisterPublicLaneValidator,"
+        "BondPublicLaneStake, FinalizePublicLaneUnbond, SlashPublicLaneValidator,"
+        "RecordPublicLaneRewards, ClaimPublicLaneRewards,);",
+    ))
+    single = item(authority, "fn reject_opaque_committee_operation(", authority_path)
+    require(authority_path, single, (
+        "custom.id() == &iroha_data_model::nexus::ValidatorCommitteeOperationV1::parameter_id()",
+        "return Err(OpaqueDeferredAuthorityError::CommitteeOperation { instruction_index });",
+        "if let Some(instruction_wire_id) = monetary_staking_wire_id(instruction)",
+        "return Err(OpaqueDeferredAuthorityError::StakingOperation {instruction_index, instruction_wire_id,});",
+    ))
+    recursive = item(authority, "fn reject_opaque_committee_operations_with<F>(", authority_path)
+    require(authority_path, recursive, (
+        "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded);}",
+        "reject_opaque_committee_operation(instruction, index)?;",
         "MultisigInstructionBox::Propose(proposal)",
+        "reject_opaque_committee_operations_with(&proposal.instructions, visited, depth + 1, resolve,)?;",
         "MultisigInstructionBox::Approve(approval)",
+        "let Some((authority, instructions)) = resolve(&approval) else",
+        "return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval",
+        "if visited.insert(identity)",
         "Executable::Instructions(nested)",
+        "reject_opaque_committee_operations_with(nested, visited, depth + 1, resolve)?;",
         "Executable::IvmProved(proved)",
+        "reject_opaque_committee_operations_with(&proved.overlay, visited, depth + 1, resolve,)?;",
         "Executable::Batch(items)",
+        "std::slice::from_ref(instruction), visited, depth + 1, resolve,",
     ))
-    classifier = section(
-        staking, "pub(super) fn monetary_staking_wire_id(",
-        "\nfn registration_plan(", staking_path,
+    require(authority_path, re.sub(r"\s+", "", mask_rust(authority)), (
+        "const MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH: usize = 64;",
+    ))
+
+    direct = item(fee, "pub(crate) fn enforce_validation_fee_admission(", fee_path)
+    require(fee_path, direct, (
+        "{let _ = active_policy(state_transaction)?;crate::retail_fee::admit(tx, state_transaction)?;Ok(())}",
+    ))
+    proved = item(fee, "pub(crate) fn enforce_ivm_proved_completed_axt_admission(", fee_path)
+    require(fee_path, proved, (
+        "if completed_envelopes == 0 {return Ok(());}",
+        "let policy = active_policy(state_transaction).map_err(",
+        "ExecutionAttemptError::Deferred(reason) => state_transaction.world.defer_execution(reason)",
+        "if policy.is_none() {return Ok(());}",
+        "reject_ivm_proved_completed_axt_effects(completed_envelopes)",
+    ))
+    reject_proved = item(fee, "fn reject_ivm_proved_completed_axt_effects(", fee_path)
+    require(fee_path, reject_proved, (
+        "if completed_envelopes == 0 {return Ok(());}",
+        "Err(ValidationFeeAdmissionError::OpaqueIvmProvedAxtEffects {completed_envelopes,})",
+    ))
+    admit = item(retail, "pub(crate) fn admit(", retail_path)
+    require(retail_path, admit, (
+        "tx.instructions().explicit_instructions().any(",
+        "log.msg.starts_with(ASSESSMENT_MARKER_PREFIX)",
+        "return Err(rejection(",
+        "stx.world.retail_fee_source_transaction_hash = Some(*tx.hash().as_ref());",
+        "tx.metadata().get(RETAIL_FEE_ASSESSMENT_METADATA_KEY)",
+        "norito::json::from_str::<RetailFeeAssessmentV1>(value.get())",
+        "bind_assessment(stx, assessment)?;",
+    ))
+    bind = item(retail, "fn bind_assessment(", retail_path)
+    require(retail_path, bind, (
+        "now >= assessment.expires_at_ms",
+        "assessment.expires_at_ms > now.saturating_add(RETAIL_FEE_QUOTE_TTL_MS)",
+        "if stx.world.retail_fee_assessment.is_some() {return Err(rejection(",
+        "stx.world.retail_fee_assessment = Some(assessment);",
+    ))
+    deferred_admit = item(retail, "pub(crate) fn admit_deferred(", retail_path)
+    require(retail_path, deferred_admit, (
+        "decode_assessment_marker(log)",
+        "if reviewed.replace(assessment).is_some() {return Err(rejection(",
+        "bind_assessment(stx, assessment)?;",
+        "stx.world.retail_fee_assessment_marker_pending = true;",
+    ))
+    marker = item(retail, "fn decode_assessment_marker(", retail_path)
+    require(retail_path, marker, (
+        "if log.level != Level::TRACE {return Err((rejection(",
+        "encoded.is_empty() || log.msg.len() > 4096 || encoded.len() % 2 != 0",
+        "byte.is_ascii_digit()",
+        "let assessment = norito::decode_canonical(&bytes)",
+    ))
+    consume = item(retail, "pub(crate) fn execute_assessment_marker(", retail_path)
+    require(retail_path, consume, (
+        "if stx.multisig_deferred_execution_stack.is_empty()"
+        "|| !stx.world.retail_fee_assessment_marker_pending"
+        "|| stx.world.retail_fee_assessment.as_ref() != Some(&assessment)",
+        "stx.world.retail_fee_assessment_marker_pending = false;",
+    ))
+    record = item(retail, "pub(crate) fn record_payment(", retail_path)
+    require(retail_path, record, (
+        "if source.definition() != &policy.ds_asset_id || amount.is_zero() {return Ok(());}",
+        "approved_source == source && approved_destination == destination && approved_amount == amount",
+        "stx.world.retail_fee_exempt_payments.remove(index);",
+        "if source.account() == destination && stx.world.retail_fee_assessment.is_none() {return Ok(());}",
+        "if stx.world.retail_fee_assessment.is_none() {return Err(invalid(",
+        "stx.world.retail_fee_observed_payments.push((source.clone(), RetailFeePaymentLegV1",
+        "destination_account_id: destination.clone(), amount_minor_units: minor(amount)?",
+    ))
+    finish = item(retail, "pub(crate) fn finalize(", retail_path)
+    require(retail_path, finish, (
+        "if stx.world.retail_fee_assessment_marker_pending {return Err(rejection(",
+        "if !stx.world.retail_fee_exempt_payments.is_empty() {return Err(rejection(",
+        "let observed = std::mem::take(&mut stx.world.retail_fee_observed_payments);",
+        "if observed.iter().any(|(id, _)| id != source) {return Err(rejection(",
+        "transfers: observed.iter().map(|(_, leg)| leg.clone()).collect(),",
+        "let expected = quote(&stx.world, stx.block_height(), stx.block_unix_timestamp_ms(), &request,)",
+        "assessment.retail_enrolled != expected.retail_enrolled",
+        "assessment.account_id != expected.account_id",
+        "assessment.billing_month_start_ms != expected.billing_month_start_ms",
+        "assessment.policy_revision != expected.policy_revision",
+        "assessment.payments_used_before != expected.payments_used_before",
+        "assessment.qualifying_payments != expected.qualifying_payments",
+        "assessment.fee_minor != expected.fee_minor",
+        "assessment.state_commitment != expected.state_commitment",
+        "assessment.intent_hash != expected.intent_hash",
+        "let source_transaction_hash = stx.world.retail_fee_source_transaction_hash.ok_or_else(",
+        "let remaining = from.checked_sub(assessment.fee_minor).ok_or_else(",
+        "to.checked_add(assessment.fee_minor).ok_or_else(",
+        "set_balance(&mut stx.world, source, remaining)",
+        "source_transaction_hash: Some(source_transaction_hash)",
+        "assessment: Some(assessment.clone())",
+        "store_receipt(&mut stx.world, &mut native_receipt)",
+        "checked_add(assessment.qualifying_payments)",
+        "stx.flush_retail_fee_transfer_transcripts()",
+        "crate::validation_fee_rewards::credit_collected_fee(stx, &policy, period, collected)?;",
+    ))
+    if finish.index("letexpected=quote(") > finish.index("letremaining=from.checked_sub("):
+        raise RuntimeError(f"{retail_path}: native fee must revalidate before debiting")
+
+    transfer = rust_item(asset, "impl PreparedNumericTransferPlan {", asset_path)
+    prepare = item(transfer, "fn prepare(", asset_path)
+    require(asset_path, prepare, (
+        "retail_payment: source_policy == NumericAssetTransferSourcePolicy::User",
+    ))
+    for declaration in ("fn apply(", "fn apply_after_batch_preflight("):
+        apply = item(transfer, declaration, asset_path)
+        require(asset_path, apply, (
+            "if self.retail_payment {crate::retail_fee::record_payment(state_transaction, &self.source_id, self.destination_id.account(), &self.amount,)?;}",
+            ".apply_prechecked_numeric_asset_transfer_delta_exact(",
+        ))
+        if apply.index("crate::retail_fee::record_payment(") > apply.index(".apply_prechecked_numeric_asset_transfer_delta_exact("):
+            raise RuntimeError(f"{asset_path}: native assessment must precede principal transfer")
+
+    admission = item(transaction, "pub(crate) fn validate_stateful_admission(", tx_path)
+    require(tx_path, admission, (
+        "crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)",
+        "ExecutionAttemptError::Deferred(reason)",
+        "state_transaction.defer_execution(reason)",
+    ))
+    execute = item(transaction, "pub(crate) fn execute_accepted_transaction_in_overlay(", tx_path)
+    sequence = (
+        "Self::validate_stateful_admission(",
+        "Self::validate_transaction_with_runtime_executor(tx.clone(), state_transaction, ivm_cache)?;",
+        "state_transaction.execute_data_triggers_dfs(&authority)",
+        "crate::retail_fee::finalize(state_transaction)?;",
+        "state_transaction.world.tx_sequences.insert(authority.clone(), seq);",
+        "commit_faucet_claim_consumption(state_transaction, &admission);",
     )
-    require_all(staking_path, classifier, (
-        "RegisterPublicLaneCandidate,", "RegisterPublicLaneValidator,",
-        "BondPublicLaneStake,", "FinalizePublicLaneUnbond,",
-        "SlashPublicLaneValidator,", "RecordPublicLaneRewards,",
-        "ClaimPublicLaneRewards,",
-    ))
-    require_all(staking_path, staking, ("native_staking_leg: true,",))
-    context_policy = section(
-        fee, "fn enforce_context_policy(", "\nfn ", fee_path,
-    )
-    require_all(fee_path, context_policy, (
-        "transfer.native_staking_leg",
-        "&& &transfer.asset_definition_id != fee_asset_definition_id",
-        "qualifying_transfer_count += 1;",
-        "required_fee_minor_units(qualifying_transfer_count, policy, hijiri_multiplier)?",
-    ))
+    require(tx_path, execute, sequence)
+    positions = [execute.index(re.sub(r"\s+", "", x)) for x in sequence]
+    if positions != sorted(positions) or execute.count(re.sub(r"\s+", "", sequence[3])) != 1:
+        raise RuntimeError(f"{tx_path}: native fee must finish once in the original transaction overlay")
 
 
 def require_proved_trigger_rejection(source: str) -> None:
@@ -1822,7 +2007,7 @@ def main() -> int:
         ),
         (
             "crates/iroha_core/src/validation_fee.rs",
-            ("Executable::IvmProved(proved)", "enforce_ivm_proved_completed_axt_admission"),
+            ("enforce_validation_fee_admission", "enforce_ivm_proved_completed_axt_admission"),
         ),
         (
             "crates/iroha_core/src/queue.rs",
@@ -5020,10 +5205,13 @@ def main() -> int:
     require_encrypted_beacon_dkg_source(
         read("crates/iroha_data_model/src/consensus.rs"), beacon_state
     )
-    require_signed_staking_fee_boundary(
-        read("crates/iroha_core/src/validation_fee.rs"),
-        read("crates/iroha_core/src/validation_fee/committee_effects.rs"),
-        read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
+    require_signed_deferred_authority_and_native_fees(
+        read('crates/iroha_core/src/validation_fee.rs'),
+        read('crates/iroha_core/src/deferred_authority.rs'),
+        read('crates/iroha_core/src/retail_fee.rs'),
+        read('crates/iroha_core/src/smartcontracts/isi/asset.rs'),
+        read('crates/iroha_core/src/tx.rs'),
+        read('crates/iroha_core/src/lib.rs'),
     )
     require_beacon_parliament_pulse_fixtures(
         beacon_state,

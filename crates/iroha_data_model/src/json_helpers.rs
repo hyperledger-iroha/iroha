@@ -166,36 +166,6 @@ pub mod u64_string {
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<u64, norito::json::Error> {
         parse_canonical(&parser.parse_string()?)
     }
-    pub mod option {
-        use super::*;
-        #[allow(clippy::ref_option)]
-        pub fn serialize(value: &Option<u64>, out: &mut String) {
-            match value {
-                Some(value) => super::serialize(value, out),
-                None => out.push_str("null"),
-            }
-        }
-        #[expect(
-            clippy::ref_option,
-            reason = "Norito bounded serializers receive optional fields by shared reference"
-        )]
-        pub fn serialize_bounded(
-            value: &Option<u64>,
-            out: &mut dyn JsonWriteSink,
-        ) -> Result<(), BoundedJsonError> {
-            match value {
-                Some(value) => super::serialize_bounded(value, out),
-                None => out.push_str("null"),
-            }
-        }
-        pub fn deserialize(parser: &mut Parser<'_>) -> Result<Option<u64>, norito::json::Error> {
-            parser.skip_ws();
-            if parser.try_consume_null()? {
-                return Ok(None);
-            }
-            super::deserialize(parser).map(Some)
-        }
-    }
 }
 /// Serialize unsigned 128-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
@@ -754,11 +724,6 @@ mod tests {
         )]
         count: u64,
         #[norito(
-            with = "crate::json_helpers::u64_string::option",
-            bounded_with = "crate::json_helpers::u64_string::option::serialize_bounded"
-        )]
-        optional_count: Option<u64>,
-        #[norito(
             with = "crate::json_helpers::u128_string",
             bounded_with = "crate::json_helpers::u128_string::serialize_bounded"
         )]
@@ -865,7 +830,6 @@ mod tests {
     fn scalar_checked_helpers_match_legacy_bytes_at_exact_bound() {
         let wrapper = ScalarHelpersWrapper {
             count: u64::MAX,
-            optional_count: Some(0),
             total: u128::MAX,
             digest: [0x01, 0x23, 0xab, 0xcd],
             optional_digest: Some([0xef, 0x42]),
