@@ -3,10 +3,6 @@
 //! Monetary methods stay unavailable until a separate genuine constrained financial owner exists.
 #[path = "ordinary_current_control.rs"]
 mod current_control;
-pub use current_control::{
-    KagemushaOrdinaryNativeCurrentControlRequestV1, KagemushaOrdinaryNativeCurrentControlResponseV1,
-    invoke_kagemusha_native_ordinary_current_control_v1,
-};
 use super::{
     KagemushaCoreCoordinatorBackendErrorV1 as Error, KagemushaCoreCoordinatorBackendV1,
     KagemushaCoreCoordinatorMethodV1 as Method, install_kagemusha_core_coordinator_backend_v1,
@@ -14,6 +10,11 @@ use super::{
     kagemusha_core_coordinator_validate_method_request_v1,
     kagemusha_core_coordinator_validate_method_response_v1,
     kagemusha_core_coordinator_validate_storage_path_v1,
+};
+pub use current_control::{
+    KagemushaOrdinaryNativeCurrentControlRequestV1,
+    KagemushaOrdinaryNativeCurrentControlResponseV1,
+    invoke_kagemusha_native_ordinary_current_control_v1,
 };
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_core_zk::kagemusha_v1_recursion::{
@@ -69,7 +70,9 @@ struct CashMaterial {
     lineage_policy_original: Vec<u8>,
     disposition: KagemushaOrdinaryEnrollmentDispositionV1,
     integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
-    receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
+    receivers: Vec<
+        Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+    >,
 }
 struct BootstrapMaterial {
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
@@ -199,19 +202,31 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
         inventory: Arc<iroha::client::KagemushaAdmittedOrdinaryNativeInventoryV1>,
         disposition: KagemushaOrdinaryEnrollmentDispositionV1,
         integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
-        receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
+        receivers: Vec<
+            Arc<
+                iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+            >,
+        >,
     ) -> Result<Self, Error> {
         self.recheck_originals(&self.path)?;
-        if self.cash.is_some() || self.bootstrap.is_none()
-            || integrity_leases.len() > 1024 || receivers.len() > 1024
+        if self.cash.is_some()
+            || self.bootstrap.is_none()
+            || integrity_leases.len() > 1024
+            || receivers.len() > 1024
             || (disposition == KagemushaOrdinaryEnrollmentDispositionV1::Fresh
-                && (!integrity_leases.is_empty() || !receivers.is_empty())) {
+                && (!integrity_leases.is_empty() || !receivers.is_empty()))
+        {
             return Err(Error::Rejected);
         }
-        let lineage_policy_original = inventory.lineage_policy_original()
+        let lineage_policy_original = inventory
+            .lineage_policy_original()
             .map_err(|_| Error::Rejected)?;
         self.cash = Some(CashMaterial {
-            inventory, lineage_policy_original, disposition, integrity_leases, receivers,
+            inventory,
+            lineage_policy_original,
+            disposition,
+            integrity_leases,
+            receivers,
         });
         self.recheck_originals(&self.path)?;
         Ok(self)
@@ -226,8 +241,12 @@ impl KagemushaNativeOrdinaryAppIdentitySourceV1 {
     fn recheck_originals(&self, path: &Path) -> Result<(), Error> {
         if let Some(cash) = &self.cash {
             cash.inventory.recheck().map_err(|_| Error::Rejected)?;
-            if cash.inventory.lineage_policy_original().map_err(|_| Error::Rejected)?
-                != cash.lineage_policy_original {
+            if cash
+                .inventory
+                .lineage_policy_original()
+                .map_err(|_| Error::Rejected)?
+                != cash.lineage_policy_original
+            {
                 return Err(Error::Rejected);
             }
         }
@@ -1064,7 +1083,28 @@ impl OrdinaryBackend {
         if owner.handle != Some(handle) {
             return Err(Error::Rejected);
         }
-        let response = if phase == 11 {
+        let response = if phase == 15 {
+            // This same opened descriptor projects only its installed current account originals.
+            // No wallet read or C reservation starts here; an absent Native session is refused.
+            let session = self
+                .source
+                .native_account_session
+                .as_ref()
+                .ok_or(Error::Unavailable)?;
+            let selected = session.current_account_selection_originals()?;
+            if let Some(reservation) = &owner.reservation {
+                if reservation
+                    .carrier()
+                    .map_err(|_| Error::Rejected)?
+                    .account_i105
+                    .as_bytes()
+                    != selected[1].as_slice()
+                {
+                    return Err(Error::Rejected);
+                }
+            }
+            selected
+        } else if phase == 11 {
             let id = self.source.original_enrollment_id(&self.path)?;
             self.source.recheck_originals(&self.path)?;
             if id == [0; 32] || owner.attempted.is_some_and(|original| original != id) {
@@ -1241,21 +1281,42 @@ impl OrdinaryBackend {
             }
         };
         self.source.recheck_originals(&self.path)?;
-        if !matches!(phase, 9 | 11 | 12 | 14) {
-            owner
-                .attempt
-                .as_ref()
-                .ok_or(Error::Rejected)?
-                .recheck()
-                .map_err(|_| Error::Rejected)?;
-        }
-        let response = kagemusha_core_coordinator_encode_response_v1(&response)
-            .map_err(|_| Error::Rejected)?;
-        kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
-            .map_err(|_| Error::Rejected)?;
-        Ok(response)
+        finish_identity_response(&owner, frame, &response)
     }
 }
+// This is the existing final identity response boundary, not a Native session constructor.
+// Phase15 only projects already-held account originals; it precedes enrollment reservation.
+fn finish_identity_response(
+    owner: &Owner,
+    frame: &[u8],
+    fields: &[Vec<u8>],
+) -> Result<Vec<u8>, Error> {
+    let method = Method::PreparedOrdinaryAppIdentity;
+    kagemusha_core_coordinator_validate_method_request_v1(method, frame)
+        .map_err(|_| Error::Rejected)?;
+    let request =
+        kagemusha_core_coordinator_decode_request_v1(frame).map_err(|_| Error::Rejected)?;
+    let phase = u32::from_le_bytes(
+        request[0]
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Rejected)?,
+    );
+    if !matches!(phase, 9 | 11 | 12 | 14 | 15) {
+        owner
+            .attempt
+            .as_ref()
+            .ok_or(Error::Rejected)?
+            .recheck()
+            .map_err(|_| Error::Rejected)?;
+    }
+    let response =
+        kagemusha_core_coordinator_encode_response_v1(fields).map_err(|_| Error::Rejected)?;
+    kagemusha_core_coordinator_validate_method_response_v1(method, frame, &response)
+        .map_err(|_| Error::Rejected)?;
+    Ok(response)
+}
+
 impl KagemushaCoreCoordinatorBackendV1 for OrdinaryBackend {
     fn open(&self, path: &str) -> Result<u64, Error> {
         if self.path != Path::new(path) {
@@ -2012,5 +2073,156 @@ mod tests {
         assert!(!*called.borrow());
         // Only called ordering/current native custody is tested; closures do not manufacture
         // a globally installed backend, root account authority or physical platform qualification.
+    }
+
+    #[test]
+    fn current_account_projection_response_needs_no_enrollment_reservation() {
+        use iroha_data_model::account::AccountId;
+        let fixture = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        fixture.verify(300).unwrap();
+        let wallet = &fixture.selection.owner.account_id;
+        let signatory = AccountId::new(
+            wallet.multisig_policy().unwrap().members()[0]
+                .public_key()
+                .clone(),
+        );
+        let fields = vec![
+            7u64.to_le_bytes().to_vec(),
+            wallet.canonical_i105().unwrap().into_bytes(),
+            signatory.canonical_i105().unwrap().into_bytes(),
+        ];
+        let owner = Owner {
+            opened: true,
+            handle: Some(1),
+            ..Owner::default()
+        };
+        let request = super::super::kagemusha_core_coordinator_encode_request_v1(&[15u32
+            .to_le_bytes()
+            .to_vec()])
+        .unwrap();
+        // Actual final response component only: these public originals install no Native session.
+        let response = finish_identity_response(&owner, &request, &fields).unwrap();
+        assert_eq!(
+            super::super::kagemusha_core_coordinator_decode_response_v1(&response).unwrap(),
+            fields
+        );
+        assert!(owner.reservation.is_none());
+        assert!(owner.attempt.is_none());
+        assert!(!owner.reservation_started);
+        // Enrollment mutation phases still require the original retained attempt.
+        for phase in [2u32, 4, 7, 8] {
+            let request = super::super::kagemusha_core_coordinator_encode_request_v1(&[
+                phase.to_le_bytes().to_vec(),
+                7u64.to_le_bytes().to_vec(),
+            ])
+            .unwrap();
+            assert!(matches!(
+                finish_identity_response(&owner, &request, &[]),
+                Err(Error::Rejected)
+            ));
+        }
+        // This enrollment response is fully valid canonical grammar. Removing phase2's
+        // retained-attempt guard would accept it, so rejection proves owner-stage admission.
+        let enrolling_request = super::super::kagemusha_core_coordinator_encode_request_v1(&[
+            2u32.to_le_bytes().to_vec(),
+            7u64.to_le_bytes().to_vec(),
+        ])
+        .unwrap();
+        let enrolling_fields = vec![vec![1], Vec::new()];
+        let enrolling_response =
+            kagemusha_core_coordinator_encode_response_v1(&enrolling_fields).unwrap();
+        kagemusha_core_coordinator_validate_method_request_v1(
+            Method::PreparedOrdinaryAppIdentity,
+            &enrolling_request,
+        )
+        .unwrap();
+        kagemusha_core_coordinator_validate_method_response_v1(
+            Method::PreparedOrdinaryAppIdentity,
+            &enrolling_request,
+            &enrolling_response,
+        )
+        .unwrap();
+        assert!(matches!(
+            finish_identity_response(&owner, &enrolling_request, &enrolling_fields),
+            Err(Error::Rejected)
+        ));
+        // The full dispatch keeps the actual Native session prerequisite fail-closed.
+        let (_temp, backend, _fixture) = backend();
+        let handle = backend.open(backend.path.to_str().unwrap()).unwrap();
+        assert!(matches!(
+            call(&backend, handle, 15, vec![]),
+            Err(Error::Unavailable)
+        ));
+        let retained = backend.owner.lock().unwrap();
+        assert!(retained.reservation.is_none());
+        assert!(retained.attempt.is_none());
+    }
+
+    #[test]
+    fn current_account_projection_response_retains_exact_phase_and_identity_grammar() {
+        use iroha_data_model::account::AccountId;
+        let fixture = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        fixture.verify(300).unwrap();
+        let wallet = &fixture.selection.owner.account_id;
+        let signatory = AccountId::new(
+            wallet.multisig_policy().unwrap().members()[0]
+                .public_key()
+                .clone(),
+        );
+        let fields = vec![
+            7u64.to_le_bytes().to_vec(),
+            wallet.canonical_i105().unwrap().into_bytes(),
+            signatory.canonical_i105().unwrap().into_bytes(),
+        ];
+        let owner = Owner {
+            opened: true,
+            handle: Some(1),
+            ..Owner::default()
+        };
+        let request = super::super::kagemusha_core_coordinator_encode_request_v1(&[15u32
+            .to_le_bytes()
+            .to_vec()])
+        .unwrap();
+        for mutation in 0..6 {
+            let mut changed = fields.clone();
+            match mutation {
+                0 => changed[0] = vec![0; 8],
+                1 => changed.swap(1, 2),
+                2 => {
+                    changed[2] = AccountId::new(fixture.issuer_policy.issuer_public_key.clone())
+                        .canonical_i105()
+                        .unwrap()
+                        .into_bytes()
+                }
+                3 => changed[1].push(b' '),
+                4 => {
+                    changed.pop();
+                }
+                _ => changed.push(vec![1]),
+            }
+            assert!(
+                matches!(
+                    finish_identity_response(&owner, &request, &changed),
+                    Err(Error::Rejected)
+                ),
+                "mutation {mutation}"
+            );
+        }
+        for malformed in [vec![], 16u32.to_le_bytes().to_vec()] {
+            let request =
+                super::super::kagemusha_core_coordinator_encode_request_v1(&[malformed]).unwrap();
+            assert!(matches!(
+                finish_identity_response(&owner, &request, &fields),
+                Err(Error::Rejected)
+            ));
+        }
+        let mut trailing = request;
+        trailing.push(0);
+        assert!(matches!(
+            finish_identity_response(&owner, &trailing, &fields),
+            Err(Error::Rejected)
+        ));
+        assert!(owner.reservation.is_none());
+        assert!(owner.attempt.is_none());
     }
 }

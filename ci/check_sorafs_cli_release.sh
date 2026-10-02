@@ -82,15 +82,15 @@ verify_cargo_lock_unchanged() {
 
 expected_cargo_lock_sha256="$(cargo_lock_sha256)"
 
-echo "[sorafs-release] runtime-provider broker deployment contracts"
-python3 scripts/tests/check_runtime_provider_broker_install_test.py
-
 verify_cargo_lock_unchanged
 
 if [[ "${diagnostics}" != true ]]; then
   echo "[sorafs-release] source integrity checks complete; diagnostics were not run"
   exit 0
 fi
+
+echo "[sorafs-release] runtime-provider broker deployment contracts"
+python3 scripts/tests/check_runtime_provider_broker_install_test.py
 
 echo "[sorafs-release] fmt check (workspace)"
 cargo fmt --all -- --check

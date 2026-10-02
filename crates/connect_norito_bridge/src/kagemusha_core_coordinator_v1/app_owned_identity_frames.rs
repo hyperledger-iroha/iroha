@@ -105,7 +105,7 @@ pub(super) fn validate_request(
     check(!f.is_empty())?;
     let phase = number(&f[0])?;
     if method == KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity {
-        if matches!(phase, 11 | 12) {
+        if matches!(phase, 11 | 12 | 15) {
             return count(f, 1);
         }
         if phase == 1 {
@@ -418,6 +418,43 @@ fn raw_metadata(point_bytes: &[u8], hash: &[u8], len: &[u8], present: bool) -> R
         check(point_bytes.is_empty() && hash.is_empty() && total == 0)
     }
 }
+// Pure canonical data grammar only; authentic membership and Native key custody
+// originate exclusively in BoundNativeAccountSessionV1 before response production.
+fn current_account_selection(r: &[Vec<u8>]) -> Result<()> {
+    use iroha_data_model::account::AccountId;
+    fn account(bytes: &[u8]) -> Result<AccountId> {
+        check(!bytes.is_empty() && bytes.len() <= 2048 && !bytes.contains(&0))?;
+        let literal =
+            std::str::from_utf8(bytes).map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+        let id = AccountId::parse_encoded(literal)
+            .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+        check(
+            id.canonical_i105()
+                .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?
+                .as_bytes()
+                == bytes,
+        )?;
+        Ok(id)
+    }
+    count(r, 3)?;
+    ticket(&r[0])?;
+    let wallet = account(&r[1])?;
+    let signatory = account(&r[2])?;
+    let policy = wallet
+        .multisig_policy()
+        .ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+    let key = signatory
+        .try_signatory()
+        .ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+    check(
+        key.algorithm() == iroha_crypto::Algorithm::Ed25519
+            && policy
+                .members()
+                .iter()
+                .any(|member| member.public_key() == key),
+    )
+}
+
 fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
     match phase {
         11 => {
@@ -451,6 +488,7 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
                 .as_bytes(),
             )
         }
+        15 => current_account_selection(r),
         14 => {
             count(r, 1)?;
             check(r[0].len() <= 16 * 1024)
@@ -1014,5 +1052,96 @@ mod tests {
         // Framing/shape only: these arbitrary archive bytes establish no identity or signature.
         let q = super::super::kagemusha_core_coordinator_encode_request_v1(&request).unwrap();
         assert!(q.len() <= KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1);
+    }
+    #[test]
+    fn current_wallet_signatory_projection_codec_keeps_distinct_canonical_originals() {
+        use iroha_data_model::{
+            account::AccountId,
+            testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture,
+        };
+        let fixture = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        fixture.verify(300).unwrap(); // Existing genuine threshold/Ed/P256 model fixture admission.
+        let wallet = &fixture.selection.owner.account_id;
+        let member = wallet.multisig_policy().unwrap().members()[0].public_key();
+        let signatory = AccountId::new(member.clone());
+        let fields = vec![
+            7u64.to_le_bytes().to_vec(),
+            wallet.canonical_i105().unwrap().into_bytes(),
+            signatory.canonical_i105().unwrap().into_bytes(),
+        ];
+        assert_ne!(fields[1], fields[2]);
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity;
+        let request =
+            kagemusha_core_coordinator_encode_request_v1(&[15u32.to_le_bytes().to_vec()]).unwrap();
+        kagemusha_core_coordinator_validate_method_request_v1(method, &request).unwrap();
+        let response = kagemusha_core_coordinator_encode_response_v1(&fields).unwrap();
+        kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+            .unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_decode_response_v1(&response).unwrap(),
+            fields
+        );
+        assert_eq!(
+            kagemusha_core_coordinator_encode_response_v1(&fields).unwrap(),
+            response
+        );
+        // Codec success installs no Native account/session or monetary owner.
+    }
+
+    #[test]
+    fn current_wallet_signatory_projection_refuses_role_aliases_and_noncanonical_carriers() {
+        use iroha_data_model::{
+            account::AccountId,
+            testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture,
+        };
+        let fixture = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        fixture.verify(300).unwrap();
+        let wallet = &fixture.selection.owner.account_id;
+        let signatory = AccountId::new(
+            wallet.multisig_policy().unwrap().members()[0]
+                .public_key()
+                .clone(),
+        );
+        let fields = vec![
+            7u64.to_le_bytes().to_vec(),
+            wallet.canonical_i105().unwrap().into_bytes(),
+            signatory.canonical_i105().unwrap().into_bytes(),
+        ];
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity;
+        let request = [15u32.to_le_bytes().to_vec()];
+        let encoded_request = kagemusha_core_coordinator_encode_request_v1(&request).unwrap();
+        let nonmember = AccountId::new(fixture.issuer_policy.issuer_public_key.clone());
+        assert_ne!(nonmember, signatory);
+        for mutation in 0..10 {
+            let mut changed = fields.clone();
+            match mutation {
+                0 => changed[0] = vec![0; 8],
+                1 => changed[0] = vec![7; 32],
+                2 => changed.swap(1, 2),
+                3 => changed[2] = changed[1].clone(),
+                4 => changed[1] = changed[2].clone(),
+                5 => changed[2].push(b' '),
+                6 => changed[2] = vec![0xff],
+                7 => changed[1] = vec![b'a'; 2049],
+                8 => changed.push(vec![1]),
+                9 => changed[2] = nonmember.canonical_i105().unwrap().into_bytes(),
+                _ => unreachable!(),
+            }
+            let encoded_response = kagemusha_core_coordinator_encode_response_v1(&changed).unwrap();
+            assert!(
+                kagemusha_core_coordinator_validate_method_response_v1(
+                    method,
+                    &encoded_request,
+                    &encoded_response
+                )
+                .is_err(),
+                "mutation {mutation}"
+            );
+        }
+        let mut offered = request.to_vec();
+        offered.push(fields[0].clone());
+        let offered = kagemusha_core_coordinator_encode_request_v1(&offered).unwrap();
+        assert!(kagemusha_core_coordinator_validate_method_request_v1(method, &offered).is_err());
+        // Caller cannot choose the current session; no mutation installs a Native owner.
     }
 }

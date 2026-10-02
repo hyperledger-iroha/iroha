@@ -13,9 +13,11 @@ use super::{
 use iroha::client::{
     AccountClient, KagemushaAdmittedOrdinaryNativeInventoryV1 as Inventory,
     KagemushaNativeAccountCustodyV1 as Custody, KagemushaNativeCurrentWalletReadV1 as Read,
+    KagemushaNativeEnrollmentRequestContextV1,
     KagemushaNativeInstalledRuntimeAuthorityV1 as Authority,
     KagemushaOrdinaryNativeArtifactResolverV1 as ArtifactResolver,
 };
+use iroha::participant_enrollment_dispatch::RetainedParticipantEnrollmentRequestV1;
 use iroha::participant_enrollment_request::VerifiedEnrollmentWalletSignatoryV1;
 use iroha_core_zk::{
     kagemusha_v1_recursion::{
@@ -92,7 +94,9 @@ pub struct KagemushaNativeOrdinaryRuntimeStartupV1 {
     bootstrap: Disposition,
     cash: Disposition,
     cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
-    cash_receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
+    cash_receivers: Vec<
+        Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+    >,
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
     profile: KagemushaRecursiveVerifierProfileV1,
     resolver: Arc<dyn KagemushaArtifactByteResolverV1>,
@@ -121,7 +125,11 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
         bootstrap: Disposition,
         cash: Disposition,
         cash_integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
-        cash_receivers: Vec<Arc<iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>>,
+        cash_receivers: Vec<
+            Arc<
+                iroha_data_model::kagemusha::KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+            >,
+        >,
         profile: KagemushaRecursiveVerifierProfileV1,
         capacity: KagemushaDurableCapacityV1,
         integrity_leases: Vec<Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
@@ -134,9 +142,11 @@ impl KagemushaNativeOrdinaryRuntimeStartupV1 {
             .load_recursive_verifier(profile.clone())
             .map_err(|_| Error::Rejected)?;
         capacity.validate().map_err(|_| Error::Rejected)?;
-        if cash_integrity_leases.len() > 1024 || cash_receivers.len() > 1024
+        if cash_integrity_leases.len() > 1024
+            || cash_receivers.len() > 1024
             || (cash == Disposition::Fresh
-                && (!cash_integrity_leases.is_empty() || !cash_receivers.is_empty())) {
+                && (!cash_integrity_leases.is_empty() || !cash_receivers.is_empty()))
+        {
             return Err(Error::Rejected);
         }
         let resolver: Arc<dyn KagemushaArtifactByteResolverV1> =
@@ -437,19 +447,143 @@ impl BoundNativeAccountSessionV1 {
         &self,
         original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,
     ) -> Result<[u8; 64], Error> {
-        let invocation = self.startup.registry.invocation(self.startup.handle()?)
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
             .map_err(|_| Error::Rejected)?;
-        let retained = self.startup.registry.dispatch(invocation, |owner| {
-            self.startup.require_current()?;
-            let signature = owner.custody.as_ref().ok_or(Error::Rejected)?
-                .sign_retained_lineage_request(&self.startup.inventory, original)
-                .map_err(|_| Error::Rejected)?;
-            self.startup.require_current()?;
-            Ok(signature)
-        }).map_err(|_| Error::Rejected)?;
-        if !retained.session_is_current { return Err(Error::Rejected); }
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                self.startup.require_current()?;
+                let signature = owner
+                    .custody
+                    .as_ref()
+                    .ok_or(Error::Rejected)?
+                    .sign_retained_lineage_request(&self.startup.inventory, original)
+                    .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                Ok(signature)
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
         retained.value
     }
+    /// Data-only exact current W/S from the same installed Native account session.
+    /// No nonce, clock refresh, key, preparation, signature or financial grant is created.
+    /// # Errors
+    /// Refuses an absent, closed, replaced or expired original Native account session/custody.
+    pub(super) fn current_account_selection_originals(&self) -> Result<Vec<Vec<u8>>, Error> {
+        let handle = self.startup.handle()?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(handle)
+            .map_err(|_| Error::Rejected)?;
+        let retained = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                if self.startup.handle()? != handle {
+                    return Err(Error::Rejected);
+                }
+                self.startup.require_current()?;
+                let custody = owner.custody.as_ref().ok_or(Error::Unavailable)?;
+                custody.recheck().map_err(|_| Error::Rejected)?;
+                let wallet = custody
+                    .wallet()
+                    .canonical_i105()
+                    .map_err(|_| Error::Rejected)?;
+                let signatory = custody
+                    .signatory()
+                    .canonical_i105()
+                    .map_err(|_| Error::Rejected)?;
+                custody.recheck().map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                if self.startup.handle()? != handle {
+                    return Err(Error::Rejected);
+                }
+                Ok(vec![
+                    handle.to_le_bytes().to_vec(),
+                    wallet.into_bytes(),
+                    signatory.into_bytes(),
+                ])
+            })
+            .map_err(|_| Error::Rejected)?;
+        if !retained.session_is_current {
+            return Err(Error::Rejected);
+        }
+        self.startup.require_current()?;
+        if self.startup.handle()? != handle {
+            return Err(Error::Rejected);
+        }
+        retained.value
+    }
+
+    /// Prepare, fetch and sign the exact enrollment request through this current Native session.
+    /// The body is retained together with the actual verified request after the prepared holder
+    /// is consumed. FI customer admission and protected issuer dispatch remain separate owners.
+    /// No managed frame, signature callback or raw key can construct this bound session.
+    /// # Errors
+    /// Refuses stale/revoked account selection, expired request/current read, changed installed
+    /// inventory/clock/prefix, failed actual Native signing or altered retained original bytes.
+    pub(super) fn sign_enrollment_request(
+        &self,
+        context: KagemushaNativeEnrollmentRequestContextV1,
+    ) -> Result<
+        (
+            iroha_crypto::Signature,
+            RetainedParticipantEnrollmentRequestV1,
+        ),
+        Error,
+    > {
+        self.startup.require_current()?;
+        let invocation = self
+            .startup
+            .registry
+            .invocation(self.startup.handle()?)
+            .map_err(|_| Error::Rejected)?;
+        let result = self
+            .startup
+            .registry
+            .dispatch(invocation, |owner| {
+                // The registry rechecks this exact invocation after the original owner lock.
+                self.startup.require_current()?;
+                let custody = owner.custody.as_ref().ok_or(Error::Rejected)?;
+                let prepared = custody
+                    .prepare_enrollment_request(context, self.startup.clock.clone())
+                    .map_err(|_| Error::Rejected)?;
+                // Preparation already validates the complete original body and its bound.
+                // Copy only those exact validated bytes; neither decode nor rebuild JSON.
+                let original_body = prepared.request().body.to_vec();
+                let (signature, verified) = custody
+                    .fetch_and_sign_current_enrollment_request(
+                        prepared,
+                        self.startup.inventory.clone(),
+                    )
+                    .map_err(|_| Error::Rejected)?;
+                let retained =
+                    RetainedParticipantEnrollmentRequestV1::retain(verified, original_body)
+                        .map_err(|_| Error::Rejected)?;
+                self.startup.require_current()?;
+                retained.original_body().map_err(|_| Error::Rejected)?;
+                Ok::<_, Error>((signature, retained))
+            })
+            .map_err(|_| Error::Rejected)?;
+        // A close/logout/account switch during actual I/O cannot publish this result.
+        if !result.session_is_current {
+            return Err(Error::Rejected);
+        }
+        let (signature, retained) = result.value?;
+        self.startup.require_current()?;
+        retained.original_body().map_err(|_| Error::Rejected)?;
+        self.startup.require_current()?;
+        Ok((signature, retained))
+    }
+
     pub(super) fn sign_current_control(
         &self,
         financial: &iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryEnrolledFinancialOwnerV1,

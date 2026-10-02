@@ -390,6 +390,45 @@ fn validate_authenticated_guard_protocol_binding_v1(
     Ok(())
 }
 
+/// Required semantic family of the four MintAuthorization artifact roles.
+/// The signed native profile pins this discriminator, exact concrete mode, and public width.
+/// Hardware and ordinary app relations require independently generated keys; no reader fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaMintAuthorizationFamilyV1 {
+    /// Recursive hardware credential/recipient transport relation (84 public cells).
+    RecursiveHardware84,
+    /// Ordinary app pre-debit leaf relation (113 public cells, including empty history).
+    OrdinaryPreDebit113,
+}
+impl KagemushaMintAuthorizationFamilyV1 {
+    /// Exact required profile tag. Unknown or omitted tags cannot select a family.
+    /// # Errors
+    /// Rejects every value outside the two concrete maintained families.
+    pub fn from_profile_tag(tag: u8) -> Result<Self, String> {
+        match tag {
+            1 => Ok(Self::RecursiveHardware84),
+            2 => Ok(Self::OrdinaryPreDebit113),
+            _ => Err("unsupported MintAuthorization circuit family".to_owned()),
+        }
+    }
+    /// Sole family byte included in the signed profile transcript.
+    #[must_use]
+    pub const fn profile_tag(self) -> u8 {
+        match self {
+            Self::RecursiveHardware84 => 1,
+            Self::OrdinaryPreDebit113 => 2,
+        }
+    }
+    fn public_instance_count(self) -> usize {
+        match self {
+            Self::RecursiveHardware84 => MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+            Self::OrdinaryPreDebit113 => {
+                super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1
+            }
+        }
+    }
+}
+
 /// Exact `halo2-base` layouts for authenticated outer and private recursive proof roles.
 ///
 /// These values are covered by [`Self::canonical_digest`], which must equal the release
@@ -397,6 +436,8 @@ fn validate_authenticated_guard_protocol_binding_v1(
 /// not safely self-describe a circuit configuration.
 #[derive(Clone, Debug)]
 pub struct KagemushaRecursiveVerifierProfileV1 {
+    /// Required signed family of the four semantic MintAuthorization keys.
+    pub mint_authorization_family: KagemushaMintAuthorizationFamilyV1,
     /// Eq private recursive aggregate-state carrier layout.
     pub inner_state_eq: BaseCircuitParams,
     /// Ep private recursive aggregate-state carrier layout.
@@ -525,6 +566,11 @@ impl KagemushaRecursiveVerifierProfileV1 {
             bytes.push(tag);
             bytes.extend_from_slice(&digest);
         }
+        bytes.push(30);
+        bytes.push(self.mint_authorization_family.profile_tag());
+        bytes.extend_from_slice(
+            &(self.mint_authorization_family.public_instance_count() as u64).to_le_bytes(),
+        );
         Ok(Sha256::digest(bytes).into())
     }
 
@@ -640,6 +686,7 @@ impl KagemushaRecursiveVerifierProfileV1 {
 /// Raw proof diagnostics and the independent consensus-backed mint-finality verifier do not
 /// establish device authority. Loading artifacts alone leaves monetary acceptance unavailable.
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
+    mint_authorization_family: KagemushaMintAuthorizationFamilyV1,
     authenticated_release:
         Option<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
     native_profile_digest: [u8; 32],
@@ -687,6 +734,46 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     terminal_authorization_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_eq_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
     commit_wrapper_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
+}
+
+pub(super) struct OrdinaryMintMaterialV1<'a> {
+    pub(super) eq_parameters: &'a halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    pub(super) ep_parameters: &'a halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    pub(super) eq_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_protocol_digest: DigestV1,
+    pub(super) ep_protocol_digest: DigestV1,
+    pub(super) provider_policy_root: DigestV1,
+    pub(super) release_id: DigestV1,
+    pub(super) suite_id: DigestV1,
+    pub(super) vk_set_digest: DigestV1,
+    pub(super) artifact_manifest_digest: DigestV1,
+}
+impl KagemushaAuthenticatedRecursiveVerifierV1 {
+    pub(super) fn ordinary_mint_material(&self) -> Result<OrdinaryMintMaterialV1<'_>, String> {
+        self.monetary_release()?;
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113
+            || self.eq_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+            || self.ep_mint_authorization_protocol.num_instance
+                != [super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1]
+        {
+            return Err("ordinary MintAuthorization113 family is not loaded".into());
+        }
+        Ok(OrdinaryMintMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            eq_protocol: &self.eq_mint_authorization_protocol,
+            ep_protocol: &self.ep_mint_authorization_protocol,
+            eq_protocol_digest: self.mint_authorization_eq_protocol_digest,
+            ep_protocol_digest: self.mint_authorization_ep_protocol_digest,
+            provider_policy_root: self.provider_policy_root,
+            release_id: self.release_id,
+            suite_id: self.suite_id,
+            vk_set_digest: self.vk_set_digest,
+            artifact_manifest_digest: self.artifact_manifest_digest,
+        })
+    }
 }
 
 pub(super) struct OrdinaryBootstrapAuxiliaryMaterialV1<'a> {
@@ -813,20 +900,37 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .as_ref(),
             profile.commit_wrapper_ep,
         )?;
-        let eq_mint_authorization_vk = read_eq_mint_authorization_vk(
-            artifacts
-                .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?
-                .as_ref(),
-            profile.mint_authorization_eq,
-            provider_policy_root,
-        )?;
-        let ep_mint_authorization_vk = read_ep_mint_authorization_vk(
-            artifacts
-                .resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?
-                .as_ref(),
-            profile.mint_authorization_ep,
-            provider_policy_root,
-        )?;
+        let mint_authorization_family = profile.mint_authorization_family;
+        let eq_mint_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEq)?;
+        let ep_mint_bytes = artifacts.resolve(KagemushaArtifactRoleV1::MintAuthorizationVkEp)?;
+        let (eq_mint_authorization_vk, ep_mint_authorization_vk) = match mint_authorization_family {
+            KagemushaMintAuthorizationFamilyV1::RecursiveHardware84 => (
+                read_eq_mint_authorization_vk(
+                    eq_mint_bytes.as_ref(),
+                    profile.mint_authorization_eq,
+                    provider_policy_root,
+                )?,
+                read_ep_mint_authorization_vk(
+                    ep_mint_bytes.as_ref(),
+                    profile.mint_authorization_ep,
+                    provider_policy_root,
+                )?,
+            ),
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113 => (
+                read_eq_ordinary_mint_authorization_vk(
+                    eq_mint_bytes.as_ref(),
+                    profile.mint_authorization_eq,
+                    provider_policy_root,
+                    artifacts.ordinary_issuer_table(),
+                )?,
+                read_ep_ordinary_mint_authorization_vk(
+                    ep_mint_bytes.as_ref(),
+                    profile.mint_authorization_ep,
+                    provider_policy_root,
+                    artifacts.ordinary_issuer_table(),
+                )?,
+            ),
+        };
         let eq_mint_vk = read_eq_mint_vk(
             artifacts
                 .resolve(KagemushaArtifactRoleV1::MintCreditVkEq)?
@@ -1021,13 +1125,13 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             &eq_parameters,
             &eq_mint_authorization_vk,
             snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
+                .with_num_instance(vec![mint_authorization_family.public_instance_count()]),
         );
         let ep_mint_authorization_protocol = compile(
             &ep_parameters,
             &ep_mint_authorization_vk,
             snark_verifier::system::halo2::Config::ipa()
-                .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
+                .with_num_instance(vec![mint_authorization_family.public_instance_count()]),
         );
         let mint_authorization_eq_protocol_digest = native_parent_protocol_digest_v1(
             &eq_mint_authorization_protocol,
@@ -1105,6 +1209,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ));
         }
         let verifier = Self {
+            mint_authorization_family,
             authenticated_release: None,
             native_profile_digest: artifacts.native_profile_digest(),
             eq_parameters,
@@ -1187,6 +1292,12 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             release.purpose(),
             ReleaseAdmissionV1::ProductionMonetary,
         )?;
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113
+        {
+            return Err(
+                "ordinary monetary release requires ordinary MintAuthorization keys".to_owned(),
+            );
+        }
         let ordinary = super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
             &release,
             self.state_checkpoint_artifacts
@@ -1555,6 +1666,12 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         authorization: &KagemushaMintAuthorizationV1,
         release: &iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1,
     ) -> Result<(), String> {
+        if self.mint_authorization_family != KagemushaMintAuthorizationFamilyV1::RecursiveHardware84
+        {
+            return Err(
+                "hardware MintAuthorization proof cannot use ordinary leaf keys".to_owned(),
+            );
+        }
         require_authenticated_release_network_v1(
             release.network_id(),
             authorization.statement.context.network_id,
@@ -2252,6 +2369,59 @@ pub(super) fn read_ep_commit_wrapper_vk(
     read_ep_recursive_vk::<KagemushaCommitWrapperEpCircuitV1>(bytes, params, "commit-wrapper")
 }
 
+pub(super) fn read_eq_ordinary_mint_authorization_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary Mint provider root absent".into(),
+        ));
+    }
+    let params = super::ordinary_mint_circuit::KagemushaOrdinaryMintCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EqAffine,
+        super::ordinary_mint_circuit::KagemushaOrdinaryMintEqCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq ordinary pre-debit MintAuthorization113",
+    )
+}
+pub(super) fn read_ep_ordinary_mint_authorization_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary Mint provider root absent".into(),
+        ));
+    }
+    let params = super::ordinary_mint_circuit::KagemushaOrdinaryMintCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EpAffine,
+        super::ordinary_mint_circuit::KagemushaOrdinaryMintEpCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep ordinary pre-debit MintAuthorization113",
+    )
+}
+
 fn read_eq_mint_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
@@ -2674,6 +2844,7 @@ mod checked_loader_tests {
 
     fn profile() -> KagemushaRecursiveVerifierProfileV1 {
         KagemushaRecursiveVerifierProfileV1 {
+            mint_authorization_family: KagemushaMintAuthorizationFamilyV1::RecursiveHardware84,
             inner_state_eq: base_params(),
             inner_state_ep: base_params(),
             state_eq: base_params(),
@@ -2703,6 +2874,34 @@ mod checked_loader_tests {
             mint_hash_claim_eq_protocol_digest: crate::kagemusha_v1_poseidon::encode(Fp::from(6)),
             mint_hash_claim_ep_protocol_digest: crate::kagemusha_v1_poseidon::encode(Fq::from(7)),
             mint_genesis_authorization_id: [3; 32],
+        }
+    }
+
+    #[test]
+    fn checked_profile_pins_exact_mint_family_and_has_no_unknown_tag_fallback() {
+        let mut ordinary = profile();
+        let hardware_digest = ordinary.canonical_digest().unwrap();
+        ordinary.mint_authorization_family =
+            KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113;
+        assert_ne!(hardware_digest, ordinary.canonical_digest().unwrap());
+        assert_eq!(
+            ordinary.mint_authorization_family.public_instance_count(),
+            113
+        );
+        assert_eq!(
+            KagemushaMintAuthorizationFamilyV1::RecursiveHardware84.public_instance_count(),
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        );
+        for tag in [0, 3, 255] {
+            assert!(KagemushaMintAuthorizationFamilyV1::from_profile_tag(tag).is_err());
+        }
+        for tag in [1, 2] {
+            assert_eq!(
+                KagemushaMintAuthorizationFamilyV1::from_profile_tag(tag)
+                    .unwrap()
+                    .profile_tag(),
+                tag
+            );
         }
     }
 

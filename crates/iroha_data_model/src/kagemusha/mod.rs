@@ -17,8 +17,10 @@ pub mod kagemusha_ordinary_cash_v1;
 /// Purpose-bound current FI control originals; Native custody remains separate.
 pub mod kagemusha_ordinary_current_control_v1;
 pub mod kagemusha_ordinary_enrollment_http_v1;
+pub mod kagemusha_ordinary_incoming_v1;
 pub mod kagemusha_ordinary_issuer_circuit_admission_v1;
 pub mod kagemusha_ordinary_lineage_v1;
+pub mod kagemusha_ordinary_mint_v1;
 pub mod kagemusha_ordinary_retail_enrollment_v1;
 pub mod kagemusha_platform_attestation_original_v1;
 pub mod kagemusha_play_integrity_provider_policy_v1;
@@ -37,7 +39,8 @@ pub use self::{
     kagemusha_mobile_bootstrap_freshness_v1::*, kagemusha_mobile_bootstrap_v1::*,
     kagemusha_ordinary_app_enrollment_v1::*, kagemusha_ordinary_cash_v1::*,
     kagemusha_ordinary_current_control_v1::*, kagemusha_ordinary_enrollment_http_v1::*,
-    kagemusha_ordinary_issuer_circuit_admission_v1::*, kagemusha_ordinary_lineage_v1::*,
+    kagemusha_ordinary_incoming_v1::*, kagemusha_ordinary_issuer_circuit_admission_v1::*,
+    kagemusha_ordinary_lineage_v1::*, kagemusha_ordinary_mint_v1::*,
     kagemusha_ordinary_retail_enrollment_v1::*, kagemusha_platform_attestation_original_v1::*,
     kagemusha_play_integrity_provider_policy_v1::*, kagemusha_play_integrity_refresh_v1::*,
     kagemusha_raw_app_attestation_admission_v1::*, kagemusha_release_v1::*,

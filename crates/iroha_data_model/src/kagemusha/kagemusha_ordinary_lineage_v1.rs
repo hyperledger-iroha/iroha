@@ -365,6 +365,11 @@ pub enum KagemushaOrdinaryLineageRequestOperationV1 {
     Reserve(Box<KagemushaOrdinaryLineageReservationV1>),
     /// Commit whole terminal evidence and atomically advance the sole global head.
     Commit(Box<KagemushaOrdinaryLineageCommitV1>),
+    /// Reserve an exact source credit and predecessor for ordinary Mint/Receive intake.
+    /// Mint issuance requires a pre-debit pending selector and actual finalized funding admission.
+    ReserveIncoming(Box<super::KagemushaOrdinaryIncomingReservationV1>),
+    /// Commit actual ordinary incoming State/replay proof and atomically consume credit/advance head.
+    CommitIncoming(Box<super::KagemushaOrdinaryIncomingCommitV1>),
 }
 impl KagemushaOrdinaryLineageRequestOperationV1 {
     /// Actual financial lineage referred to by every operation.
@@ -374,6 +379,8 @@ impl KagemushaOrdinaryLineageRequestOperationV1 {
             Self::Anchor(anchor) => &anchor.lineage,
             Self::Reserve(r) => &r.selection.lineage,
             Self::Commit(c) => &c.reservation.selection.lineage,
+            Self::ReserveIncoming(r) => &r.selection.lineage,
+            Self::CommitIncoming(c) => &c.reservation.selection.lineage,
         }
     }
     /// Validate data-only operation shape.
@@ -384,6 +391,8 @@ impl KagemushaOrdinaryLineageRequestOperationV1 {
             Self::Anchor(anchor) => anchor.validate_shape(),
             Self::Reserve(r) => r.validate_shape(),
             Self::Commit(c) => c.validate_shape(),
+            Self::ReserveIncoming(r) => r.validate_shape(),
+            Self::CommitIncoming(c) => c.validate_shape(),
         }
     }
 }

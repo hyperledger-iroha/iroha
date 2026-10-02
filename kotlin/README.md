@@ -215,6 +215,16 @@ coordinator adapter fixtures that require the canonical Rust address validator.
 The adapter's scripted endpoints remain mapping controls, not native coordinator
 or hardware qualification.
 
+The separate `:kagemusha-wallet-android:testDebugHostNative` task uses the wallet's
+main JNI implementation and the same explicit canonical host-library directory.
+It checks ABI 25, signer contract 7, actual initial startup phase 1 and selection
+revocation phase 5 against an absent independently registered Native root.
+Missing symbols or libraries fail; phase 6 is not exercised after phase 1 refuses.
+A later Core-open assertion checks the managed startup fence. The task excludes
+scripted client test JNI classes, disables result reuse, and is excluded from
+ordinary managed tests through its `host-native` tag. It creates no account,
+release, monetary or hardware authority and grants no device qualification.
+
 ### Java transaction metadata
 
 `JsonValue` is one immutable Kotlin-owned type for both JVM languages. Its

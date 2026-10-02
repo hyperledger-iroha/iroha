@@ -113,7 +113,8 @@ pub enum KagemushaCircuitFamilyV1 {
     InnerState,
     /// Compact public transport decider for the aggregate state.
     State,
-    /// Compact outer recipient hardware authorization checked before reserve mutation.
+    /// Pre-debit authorization; the signed native profile selects the exact hardware-recursive
+    /// or ordinary-app leaf family. The same four semantic roles require fresh family-specific keys.
     MintAuthorization,
     /// Compact outer finalized reserve-mint receipt and consensus-finality helper.
     MintCredit,

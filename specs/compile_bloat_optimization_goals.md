@@ -49,16 +49,17 @@ none of the three failures in the earlier retained ordinary suite, which finishe
 with 2,209 passed, three failed and 52 original ignored tests. The fresh harness
 registers 2,356 tests, including 56 ignored cases. Its composite-child control
 passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
-remain resource-held. The original build capture remains unqualified because of
+remain pending after a capacity preflight refused execution. That attempt ran no
+proofs. The original build capture remains unqualified because of
 two foreign CoreZK census races; the independently checked composite result does
 not qualify the full suite or merged candidate. Eight focused parameter tests pass with the scoped inline-policy
 annotation.
 Concurrent policy edits limit current-source qualification. Both metadata builds
 compile with matching package/features; the freshness check fails with concurrent
 source changes and library rebuilds. The latest workspace check reaches Core test
-compile errors owned by the separate repair chat. The current shared merge has
-no unresolved entries but remains open. The separate repair chat owns its closure
-and remaining protocol integration repairs.
+compile errors owned by the separate repair chat. The shared merge is closed;
+the separate repair chat owns the remaining protocol integration repairs.
+Final validation still requires a stable merged source interval.
 New SDK native-custody and assembly tools have explicit feature/target owners;
 FASTPQ belongs to existing STARK activation; the measured Native dependency
 graph fell from 418 to 403 packages. The shipping Native configuration pins

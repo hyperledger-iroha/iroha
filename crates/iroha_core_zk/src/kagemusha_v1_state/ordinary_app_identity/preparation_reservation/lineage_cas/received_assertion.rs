@@ -126,6 +126,63 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             },
         )
     }
+    /// Re-admit the same retained receiver source under its authentic captured FI decision.
+    /// The complete signature/DATA/finality source is checked again; the historical capture
+    /// lends no current FI floor, elapsed clock, funded State or incoming Commit authority.
+    pub(crate) fn readmit_received_commit_assertion_for_captured_control<'a>(
+        &'a self,
+        financial: &'a KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        captured: &KagemushaCapturedOrdinaryFinancialControlDecisionV1<'_>,
+        raw: &[u8],
+    ) -> Result<KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1<'a>> {
+        self.recheck_historical(financial)?;
+        captured.recheck_financial_owner(financial)?;
+        let original = KagemushaOrdinaryReceivedLineageCommitOriginalV1::decode_original(raw)?;
+        let signed = self.verify_received_assertion_original(&original)?;
+        let control: KagemushaSignedOrdinaryCurrentControlV1 = decode(
+            captured.original()?,
+            KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1,
+        )?;
+        let subject = &signed.subject;
+        if control.subject.data_incarnation_digest != subject.data_incarnation_digest
+            || control.subject.data_policy_epoch != subject.data_policy_epoch
+            || control.subject.data_schema_epoch != subject.data_schema_epoch
+            || control.subject.data_revision < subject.data_revision
+            || control.subject.authority_height < subject.authority_height
+        {
+            return Err(Rejected);
+        }
+        captured.recheck_financial_owner(financial)?;
+        self.recheck_historical(financial)?;
+        Ok(
+            KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1 {
+                owner: self,
+                financial,
+                original,
+                signed,
+            },
+        )
+    }
+
+    /// Authenticate the sender's complete historical clock under this owner's actual installed
+    /// clock root and retained finality prefix, independently of any offered source clock policy.
+    pub(crate) fn authenticate_received_clock_original(
+        &self,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        raw: &[u8],
+    ) -> Result<super::super::super::super::KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1>
+    {
+        self.recheck_historical(financial)?;
+        let admitted = self
+            .actual_clock()?
+            .lock()
+            .map_err(|_| Custody)?
+            .authenticate_received_historical_signed_original(raw)
+            .map_err(|_| Custody)?;
+        self.recheck_historical(financial)?;
+        Ok(admitted)
+    }
+
     fn verify_received_assertion_original(
         &self,
         original: &KagemushaOrdinaryReceivedLineageCommitOriginalV1,

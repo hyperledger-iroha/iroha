@@ -19,6 +19,18 @@ import org.hyperledger.iroha.sdk.crypto.keystore.requireOriginalP256DerV1
 class KagemushaNativeAppApprovalCoordinatorV1 internal constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
 ) {
+    /** Exact current W/S from this same installed Native account/session owner.
+     * Finite correlation originals grant no installation, signing or financial authority.
+     */
+    fun currentWalletAccountSelection(): KagemushaNativeWalletAccountSelectionOriginalV1 {
+        val fields = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(15)))
+        return KagemushaNativeWalletAccountSelectionOriginalV1.fromNative(bridge, fields)
+    }
+
+    internal fun requireCurrentWalletAccountSelection(original: KagemushaNativeWalletAccountSelectionOriginalV1) =
+        original.requireForCoordinator(bridge)
+
     /** Read the installed source's already reserved original ID; a selector grants no enrollment authority. */
     fun originalEnrollmentAttemptId(): ByteArray = bridge.invoke(
         KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY,

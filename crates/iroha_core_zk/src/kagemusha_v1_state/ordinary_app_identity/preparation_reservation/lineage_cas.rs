@@ -3,11 +3,6 @@
 use super::*;
 #[path = "lineage_cas/received_assertion.rs"]
 mod received_assertion;
-pub use received_assertion::{
-    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
-    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
-    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
-};
 use crate::kagemusha_v1_recursion::{
     KagemushaVerifiedOrdinaryLineageAnchorProofV1, KagemushaVerifiedOrdinaryLineageCommitProofV1,
     KagemushaVerifiedOrdinaryLineageReservationProofV1,
@@ -15,10 +10,17 @@ use crate::kagemusha_v1_recursion::{
 use crate::kagemusha_v1_state::KagemushaRecoveryJournalPrefixV1;
 use iroha_crypto::Signature;
 use iroha_torii_shared::kagemusha_state::decode_unverified_kagemusha_authority_state_v1;
+pub use received_assertion::{
+    KAGEMUSHA_ORDINARY_RECEIVED_COMMIT_ORIGINAL_MAX_BYTES_V1,
+    KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1,
+    KagemushaOrdinaryReceivedLineageCommitOriginalV1,
+};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 #[path = "lineage_cas/account_signing.rs"]
 mod account_signing;
+#[path = "lineage_cas/effect_capture.rs"]
+mod effect_capture;
 pub use account_signing::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1;
 
 const MAX_RECORD: usize = 20 * 1024 * 1024;
@@ -547,7 +549,10 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
     ) -> Result<(&KagemushaOrdinaryFinancialLineageV1, [u8; 32])> {
         self.recheck_historical(financial)?;
-        Ok((&self.initialize.lineage, Sha256::digest(&self.initialize.policy_original).into()))
+        Ok((
+            &self.initialize.lineage,
+            Sha256::digest(&self.initialize.policy_original).into(),
+        ))
     }
     /// Recheck the exact already-held private WAL/financial/purpose identity without a live grant.
     /// This cannot create a receipt or make a cold acknowledgement current.

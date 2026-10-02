@@ -75,9 +75,25 @@ pub(crate) use ordinary_cash_terminal_verifier::{
 };
 #[cfg(feature = "zk-halo2-ipa")]
 mod ordinary_guard_circuit;
+#[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_mint_circuit;
+#[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_mint_public;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_mint_request_budget;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod ordinary_mint_verifier;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub(crate) use ordinary_cash_candidate_verifier::{
     KagemushaAuthenticatedOrdinaryCashCandidateV1, verify_ordinary_cash_candidate_v1,
+};
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use ordinary_mint_request_budget::{
+    KagemushaOrdinaryMintRequestByteBudgetV1, ordinary_mint_request_byte_budget_v1,
+};
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use ordinary_mint_verifier::{
+    KagemushaVerifiedOrdinaryMintAuthorizationV1, verify_ordinary_mint_authorization_v1,
 };
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 mod ordinary_cash_carrier_budget;
@@ -482,7 +498,8 @@ pub use mint_finality::{
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_helper::{KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitnessV1};
 pub use native_backend::{
-    KagemushaAuthenticatedRecursiveVerifierV1, KagemushaRecursiveVerifierProfileV1,
+    KagemushaAuthenticatedRecursiveVerifierV1, KagemushaMintAuthorizationFamilyV1,
+    KagemushaRecursiveVerifierProfileV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use provider_policy_root::KagemushaProviderRootCircuitParamsV1;

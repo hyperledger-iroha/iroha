@@ -91,6 +91,7 @@ struct KagemushaBaseCircuitProfileFileV1 {
 #[derive(Debug, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct KagemushaRecursiveVerifierProfileFileV1 {
+    mint_authorization_family: u8,
     inner_state_eq: KagemushaBaseCircuitProfileFileV1,
     inner_state_ep: KagemushaBaseCircuitProfileFileV1,
     state_eq: KagemushaBaseCircuitProfileFileV1,
@@ -1895,6 +1896,7 @@ pub fn load_authenticated_kagemusha_v1_experimental_runtime_verifier(
 impl KagemushaRecursiveVerifierProfileFileV1 {
     fn try_into_profile(self) -> Result<KagemushaRecursiveVerifierProfileV1, String> {
         Ok(KagemushaRecursiveVerifierProfileV1 {
+            mint_authorization_family: iroha_core_zk::kagemusha_v1_recursion::KagemushaMintAuthorizationFamilyV1::from_profile_tag(self.mint_authorization_family)?,
             inner_state_eq: self.inner_state_eq.try_into_params("inner state Eq")?,
             inner_state_ep: self.inner_state_ep.try_into_params("inner state Ep")?,
             state_eq: self.state_eq.try_into_params("transport state Eq")?,
@@ -1958,6 +1960,10 @@ mod recursive_profile_file_tests {
 
     fn profile_json_fields() -> BTreeMap<String, norito::json::Value> {
         let mut fields = BTreeMap::new();
+        fields.insert(
+            "mint_authorization_family".to_owned(),
+            norito::json::to_value(&1_u8).unwrap(),
+        );
         for (name, fixed) in [
             ("inner_state_eq", 1),
             ("inner_state_ep", 1),
@@ -2017,6 +2023,34 @@ mod recursive_profile_file_tests {
             fields.insert(name.to_owned(), norito::json::to_value(&[tag; 32]).unwrap());
         }
         fields
+    }
+
+    #[test]
+    fn recursive_profile_requires_known_explicit_mint_family() {
+        let mut fields = profile_json_fields();
+        fields.remove("mint_authorization_family");
+        assert!(
+            norito::json::from_value::<KagemushaRecursiveVerifierProfileFileV1>(
+                norito::json::to_value(&fields).unwrap()
+            )
+            .is_err()
+        );
+        for tag in [0_u8, 3, 255] {
+            fields.insert(
+                "mint_authorization_family".to_owned(),
+                norito::json::to_value(&tag).unwrap(),
+            );
+            let data: KagemushaRecursiveVerifierProfileFileV1 =
+                norito::json::from_value(norito::json::to_value(&fields).unwrap()).unwrap();
+            assert!(data.try_into_profile().is_err());
+        }
+        fields.insert(
+            "mint_authorization_family".to_owned(),
+            norito::json::to_value(&2_u8).unwrap(),
+        );
+        let data: KagemushaRecursiveVerifierProfileFileV1 =
+            norito::json::from_value(norito::json::to_value(&fields).unwrap()).unwrap();
+        assert_eq!(data.try_into_profile().unwrap().mint_authorization_family, iroha_core_zk::kagemusha_v1_recursion::KagemushaMintAuthorizationFamilyV1::OrdinaryPreDebit113);
     }
 
     #[test]

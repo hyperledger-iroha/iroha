@@ -2,7 +2,7 @@
   "schema": "iroha.taira.privacy_rollout_plan.v1",
   "schema_version": 1,
   "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
-  "cargo_lock_sha256": "bd3b88373cf6dae8dab54057b365a5638475c46c22ea75785f9c1452603670bb",
+  "cargo_lock_sha256": "8a0bba0b8c35c14c9701c2269b6d9297dd2ae971603796be92d4a09299a0843e",
   "protocol_matrix_sha256": "1e8c12983c3fe0e3894e51c5839c27bccb47c075229c80f3720bf6d1d058697d",
   "wire_contract": {
     "catalog_size": 12,

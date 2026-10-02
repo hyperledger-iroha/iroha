@@ -7,8 +7,8 @@
 
 use super::*;
 use crate::kagemusha_v1_recursion::{
-    KagemushaOrdinaryCashCarrierBudgetV1, KagemushaOrdinaryLineageStateProofBundleV1,
-    KagemushaOrdinaryLineageStateOriginalV1, ordinary_cash_carrier_budget_v1,
+    KagemushaOrdinaryCashCarrierBudgetV1, KagemushaOrdinaryLineageStateOriginalV1,
+    KagemushaOrdinaryLineageStateProofBundleV1, ordinary_cash_carrier_budget_v1,
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1,
@@ -16,8 +16,8 @@ use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalPurposeV1, KagemushaAppOperationApprovalV1,
     KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
     KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryLineageAnchorV1,
-    KagemushaOrdinaryPaymentOutputV1,
-    KagemushaOutboxReservationV1, KagemushaVerifiedAppOperationApprovalV1,
+    KagemushaOrdinaryPaymentOutputV1, KagemushaOutboxReservationV1,
+    KagemushaVerifiedAppOperationApprovalV1,
     kagemusha_ordinary_financial_authorization_proof_binding_digest_v1,
 };
 use rand_core_06::{OsRng, RngCore as _};
@@ -32,16 +32,22 @@ use send_credit::SendCreditOriginals;
 #[path = "ordinary_redeem_factory.rs"]
 mod redeem_credit;
 use redeem_credit::RedeemOriginals;
-#[path = "ordinary_receiver_request_factory.rs"]
-mod receiver_request;
 #[path = "ordinary_cash_lineage_transport.rs"]
 mod lineage_transport;
 #[path = "ordinary_cash_preparation_originals.rs"]
 mod preparation_originals;
+#[path = "ordinary_receiver_request_factory.rs"]
+mod receiver_request;
+#[path = "ordinary_cash_state_commit.rs"]
+mod state_commit;
 use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
 pub(crate) use receiver_request::{
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
+};
+use state_commit::{
+    FinalizedDeliveryOriginals, PreparedCommitAdmission, PreparedCommitOriginals, RetainedDelivery,
+    RetainedStateAdvance, StateAdvanceAcknowledgment,
 };
 pub(crate) use terminal::KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1;
 
@@ -111,6 +117,15 @@ enum Record {
         operation: DigestV1,
     },
     Terminal(terminal::TerminalRecord),
+    PrepareCommit(PreparedCommitOriginals),
+    StateAdvance {
+        prepared_original_sha256: DigestV1,
+        delivery: FinalizedDeliveryOriginals,
+    },
+    StateAdvanceAcknowledged {
+        commit_request_original_sha256: DigestV1,
+        acknowledgment: StateAdvanceAcknowledgment,
+    },
     ReceiverReserve {
         originals: ReceiverRequestOriginals,
         financial_control: CapturedFinancialControlIdentity,
@@ -213,6 +228,9 @@ pub struct KagemushaNativeOrdinaryCashOwnerV1 {
     lineage_originals: [DigestV1; 4],
     public_state_original: Vec<u8>,
     anchor_request_sha256: Option<DigestV1>,
+    prepared_commit: Option<PreparedCommitAdmission>,
+    state_advance: Option<RetainedStateAdvance>,
+    outbox: BTreeMap<DigestV1, RetainedDelivery>,
     verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
     journal: PrivateJournal,
     prefix: KagemushaRecoveryJournalPrefixV1,
@@ -258,11 +276,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         let state = publication.initial_state()?.clone();
-        let (initial_lineage_anchor, initial_lineage_anchor_bundle_original) = publication
-            .lineage_anchor_public_originals(Arc::clone(&verifier), capacity)?;
+        let (initial_lineage_anchor, initial_lineage_anchor_bundle_original) =
+            publication.lineage_anchor_public_originals(Arc::clone(&verifier), capacity)?;
         let initial_bundle = KagemushaOrdinaryLineageStateProofBundleV1::decode_original(
             &initial_lineage_anchor_bundle_original,
-        ).map_err(material)?;
+        )
+        .map_err(material)?;
         let public_state_original = initial_bundle.state_original().to_vec();
         if initial_lineage_anchor.initial_head.state_commitment != state.state_commitment
             || initial_lineage_anchor.initial_head.logical_sequence != state.logical_sequence
@@ -273,11 +292,13 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         }
         let lineage_originals = [
             Sha256::digest(installed_lineage_policy_original).into(),
-            Sha256::digest(norito::encode_canonical(&initial_lineage_anchor).map_err(material)?).into(),
+            Sha256::digest(norito::encode_canonical(&initial_lineage_anchor).map_err(material)?)
+                .into(),
             Sha256::digest(&initial_lineage_anchor_bundle_original).into(),
             Sha256::digest(&public_state_original).into(),
         ];
-        let carrier_budget = ordinary_cash_carrier_budget_v1(verifier.as_ref()).map_err(material)?;
+        let carrier_budget =
+            ordinary_cash_carrier_budget_v1(verifier.as_ref()).map_err(material)?;
         if carrier_budget.release_id() != state.release_id
             || u64::from(carrier_budget.required_outbox_slot_bytes()) > FORMAT.maximum_payload_bytes
         {
@@ -333,13 +354,18 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         .map_err(material)?;
         let lineage_cas = if recover {
             KagemushaOrdinaryLineageCasOwnerV1::open_existing(
-                path, publication.cash_financial(), installed_lineage_policy_original,
+                path,
+                publication.cash_financial(),
+                installed_lineage_policy_original,
             )
         } else {
             KagemushaOrdinaryLineageCasOwnerV1::create(
-                path, publication.cash_financial(), installed_lineage_policy_original,
+                path,
+                publication.cash_financial(),
+                installed_lineage_policy_original,
             )
-        }.map_err(material)?;
+        }
+        .map_err(material)?;
         let prefix = journal.recovery_prefix().map_err(storage)?;
         let this = Self {
             publication,
@@ -350,6 +376,9 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             lineage_originals,
             public_state_original,
             anchor_request_sha256: None,
+            prepared_commit: None,
+            state_advance: None,
+            outbox: BTreeMap::new(),
             verifier,
             journal,
             prefix,
@@ -384,14 +413,22 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     pub fn prepare_lineage_anchor(&mut self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         self.require_current_financial_control()?;
         if self.anchor_request_sha256.is_some()
-            || self.lineage_cas.acknowledged_anchor_request(
-                self.publication.cash_financial(), &self.initial_lineage_anchor,
-            ).map_err(material)?.is_some()
+            || self
+                .lineage_cas
+                .acknowledged_anchor_request(
+                    self.publication.cash_financial(),
+                    &self.initial_lineage_anchor,
+                )
+                .map_err(material)?
+                .is_some()
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
         let financial = self.publication.cash_financial();
-        let approval = self.publication.cash_approvals().historical_bootstrap_approval()?;
+        let approval = self
+            .publication
+            .cash_approvals()
+            .historical_bootstrap_approval()?;
         let proof = crate::kagemusha_v1_recursion::verify_ordinary_lineage_anchor_v1(
             self.verifier.as_ref(),
             &self.initial_lineage_anchor,
@@ -400,9 +437,12 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             approval
                 .original_approval_integrity_lease()
                 .map(|lease| lease.as_ref()),
-        ).map_err(material)?;
+        )
+        .map_err(material)?;
         let current = self.control.loan(financial).map_err(material)?;
-        let original = self.lineage_cas.reserve_anchor(financial, &current, &proof)
+        let original = self
+            .lineage_cas
+            .reserve_anchor(financial, &current, &proof)
             .map_err(material)?;
         self.require_current_financial_control()?;
         Ok(original)
@@ -424,7 +464,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.recheck_lineage_retained_custody()?;
         self.journal.check_owned().map_err(storage)?;
         if self.journal.recovery_prefix().map_err(storage)? != self.prefix
-            || self.state != *self.publication.initial_state()?
             || !Arc::ptr_eq(
                 &admitted_release(&self.verifier)?,
                 self.publication.cash_approvals().retained_release(),
@@ -450,7 +489,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
 
     fn recheck_lineage_retained_custody(&self) -> Result<(), KagemushaStateErrorV1> {
         self.publication.recheck_historical_cash_custody()?;
-        let (lineage, policy_sha256) = self.lineage_cas
+        let (lineage, policy_sha256) = self
+            .lineage_cas
             .retained_lineage_originals(self.publication.cash_financial())
             .map_err(material)?;
         let anchor = &self.initial_lineage_anchor;
@@ -462,8 +502,9 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         // custody checks hash its retained originals; they do not repeat recursive proving.
         if lineage != &anchor.lineage
             || policy_sha256 != self.lineage_originals[0]
-            || <DigestV1>::from(Sha256::digest(norito::encode_canonical(anchor).map_err(material)?))
-                != self.lineage_originals[1]
+            || <DigestV1>::from(Sha256::digest(
+                norito::encode_canonical(anchor).map_err(material)?,
+            )) != self.lineage_originals[1]
             || <DigestV1>::from(Sha256::digest(bundle)) != self.lineage_originals[2]
             || anchor.proof_bundle_original_sha256 != self.lineage_originals[2]
             || <DigestV1>::from(Sha256::digest(initial_bundle.state_original()))
@@ -476,6 +517,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         }
         KagemushaOrdinaryLineageStateOriginalV1::decode_original(&self.public_state_original)
             .map_err(material)?;
+        self.recheck_state_advance_historical()?;
         self.recheck_initial_lineage_anchor_historical()
     }
 
@@ -489,6 +531,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
 
     fn require_current_financial_control(&self) -> Result<(), KagemushaStateErrorV1> {
         self.recheck()?;
+        self.require_state_advance_acknowledged()?;
         self.control
             .loan(self.publication.cash_financial())
             .map_err(material)?
@@ -504,7 +547,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.recheck_lineage_retained_custody()?;
         self.journal.check_owned().map_err(storage)?;
         if self.journal.recovery_prefix().map_err(storage)? != self.prefix
-            || self.state != *self.publication.historical_initial_state()?
             || !Arc::ptr_eq(
                 &admitted_release(&self.verifier)?,
                 self.publication.cash_approvals().retained_release(),
@@ -621,7 +663,14 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 return Err(error);
             }
         }
-        self.require_current_financial_control()
+        // FI intake may recover an unacknowledged durable StateAdvance. Money remains
+        // unavailable until its distinct actual post-fsync acknowledgment is completed.
+        self.recheck()?;
+        self.control
+            .loan(self.publication.cash_financial())
+            .map_err(material)?
+            .recheck()
+            .map_err(material)
     }
 
     /// Lend actual custody for PI refresh even when the old PI has expired. This checks
@@ -648,7 +697,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.recheck_lineage_retained_custody()?;
         self.journal.check_owned().map_err(storage)?;
         if self.journal.recovery_prefix().map_err(storage)? != self.prefix
-            || self.state != *self.publication.historical_initial_state()?
             || !Arc::ptr_eq(
                 &admitted_release(&self.verifier)?,
                 self.publication.cash_approvals().retained_release(),
@@ -968,7 +1016,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     pub(crate) fn receiver_request_custody(
         &self,
         request_id: DigestV1,
-    ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1> {
+    ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1>
+    {
         receiver_request::loan_main_request(self, request_id)
     }
 
@@ -1110,13 +1159,15 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     ) -> Result<DigestV1, KagemushaStateErrorV1> {
         self.require_current_financial_control()?;
         self.require_initial_lineage_anchor_current()?;
+        self.require_outbox_capacity_for_new_slot()?;
         if self.pending.is_some()
             || self.pending_receiver_request.is_some()
             || !matches!(
                 operation_kind,
                 KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
             )
-            || u64::from(self.carrier_budget.required_outbox_slot_bytes()) > self.capacity.outbox_bytes
+            || u64::from(self.carrier_budget.required_outbox_slot_bytes())
+                > self.capacity.outbox_bytes
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
@@ -1653,7 +1704,25 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         preceding: Option<KagemushaRecoveryJournalPrefixV1>,
     ) -> Result<(), KagemushaStateErrorV1> {
         match record {
-            Record::LineageAnchorAcknowledged { request_original_sha256 } => {
+            Record::PrepareCommit(originals) => self.replay_prepared_commit(originals)?,
+            Record::StateAdvance {
+                prepared_original_sha256,
+                delivery,
+            } => {
+                self.install_actual_state_advance(prepared_original_sha256, delivery)?;
+            }
+            Record::StateAdvanceAcknowledged {
+                commit_request_original_sha256,
+                acknowledgment,
+            } => {
+                self.replay_state_advance_acknowledgment(
+                    commit_request_original_sha256,
+                    acknowledgment,
+                )?;
+            }
+            Record::LineageAnchorAcknowledged {
+                request_original_sha256,
+            } => {
                 self.replay_lineage_anchor_acknowledgment(request_original_sha256)?;
             }
             Record::Intent {
@@ -1671,6 +1740,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 && predecessor == self.state.state_commitment
                 && !self.used_operations.contains(&operation) =>
             {
+                self.require_state_advance_acknowledged()?;
+                self.require_outbox_capacity_for_new_slot()?;
                 preparation_clock.validate_shape().map_err(material)?;
                 reservation.validate().map_err(material)?;
                 preparation_clock
@@ -1679,7 +1750,8 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                         reservation.expires_at_ms,
                     )
                     .map_err(material)?;
-                if reservation.reserved_outbox_bytes != self.carrier_budget.required_outbox_slot_bytes()
+                if reservation.reserved_outbox_bytes
+                    != self.carrier_budget.required_outbox_slot_bytes()
                     || u64::from(reservation.reserved_outbox_bytes) > self.capacity.outbox_bytes
                 {
                     return Err(KagemushaStateErrorV1::SnapshotIntegrity);

@@ -46,7 +46,10 @@ implemented by this runtime and are rejected. The in-process native test now
 passes paid catalog/bootstrap/namespace execution and a real three-of-four BLS
 private-lane certificate through production storage and global merge. The focused
 CLI dataspace suite passes 111 tests; the four-daemon deployment rehearsal
-remains a qualification gate. This source change performs no live deployment.
+is an optional engineering diagnostic, never a signing or deployment prerequisite
+for Taira or production. Full regression suites and fixed-duration fault runs,
+including 24-hour tests, are likewise optional. This source change performs no
+live deployment.
 The rest of this design includes planned network rendering, owner committees
 and teardown work.
 

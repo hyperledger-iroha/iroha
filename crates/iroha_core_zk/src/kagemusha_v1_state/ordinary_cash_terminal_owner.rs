@@ -142,6 +142,47 @@ impl TerminalJournal {
             used_operations: BTreeSet::new(),
         }
     }
+    /// Consume only the captured terminal admitted by the exact genuine Commit capability.
+    /// The caller already verified the real global CAS acknowledgment before StateAdvance.
+    pub(super) fn consume_actual_commit(
+        &mut self,
+        generated: &crate::kagemusha_v1_recursion::GeneratedOrdinaryCashCommitOriginalsV1,
+        receipt: &KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1<'_>,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck()?;
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let (record, approval) = pending
+            .captured
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let commit = generated.commit();
+        receipt.recheck_historical(financial).map_err(material)?;
+        if receipt.commit().map_err(material)? != commit {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        if !pending.fenced
+            || commit.reservation.successor.state_commitment
+                != pending.candidate.successor_state().state_commitment
+            || commit.reservation.successor.logical_sequence
+                != pending.candidate.successor_state().logical_sequence
+            || generated.selected_successor_state() != pending.candidate.successor_state()
+            || commit.purpose1_approval_original_sha256
+                != <DigestV1>::from(Sha256::digest(approval.original()))
+            || commit.terminal_record_original_sha256
+                != <DigestV1>::from(Sha256::digest(
+                    norito::encode_canonical(record).map_err(material)?,
+                ))
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        // Used operation identities and monotonic logical floors are deliberately retained.
+        self.pending = None;
+        self.recheck()
+    }
     pub(super) fn has_pending(&self) -> bool {
         self.pending.is_some()
     }

@@ -703,3 +703,74 @@ fn historical_clock_original_lookup_retains_earlier_authenticated_finality_decis
     );
     assert!(recovered.current_native_time_interval().is_err());
 }
+
+#[test]
+fn received_historical_signed_clock_authenticates_sender_originals_without_native_time_grant() {
+    let fixture = Fixture::new();
+    let sender_root = tempfile::tempdir().unwrap();
+    let mut sender = KagemushaOrdinaryNativeClockOwnerV1::create(
+        &sender_root.path().canonicalize().unwrap(),
+        fixture.selected.clone(),
+    )
+    .unwrap();
+    let read = sender.reserve_current_read().unwrap();
+    let nonce = read.nonce();
+    sender
+        .admit_current_read(
+            read,
+            fixture.replies(nonce, [1_000_000, 1_000_002, 1_000_004, 1_000_006]),
+        )
+        .unwrap();
+    let context = sender.current_cash_clock_context().unwrap();
+    let raw = sender
+        .retained_cash_clock_originals(&context)
+        .unwrap()
+        .canonical_original()
+        .to_vec();
+    let receiver_root = tempfile::tempdir().unwrap();
+    let root = receiver_root.path().canonicalize().unwrap();
+    let receiver =
+        KagemushaOrdinaryNativeClockOwnerV1::create(&root, fixture.selected.clone()).unwrap();
+    let prefix = receiver.journal.recovery_prefix().unwrap();
+    let admitted = receiver
+        .authenticate_received_historical_signed_original(&raw)
+        .unwrap();
+    admitted.recheck_cash_context(&context).unwrap();
+    assert_eq!(admitted.original(), raw);
+    assert_eq!(
+        admitted.certified_height().unwrap(),
+        fixture.native.latest().height()
+    );
+    assert!(receiver.retained_cash_clock_originals(&context).is_err());
+    let mut altered = KagemushaOrdinaryNativeSignedClockOriginalV1::decode_original(&raw).unwrap();
+    fixture.resign_changed(&mut altered.originals[0], 0, |body| {
+        body.build_fingerprint = Hash::new(b"foreign received clock executable")
+    });
+    assert!(
+        receiver
+            .authenticate_received_historical_signed_original(
+                &altered.canonical_original().unwrap()
+            )
+            .is_err()
+    );
+    let mut trailing = raw.clone();
+    trailing.push(0);
+    assert!(
+        receiver
+            .authenticate_received_historical_signed_original(&trailing)
+            .is_err()
+    );
+    assert_eq!(receiver.journal.recovery_prefix().unwrap(), prefix);
+    drop(receiver);
+    let mut recovered =
+        KagemushaOrdinaryNativeClockOwnerV1::open_existing(&root, fixture.selected.clone())
+            .unwrap();
+    recovered
+        .authenticate_received_historical_signed_original(&raw)
+        .unwrap()
+        .recheck_cash_context(&context)
+        .unwrap();
+    assert!(recovered.current_native_time_interval().is_err());
+    assert!(recovered.retained_cash_clock_originals(&context).is_err());
+    assert_eq!(recovered.journal.recovery_prefix().unwrap(), prefix);
+}

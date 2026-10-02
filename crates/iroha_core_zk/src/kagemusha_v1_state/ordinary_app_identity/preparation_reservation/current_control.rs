@@ -953,6 +953,20 @@ impl KagemushaAuthenticatedOrdinaryCurrentFinancialControlLoanV1<'_> {
     }
 }
 impl KagemushaCapturedOrdinaryFinancialControlDecisionV1<'_> {
+    /// Bind this captured decision to the same actual financial/selection/enrollment owner.
+    /// Public fields or equal keys cannot substitute another Native holder.
+    pub(crate) fn recheck_financial_owner(
+        &self,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+    ) -> Result<()> {
+        self.recheck_historical_originals()?;
+        self.owner.require_same_historical_financial(financial)?;
+        if !std::ptr::eq(self.financial, financial) {
+            return Err(Rejected);
+        }
+        self.recheck_historical_originals()
+    }
+
     pub(crate) fn original_sha256(&self) -> Result<[u8; 32]> {
         self.recheck_historical_originals()?;
         Ok(self.original_sha256)

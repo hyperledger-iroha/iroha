@@ -63,7 +63,8 @@ of the three failures in the earlier retained ordinary suite, which finishes wit
 2,209 passed, three failed and 52 original ignored tests. The fresh harness
 registers 2,356 tests, including 56 ignored cases. Its composite-child control
 passes with 447 scoped inputs unchanged; the two deterministic STARK KAT controls
-remain resource-held. The original build capture remains unqualified because of
+remain pending after a capacity preflight refused execution. That attempt ran no
+proofs. The original build capture remains unqualified because of
 two foreign CoreZK census races. An independent closure check supports the single
 composite result while preserving that failed capture; full ordinary-suite and
 merged-candidate qualification remain incomplete.
@@ -73,8 +74,8 @@ Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
 fails with concurrent source changes and library rebuilds. The latest workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-The shared merge has no unresolved entries but remains open. The separate repair
-chat owns its closure and remaining protocol integration repairs. Workspace validation,
+The shared merge is closed. The separate repair chat owns the remaining protocol
+integration repairs; final validation requires a stable merged source interval. Workspace validation,
 metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.

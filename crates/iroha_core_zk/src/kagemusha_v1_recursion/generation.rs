@@ -117,6 +117,13 @@ pub(super) mod production_prover;
 pub(crate) mod ordinary_guard_generation;
 
 #[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-real-proof-harness")
+))]
+#[path = "ordinary_mint_generation.rs"]
+pub(crate) mod ordinary_mint_generation;
+
+#[cfg(all(
     unix,
     feature = "zk-halo2-ipa",
     any(test, feature = "kagemusha-production-prover")
