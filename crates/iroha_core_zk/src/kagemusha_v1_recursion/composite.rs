@@ -1082,9 +1082,9 @@ pub(super) fn build_recursive_state_pair_impl_v1(
                     != witness.state.successor.state_commitment
                 || m.preparation.financial_index_before != before.secure_index
                 || m.preparation.financial_index_after != witness.state.successor.secure_index
-                || m.preparation.logical_journal_sequence_before
+                || u128::from(m.preparation.logical_journal_sequence_before)
                     != witness.state.journal_revision_before
-                || m.preparation.logical_journal_sequence_after
+                || u128::from(m.preparation.logical_journal_sequence_after)
                     != witness.state.journal_revision_after
             {
                 return Err("ordinary Mint incoming preparation financial edge differs".into());
@@ -6977,7 +6977,7 @@ fn ordinary_mint_codec_padding_v1(
                     fi_id: "inactive"
                         .parse()
                         .map_err(|e| format!("inactive FI codec: {e}"))?,
-                    ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(0),
+                    ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(0),
                     authentication_namespace: "inactive"
                         .parse()
                         .map_err(|e| format!("inactive namespace codec: {e}"))?,

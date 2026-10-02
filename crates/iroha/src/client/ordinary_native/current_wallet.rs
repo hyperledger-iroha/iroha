@@ -28,7 +28,13 @@ impl KagemushaNativeCurrentWalletReadV1 {
         let body = request.canonical_wire()?;
         let mut first: Option<Original> = None;
         let mut statements = Vec::with_capacity(4);
-        for client in &transport.nodes {
+        let clients = match &transport.nodes {
+            super::public_clock::ClockNodes::AccountContext(clients) => clients,
+            super::public_clock::ClockNodes::Public(_) => {
+                return Err(eyre!("current wallet requires the retained Native account transport"));
+            }
+        };
+        for client in clients.iter() {
             self.inventory.recheck()?;
             let interval = self
                 .clock

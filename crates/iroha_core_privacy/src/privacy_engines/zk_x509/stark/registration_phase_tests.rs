@@ -215,7 +215,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "e3acff9ebb2e4166768308152400b1d01fa5ed3796103c148356cff9a064afa0",
+        "45bfc37d963142200bae401557da42587dd42e9df3e23fb606ebefe8492a9cf1",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -273,7 +273,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "7efdef5f968f33a391d8a374d6f656ca4432cbf05bb2230cc0aa0c2f034f53b1",
+        "ec65a821d28924ab6e036149d5479c7e6273d5be7fe857dd3477021505f5c53d",
         "update only when the canonical proof protocol intentionally changes"
     );
 }

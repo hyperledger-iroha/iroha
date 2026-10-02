@@ -209,12 +209,12 @@ pub use kagemusha_core_coordinator_v1::{
 };
 mod kagemusha_device_bridge_v1;
 #[cfg(unix)]
-#[cfg(unix)]
 mod kagemusha_hardware_evidence_v1;
 #[cfg(unix)]
 pub use kagemusha_hardware_evidence_v1::{KagemushaNativeHardwareEvidenceSourceV1,
     register_kagemusha_native_hardware_evidence_source_v1,
     bootstrap_kagemusha_native_hardware_evidence_v1};
+#[cfg(unix)]
 mod kagemusha_mobile_bootstrap_online_v1;
 mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;

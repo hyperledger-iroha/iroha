@@ -7,7 +7,7 @@ use crate::{
 };
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
-    gates::{GateInstructions as _, RangeChip},
+    gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 use iroha_data_model::kagemusha::KagemushaOrdinaryCanonicalFieldStreamGrammarV1;
 
@@ -55,7 +55,7 @@ pub(super) fn compact_u32_v1<F: KagemushaPoseidonFieldV1>(
 }
 
 /// Prefix one exact field payload with the sole minimal canonical field length.
-pub(super) fn field_v1<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn field_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     payload: &KagemushaBoundedByteStreamV1<F>,
@@ -72,7 +72,7 @@ pub(super) fn field_v1<F: KagemushaPoseidonFieldV1>(
 /// Concatenate an immutable inventory with a balanced fixed-capacity routing tree. This retains
 /// every field capacity during key generation/proving and avoids routing each leaf through the
 /// entire final carrier. No host index or loop count depends on a witnessed active length.
-pub(super) fn concat_fields_v1<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn concat_fields_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     fields: &[KagemushaBoundedByteStreamV1<F>],
@@ -97,7 +97,7 @@ pub(super) fn concat_fields_v1<F: KagemushaPoseidonFieldV1>(
 
 /// Bare canonical payload from the exact sealed model struct inventory. A field's semantic
 /// source must be already constrained; assigning a DTO digest here does not authenticate it.
-pub(super) fn struct_payload_v1<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn struct_payload_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     grammar: &KagemushaOrdinaryCanonicalFieldStreamGrammarV1,
@@ -127,7 +127,7 @@ pub(super) fn struct_frame_v1<F: KagemushaPoseidonFieldV1>(
 
 /// Canonical Vec<u8> payload uses its maintained fixed LE64 count followed by the exact raw
 /// bytes. This is distinct from the enclosing struct's compact field-length prefix.
-pub(super) fn byte_vector_v1<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn byte_vector_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     raw: &KagemushaBoundedByteStreamV1<F>,
@@ -146,7 +146,7 @@ pub(super) fn byte_vector_v1<F: KagemushaPoseidonFieldV1>(
 
 /// SHA256(domain || LE64(actual original length) || complete original). Callers separately
 /// copy-bind the result to the same recursively verified semantic/original public column.
-pub(super) fn framed_hash_v1<F: KagemushaPoseidonFieldV1>(
+pub(in crate::kagemusha_v1_recursion) fn framed_hash_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     jobs: &mut PastaSha256JobsV1<F>,

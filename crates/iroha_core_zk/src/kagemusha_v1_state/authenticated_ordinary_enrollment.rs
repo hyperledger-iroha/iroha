@@ -23,6 +23,7 @@ mod cash_owner;
 pub(crate) use cash_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
