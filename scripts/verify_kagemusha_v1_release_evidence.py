@@ -360,6 +360,9 @@ NATIVE_PROFILE_DIGEST_TAGS = {
     "mint_hash_claim_eq_protocol_digest": 28,
     "mint_hash_claim_ep_protocol_digest": 29,
 }
+# Required tag 30 binds the concrete circuit family and its exact public width.
+NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILY_TAG = 30
+NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILIES = {1: 84, 2: 113}
 NATIVE_PROFILE_MAX_BYTES = 64 * 1024
 
 REPORT_SCHEMAS = frozenset(
@@ -1083,15 +1086,22 @@ def rust_native_profile_digest(raw: object, protocols: Mapping[str, object]) -> 
 
     No payload-supplied digest is trusted. Bounds and allocation order mirror the
     native preflight; protocol identities must match the separately selected role
-    inventory. The nonzero genesis roster is pinned by this signed profile identity.
+    inventory. The nonzero genesis authorization and required mint family are pinned
+    by this signed profile identity.
     """
     profile = _object(
         raw, "native profile", set(NATIVE_PROFILE_LAYOUT_TAGS) | set(NATIVE_PROFILE_DIGEST_TAGS)
+        | {"mint_authorization_family"}
     )
     if len(canonical_json_bytes(profile)) > NATIVE_PROFILE_MAX_BYTES:
         _fail("native profile exceeds the runtime 64-KiB limit")
+    family = _integer(profile["mint_authorization_family"],
+                      "native profile mint authorization family", minimum=1, maximum=2)
     maximum = (1 << 64) - 1
-    parts: dict[int, bytes] = {}
+    parts: dict[int, bytes] = {
+        NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILY_TAG: bytes([family])
+        + NATIVE_PROFILE_MINT_AUTHORIZATION_FAMILIES[family].to_bytes(8, "little"),
+    }
     for name, tag in NATIVE_PROFILE_LAYOUT_TAGS.items():
         label = f"native profile {name}"
         layout = _object(profile[name], label, {
@@ -1164,7 +1174,7 @@ def rust_native_profile_digest(raw: object, protocols: Mapping[str, object]) -> 
         _fail("native profile protocol roles must be distinct")
     preimage = bytearray(b"iroha:kagemusha:v1:paired-recursive-circuit-profile\x00")
     preimage.extend((1).to_bytes(4, "little"))
-    for tag in range(1, 30):
+    for tag in range(1, 31):
         preimage.append(tag)
         preimage.extend(parts[tag])
     return hashlib.sha256(preimage).hexdigest()

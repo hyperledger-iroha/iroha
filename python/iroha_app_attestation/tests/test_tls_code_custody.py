@@ -1,3 +1,4 @@
+from iroha_app_attestation.native_time_interval import NativeTimeInterval
 """Actual public-file/dependency custody tests; no credential or issuer launch.
 
 The selected Homebrew runtime is deliberately unapproved and must fail the real
@@ -105,7 +106,7 @@ class DarwinTlsCodeCustodyTests(unittest.TestCase):
                         oauth.GoogleServiceAccountTokenProvider,'_read') as read:
                     with self.assertRaisesRegex(AttestationRejected,'ancestor custody'):
                         oauth.GoogleServiceAccountTokenProvider(public_policy_original=ORIGINAL,
-                            native_policy=POLICY,credential_fd=fd,trusted_time_ms=lambda:1_800_000_000_000,
+                            native_policy=POLICY,credential_fd=fd,trusted_time_interval=lambda:NativeTimeInterval(1_800_000_000_000,1_800_000_000_000),
                             openssl_path=Path('/usr/bin/openssl'))
                     duplicate.assert_not_called();read.assert_not_called()
             finally:os.close(fd)

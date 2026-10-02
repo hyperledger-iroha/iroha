@@ -239,6 +239,7 @@ impl CaMainPrivateLinkPlanV1 {
         &self.main_openings
     }
     /// Ordered CA translated openings.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn ca_openings_v1(&self) -> &[CaExtraOpeningV1; CA_EXTRA_OPENINGS_V1] {
         &self.ca_openings
     }

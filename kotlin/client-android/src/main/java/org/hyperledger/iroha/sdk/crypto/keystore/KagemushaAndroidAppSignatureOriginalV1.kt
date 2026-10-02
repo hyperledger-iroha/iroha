@@ -17,6 +17,7 @@ internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, va
     FIRST_DEVICE_HARDWARE_POSSESSION("iroha:kagemusha:v1:hardware-evidence-possession\u0000", 308, 7),
     OPERATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     ORDINARY_BOOTSTRAP_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
+    ORDINARY_CASH_TERMINAL_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     IDENTITY_ENROLLMENT_POSSESSION("iroha:kagemusha:v1:app-enrollment-possession\u0000", 371, 11),
     // Native cash selection must correlate exact W/S before selecting this private purpose.
     ORDINARY_PREPARATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8, 2),
@@ -66,6 +67,22 @@ internal fun approveNativeOrdinaryPreparationOriginalV1(prepared: KagemushaNativ
             requireAppPlatformSigningMessageV1(message, purpose)
             check(MessageDigest.isEqual(original, message)) { "The Native-held preparation message changed" }
             signOriginal(alias, generationChallenge, point, keyId, message, policy, purpose, guard)
+        }.copyOf()
+    } finally { original.fill(0) }
+}
+
+/** Real terminal consumer validates the fixed purpose before Main can fsync its OS fence. */
+internal fun approveNativeOrdinaryTerminalOriginalV1(prepared: org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryTerminalApprovalV1,
+    signOriginal: (String, ByteArray, ByteArray, ByteArray, ByteArray, KagemushaAndroidAppKeyHardwarePolicyV1,
+        KagemushaAndroidAppSignaturePurposeV1, () -> Unit) -> ByteArray): ByteArray {
+    val purpose = KagemushaAndroidAppSignaturePurposeV1.ORDINARY_CASH_TERMINAL_APPROVAL
+    val original = prepared.signingBytes()
+    try {
+        requireAppPlatformSigningMessageV1(original, purpose)
+        return prepared.performPlatformSigning { alias, challenge, point, keyId, message, policy, guard ->
+            requireAppPlatformSigningMessageV1(message, purpose)
+            check(MessageDigest.isEqual(original, message)) { "The Native-held terminal message changed" }
+            signOriginal(alias, challenge, point, keyId, message, policy, purpose, guard)
         }.copyOf()
     } finally { original.fill(0) }
 }

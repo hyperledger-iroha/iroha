@@ -5,7 +5,10 @@
 //! open the exact full authorization/finalized-credit originals to its replay envelope. This
 //! component supplies no finalized debit, Native opening loan, global reservation or State grant.
 use super::super::{
-    canonical_preimage::assemble_canonical_preimage_v1,
+    canonical_preimage::{
+        assemble_canonical_preimage_v1, field_stream::framed_hash_v1,
+        stream::KagemushaBoundedByteStreamV1,
+    },
     composite::{assigned_digest_bytes_v1, assigned_uint_bytes_v1},
     guard_bundle::{assign_bytes, constant_bytes, digest_limbs_assigned, hash},
     ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,
@@ -121,8 +124,9 @@ fn framed_hash<F: KagemushaPoseidonFieldV1>(
 }
 
 /// Join the true113 semantic offsets to the actual State and the same private credit openings.
-/// Both active and inactive branches emit the identical canonical-width cipher and 32-byte opening
-/// graphs. Inactive buffers and the entire79-cell semantic prefix are explicitly zero.
+/// Both active and inactive branches emit the same 384-byte capacity and 32-byte opening
+/// graphs. The active canonical original is 327 bytes; inactive buffers, length and the entire
+/// 79-cell semantic prefix are explicitly zero. Transport padding never enters the digest.
 /// The generic cash/Bootstrap approval cannot satisfy this dedicated pre-debit Mint family.
 pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_v1<
     F: KagemushaPoseidonFieldV1,
@@ -139,7 +143,7 @@ pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_
             o.encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
         })
     {
-        return Err("ordinary Mint State full column/cipher capacity differs".into());
+        return Err("ordinary Mint State full column/canonical cipher length differs".into());
     }
     let gate = range.gate();
     let enabled = gate.is_equal(
@@ -280,16 +284,31 @@ pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_
         credit_original,
     )?;
     bytes_if(ctx, range, &credit_digest, digest(22), enabled)?;
-    let ciphertext = opening.map_or_else(
-        || vec![0; KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1],
-        |o| o.encrypted_credit.to_vec(),
-    );
+    let actual = opening.as_ref().map_or(&[][..], |o| o.encrypted_credit);
+    let mut ciphertext = vec![0; KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1];
+    ciphertext[..actual.len()].copy_from_slice(actual);
     let ciphertext = assign_bytes(ctx, range, &ciphertext);
     for byte in &ciphertext {
         let selected = gate.mul(ctx, byte.quantum_cell(), inactive);
         gate.assert_is_const(ctx, &selected, &F::ZERO);
     }
-    let ciphertext_digest = framed_hash(ctx, jobs, b"iroha:kagemusha:v1:ciphertext\0", ciphertext)?;
+    let length = ctx.load_witness(F::from(actual.len() as u64));
+    let selected_length = gate.mul(
+        ctx,
+        enabled,
+        halo2_base::QuantumCell::Constant(F::from(
+            KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1 as u64,
+        )),
+    );
+    ctx.constrain_equal(&length, &selected_length);
+    let ciphertext = KagemushaBoundedByteStreamV1::constrain(ctx, range, ciphertext, length)?;
+    let ciphertext_digest = framed_hash_v1(
+        ctx,
+        range,
+        jobs,
+        b"iroha:kagemusha:v1:ciphertext\0",
+        &ciphertext,
+    )?;
     bytes_if(ctx, range, &ciphertext_digest, digest(25), enabled)?;
     Ok(())
 }

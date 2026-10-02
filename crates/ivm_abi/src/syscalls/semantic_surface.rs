@@ -62,6 +62,10 @@ fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
                     ty: "Quantity",
                 },
                 AbiNamedTypeSurface {
+                    name: "numeric_scale",
+                    ty: "Option<int>",
+                },
+                AbiNamedTypeSurface {
                     name: "metadata",
                     ty: "Json",
                 },

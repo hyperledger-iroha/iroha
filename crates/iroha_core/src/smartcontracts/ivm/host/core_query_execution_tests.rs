@@ -306,7 +306,7 @@ seiyaku DedicatedQueryContract {
     let (is_some, definition_words) =
         read_option_words(&vm, vm.register(10), CoreHost::ASSET_DEFINITION_VIEW_WORDS);
     assert!(is_some);
-    assert_eq!(definition_words.len(), 6);
+    assert_eq!(definition_words.len(), 7);
     let asset_def_out: AssetDefinitionId =
         decode_typed_leaf(&vm, definition_words[0], PointerType::AssetDefinitionId);
     assert_eq!(asset_def_out, asset_def_id);
@@ -323,7 +323,7 @@ seiyaku DedicatedQueryContract {
     );
     let _: AccountId = decode_typed_leaf(&vm, definition_words[3], PointerType::AccountId);
     let _ = decode_quantity_leaf(&vm, definition_words[4]);
-    let _: Json = decode_typed_leaf(&vm, definition_words[5], PointerType::Json);
+    let _: Json = decode_typed_leaf(&vm, definition_words[6], PointerType::Json);
     let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&domain_id));
     host.reset_core_query_page_metrics();
     vm.set_register(10, CoreQueryEntityTagV1::Domain.as_u64());
@@ -773,5 +773,74 @@ fn core_query_page_is_bounded_ordered_and_validates_arguments() {
             host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm),
             Err(ivm::VMError::DecodeError)
         ));
+    }
+}
+
+#[test]
+fn typed_asset_definition_query_returns_native_constrained_and_unconstrained_scale() {
+    for (spec, expected) in [
+        (iroha_primitives::numeric::NumericSpec::integer(), Some(0)),
+        (
+            iroha_primitives::numeric::NumericSpec::fractional(2),
+            Some(2),
+        ),
+        (
+            iroha_primitives::numeric::NumericSpec::fractional(18),
+            Some(18),
+        ),
+        (
+            iroha_primitives::numeric::NumericSpec::unconstrained(),
+            None,
+        ),
+    ] {
+        let authority = fixture_account("alice");
+        let domain_id = DomainId::try_new("precision", "universal").unwrap();
+        let id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "unit".parse().unwrap());
+        let definition = AssetDefinition::new(
+            id.clone(),
+            "unit",
+            spec,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let world = World::with(
+            [Domain::new(domain_id).build(&authority)],
+            [Account::new(authority.clone()).build(&authority)],
+            [definition],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let pointer = store_tlv(&mut vm, PointerType::AssetDefinitionId, &norito_blob(&id));
+        vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
+        vm.set_register(11, pointer);
+        host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
+            .expect("native typed definition query");
+        let (some, words) = ivm::sum::read_words(
+            &vm,
+            vm.register(10),
+            ivm::sum::SumLayoutV1::option(CoreHost::ASSET_DEFINITION_VIEW_WORDS).unwrap(),
+        )
+        .unwrap();
+        assert!(some);
+        let (has_scale, scale_words) =
+            ivm::sum::read_words(&vm, words[5], ivm::sum::SumLayoutV1::option(1).unwrap()).unwrap();
+        assert_eq!(has_scale, expected.is_some());
+        if let Some(scale) = expected {
+            let value = vm.memory.validate_tlv(scale_words[0]).unwrap();
+            assert_eq!(value.type_id, PointerType::Int);
+            assert_eq!(
+                IntValueV1::decode_frame(value.payload).unwrap().into_int(),
+                BigInt::from(scale)
+            );
+        }
     }
 }

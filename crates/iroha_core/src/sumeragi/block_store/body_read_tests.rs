@@ -1,6 +1,7 @@
 //! Actual signed model fixtures projected through the retained stored-body boundary.
 
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::crypto::BlsCrypto;
 use iroha_data_model::{
     block::{CommitCertificate, decode_versioned_signed_block},
@@ -198,13 +199,16 @@ fn stored_result_decode_refusal_retains_original_decoded_owners_and_retries() {
             norito::DecodeLimits::new(96, MAX_RESULT_PREIMAGE_BYTES, usize::MAX, 0, 32),
             || read.poll(&budget),
         );
-        let Err(BodyReadError::Io(error)) = outcome else {
+        let Err(BodyReadError::Deferred(reason)) = outcome else {
             panic!("result decode must refuse locally before projection");
         };
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            reason.reason(),
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        );
         assert!(
-            error.get_ref().is_none(),
-            "resource refusal cannot allocate a replacement boxed diagnostic"
+            reason.allocation_refusal().is_none(),
+            "Norito scopes do not invent a pool"
         );
         let Stage::Decoded(decoded) = &read.stage else {
             panic!("retain the same original decoded source");
@@ -246,7 +250,9 @@ fn malformed_result_preimage_remains_terminal_storage_corruption() {
         .as_ref()
         .clone()
         .with_commit_certificate(Some(certificate));
-    let error = super::super::execution::validate(&changed).unwrap_err();
+    let Attempt::Rejected(error) = super::super::execution::validate(&changed).unwrap_err() else {
+        panic!("malformed result must remain terminal");
+    };
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(matches!(
         error
@@ -275,14 +281,18 @@ fn stored_certificate_allocator_refusal_keeps_original_read_and_retries() {
         refused,
         "the real canonical bitmap decoder must reach the physical allocator"
     );
-    let BodyReadError::Io(error) = result.err().expect("physical decoder allocation refuses")
+    let BodyReadError::Deferred(reason) =
+        result.err().expect("physical decoder allocation refuses")
     else {
         panic!("physical allocation failure must remain an operational refusal");
     };
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(
+        reason.reason(),
+        ivm::error::ExecutionDeferral::AllocationUnavailable
+    );
     assert!(
-        error.get_ref().is_none(),
-        "local refusal must not allocate a boxed diagnostic"
+        reason.allocation_refusal().is_none(),
+        "physical failure cannot invent pool custody"
     );
     let Stage::Certificate(job) = &read.stage else {
         panic!("same original certificate read");

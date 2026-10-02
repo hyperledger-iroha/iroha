@@ -63,4 +63,24 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 203)
+        self.assertEqual(len(names), 208)
+
+    def test_warmed_prefix_checks_have_the_exact_registered_native_owner(self):
+        owners = [row for row in inventory.NATIVE_CORE_TEST_OWNERS
+                  if row[0] == "native certified prefix authority"]
+        self.assertEqual(len(owners), 1)
+        owner = owners[0]
+        self.assertEqual(owner[1:5], (
+            "sumeragi/certified_chain/tests.rs",
+            "sumeragi/certified_chain/prefix_tests.rs",
+            "prefix_tests",
+            "sumeragi::certified_chain::tests::prefix_tests",
+        ))
+        self.assertEqual(owner[-1], (
+            "streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor",
+            "unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader",
+            "streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary",
+            "warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc",
+            "warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal",
+            "standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks",
+        ))

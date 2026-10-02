@@ -311,11 +311,21 @@ fn read_lane_d(image: &Luma, h: &Homography, reference: &Reference) -> Option<La
 }
 
 /// Tries Reed–Solomon with growing numbers of erasures, least confident first.
+///
+/// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes, and for lane `K` also ⅔. Lanes `D` and
+/// `P` stop at ½: their words have only 11 and 13 parity bytes, and a further erasure step leaves
+/// so few spare ones that it accepts wrong codewords (lane `D` at 7 erasures: about 0.4 % of random
+/// words, and 5 wrong lanes in 2 900 simulated harsh frames; lane `P` at 8: 2 wrong lanes in 600
+/// banded 480p frames). Capping them costs 0.65 % of the lane `D` reads and 0.15 % of the lane `P`
+/// reads in those frames.
 fn decode_with_erasures(lane: Lane, word: &[u8], confidence: &[f64]) -> Option<LaneResult> {
     let nsym = lane.parity_len();
     let mut order: Vec<usize> = (0..word.len()).collect();
     order.sort_by(|&a, &b| confidence[a].total_cmp(&confidence[b]));
-    let mut schedule = vec![0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3];
+    let mut schedule = vec![0, nsym / 8, nsym / 4, nsym / 3, nsym / 2];
+    if lane == Lane::K {
+        schedule.push(nsym * 2 / 3);
+    }
     schedule.dedup();
     for erasures in schedule {
         let positions: Vec<usize> = order.iter().copied().take(erasures).collect();
@@ -1011,6 +1021,96 @@ mod tests {
         let decoded = decode(&luma, &DecodeOptions::default()).expect("decodes");
         assert_eq!(decoded.p.as_ref().map(|l| &l.data), Some(&p_data));
         assert_eq!(decoded.k.as_ref().map(|l| &l.data), Some(&k_data));
+    }
+
+    #[test]
+    fn random_words_are_almost_never_accepted() {
+        // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
+        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about
+        // one random word in 250 (150 of these 40 000). Lane P stops at six for the same reason. The counts are exact so that every SDK port,
+        // fed the same xorshift32 words and byte-valued confidences (many ties, so the ranking must
+        // be stable), reproduces the decoder bit for bit.
+        let mut rng = crate::prng::Xorshift32::new(0x5EED);
+        let trials = 40_000;
+        for (lane, expected) in [(Lane::D, 3), (Lane::P, 0)] {
+            let len = lane.data_len() + lane.parity_len();
+            let mut accepted = 0;
+            for _ in 0..trials {
+                let word: Vec<u8> = (0..len).map(|_| rng.next_byte()).collect();
+                let confidence: Vec<f64> = (0..len).map(|_| f64::from(rng.next_byte())).collect();
+                accepted += usize::from(decode_with_erasures(lane, &word, &confidence).is_some());
+            }
+            assert_eq!(accepted, expected, "lane {lane:?} of {trials} random words");
+        }
+    }
+
+    #[test]
+    fn only_lane_k_uses_two_thirds_of_its_parity_as_erasures() {
+        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
+        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+        for (lane, flagged) in [(Lane::D, 7), (Lane::P, 8)] {
+            let data: Vec<u8> = (0..lane.data_len() as u8).collect();
+            let word = crate::lanes::encode_lane(lane, &data);
+            let mut damaged = word.clone();
+            let mut confidence = vec![1.0; word.len()];
+            for position in 0..flagged {
+                damaged[position] ^= 0xA5;
+                confidence[position] = 0.0;
+            }
+            damaged[20] ^= 0x3C;
+            damaged[21] ^= 0x3C;
+            assert!(
+                decode_with_erasures(lane, &damaged, &confidence).is_none(),
+                "lane {lane:?}"
+            );
+            // half the parity flagged plus one hidden error stays comfortably repairable
+            let mut damaged = word;
+            let mut confidence = vec![1.0; damaged.len()];
+            for position in 0..lane.parity_len() / 2 {
+                damaged[position] ^= 0xA5;
+                confidence[position] = 0.0;
+            }
+            damaged[20] ^= 0x3C;
+            let result = decode_with_erasures(lane, &damaged, &confidence).expect("repairable");
+            assert_eq!(result.data, data, "lane {lane:?}");
+            assert!(result.erasures <= lane.parity_len() / 2, "lane {lane:?}");
+        }
+        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+        // (2·7 + 30 = 44 of 45 parity bytes)
+        let data: Vec<u8> = (0..crate::lanes::K_DATA).map(|i| i as u8).collect();
+        let word = crate::lanes::encode_lane(Lane::K, &data);
+        let mut damaged = word;
+        let mut confidence = vec![1.0; damaged.len()];
+        for position in 0..30 {
+            damaged[position] ^= 0xA5;
+            confidence[position] = 0.0;
+        }
+        for byte in &mut damaged[60..67] {
+            *byte ^= 0x3C;
+        }
+        let result = decode_with_erasures(Lane::K, &damaged, &confidence).expect("30 erasures");
+        assert_eq!((result.data, result.erasures), (data, 30));
+    }
+
+    #[test]
+    fn equal_confidences_are_erased_in_position_order() {
+        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
+        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
+        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
+        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
+        // the last positions instead would see seven errors.
+        let data: Vec<u8> = (0..crate::lanes::D_DATA as u8).collect();
+        let mut word = crate::lanes::encode_lane(Lane::D, &data);
+        for position in (0..3).chain(20..24) {
+            word[position] ^= 0x5A;
+        }
+        let confidence = vec![1.0; word.len()];
+        let result = decode_with_erasures(Lane::D, &word, &confidence).expect("ties in order");
+        assert_eq!(
+            (result.data, result.erasures, result.corrected),
+            (data, 3, 7)
+        );
     }
 
     #[test]

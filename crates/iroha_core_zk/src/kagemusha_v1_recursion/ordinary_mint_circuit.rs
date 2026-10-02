@@ -190,18 +190,8 @@ macro_rules! ordinary_circuit {
 ordinary_circuit!(KagemushaOrdinaryMintEqCircuitV1, Fp);
 ordinary_circuit!(KagemushaOrdinaryMintEpCircuitV1, Fq);
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-production-prover",
-    feature = "kagemusha-real-proof-harness"
-))]
 #[path = "ordinary_mint_relation.rs"]
 mod relation;
-#[cfg(any(
-    test,
-    feature = "kagemusha-production-prover",
-    feature = "kagemusha-real-proof-harness"
-))]
 pub(crate) use relation::{
     OrdinaryMintWitnessV1, build_ordinary_mint_ep_v1, build_ordinary_mint_eq_v1,
 };

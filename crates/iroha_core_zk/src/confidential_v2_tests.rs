@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     pub(super) fn full_tree_input_path_v3<const DEPTH: usize>(
         commitment: [u8; 32],
     ) -> super::ConfidentialMerklePathV2 {
@@ -27,7 +26,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn single_input_paths_accept_full_capacity_and_reject_surplus_or_foreign_paths() {
         let commitment = scalar_bytes(41);
@@ -118,7 +116,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn tree_list_optional_input_accepts_full_capacity_without_empty_membership() {
         let tree = vec![scalar_bytes(7); super::CONFIDENTIAL_TREE_CAPACITY_V2];
@@ -138,7 +135,6 @@ mod tests {
         assert_ne!(present.root, absent.root);
     }
 
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn tree_builders_reject_impossible_public_shapes_before_hashing_or_keys() {
         let network = network_id("tree-shape-preflight");
@@ -315,7 +311,6 @@ mod tests {
         };
         assert_redacted_debug(&path, "ConfidentialMerklePathV2");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_opening_debug_redacts_amounts_nonces_and_ownership() {
         let transfer_input = super::ConfidentialTransferInputV2 {
@@ -516,7 +511,6 @@ mod tests {
             "alternate-layout nested STARK wrapper must be rejected"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn scalar_bytes(value: u64) -> [u8; 32] {
         use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
         Fp::from(value)
@@ -525,7 +519,6 @@ mod tests {
             .try_into()
             .expect("Pallas scalar representation")
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn dense_confidential_tree_layers_v3_reference(
         commitments: &[[u8; 32]],
         tree_width: usize,
@@ -554,7 +547,6 @@ mod tests {
         }
         layers
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn canonical_empty_root_constant_matches_poseidon_profile() {
         let computed = super::scalar_to_repr_bytes(
@@ -570,7 +562,6 @@ mod tests {
             computed
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_prefix_roots_match_recursive_profile() {
         let commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
@@ -589,7 +580,6 @@ mod tests {
             assert_eq!(prefix_roots[prefix_len - 1], recursive);
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sparse_confidential_subtree_roots_match_dense_reference() {
         let all_commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
@@ -617,7 +607,6 @@ mod tests {
             }
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn compact_projection_matches_legacy_paths_and_incremental_frontier() {
         let commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
@@ -651,7 +640,6 @@ mod tests {
             assert_eq!(projected.root, legacy.root);
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_frontier_preserves_prefix_shape_and_full_tree_transition() {
         let commitments = (1_u64..=3).map(scalar_bytes).collect::<Vec<_>>();
@@ -718,7 +706,6 @@ mod tests {
         )
         .expect("full tree retains its separately persisted root");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn compact_projection_hashes_each_commitment_once_for_many_paths() {
         let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
@@ -744,7 +731,6 @@ mod tests {
             "path count must not cause another commitment scan"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_frontier_append_work_depends_only_on_batch_and_depth() {
         let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
@@ -775,7 +761,6 @@ mod tests {
         )
         .expect("appended frontier remains self-consistent");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn production_circuit_selectors_reject_noncanonical_aliases() {
         let selectors: [(&str, fn(&str) -> bool); 3] = [
@@ -803,7 +788,6 @@ mod tests {
             assert!(!accepts(&format!("halo2/pasta/{bare}")));
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn retired_single_expression_poseidon_pair_has_constructive_collisions() {
         use halo2_proofs::halo2curves::{
@@ -858,7 +842,6 @@ mod tests {
             0x3333_3333_3333_3333,
         ]);
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn cached_confidential_poseidon_matches_fresh_engine_on_both_pasta_fields() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
@@ -908,7 +891,6 @@ mod tests {
         check::<Fp>();
         check::<Fq>();
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn secure_confidential_poseidon_host_and_chip_match_all_domains_on_both_pasta_fields() {
         use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
@@ -972,7 +954,6 @@ mod tests {
         check::<Fp>();
         check::<Fq>();
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn secure_confidential_poseidon_kats_pin_both_pasta_fields_and_domains() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
@@ -1120,7 +1101,6 @@ mod tests {
             assert_eq!(repr_inputs::<Fq>(domain, inputs), hex32(fq));
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_v3_native_derivations_are_domain_separated_and_fail_closed() {
         use std::collections::BTreeSet;
@@ -1165,7 +1145,6 @@ mod tests {
             super::derive_confidential_nullifier_v3(&spend_key, [0; 32], asset, network).is_err()
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_v2_vk_records_parse_as_matching_circuits() {
         let transfer = super::confidential_transfer_v2_vk_record("vk_transfer", 3)
@@ -1202,7 +1181,6 @@ mod tests {
         super::parse_vk_for_unshield_v3(&unshield_v3.circuit_id, unshield_v3_key)
             .expect("unshield v3 key must parse as confidential unshield v3");
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn supplied_confidential_merkle_path_recomputes_witness_nodes() {
         let commitments = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
@@ -1233,7 +1211,6 @@ mod tests {
             .is_err()
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn next_zero_confidential_path_matches_padded_tree_path() {
         for len in 1usize..12 {
@@ -1274,7 +1251,6 @@ mod tests {
             );
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sequential_append_paths_match_complete_tree_recomputation() {
         for initial_len in 0usize..10 {
@@ -1338,7 +1314,6 @@ mod tests {
             }
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sequential_append_paths_reject_tamper_and_invalid_cardinality() {
         let commitments = vec![scalar_bytes(1001), scalar_bytes(1002)];
@@ -1390,7 +1365,6 @@ mod tests {
             .is_err()
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn canonical_unshield_vk_digests_match_reviewed_goldens() {
         let full = super::confidential_unshield_v2_vk_box().expect("canonical full-unshield vk");
@@ -1408,7 +1382,6 @@ mod tests {
             "canonical verifier-key layout changed; review the circuit/schema version before updating these goldens",
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_transfer_v2_canonical_vk_guard_rejects_self_consistent_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
@@ -1453,27 +1426,6 @@ mod tests {
             "unexpected empty-key error: {err}"
         );
     }
-    #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-    #[test]
-    fn canonical_vk_guards_fail_closed_without_halo2_ipa() {
-        use iroha_data_model::proof::VerifyingKeyBox;
-        let opaque =
-            VerifyingKeyBox::new(crate::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA5; 32]);
-        for result in [
-            super::ensure_confidential_transfer_v2_canonical_vk_box(&opaque),
-            super::ensure_confidential_unshield_v2_canonical_vk_box(&opaque),
-            super::ensure_confidential_unshield_v3_canonical_vk_box(&opaque),
-        ] {
-            let err = result.expect_err(
-                "a build without Halo2/IPA cannot establish canonical verifier-key equality",
-            );
-            assert!(
-                err.contains("requires the Halo2/IPA backend"),
-                "unexpected fail-closed error: {err}"
-            );
-        }
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_transfer_v2_canonical_vk_guard_rejects_malformed_key_preflight() {
         use iroha_data_model::proof::VerifyingKeyBox;
@@ -1486,7 +1438,6 @@ mod tests {
             "unexpected malformed-key error: {err}"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
@@ -1568,7 +1519,6 @@ mod tests {
             "unexpected v3-as-v2 canonical-guard error: {err}"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk() {
         use halo2_proofs::halo2curves::{ff::Field as _, pasta::Fp};
@@ -1692,7 +1642,6 @@ mod tests {
             ),
             "generated one-input one-output confidential transfer v2 proof should verify against the generated VK"
         );
-        #[cfg(feature = "zk-halo2-ipa")]
         {
             const EXACT_BACKEND: &str =
                 "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3";
@@ -1714,10 +1663,7 @@ mod tests {
             >::default(),
         )
         .expect("transfer-shaped verifier key with wrong CID1");
-        assert_ne!(
-            crate::hash_vk(transfer_key),
-            crate::hash_vk(&wrong_cid_key)
-        );
+        assert_ne!(crate::hash_vk(transfer_key), crate::hash_vk(&wrong_cid_key));
         let wrong_cid_error = super::build_confidential_transfer_proof_v2(
             &network_id,
             asset_definition_id,
@@ -1749,7 +1695,6 @@ mod tests {
             "verifier must reject a cryptographically valid proof whose VK CID1 names another circuit"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
         let network_id = network_id(b"confidential-transfer-v2-test-network");
@@ -1841,7 +1786,6 @@ mod tests {
             "generated confidential transfer v2 proof should verify against the generated VK"
         );
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_one_input_two_outputs_verifies_against_generated_vk() {
         let network_id = network_id(b"confidential-transfer-v2-one-input-test-network");

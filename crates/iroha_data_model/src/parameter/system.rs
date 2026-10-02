@@ -462,15 +462,27 @@ mod model {
         pub fn into_custom_parameter(self) -> CustomParameter {
             CustomParameter::new(Self::parameter_id(), Json::new(self))
         }
-        /// Attempt to decode this payload from a [`CustomParameter`].
-        #[must_use]
-        pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
+        /// Decode this payload when the custom parameter names the `NPoS` policy.
+        ///
+        /// A different identifier is absent. A matching identifier retains the original
+        /// decoder error, including a local resource refusal, instead of becoming absent.
+        ///
+        /// # Errors
+        /// The matching payload cannot be decoded or violates the signed policy bounds.
+        pub fn from_custom_parameter(
+            custom: &CustomParameter,
+        ) -> Result<Option<Self>, norito::json::Error> {
             if custom.id != Self::parameter_id() {
-                return None;
+                return Ok(None);
             }
-            let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
-            value.validate().ok()?;
-            Some(value)
+            let value = norito::json::from_str::<Self>(custom.payload().get())?;
+            value
+                .validate()
+                .map_err(|message| norito::json::Error::InvalidField {
+                    field: Self::PARAMETER_ID_STR.to_owned(),
+                    message: message.to_owned(),
+                })?;
+            Ok(Some(value))
         }
         /// Canonical XOR asset authenticated by genesis for this network.
         #[must_use]
@@ -2995,6 +3007,47 @@ mod tests {
         }
     }
     #[test]
+    fn sumeragi_npos_retains_original_decoder_refusal_and_retries_same_bytes() {
+        let expected = SumeragiNposParameters::default();
+        let custom = expected.clone().into_custom_parameter();
+        let original = custom.payload().get().clone();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let error = norito::with_decode_limits_scope(limits, || {
+            SumeragiNposParameters::from_custom_parameter(&custom)
+        })
+        .unwrap_err();
+        assert!(matches!(error, norito::json::Error::DecodeResourceLimit));
+        assert_eq!(custom.payload().get(), &original);
+        assert_eq!(
+            SumeragiNposParameters::from_custom_parameter(&custom).unwrap(),
+            Some(expected)
+        );
+        let foreign =
+            CustomParameter::new("unrelated_parameter".parse().unwrap(), Json::new(false));
+        assert!(
+            norito::with_decode_limits_scope(limits, || {
+                SumeragiNposParameters::from_custom_parameter(&foreign)
+            })
+            .unwrap()
+            .is_none()
+        );
+        let malformed =
+            CustomParameter::new(SumeragiNposParameters::parameter_id(), Json::new(false));
+        assert!(
+            matches!(SumeragiNposParameters::from_custom_parameter(&malformed), Err(error)
+            if !matches!(error, norito::json::Error::DecodeResourceLimit | norito::json::Error::AllocationFailed))
+        );
+        let invalid = SumeragiNposParameters {
+            max_validators: 5,
+            ..SumeragiNposParameters::default()
+        };
+        assert!(matches!(
+            SumeragiNposParameters::from_custom_parameter(&invalid.into_custom_parameter()),
+            Err(norito::json::Error::InvalidField { .. })
+        ));
+    }
+
+    #[test]
     fn sumeragi_npos_rejects_retired_unsupported_election_controls() {
         let expected = SumeragiNposParameters::default();
         let canonical = norito::json::to_value(&expected).expect("canonical NPoS parameters");
@@ -3003,7 +3056,7 @@ mod tests {
             Json::from_norito_value_ref(&canonical).unwrap(),
         );
         assert_eq!(
-            SumeragiNposParameters::from_custom_parameter(&custom),
+            SumeragiNposParameters::from_custom_parameter(&custom).unwrap(),
             Some(expected)
         );
         for field in [
@@ -3022,7 +3075,7 @@ mod tests {
                     Json::from_norito_value_ref(&retired).unwrap(),
                 );
                 assert!(
-                    SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+                    SumeragiNposParameters::from_custom_parameter(&custom).is_err(),
                     "unsupported signed policy {field}={value} must not be ignored"
                 );
             }
@@ -3034,7 +3087,7 @@ mod tests {
         let wrapped = Json::new(norito::json::to_json(&expected).expect("serialize npos payload"));
         let custom = CustomParameter::new(SumeragiNposParameters::parameter_id(), wrapped);
         assert!(
-            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            SumeragiNposParameters::from_custom_parameter(&custom).is_err(),
             "string-wrapped compatibility payload must be rejected"
         );
     }
@@ -3075,7 +3128,7 @@ mod tests {
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
         assert!(
-            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            SumeragiNposParameters::from_custom_parameter(&custom).is_err(),
             "numeric-string compatibility payload must be rejected"
         );
     }
@@ -3102,7 +3155,8 @@ mod tests {
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
         let decoded = SumeragiNposParameters::from_custom_parameter(&custom)
-            .expect("decode hex epoch seed payload");
+            .expect("decode hex epoch seed payload")
+            .expect("matching policy identifier");
         assert_eq!(decoded, expected);
     }
     #[test]
@@ -3128,7 +3182,7 @@ mod tests {
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
         assert!(
-            SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
+            SumeragiNposParameters::from_custom_parameter(&custom).is_err(),
             "nested-quoted compatibility payload must be rejected"
         );
     }
@@ -3142,7 +3196,9 @@ mod tests {
                 .expect("fixture payload should be valid json"),
         );
         assert!(
-            SumeragiNposParameters::from_custom_parameter(&custom).is_some(),
+            SumeragiNposParameters::from_custom_parameter(&custom)
+                .unwrap()
+                .is_some(),
             "real chain payload should decode"
         );
     }

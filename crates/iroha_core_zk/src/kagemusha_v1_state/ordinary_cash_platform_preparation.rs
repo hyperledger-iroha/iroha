@@ -6,8 +6,6 @@ use iroha_data_model::kagemusha::{
     KagemushaOrdinaryPaymentRequestV1, KagemushaOrdinaryPreparedTransitionV1,
 };
 
-pub(super) const ORDINARY_PREPARATION_LIFETIME_MS: u64 = 10_000;
-
 /// Exclusive process-owned borrow of one actual Native cash preparation.
 /// No constructor, clone, decoding or serialized capability exists. Public projections are data only;
 /// monetary proof admission, terminal capture, lineage CAS and outbox release remain separate.

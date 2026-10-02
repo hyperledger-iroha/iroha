@@ -29,7 +29,7 @@ pub use beacon::{
     global_threshold_beacon_pulse_payload_v1, validate_beacon_pulse_shape,
 };
 mod genesis;
-pub use genesis::{genesis_epoch, signed_genesis_consensus_metadata};
+pub use genesis::{GenesisReadError, genesis_epoch, signed_genesis_consensus_metadata};
 mod lane_state_commitment;
 mod native_lanes;
 pub use lane_state_commitment::SumeragiLaneStateCommitment;
@@ -92,6 +92,25 @@ pub const FINALITY_ATTESTATION_DOMAIN: &[u8] = b"iroha:sumeragi-finality-attesta
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("current finality: {0}")]
 pub struct FinalityError(pub String);
+
+/// A portable trust-root read that preserves original JSON and binary decoder failures.
+///
+/// Completed proof checks retain their existing verdict. Decoder errors remain typed so
+/// callers can distinguish surviving local limits from intrinsic format ceilings before
+/// projecting an external response.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum FinalityReadError {
+    /// A completed trust-binding or cryptographic check failed.
+    #[error(transparent)]
+    Invalid(#[from] FinalityError),
+    /// The original signed genesis could not be read or authenticated.
+    #[error(transparent)]
+    Genesis(#[from] GenesisReadError),
+    /// Exact original checkpoint decoder fields, before any caller locality classification.
+    /// Intrinsic format ceilings are not automatically a retryable caller refusal.
+    #[error("checkpoint decoder resource: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
+}
 
 fn need(condition: bool, reason: &str) -> Result<(), FinalityError> {
     if condition {
@@ -311,6 +330,25 @@ pub struct DecodedSumeragiBlock {
 }
 
 impl DecodedSumeragiBlock {
+    /// Compare decoded decision data with an independently authenticated native execution.
+    ///
+    /// This pure equality check does not establish provenance for the offered arguments or
+    /// admit the candidate committee. The Node consumer must obtain every argument from its
+    /// actual consensus-visible committed reader and subsequently verify the portable proof.
+    #[must_use]
+    pub fn matches_native_execution_decision(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        core_hash: [u8; 32],
+        result: [u8; 32],
+        commitment: &ExecutionResultCommitment,
+    ) -> bool {
+        self.block.hash() == *block_hash
+            && self.core_hash.0 == core_hash
+            && self.result.0 == result
+            && &self.commitment == commitment
+    }
+
     /// Structurally checked execution under the proof's candidate committee.
     ///
     /// This accessor does not authenticate the committee or select a trust root.
@@ -597,13 +635,13 @@ impl SumeragiFinalityVerifier {
         trusted_genesis: &SignedBlock,
         chain_id: &str,
         validators: Vec<FinalityValidator>,
-    ) -> Result<Self, FinalityError> {
+    ) -> Result<Self, FinalityReadError> {
         need(
             trusted_genesis.header().is_genesis(),
             "trust root must be signed genesis",
         )?;
         let (crypto, committee) = ProofCrypto::new(&validators)?;
-        let genesis_epoch = genesis_epoch(trusted_genesis).map_err(malformed)?;
+        let genesis_epoch = genesis_epoch(trusted_genesis)?;
         need(
             validators.len() == genesis_epoch.committee.len()
                 && validators
@@ -615,8 +653,7 @@ impl SumeragiFinalityVerifier {
                     }),
             "selected roster differs from signed genesis authority",
         )?;
-        let instance = signed_genesis_consensus_metadata(trusted_genesis)
-            .map_err(malformed)?
+        let instance = signed_genesis_consensus_metadata(trusted_genesis)?
             .sumeragi_context
             .root_scope
             .instance_id(
@@ -646,9 +683,10 @@ impl SumeragiFinalityVerifier {
     /// explicitly; a valid private-root certificate does not grant global parent authority.
     /// # Errors
     /// The retained signed genesis no longer contains valid canonical consensus metadata.
-    pub fn root_scope(&self) -> Result<crate::block::consensus::SumeragiRootScope, FinalityError> {
-        Ok(signed_genesis_consensus_metadata(&self.genesis)
-            .map_err(malformed)?
+    pub fn root_scope(
+        &self,
+    ) -> Result<crate::block::consensus::SumeragiRootScope, GenesisReadError> {
+        Ok(signed_genesis_consensus_metadata(&self.genesis)?
             .sumeragi_context
             .root_scope)
     }

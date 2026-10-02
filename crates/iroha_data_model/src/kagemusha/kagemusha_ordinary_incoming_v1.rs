@@ -19,6 +19,14 @@ pub use preparation::{
     KAGEMUSHA_ORDINARY_INCOMING_PREPARATION_BYTES_V1, KagemushaOrdinaryIncomingPreparationV1,
 };
 
+#[path = "kagemusha_ordinary_incoming_v1/terminal.rs"]
+mod terminal;
+pub use terminal::{
+    KAGEMUSHA_ORDINARY_INCOMING_TERMINAL_BODY_BYTES_V1,
+    KAGEMUSHA_ORDINARY_INCOMING_TERMINAL_INTENT_BYTES_V1, KagemushaOrdinaryIncomingTerminalBodyV1,
+    KagemushaOrdinaryIncomingTerminalIntentV1,
+};
+
 /// Immutable source selectors known before the incoming State proof. Future receiver State
 /// proofs and DATA results are deliberately excluded. Core must authenticate the source fully.
 #[allow(variant_size_differences)]
@@ -44,12 +52,11 @@ pub use preparation::{
 #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1")]
 // Small fixed-size Copy selectors intentionally retain all four Receive digests inline.
 // This bounded canonical model avoids an allocation solely to equalize enum variants.
-#[allow(variant_size_differences)]
 pub enum KagemushaOrdinaryIncomingSourceSelectionV1 {
-    /// Complete unsigned ordinary TopUpRequest after the actual app approval/proof and AEAD.
+    /// Complete unsigned ordinary `TopUpRequest` after the actual app approval/proof and AEAD.
     /// The later Core pre-debit decision/signature and debit/finality are excluded from this SHA.
     Mint {
-        /// SHA256 of the complete sole canonical ordinary TopUpRequest original.
+        /// SHA256 of the complete sole canonical ordinary `TopUpRequest` original.
         topup_request_original_sha256: [u8; 32],
     },
     /// A genuine immutable sender Commit and its independently verified compact Wrapper.
@@ -218,10 +225,10 @@ pub struct KagemushaOrdinaryIncomingReservationV1 {
     pub selection: KagemushaOrdinaryIncomingSelectionV1,
     /// SHA256 of complete finalized Mint funding original or complete received Commit envelope.
     pub finalized_source_original_sha256: [u8; 32],
-    /// SHA256 of the entire independently verified canonical MintCredit original for Mint,
-    /// including both genuine MintAuthority proofs and complete histories; for Receive, the
+    /// SHA256 of the entire independently verified canonical `MintCredit` original for Mint,
+    /// including both genuine `MintAuthority` proofs and complete histories; for Receive, the
     /// exact retained compact sender outgoing carrier. This later selector is excluded from
-    /// the pre-debit IncomingSelection and cannot change the deterministic credit identity.
+    /// the pre-debit `IncomingSelection` and cannot change the deterministic credit identity.
     pub source_proof_original_sha256: [u8; 32],
     /// Exact finalized Mint statement or sender output semantic digest from the genuine source.
     pub source_semantic_digest: [u8; 32],
@@ -242,12 +249,10 @@ impl KagemushaOrdinaryIncomingReservationV1 {
             sender_outgoing_original_sha256,
             ..
         } = self.selection.source
+            && (sender_commit_transport_original_sha256 != self.finalized_source_original_sha256
+                || sender_outgoing_original_sha256 != self.source_proof_original_sha256)
         {
-            if sender_commit_transport_original_sha256 != self.finalized_source_original_sha256
-                || sender_outgoing_original_sha256 != self.source_proof_original_sha256
-            {
-                return Err("ordinary incoming finalized receipt differs from exact source".into());
-            }
+            return Err("ordinary incoming finalized receipt differs from exact source".into());
         }
         Ok(())
     }
@@ -261,7 +266,7 @@ impl KagemushaOrdinaryIncomingReservationV1 {
 }
 /// Incoming whole ordinary State commit. Actual Core must verify both State parities and complete
 /// history, source credit/replay insertion, financial possession and exact predecessor/successor;
-/// then atomically consume credit_id and advance the reserved DATA head before Native effects.
+/// then atomically consume `credit_id` and advance the reserved DATA head before Native effects.
 #[derive(
     Debug,
     Clone,

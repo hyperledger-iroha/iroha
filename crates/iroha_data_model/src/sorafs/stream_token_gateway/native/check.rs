@@ -80,10 +80,6 @@ impl StreamTokenGatewayFinalityFloorV1 {
 /// Admission authenticates historical recovery material. Only Serving asks the native owner
 /// to establish live eligibility for the independently retained physical HTTP serving attempt.
 /// No decoded subject or successful shape check establishes either fact.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "bounded inline gateway claims retain their canonical V1 layout"
-)]
 #[derive(
     Clone,
     Copy,
@@ -193,7 +189,7 @@ pub struct StreamTokenGatewayCheckV1 {
 }
 
 fn record_binding(
-    record: Record,
+    record: &Record,
     gateway: [u8; 32],
     revision: u64,
     digest: [u8; 32],
@@ -210,12 +206,12 @@ fn record_binding(
 }
 
 fn result_binding(
-    result: AdmissionResult,
+    result: &AdmissionResult,
     gateway: [u8; 32],
     revision: u64,
     digest: [u8; 32],
 ) -> Result<(), Error> {
-    record_binding(result.record, gateway, revision, digest)?;
+    record_binding(&result.record, gateway, revision, digest)?;
     let sequence = result.record.outcome.binding.gateway_sequence;
     match result.delivery_state {
         Delivery::Pending {
@@ -236,6 +232,8 @@ impl StreamTokenGatewayCheckV1 {
         revision: u64,
         digest: [u8; 32],
     ) -> Result<(), Error> {
+        use StreamTokenGatewayCheckSubjectV1 as Subject;
+
         self.floor.validate()?;
         let operators = std::collections::BTreeSet::from([self.expected_operator.clone()]);
         let observers = std::collections::BTreeSet::from([self.expected_observer.clone()]);
@@ -245,8 +243,7 @@ impl StreamTokenGatewayCheckV1 {
         {
             return Err(Error::BindingMismatch);
         }
-        use StreamTokenGatewayCheckSubjectV1 as Subject;
-        match self.subject {
+        match &self.subject {
             Subject::Qualification => Ok(()),
             Subject::Admission {
                 request_digest,
@@ -256,7 +253,7 @@ impl StreamTokenGatewayCheckV1 {
                 request_digest,
                 result,
             } => {
-                if request_digest == [0; 32]
+                if *request_digest == [0; 32]
                     || (matches!(self.subject, Subject::Serving { .. })
                         && (result.record.outcome.status
                             != StreamTokenValidationStatusV1::Accepted
@@ -273,8 +270,8 @@ impl StreamTokenGatewayCheckV1 {
                 max_items,
                 readback_digest,
             } => {
-                if !(1..=STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1).contains(&max_items)
-                    || readback_digest == [0; 32]
+                if !(1..=STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1).contains(max_items)
+                    || *readback_digest == [0; 32]
                 {
                     return Err(Error::InvalidRequest);
                 }

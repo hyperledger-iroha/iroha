@@ -910,17 +910,18 @@ impl ExecuteSingularQuery for SingularQueryBox {
     }
 }
 /// Execute through a source-specific ordinary adapter when limits are attached.
-fn execute_iterable_source<T, Q>(
+fn execute_iterable_source<T, Q, E>(
     query: Q,
     predicate: CompoundPredicate<T>,
     params: &QueryParams,
     limits: QueryLimits,
     mode: ordinary_memory::OrdinaryCursorMode,
     state: &impl StateReadOnly,
-) -> Result<(impl Iterator<Item = T>, QueryExecutionStats), Error>
+) -> Result<(impl Iterator<Item = T>, QueryExecutionStats), QueryAttemptError>
 where
     T: NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de> + Send + Sync + 'static,
-    Q: ValidQuery<Item = T> + 'static,
+    Q: ValidQuery<E, Item = T> + 'static,
+    E: Into<QueryAttemptError>,
 {
     ordinary_iterable::execute(
         query,
@@ -2378,7 +2379,7 @@ where
     Ok((first_batch, batch_len, has_more))
 }
 #[cfg(test)]
-fn prepare_stored_unsorted_bounded_replay_start<I, Q>(
+fn prepare_stored_unsorted_bounded_replay_start<I, Q, E>(
     iter: I,
     query: Q,
     predicate: CompoundPredicate<I::Item>,
@@ -2392,7 +2393,8 @@ where
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
-    Q: ValidQuery<Item = I::Item> + Clone + Send + Sync + 'static,
+    Q: ValidQuery<E, Item = I::Item> + Clone + Send + Sync + 'static,
+    E: Into<QueryAttemptError>,
 {
     let (first_batch, batch_len, has_more) =
         collect_unsorted_bounded_page(iter, selector.clone(), params, limits, 0)?;
@@ -2408,7 +2410,9 @@ where
     let continuation = PagedQueryContinuation::new(first_cursor, move |cursor| {
         let state = replay_state.upgrade().ok_or(Error::Expired)?;
         let view = state.query_view();
-        let iter = ValidQuery::execute(query.clone(), predicate.clone(), &view)?;
+        let iter = ValidQuery::execute(query.clone(), predicate.clone(), &view)
+            .map_err(Into::into)
+            .map_err(query_transport_error)?;
         let (batch, batch_len, has_more) = collect_unsorted_bounded_page(
             iter,
             selector.clone(),

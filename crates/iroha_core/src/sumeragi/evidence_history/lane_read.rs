@@ -61,7 +61,7 @@ impl LaneEvidenceRead {
                 }
                 Stage::Consumed => {
                     return Err(NativeEvidenceError::Source(
-                        io::ErrorKind::InvalidData.into(),
+                        std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
                     ));
                 }
             }
@@ -70,7 +70,7 @@ impl LaneEvidenceRead {
     fn open_history(&mut self) -> Result<(), NativeEvidenceError> {
         let Stage::Captured(capture) = std::mem::replace(&mut self.stage, Stage::Consumed) else {
             return Err(NativeEvidenceError::Source(
-                io::ErrorKind::InvalidData.into(),
+                std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
             ));
         };
         match HistoryScan::open_for_evidence(capture, self.scope) {
@@ -87,7 +87,7 @@ impl LaneEvidenceRead {
     fn finish_history(&mut self) -> Result<(), NativeEvidenceError> {
         let Stage::History(history) = std::mem::replace(&mut self.stage, Stage::Consumed) else {
             return Err(NativeEvidenceError::Source(
-                io::ErrorKind::InvalidData.into(),
+                std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
             ));
         };
         // Complete authentication does not waive the ambient decoder field ceiling.
@@ -108,16 +108,16 @@ impl LaneEvidenceRead {
     fn open_native(&mut self) -> Result<(), NativeEvidenceError> {
         let Stage::Context(context) = std::mem::replace(&mut self.stage, Stage::Consumed) else {
             return Err(NativeEvidenceError::Source(
-                io::ErrorKind::InvalidData.into(),
+                std::io::Error::from(std::io::ErrorKind::InvalidData).into(),
             ));
         };
         let frontier = match context.payload.custody_record(&self.scope.incarnation) {
             Ok(row) => row.map(|row| row.frontier()),
             Err(error) => {
                 self.stage = Stage::Context(context);
-                return Err(NativeEvidenceError::Source(super::lane::payload_error(
-                    error,
-                )));
+                return Err(NativeEvidenceError::Source(
+                    crate::sumeragi::runtime_availability::history::payload_error(error),
+                ));
             }
         };
         if frontier.is_some_and(|frontier| {
@@ -182,7 +182,7 @@ mod tests {
             norito::core::DecodeLimits::new(1024, 1, 4096, 0, 32),
             || {
                 assert!(matches!(reader.finish_history(),
-                    Err(NativeEvidenceError::Source(error)) if error.kind() == io::ErrorKind::WouldBlock));
+                    Err(NativeEvidenceError::Source(error)) if error.io_kind() == io::ErrorKind::WouldBlock));
             },
         );
         assert!(
@@ -198,7 +198,7 @@ mod tests {
             || {
                 assert!(
                     matches!(reader.open_native(), Err(NativeEvidenceError::Source(error))
-                if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none())
+                if error.io_kind() == io::ErrorKind::WouldBlock && matches!(error, crate::execution_attempt::ExecutionAttemptError::Deferred(_)))
                 )
             },
         );

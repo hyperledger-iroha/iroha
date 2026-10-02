@@ -1132,10 +1132,19 @@ mod block {
                 None => self.current().get(key),
             }
         }
-
         /// Borrow the value retained in this transaction's original parent root.
         pub fn get_before_transaction(&self, key: &K) -> Option<&V> {
             self.current().get_before(key)
+        }
+
+        /// Iterate keys changed by this transaction or an earlier applied
+        /// transaction in the current block. The undo checkpoint retains both.
+        pub fn changed_keys_in_block(&self) -> impl Iterator<Item = &K> {
+            self.assert_operable();
+            self.revert
+                .as_ref()
+                .expect("live transaction undo root")
+                .keys()
         }
 
         /// Visit touched keys and their original/current values in canonical order.
@@ -1703,6 +1712,30 @@ mod tests {
         let revert = block.revert_map();
         assert!(revert.contains_key(&1));
         assert!(revert.contains_key(&2));
+    }
+    #[test]
+    fn pending_block_keys_include_applied_and_local_but_not_aborted_mutations() {
+        let storage = Storage::<u64, u64>::new();
+        let mut block = storage.block();
+        {
+            let mut first = block.transaction();
+            first.insert(1, 10);
+            first.apply();
+        }
+        {
+            let mut aborted = block.transaction();
+            aborted.insert(2, 20);
+        }
+        let mut current = block.transaction();
+        current.insert(1, 11);
+        current.insert(3, 30);
+        let keys = current
+            .changed_keys_in_block()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys, std::collections::BTreeSet::from([1, 3]));
+        assert_eq!(current.get_before_block(&1), None);
+        assert_eq!(current.get(&2), None);
     }
     #[test]
     fn get_before_block_tracks_first_value_across_direct_mutations() {

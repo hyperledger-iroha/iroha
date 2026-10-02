@@ -1,16 +1,17 @@
 //! Exact source-bound publication without copying the executed proposal or complete payload.
 use super::*;
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use committed_read::certified_source;
 
 impl KuraBlockStore {
-    pub(super) fn write(&self, body: &AvailableBody, qc: &Qc) -> io::Result<()> {
+    pub(super) fn write(&self, body: &AvailableBody, qc: &Qc) -> Result<(), Attempt<io::Error>> {
         if !body.admitted_to(&self.execution_budget)
             || qc
                 .attestation_witness
                 .as_ref()
                 .is_some_and(|w| !w.admitted_to(&self.execution_budget))
         {
-            return Err(invalid("publication uses another allocation pool"));
+            return Err(invalid("publication uses another allocation pool").into());
         }
         let height = body.header().height;
         let source = certified_source(
@@ -22,7 +23,7 @@ impl KuraBlockStore {
             qc,
         )?;
         if body.source() != &source {
-            return Err(invalid("body custody uses another historical authority"));
+            return Err(invalid("body custody uses another historical authority").into());
         }
         let tip = self.height();
         if height <= tip {
@@ -30,12 +31,12 @@ impl KuraBlockStore {
                 .committed_body(height)?
                 .ok_or_else(|| invalid("committed retry has no original frame"))?;
             if stored != *body || original_qc != *qc {
-                return Err(invalid("another committed decision is already stored"));
+                return Err(invalid("another committed decision is already stored").into());
             }
             return Ok(());
         }
         if tip.checked_add(1) != Some(height) {
-            return Err(invalid("publication would leave a committed height gap"));
+            return Err(invalid("publication would leave a committed height gap").into());
         }
         let staged = self
             .staging
@@ -43,15 +44,13 @@ impl KuraBlockStore {
             .ok_or_else(|| invalid("no original executed frame staged for commit"))?;
         let executed = &staged.executed;
         if executed.header().height().get() != height || !executed.has_results() {
-            return Err(invalid(
-                "staged frame has another height or no execution result",
-            ));
+            return Err(invalid("staged frame has another height or no execution result").into());
         }
         let certificate = executed
             .commit_certificate()
             .ok_or_else(|| invalid("staged frame has no commit certificate"))?;
         if !certificate.admitted_to(&self.execution_budget) {
-            return Err(invalid("staged certificate uses another allocation pool"));
+            return Err(invalid("staged certificate uses another allocation pool").into());
         }
         norito::verify_exact_canonical_frame(body.header(), certificate.consensus_header())
             .map_err(codec)?;
@@ -59,19 +58,15 @@ impl KuraBlockStore {
         norito::verify_exact_canonical_frame(body.availability(), certificate.availability())
             .map_err(codec)?;
         if result_of_preimage(certificate.result_preimage()) != qc.result {
-            return Err(invalid(
-                "staged result preimage differs from the certified result",
-            ));
+            return Err(invalid("staged result preimage differs from the certified result").into());
         }
         super::execution::validate(executed)?;
         if !matches_payload(executed, body.payload().as_slice())? {
-            return Err(invalid(
-                "staged proposal differs from the original signed payload",
-            ));
+            return Err(invalid("staged proposal differs from the original signed payload").into());
         }
         self.kura
             .store_block(Arc::clone(executed))
-            .map_err(io::Error::other)
+            .map_err(|error| io::Error::other(error).into())
     }
 }
 fn codec(error: norito::Error) -> io::Error {

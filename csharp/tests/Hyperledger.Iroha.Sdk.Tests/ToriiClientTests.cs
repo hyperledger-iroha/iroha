@@ -14338,10 +14338,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public static IEnumerable<object[]> InvalidToriiTransactionHashResponses()
     {
         yield return new object[] { "contract-call", "tx_hash_hex", ToriiTransactionHashHex[..32] + " " + ToriiTransactionHashHex[32..], "whitespace" };
-        yield return new object[] { "multisig-propose", "tx_hash_hex", ToriiTransactionHashHex + "\u0001", "control characters" };
         yield return new object[] { "multisig-contract-propose", "tx_hash_hex", new string('c', 63), "32-byte hex string" };
         yield return new object[] { "multisig-contract-approve", "tx_hash_hex", new string('g', 64), "32-byte hex string" };
-        yield return new object[] { "multisig-propose", "executed_tx_hash_hex", "0x" + ToriiTransactionHashHex, "32-byte hex string" };
         yield return new object[] { "multisig-contract-approve", "executed_tx_hash_hex", " ", "non-empty 32-byte hex string" };
     }
 
@@ -17973,10 +17971,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("multisig-propose", "multisig response.resolved_multisig_account_id", " sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53", "surrounding whitespace")]
     [InlineData("multisig-contract-propose", "multisig contract-call response.resolved_multisig_account_id", "sorau ﾛ1Nmultisig", "whitespace")]
     [InlineData("multisig-contract-approve", "multisig contract-call response.resolved_multisig_account_id", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53\u0001", "control characters")]
-    [InlineData("multisig-propose", "multisig response.resolved_multisig_account_id", "merchant@sora", "canonical I105")]
     [InlineData("multisig-contract-propose", "multisig contract-call response.resolved_multisig_account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "canonical I105")]
     [InlineData("multisig-contract-approve", "multisig contract-call response.resolved_multisig_account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", "canonical I105")]
     public async Task MultisigResponsesRejectNonExactResolvedAccountIds(
@@ -18002,14 +17998,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidMultisigResolvedAccountPresenceResponses()
     {
-        yield return new object[] { "multisig-propose", MultisigResponseJson("resolved_multisig_account_id", null) };
-        yield return new object[]
-        {
-            "multisig-propose",
-            RemoveTopLevelJsonField(
-                MultisigResponseJson("resolved_multisig_account_id", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"),
-                "resolved_multisig_account_id"),
-        };
         yield return new object[] { "multisig-contract-propose", MultisigResponseJson("resolved_multisig_account_id", null) };
         yield return new object[]
         {
@@ -18265,406 +18253,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task ProposeMultisigAsyncPostsNativeNoritoInstructionFrames()
-    {
-        const string accountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
-        var instructionBase64 = TransactionInstruction
-            .ExecuteTrigger("daily-close")
-            .EncodeInstructionBoxBase64(accountId);
-        var request = new ToriiMultisigProposeRequest
-        {
-            MultisigAccountAlias = "ops@universal",
-            SignerAccountId = accountId,
-            CreationTimeMilliseconds = 123,
-            FeePayment = EmptyAuthorityFeePayment,
-            ValidationFeePolicyVersion = 7,
-            ValidationFeePolicyHash = new string('a', 64),
-            ValidationFeeHijiriFeeQuoteHash = new string('c', 64),
-            ValidationFeeInstructionIndex = 1,
-            ValidationFeeTransferEntryIndex = 2,
-            Instructions = [instructionBase64],
-        };
-        var responseJson = MultisigProposeResponseJsonObject(
-            request,
-            accountId,
-            EmptyAuthorityFeePayment,
-            transactionCreationTimeMilliseconds: 123);
-        var expectedProposalHash = responseJson["proposal_id"]!.GetValue<string>();
-
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/multisig/propose", request.RequestUri!.AbsolutePath);
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("ops@universal", payload.RootElement.GetProperty("multisig_account_alias").GetString());
-            Assert.Equal(accountId, payload.RootElement.GetProperty("signer_account_id").GetString());
-            Assert.Equal((ulong)123, payload.RootElement.GetProperty("creation_time_ms").GetUInt64());
-            Assert.Equal("7", payload.RootElement.GetProperty("validation_fee_policy_version").GetString());
-            Assert.Equal(new string('a', 64), payload.RootElement.GetProperty("validation_fee_policy_hash").GetString());
-            Assert.Equal(new string('c', 64), payload.RootElement.GetProperty("validation_fee_hijiri_fee_quote_hash").GetString());
-            Assert.False(payload.RootElement.TryGetProperty("private_key", out _));
-            Assert.Equal("1", payload.RootElement.GetProperty("validation_fee_instruction_index").GetString());
-            Assert.Equal("2", payload.RootElement.GetProperty("validation_fee_transfer_entry_index").GetString());
-
-            var encodedInstruction = payload.RootElement.GetProperty("instructions")[0].GetString()!;
-            Assert.Equal(instructionBase64, encodedInstruction);
-            var instructionBytes = Convert.FromBase64String(encodedInstruction);
-            Assert.Equal("862a7d77075d4d23ff6c1261db027811", Convert.ToHexString(instructionBytes.AsSpan(6, 16)).ToLowerInvariant());
-
-            return JsonResponse(responseJson.ToJsonString());
-        });
-
-        using var client = BoundToriiClient(handler);
-        var response = await client.ProposeMultisigAsync(
-            request,
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.False(response.Submitted);
-        Assert.Equal(expectedProposalHash, response.ProposalId);
-        Assert.Equal(expectedProposalHash, response.InstructionsHash);
-        Assert.Equal(
-            responseJson["transaction_payload_b64"]!.GetValue<string>(),
-            response.TransactionPayloadBase64);
-        Assert.Equal(
-            responseJson["signing_message_b64"]!.GetValue<string>(),
-            response.SigningMessageBase64);
-        Assert.Equal(EmptyAuthorityFeePayment, response.FeePayment);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncPostsCanonicalAccountSelectorSignerAndFeeSponsor()
-    {
-        var responseFeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId);
-        var request = new ToriiMultisigProposeRequest
-        {
-            MultisigAccountId = CanonicalMultisigAccountId,
-            SignerAccountId = MultisigSignerAccountId,
-            FeePayment = responseFeePayment,
-            Instructions =
-            [
-                TransactionInstruction
-                    .ExecuteTrigger("canonical-account-selector")
-                    .EncodeInstructionBoxBase64(MultisigSignerAccountId),
-            ],
-        };
-        var responseJson = MultisigProposeResponseJsonObject(
-            request,
-            CanonicalMultisigAccountId,
-            responseFeePayment);
-        using var handler = new RecordingHandler(httpRequest =>
-        {
-            var payload = ReadBodyAsJson(httpRequest);
-            Assert.Equal(CanonicalMultisigAccountId, payload.RootElement.GetProperty("multisig_account_id").GetString());
-            Assert.Equal(MultisigSignerAccountId, payload.RootElement.GetProperty("signer_account_id").GetString());
-            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
-
-            return JsonResponse(responseJson.ToJsonString());
-        });
-
-        using var client = BoundToriiClient(handler);
-        var response = await client.ProposeMultisigAsync(
-            request,
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncSnapshotsInstructionListBeforeDispatchAndAccess()
-    {
-        var encodedInstruction = TransactionInstruction
-            .ExecuteTrigger("multisig-snapshot")
-            .EncodeInstructionBoxBase64(MultisigSignerAccountId);
-        string[] instructions = [encodedInstruction];
-        var request = new ToriiMultisigProposeRequest
-        {
-            MultisigAccountId = CanonicalMultisigAccountId,
-            SignerAccountId = MultisigSignerAccountId,
-            FeePayment = EmptyAuthorityFeePayment,
-            Instructions = instructions,
-        };
-        var responseJson = MultisigProposeResponseJsonObject(
-            request,
-            CanonicalMultisigAccountId,
-            EmptyAuthorityFeePayment);
-
-        instructions[0] = "BAUG";
-        var detachedInstructions = Assert.IsType<string[]>(request.Instructions);
-        detachedInstructions[0] = "BwgJ";
-        var storedInstructions = Assert.IsType<string[]>(request.Instructions);
-        Assert.NotSame(detachedInstructions, storedInstructions);
-        Assert.Equal([encodedInstruction], storedInstructions);
-
-        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiMultisigProposeRequest
-        {
-            Instructions = ["AQID", null!],
-        });
-        Assert.Equal("Instructions[1]", nullElementError.ParamName);
-        Assert.Contains("must not be null", nullElementError.Message);
-
-        using var handler = new RecordingHandler(httpRequest =>
-        {
-            instructions[0] = "mutated-in-handler";
-            var payload = ReadBodyAsJson(httpRequest);
-            Assert.Equal(encodedInstruction, payload.RootElement.GetProperty("instructions")[0].GetString());
-            return JsonResponse(responseJson.ToJsonString());
-        });
-
-        using var client = BoundToriiClient(handler);
-        var response = await client.ProposeMultisigAsync(request, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    public static IEnumerable<object[]> InvalidMultisigProposeRequests()
-    {
-        var valid = ValidMultisigProposeRequest();
-        yield return new object[] { valid with { MultisigAccountAlias = null }, "MultisigAccountId", "Provide either" };
-        yield return new object[] { valid with { MultisigAccountId = CanonicalMultisigAccountId }, "MultisigAccountId", "exactly one" };
-        yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "merchant@sora" }, "MultisigAccountId", "canonical I105" };
-        yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "MultisigAccountId", "canonical I105" };
-        yield return new object[] { valid with { MultisigAccountAlias = null, MultisigAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "MultisigAccountId", "canonical I105" };
-        yield return new object[] { valid with { MultisigAccountAlias = " ops@universal" }, "MultisigAccountAlias", "whitespace" };
-        yield return new object[] { valid with { SignerAccountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\u0001" }, "SignerAccountId", "control characters" };
-        yield return new object[] { valid with { SignerAccountId = "merchant@sora" }, "SignerAccountId", "canonical I105" };
-        yield return new object[] { valid with { SignerAccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "SignerAccountId", "canonical I105" };
-        yield return new object[] { valid with { SignerAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "SignerAccountId", "canonical I105" };
-        yield return new object[] { valid with { PublicKeyHex = new string('a', 64) }, "SignatureBase64", "Detached signing requires both" };
-        yield return new object[] { valid with { SignatureBase64 = "AQID" }, "PublicKeyHex", "Detached signing requires both" };
-        yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
-        yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
-        yield return new object[] { valid with { ValidationFeePolicyVersion = 7 }, "ValidationFeePolicyHash", "provided together" };
-        yield return new object[] { valid with { ValidationFeePolicyHash = new string('a', 64) }, "ValidationFeePolicyVersion", "provided together" };
-        yield return new object[] { valid with { ValidationFeeHijiriFeeQuoteHash = new string('c', 64) }, "ValidationFeeHijiriFeeQuoteHash", "requires validation fee policy metadata" };
-        yield return new object[] { valid with { ValidationFeeInstructionIndex = 1 }, "ValidationFeeInstructionIndex", "requires policy metadata" };
-        yield return new object[] { valid with { ValidationFeeTransferEntryIndex = 2 }, "ValidationFeeTransferEntryIndex", "requires policy metadata" };
-        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = "bad" }, "ValidationFeePolicyHash", "32-byte hex string" };
-        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = new string('a', 64), ValidationFeeHijiriFeeQuoteHash = "bad" }, "ValidationFeeHijiriFeeQuoteHash", "32-byte hex string" };
-        yield return new object[] { valid with { ValidationFeePolicyVersion = 7, ValidationFeePolicyHash = new string('a', 64), ValidationFeeTransferEntryIndex = 2 }, "ValidationFeeTransferEntryIndex", "requires an instruction index" };
-        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
-        yield return new object[] { valid with { Instructions = null! }, "Instructions", "cannot be null" };
-        yield return new object[] { valid with { Instructions = [] }, "Instructions", "must not be empty" };
-        yield return new object[] { valid with { Instructions = [" AQID"] }, "Instructions[0]", "whitespace" };
-        yield return new object[] { valid with { Instructions = ["not-base64"] }, "Instructions[0]", "base64 encoded" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidMultisigProposeRequests))]
-    public async Task ProposeMultisigAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiMultisigProposeRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed multisig proposal reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.ProposeMultisigAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
     public void EncodeInstructionBoxBase64RejectsMissingAuthority()
     {
         var instruction = TransactionInstruction.ExecuteTrigger("daily-close");
 
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBoxBase64(""));
         Assert.Throws<ArgumentNullException>(() => instruction.EncodeInstructionBoxBase64(null!));
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncPropagatesToriiRejection()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
-        {
-            Content = new StringContent("""{"error":"malformed native instruction frame"}"""),
-            ReasonPhrase = "Unprocessable Entity",
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var ex = await Assert.ThrowsAsync<ToriiApiException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, ex.StatusCode);
-        var responseBody = Assert.IsType<string>(ex.ResponseBody);
-        Assert.Contains("malformed native instruction frame", responseBody);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsMalformedSuccessResponse()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
-                {
-                  "ok": true,
-                  "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-                  "instructions_hash": {}
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsFalseOkResponse()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
-                {
-                  "ok": false,
-                  "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsEmptySigningMessageResponse()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
-                {
-                  "ok": true,
-                  "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-                  "signing_message_b64": ""
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Theory]
-    [InlineData(" bXVsdGlzaWc=", "surrounding whitespace")]
-    [InlineData("bXVsdGlzaWc= ", "surrounding whitespace")]
-    [InlineData("bXVsdG lzaWc=", "whitespace")]
-    [InlineData("bXVsdGlzaWc=\u00A0", "surrounding whitespace")]
-    [InlineData("bXVsdGlzaWc=\u0001", "control characters")]
-    public async Task ProposeMultisigAsyncRejectsNonExactSigningMessageResponse(
-        string signingMessage,
-        string expectedReason)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
-                {
-                  "ok": true,
-                  "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-                  "signing_message_b64": {{JsonSerializer.Serialize(signingMessage)}}
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("multisig response.signing_message_b64", error.Message);
-        Assert.Contains(expectedReason, error.Message);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidMultisigResponseHashFields))]
-    public async Task ProposeMultisigAsyncRejectsNonExactProposalAndInstructionsHashResponses(
-        string field,
-        string value,
-        string expectedReason)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse(MultisigResponseJson(field, value)));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains($"multisig response.{field}", error.Message);
-        Assert.Contains(expectedReason, error.Message);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsNegativeCreationTimeResponse()
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
-                {
-                  "ok": true,
-                  "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-                  "creation_time_ms": -1
-                }
-                """),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(new ToriiMultisigProposeRequest
-            {
-                MultisigAccountAlias = "ops@universal",
-                SignerAccountId = MultisigSignerAccountId,
-                FeePayment = EmptyAuthorityFeePayment,
-                Instructions = ["AQID"],
-            }, cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -18872,7 +18466,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("propose", "/v1/multisig/propose")]
     [InlineData("approve", "/v1/multisig/approve")]
     [InlineData("cancel", "/v1/multisig/cancel")]
     [InlineData("contract-propose", "/v1/contracts/call/multisig/propose")]
@@ -18896,7 +18489,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("propose", "multisig response", "/v1/multisig/propose")]
     [InlineData("approve", "multisig approval response", "/v1/multisig/approve")]
     [InlineData("cancel", "multisig cancel response", "/v1/multisig/cancel")]
     [InlineData("contract-propose", "multisig contract-call response", "/v1/contracts/call/multisig/propose")]
@@ -18923,74 +18515,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "changed the requested payer, sponsor revision, or gas bound",
             error.Message);
         Assert.Equal(expectedPath, handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncAcceptsQuoteEnrichedFeeChargeLimits()
-    {
-        var quotedFeePayment = FeePaymentIntent.Authority(
-            [new FeeChargeLimit(FeeChargeKind.Nexus, UaidPortfolioAssetDefinitionId, "1")]);
-        var responseJson = MultisigResponseJson(
-            "fee_payment",
-            JsonSerializer.SerializeToNode(quotedFeePayment),
-            transactionFeePayment: quotedFeePayment);
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = BoundToriiClient(handler);
-
-        var response = await client.ProposeMultisigAsync(
-            ValidMultisigProposeRequest(),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(quotedFeePayment, response.FeePayment);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsRehashedExecutableSubstitution()
-    {
-        var request = ValidMultisigProposeRequest();
-        var responseJson = MultisigProposeResponseJsonObject(
-            request,
-            CanonicalMultisigAccountId,
-            EmptyAuthorityFeePayment,
-            transactionInstructions:
-            [
-                TransactionInstruction.ExecuteTrigger("substituted-multisig-action"),
-            ]);
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                request,
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("transaction executable", error.Message);
-        Assert.Contains("exact requested multisig action", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsRehashedMetadataSubstitution()
-    {
-        var request = ValidMultisigProposeRequest();
-        var responseJson = MultisigProposeResponseJsonObject(
-            request,
-            CanonicalMultisigAccountId,
-            EmptyAuthorityFeePayment,
-            transactionMetadata: new Dictionary<string, JsonNode?>
-            {
-                ["substituted"] = true,
-            });
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                request,
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("transaction metadata", error.Message);
-        Assert.Contains("exact request binding", error.Message);
     }
 
     [Fact]
@@ -19061,104 +18585,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Contains("transaction metadata differs", error.Message);
         Assert.Contains("caller-trusted DraftIntent", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsResponseFeeThatDiffersFromTransactionPayload()
-    {
-        var quotedFeePayment = FeePaymentIntent.Authority(
-            [new FeeChargeLimit(FeeChargeKind.Nexus, UaidPortfolioAssetDefinitionId, "1")]);
-        var responseJson = MultisigResponseJson(
-            "fee_payment",
-            JsonSerializer.SerializeToNode(quotedFeePayment));
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = BoundToriiClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                ValidMultisigProposeRequest(),
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("multisig response.fee_payment", error.Message);
-        Assert.Contains("does not match the exact transaction payload", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsTransactionPayloadForAnotherSigner()
-    {
-        var responseJson = MultisigResponseJson(
-            "fee_payment",
-            JsonSerializer.SerializeToNode(EmptyAuthorityFeePayment),
-            transactionSignerAccountId: CanonicalAccountId);
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = BoundToriiClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                ValidMultisigProposeRequest(),
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("transaction authority", error.Message);
-        Assert.Contains("requested signer", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsCreationTimeThatDiffersFromTransactionPayload()
-    {
-        var responseJson = MultisigResponseJson(
-            "creation_time_ms",
-            322,
-            transactionCreationTimeMilliseconds: 321);
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = BoundToriiClient(handler);
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                ValidMultisigProposeRequest(),
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("multisig response.creation_time_ms", error.Message);
-        Assert.Contains("does not match the exact transaction payload", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsCreationTimeThatDiffersFromRequest()
-    {
-        var responseJson = MultisigResponseJson("creation_time_ms", 321);
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                ValidMultisigProposeRequest() with { CreationTimeMilliseconds = 322 },
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("multisig response.creation_time_ms", error.Message);
-        Assert.Contains("not bound to the request", error.Message);
-    }
-
-    [Fact]
-    public async Task ProposeMultisigAsyncRejectsChangedFeeSponsorRevision()
-    {
-        var requestedFeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId);
-        var changedFeePayment = FeePaymentIntent.Sponsor(
-            new FeeSponsorProgramId(MultisigFeeSponsorAccountId, "default"),
-            2,
-            Array.Empty<FeeChargeLimit>());
-        var responseJson = MultisigResponseJson(
-            "fee_payment",
-            JsonSerializer.SerializeToNode(changedFeePayment));
-        using var handler = new RecordingHandler(_ => JsonResponse(responseJson));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.ProposeMultisigAsync(
-                ValidMultisigProposeRequest() with { FeePayment = requestedFeePayment },
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("multisig response.fee_payment", error.Message);
-        Assert.Contains("sponsor revision", error.Message);
-        Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidMultisigContractCallApproveRequests()
@@ -28962,7 +28388,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
-            "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),
             "multisig-contract-approve" => client.ApproveMultisigContractCallAsync(ValidMultisigContractCallApproveRequest()),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown Torii transaction hash response operation."),
@@ -29294,51 +28719,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return response;
     }
 
-    private static JsonObject MultisigProposeResponseJsonObject(
-        ToriiMultisigProposeRequest request,
-        string resolvedMultisigAccountId,
-        FeePaymentIntent responseFeePayment,
-        FeePaymentIntent? transactionFeePayment = null,
-        string? transactionSignerAccountId = null,
-        ulong transactionCreationTimeMilliseconds = 321,
-        IReadOnlyList<TransactionInstruction>? transactionInstructions = null,
-        IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null)
-    {
-        var proposalInstructions = request.Instructions!.ToList();
-        if (request.ValidationFeeInstructionIndex.HasValue)
-        {
-            var message = string.Create(
-                CultureInfo.InvariantCulture,
-                $"iroha:validation_fee:multisig:v1:{request.ValidationFeePolicyVersion!.Value}:{request.ValidationFeePolicyHash}:{request.ValidationFeeHijiriFeeQuoteHash ?? "-"}:{request.ValidationFeeInstructionIndex.Value}:{request.ValidationFeeTransferEntryIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
-            proposalInstructions.Add(new TestMultisigLogInstruction(message)
-                .EncodeInstructionBoxBase64(request.SignerAccountId));
-        }
-        var proposalHash = TestHashMultisigInstructions(proposalInstructions);
-        var outer = TestMultisigProposeInstruction(
-            resolvedMultisigAccountId,
-            proposalInstructions);
-        var draft = MultisigTransactionDraft(
-            transactionSignerAccountId ?? request.SignerAccountId,
-            transactionCreationTimeMilliseconds,
-            transactionFeePayment ?? responseFeePayment,
-            transactionInstructions ?? [outer],
-            transactionMetadata ?? TestMultisigProposeMetadata(request));
-        return new JsonObject
-        {
-            ["ok"] = true,
-            ["resolved_multisig_account_id"] = resolvedMultisigAccountId,
-            ["submitted"] = false,
-            ["proposal_id"] = proposalHash,
-            ["instructions_hash"] = proposalHash,
-            ["tx_hash_hex"] = null,
-            ["executed_tx_hash_hex"] = null,
-            ["creation_time_ms"] = transactionCreationTimeMilliseconds,
-            ["fee_payment"] = JsonSerializer.SerializeToNode(responseFeePayment),
-            ["transaction_payload_b64"] = draft.TransactionPayloadBase64,
-            ["signing_message_b64"] = draft.SigningMessageBase64,
-        };
-    }
-
     private static JsonObject MultisigApprovalResponseJsonObject(
         string signerAccountId,
         string resolvedMultisigAccountId,
@@ -29425,20 +28805,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string MultisigResponseJson(
-        string field,
-        object? value,
-        string? transactionSignerAccountId = null,
-        ulong transactionCreationTimeMilliseconds = 321,
-        FeePaymentIntent? transactionFeePayment = null)
+    private static string MultisigResponseJson(string field, object? value)
     {
-        var response = MultisigProposeResponseJsonObject(
-            ValidMultisigProposeRequest(),
-            CanonicalMultisigAccountId,
-            EmptyAuthorityFeePayment,
-            transactionFeePayment,
-            transactionSignerAccountId,
-            transactionCreationTimeMilliseconds);
+        var response = JsonSerializer.SerializeToNode(ValidMultisigResponse())!.AsObject();
         response[field] = JsonValueForMultisig(value);
         return response.ToJsonString();
     }
@@ -29554,33 +28923,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             }
         }
         return $"hash:{body}#{checksum:X4}";
-    }
-
-    private static IReadOnlyDictionary<string, JsonNode?> TestMultisigProposeMetadata(
-        ToriiMultisigProposeRequest request)
-    {
-        var metadata = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
-        if (request.ValidationFeePolicyVersion.HasValue)
-        {
-            metadata["validation_fee_policy_version"] = request.ValidationFeePolicyVersion.Value;
-            metadata["validation_fee_policy_hash"] = request.ValidationFeePolicyHash;
-            if (request.ValidationFeeHijiriFeeQuoteHash is not null)
-            {
-                metadata["validation_fee_hijiri_fee_quote_hash"] =
-                    request.ValidationFeeHijiriFeeQuoteHash;
-            }
-            if (request.ValidationFeeInstructionIndex.HasValue)
-            {
-                metadata["validation_fee_instruction_index"] =
-                    request.ValidationFeeInstructionIndex.Value;
-            }
-            if (request.ValidationFeeTransferEntryIndex.HasValue)
-            {
-                metadata["validation_fee_transfer_entry_index"] =
-                    request.ValidationFeeTransferEntryIndex.Value;
-            }
-        }
-        return metadata;
     }
 
     private sealed record class TestMultisigCustomInstruction(JsonNode Payload)
@@ -31046,22 +30388,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static ToriiMultisigProposeRequest ValidMultisigProposeRequest()
-    {
-        return new ToriiMultisigProposeRequest
-        {
-            MultisigAccountAlias = "ops@universal",
-            SignerAccountId = MultisigSignerAccountId,
-            FeePayment = EmptyAuthorityFeePayment,
-            Instructions =
-            [
-                TransactionInstruction
-                    .ExecuteTrigger("multisig-default")
-                    .EncodeInstructionBoxBase64(MultisigSignerAccountId),
-            ],
-        };
-    }
-
     private static ToriiMultisigContractCallProposeRequest ValidMultisigContractCallProposeRequest()
     {
         return new ToriiMultisigContractCallProposeRequest
@@ -31123,7 +30449,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "approve" => client.ApproveMultisigAsync(ValidMultisigApproveRequest()),
             "cancel" => client.CancelMultisigAsync(ValidMultisigCancelRequest()),
             "contract-propose" => client.ProposeMultisigContractCallAsync(

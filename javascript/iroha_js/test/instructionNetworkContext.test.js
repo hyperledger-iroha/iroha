@@ -10,7 +10,6 @@ import {
 import { NetworkId } from "../src/networkId.js";
 import { _createTransactionApi } from "../src/transaction.js";
 import { createValidationFeeConsensusApi } from "../src/validationFeeConsensus.js";
-import { createValidationFeeHijiriQuoteApi } from "../src/validationFeeHijiriQuote.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 
@@ -110,12 +109,9 @@ test("fee verification binds every projection to the selected prefix before ente
   const runtime = createNativeRuntime({
     connectNoritoBridgeAbiVersion: () => 25,
     validationFeeCurrentPolicyProofRequestV1() {},
-    validationFeeHijiriQuoteRequestV1() {},
     validationFeeVerifyCurrentPolicyProofV1(...args) { calls.push(["policy", args.at(-1)]); throw stop; },
-    validationFeeVerifyHijiriQuoteResponseV1(...args) { calls.push(["quote", args.at(-1)]); throw stop; },
   });
   const policy = createValidationFeeConsensusApi(runtime);
-  const quote = createValidationFeeHijiriQuoteApi(runtime);
   const binding = {
     schema: "iroha.validation-fee-ledger-binding.v1",
     networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)),
@@ -124,13 +120,11 @@ test("fee verification binds every projection to the selected prefix before ente
   };
   for (const prefix of [undefined, null, "369", 369n, -1, 65536, 0.5, NaN, Infinity]) {
     assert.throws(() => policy.verifyValidationFeeCurrentPolicyProofV1(Buffer.of(1), binding, binding.checkpoint, prefix), /networkPrefix/);
-    assert.throws(() => quote.verifyValidationFeeHijiriQuoteResponseV1(Buffer.of(1), Buffer.of(2), prefix), /networkPrefix/);
   }
   assert.deepEqual(calls, []);
   for (const prefix of [0, 369, 753, 65535, 369]) {
     assert.throws(() => policy.verifyValidationFeeCurrentPolicyProofV1(Buffer.of(1), binding, binding.checkpoint, prefix), (error) => error === stop);
-    assert.throws(() => quote.verifyValidationFeeHijiriQuoteResponseV1(Buffer.of(1), Buffer.of(2), prefix), (error) => error === stop);
-    assert.deepEqual(calls.splice(0), [["policy", prefix], ["quote", prefix]]);
+    assert.deepEqual(calls.splice(0), [["policy", prefix]]);
   }
 });
 
@@ -149,7 +143,6 @@ test("client contexts are caller-selected and missing codec context fails before
   const browser = new ToriiBrowserClient("https://example.invalid", { fetchImpl });
   await assert.rejects(browser.submitMultisigPropose({ instructions: [] }), /networkPrefix/);
   const full = new ToriiClient("https://example.invalid", { fetchImpl });
-  await assert.rejects(full.quoteValidationFeeHijiri("unused", 1, {}), /localSigningContext/);
   await assert.rejects(full.getValidationFeeCurrentPolicyProofPage({}, null, {}), /localSigningContext/);
   assert.equal(requests, 0);
 });

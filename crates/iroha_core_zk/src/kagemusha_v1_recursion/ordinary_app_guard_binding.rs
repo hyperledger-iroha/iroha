@@ -445,8 +445,8 @@ mod tests {
             hardware_epoch_generation: 1,
             operation_kind: KagemushaOperationKindV1::MintFold,
             transition_statement_digest: [9; 32],
-            candidate_envelope_digest: [0; 32],
-            terminal_body_commitment: [0; 32],
+            candidate_envelope_digest: [17; 32],
+            terminal_body_commitment: [18; 32],
             secure_index_before: index,
             secure_index_after: index + 1,
         };
@@ -459,8 +459,12 @@ mod tests {
             authority_policy_digest: [13; 32],
             attested_key_id: [14; 32],
             enrollment_digest: [15; 32],
-            subject_signing_digest: Sha256::digest(subject.canonical_signing_bytes().unwrap())
-                .into(),
+            subject_signing_digest: Sha256::digest(
+                subject
+                    .canonical_ordinary_incoming_terminal_signing_bytes()
+                    .unwrap(),
+            )
+            .into(),
             normalized_guard_digest: [16; 32],
             issued_at_ms: 1000,
             expires_at_ms: 121_000,
@@ -492,7 +496,7 @@ mod tests {
         // Public synthetic model bytes only. These tests authenticate no certificate or wallet.
         let mut expected = original();
         let mut wrapper = expected.canonical_signing_bytes().unwrap();
-        let mut subject = expected.subject.canonical_signing_bytes().unwrap();
+        let mut subject = expected.canonical_subject_signing_bytes().unwrap();
         if let Some(selector) = zero_native_scope {
             // Match both copies to zero, so refusal must come from the relation's nonzero
             // admission rather than a mismatching independently selected original.
@@ -538,7 +542,7 @@ mod tests {
         // S is independently derived from the retained financial State/Guard in production.
         // Pin it here to the selected original so recomputed digest substitution exercises that
         // same essential copy boundary, without pretending this synthetic fixture is a State.
-        let selected_subject = expected.subject.canonical_signing_bytes().unwrap();
+        let selected_subject = expected.canonical_subject_signing_bytes().unwrap();
         for (actual, selected) in actual_subject.iter().zip(selected_subject) {
             range
                 .gate()

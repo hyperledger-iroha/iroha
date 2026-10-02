@@ -337,8 +337,10 @@ fn signed_quantity_source_without_execution_context_is_rejected_before_execution
     let error = block
         .execute_ordinary_output_plan(&missing, None)
         .unwrap_err();
-    assert!(matches!(error, ExecutionAttemptError::Rejected(reason)
-            if reason == "Network source has an invalid execution context"));
+    assert!(
+        matches!(error, super::ExecutionOutputAttemptError::Owner(reason)
+            if reason == "Network source has an invalid execution context")
+    );
     assert_eq!(block.committed_fragment_count(), fragments);
     assert_eq!(
         block.world.assets.get(&alice).unwrap().as_ref(),

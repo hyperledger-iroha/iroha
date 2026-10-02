@@ -288,7 +288,11 @@ The reference algorithm, which the golden captures are calibrated to:
 
    Words for lanes `P` and `K` come from the level read; any lane that does not decode is retried with the words of the
    normalised read.
-6. **Reed–Solomon with erasures.** Rank bytes by confidence and retry with 0, ⅛, ¼, ⅓, ½, ⅔ of the parity as erasures.
+6. **Reed–Solomon with erasures.** Rank bytes by confidence, least confident first, with ties in position order (a stable sort:
+   the weak tiles of step 5 all have confidence 0), and retry with 0, ⅛, ¼, ⅓ and ½ of the parity bytes as erasures (integer
+   division: lane `D` 0, 1, 2, 3, 5; lane `P` 0, 1, 3, 4, 6; lane `K` 0, 5, 11, 15, 22), and for lane `K` only also ⅔ (30).
+   Lanes `D` and `P` stop at ½: with 11 and 13 parity bytes, a further erasure step leaves so few spare ones that it lets wrong
+   codewords through (§11).
 
 The constants above are what the ports use; they may be tuned together with the fixtures. Decoding is not bit-reproducible
 across platforms (it uses the platform's `sin`, `cos`, `exp` and `atan2`, and `f32` slot centres): conformance means the
@@ -314,7 +318,7 @@ Per-frame decode rates (60 random poses per row, rotation 0–360°, tilt up to 
 | 720p tilt ≤ 25° / 35° / 45° | 100 / 100 / 92 % | same | 100 / 98 / 88 % | same |
 | 480p, 6.7–9.1 px/tile, σ 1.2 px | 100 % | 100 % | 0 % | 100 % |
 | 480p, 9.7–9.8 px/tile, σ 1.2 px | 100 % | 100 % | 37–40 % | 100 % |
-| 480p defocus σ 2.6 / 3.2 px | 100 % | 100 / 70 % | 0 % | 100 % |
+| 480p defocus σ 2.6 / 3.2 px | 100 % | 100 / 68 % | 0 % | 100 % |
 | harshest preset (480p, σ 1.7, tilt, bloom, ambient 10 %, barrel) | 100 % | 97 % | 0 % | 100 % |
 
 Light and motion that are not nominal (`stress` example, 40 poses per cell; each cell lists a modern 720p / a legacy 720p /
@@ -326,10 +330,10 @@ the harshest 480p camera; light levels are fractions of the lit level; hand shak
 | auto-exposure gain 1.5× / 2× too high | 100 / 98–100 / 0 % | 100 / 78–100 / 0 % | 100 / 100 / 100 % |
 | auto-exposure gain 3× too high | 100 / 12 / 0 % | 100 / 0 / 0 % | 100 / 100 / 100 % |
 | illumination gradient equal to the lit level | 100 / 100 / 0 % | 100 / 90 / 0 % | 100 / 100 / 2 % |
-| glare 0.5 × lit, σ 120 px | 100 / 98 / 2 % | 100 / 100 / 0 % | 100 / 100 / 90 % |
-| glare 1.0 × lit, σ 120 px | 92 / 45 / 0 % | 92 / 42 / 0 % | 75 / 52 / 8 % |
-| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 12 % | 100 / 98 / 0 % | 100 / 100 / 100 % |
-| banding 50 % deep, 80 px period | 22 / 2 / 0 % | 8 / 0 / 0 % | 98 / 90 / 15 % |
+| glare 0.5 × lit, σ 120 px | 100 / 98 / 2 % | 100 / 100 / 0 % | 98 / 98 / 88 % |
+| glare 1.0 × lit, σ 120 px | 92 / 45 / 0 % | 92 / 42 / 0 % | 70 / 50 / 8 % |
+| banding (display PWM) 30 % deep, 30 px period | 100 / 100 / 10 % | 100 / 98 / 0 % | 100 / 100 / 100 % |
+| banding 50 % deep, 80 px period | 20 / 2 / 0 % | 8 / 0 / 0 % | 98 / 88 / 12 % |
 | hand shake 4 px | 100 / 100 / 85 % | 60 / 12 / 0 % | 100 / 100 / 100 % |
 | hand shake 9 px | 100 / 100 / 30 % | 0 / 0 / 0 % | 100 / 100 / 100 % |
 
@@ -404,9 +408,12 @@ Implementations: Rust (`crates/iroha_petal`, `iroha offline petal`), Swift (`Iro
 * Frames are untrusted input. Decoders bound their work (`max_pixels` 12 MP, payload limit, bounded buffers) and never panic
   on malformed images; garbage fixtures are part of the suite.
 * Reed–Solomon decoding with erasures can accept a word that is not a transmission: measured on uniformly random words, one
-  decode attempt accepts about 0.4 % of lane `D` (its 7-erasure step leaves four spare parity bytes), 0.002 % of lane `P` and none
-  of lane `K`. The stream layer absorbs that: lane headers carry the stream tag (a stranger passes with probability 1/256) and
-  the payload CRC-32C is verified before delivery, so a false accept costs at most an integrity reset, never a wrong payload.
+  decoding of a lane accepts 0.015 % of lane `D`, under 0.001 % of lane `P` and none of lane `K`. (Lane `D` used to try a
+  seventh erasure and lane `P` an eighth; the first accepted 0.4 % of random words and cost five wrong lanes in 2 900 simulated
+  harsh frames, the second two wrong lanes in 600 banded 480p frames. After the caps there were none, for 0.65 % fewer `D` and
+  0.15 % fewer `P` lanes read.) The stream layer absorbs what is left: lane headers carry the stream
+  tag (a stranger passes with probability 1/256) and the payload CRC-32C is verified before delivery, so a false accept costs at
+  most an integrity reset, never a wrong payload.
 * The payload CRC-32C and the Reed–Solomon codes detect corruption, not forgery. A screen in front of the camera can always show
   garbage or a different stream; the application must authenticate the payload (KAGEMUSHA messages carry their own proofs and
   signatures) and must not treat a completed Petal stream as authentic.

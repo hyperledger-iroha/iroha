@@ -74,6 +74,7 @@ pub(crate) fn signed_genesis(scope: SumeragiRootScope) -> iroha_data_model::bloc
     .build_raw()
     .unwrap()
     .with_consensus_meta()
+    .expect("valid fixture consensus parameters")
     .build_and_sign(&iroha_test_samples::ALICE_KEYPAIR)
     .unwrap()
     .0

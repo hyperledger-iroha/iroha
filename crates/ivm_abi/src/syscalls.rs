@@ -4039,6 +4039,7 @@ mod tests {
                         ("description", "Option<String>"),
                         ("owned_by", "AccountId"),
                         ("total_quantity", "Quantity"),
+                        ("numeric_scale", "Option<int>"),
                         ("metadata", "Json"),
                     ]
                 ),

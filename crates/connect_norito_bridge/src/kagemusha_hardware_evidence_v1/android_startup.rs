@@ -20,7 +20,7 @@ const CLOCK_ASSET: &str = "kagemusha/hardware-evidence-native-clock-selection.no
 static STARTUP: Mutex<Option<Startup>> = Mutex::new(None);
 
 #[path = "android_package.rs"]
-mod android_package;
+pub(crate) mod android_package;
 use android_package::*;
 
 struct Startup {

@@ -19,6 +19,38 @@ impl StateTransaction<'_, '_> {
             Some(output_capacity::ExecutionOutputPlanState::Poisoned);
     }
 
+    #[cfg(test)]
+    pub(crate) fn retail_fee_transcripts_for_test(&self) -> &[TransferTranscript] {
+        &self.pending_transfer_transcripts
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retail_fee_source_kind_for_test(&self, hash: &Hash) -> bool {
+        self.pending_fastpq_source_captures.sources().unwrap()[hash].is_protocol_purpose()
+    }
+
+    /// Capture native deductions before the next principal occurrence is prepared.
+    /// Transaction deductions share their signed call identity; idle settlement binds
+    /// its protocol purpose to the immutable fee receipt ID. These entries are created
+    /// only by consensus fee collection, never from caller-supplied metadata.
+    ///
+    /// # Errors
+    ///
+    /// Source capture or quota reservation fails; the attempt is poisoned.
+    pub(crate) fn flush_retail_fee_transfer_transcripts(&mut self) -> Result<(), Error> {
+        for (authority, receipt_hash, delta) in
+            core::mem::take(&mut self.world.retail_fee_pending_transcripts)
+        {
+            let purpose = self.tx_call_hash.unwrap_or(receipt_hash);
+            let occurrence = self.prepare_transfer_occurrence(&authority, purpose, vec![delta]);
+            if let Some(occurrence) = &occurrence {
+                self.reserve_transfer_occurrence(occurrence)?;
+            }
+            self.stage_transfer_occurrence(occurrence);
+        }
+        Ok(())
+    }
+
     fn prepare_transfer_occurrence(
         &self,
         authority: &AccountId,
@@ -141,6 +173,7 @@ impl StateTransaction<'_, '_> {
         deltas: Vec<TransferDeltaTranscript>,
         apply: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.flush_retail_fee_transfer_transcripts()?;
         let occurrence = self.prepare_transfer_occurrence(authority, batch_hash, deltas);
         if let Some(occurrence) = &occurrence {
             self.reserve_transfer_occurrence(occurrence)?;
@@ -192,6 +225,7 @@ impl StateTransaction<'_, '_> {
             &mut dyn FnMut(&mut Self, TransferDeltaTranscript) -> Result<(), Error>,
         ) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.flush_retail_fee_transfer_transcripts()?;
         let capture = self.fastpq_source_context.capture_transcript(
             self.tx_call_hash,
             batch_hash,

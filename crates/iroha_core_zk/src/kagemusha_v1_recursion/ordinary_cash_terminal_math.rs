@@ -45,7 +45,7 @@ use super::super::{
     ordinary_send_output_opening::{
         OrdinarySendOutputSourcesV1, constrain_ordinary_send_output_opening_v1,
     },
-    ordinary_state_reserved::constrain_ordinary_state_reserved_guard_positions_v1,
+    ordinary_state_reserved::constrain_ordinary_state_outer_protocol_positions_v1,
     state_relation::{self, KagemushaStateRelationWitnessV1, public_instance as state_slot},
     terminal_authorization::constrain_candidate_envelope_digest_v1,
     typed_sha_consumer::{
@@ -72,7 +72,8 @@ use halo2_base::{
     utils::{BigPrimeField, CurveAffineExt},
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_ORDINARY_OUTPUT_BINDING_DOMAIN_V1,
+    KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1, KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1,
+    KAGEMUSHA_ORDINARY_OUTPUT_BINDING_DOMAIN_V1,
     KAGEMUSHA_ORDINARY_TERMINAL_GUARD_COMMIT_DOMAIN_V1, KagemushaAppOperationApprovalV1,
     KagemushaCreditOpeningV1, KagemushaHardwarePlatformClassV1,
     KagemushaHardwareSelectionSigningLayoutV1 as S, KagemushaOrdinaryAppCredentialV1,
@@ -346,7 +347,7 @@ pub(in super::super) fn assign_ordinary_cash_terminal_semantics_v1<F: KagemushaP
                 credit_opening,
             } if send => {
                 if !receiver.enabled
-                    || encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1
+                    || encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
                 {
                     return Err(
                         "ordinary Send requires actual receiver and encrypted originals".into(),
@@ -465,11 +466,24 @@ pub(in super::super) fn assign_ordinary_cash_terminal_semantics_v1<F: KagemushaP
     if state_semantic.len() != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
         return Err("ordinary Terminal assigned State semantic shape differs".into());
     }
-    constrain_ordinary_state_reserved_guard_positions_v1(
+    constrain_ordinary_state_outer_protocol_positions_v1(
         &mut builder,
         [state_semantic[44], state_semantic[45]],
         [state_semantic[46], state_semantic[47]],
     );
+    // The State consumed here is the actual OUTER pair. Both purposes use the same exact
+    // release-held outer protocol cells, rather than caller-supplied credential-audit padding.
+    for (actual, expected) in [
+        (44, state_slot::EQ_PROTOCOL_LO),
+        (46, state_slot::EP_PROTOCOL_LO),
+    ] {
+        for limb in 0..2 {
+            builder.main(0).constrain_equal(
+                &state_semantic[actual + limb],
+                &state_semantic[expected + limb],
+            );
+        }
+    }
     let predecessor = source
         .state
         .predecessor

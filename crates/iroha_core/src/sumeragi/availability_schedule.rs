@@ -1,5 +1,6 @@
 //! Historical availability authority supplied by the node's authenticated schedule owner.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use std::io;
 
 use iroha_sumeragi::{
@@ -21,7 +22,7 @@ pub trait AvailabilitySchedule: Send + Sync {
     ///
     /// # Errors
     /// Historical state is corrupt, cannot be authenticated, or cannot be read.
-    fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>>;
+    fn height_config(&self, height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>>;
 }
 
 /// Bind caller-selected identity to the independent historical schedule before any disk read.
@@ -31,12 +32,13 @@ pub(super) fn resolve_source(
     instance: Hash32,
     height: u64,
     block_hash: Hash32,
-) -> io::Result<Option<AvailabilitySource>> {
+) -> Result<Option<AvailabilitySource>, Attempt<io::Error>> {
     if schedule.instance() != instance {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "availability schedule belongs to another instance",
-        ));
+        )
+        .into());
     }
     let Some(config) = schedule.height_config(height)? else {
         return Ok(None);
@@ -48,6 +50,7 @@ pub(super) fn resolve_source(
                 io::ErrorKind::InvalidData,
                 format!("invalid historical availability source: {error:?}"),
             )
+            .into()
         })
 }
 
@@ -65,12 +68,13 @@ mod tests {
         fn instance(&self) -> Hash32 {
             self.instance
         }
-        fn height_config(&self, _height: u64) -> io::Result<Option<HeightConfig>> {
+        fn height_config(&self, _height: u64) -> Result<Option<HeightConfig>, Attempt<io::Error>> {
             if self.fail {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "corrupt authenticated prefix",
-                ));
+                )
+                .into());
             }
             Ok(self.config.clone())
         }

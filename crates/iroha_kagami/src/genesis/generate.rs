@@ -78,7 +78,7 @@ fn append_lane_policy(
         .into_builder()
         .append_parameter(Parameter::Custom(policy.into_custom_parameter()))
         .build_raw()?
-        .with_consensus_meta())
+        .with_consensus_meta()?)
 }
 
 pub(super) fn load_kagemusha_mint_finality_parameters(
@@ -497,14 +497,16 @@ fn append_public_xor_binding(
     let mut npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| color_eyre::eyre::eyre!("public XOR requires the signed NPoS snapshot"))?;
     npos.xor_asset_definition_id = asset_definition_id.clone();
     let mut builder = genesis
         .into_builder()
         .append_parameter(Parameter::Custom(npos.into_custom_parameter()));
     if has_domain && has_asset_definition && alias_bound {
-        return Ok(builder.build_raw()?.with_consensus_meta());
+        return Ok(builder.build_raw()?.with_consensus_meta()?);
     }
     builder = builder.next_transaction();
     if !has_domain {
@@ -530,7 +532,7 @@ fn append_public_xor_binding(
             ),
         );
     }
-    Ok(builder.build_raw()?.with_consensus_meta())
+    Ok(builder.build_raw()?.with_consensus_meta()?)
 }
 fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
     if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
@@ -917,7 +919,10 @@ mod consensus_manifest_tests {
         let npos = parameters
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()
+            .expect("valid fixture NPoS parameters")
+            .flatten()
             .expect("signed NPoS parameters");
         assert_eq!(
             parameters.sumeragi().block_cadence_ms(),
@@ -1296,5 +1301,5 @@ fn generate_synthetic(
         }
     }
     let manifest = builder.build_raw()?.with_consensus_mode(consensus_mode);
-    Ok(manifest.with_consensus_meta())
+    Ok(manifest.with_consensus_meta()?)
 }

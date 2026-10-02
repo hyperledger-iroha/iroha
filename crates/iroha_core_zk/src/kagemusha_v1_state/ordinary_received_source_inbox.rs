@@ -95,6 +95,29 @@ impl KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_> {
         Ok(self.source()?.originals.operation_id)
     }
 
+    /// Lend the genuine received proof together with its exact historical Main RequestCapture.
+    /// Its original C, PI, previous counter and both signed clocks stay separate from fresh W2.
+    /// No decoded request, caller credential or replacement lease creates this historical loan.
+    pub(crate) fn with_received_source_and_request(
+        &self,
+        visitor: &mut dyn for<'loan, 'owner> FnMut(
+            &'loan KagemushaVerifiedOrdinaryReceivedCashOutputV1,
+            &'loan KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'owner>,
+        ) -> Result<(), KagemushaStateErrorV1>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_source_custody()?;
+        let request = receiver_request::loan_main_request_historical(self.owner, self.request_id)?;
+        let source = &self.source()?.admitted;
+        if source.request_original() != request.request_original()?
+            || source.receiver_credential_digest()
+                != request.enrollment()?.app_credential().digest()
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        visitor(source, &request)?;
+        request.recheck_historical_custody()?;
+        self.recheck_source_custody()
+    }
     /// Lend the real AEAD opening only inside a higher-ranked proof-witness construction call.
     /// The key never leaves Main. This source opening is not an incoming financial approval.
     pub(crate) fn with_borrowed_received_credit_opening(
@@ -134,9 +157,14 @@ impl KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1<'_> {
 }
 
 impl ReceivedSourceOriginals {
-    fn encoded(&self) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+    fn encoded(&self, maximum_payload_bytes: u64) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        if u64::try_from(norito::canonical_frame_len(self).map_err(material)?).map_err(material)?
+            > maximum_payload_bytes
+        {
+            return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
+        }
         let raw = norito::encode_canonical(self).map_err(material)?;
-        if raw.is_empty() || raw.len() as u64 > FORMAT.maximum_payload_bytes {
+        if raw.is_empty() || raw.len() as u64 > maximum_payload_bytes {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
         Ok(raw)
@@ -209,7 +237,7 @@ impl ReceivedSourceOriginals {
             .checked_add(u64::try_from(intake_clock_bytes.len()).map_err(material)?)
             .and_then(|v| v.checked_add(4096))
             .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
-        if self.encoded()?.len() as u64 > maximum {
+        if self.encoded(owner.maximum_record_payload_bytes)?.len() as u64 > maximum {
             return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
         }
         Ok(())
@@ -466,7 +494,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         used = used
-            .checked_add(next.encoded()?.len() as u64 + 256)
+            .checked_add(next.encoded(self.maximum_record_payload_bytes)?.len() as u64 + 256)
             .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         if used > self.capacity.inbox_bytes || self.received_sources.len() >= MAX_ROWS as usize {
             return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
@@ -478,7 +506,10 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     pub(super) fn retained_received_source_capacity_charge(
         &self,
     ) -> Result<u64, KagemushaStateErrorV1> {
-        let mut total = 0u64;
+        let mut total = self
+            .retained_incoming_commit_capacity_charge()?
+            .checked_add(self.retained_incoming_receive_suffix_capacity()?)
+            .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         for (request_id, source) in &self.received_sources {
             if *request_id != source.originals.request_id
                 || !self
@@ -489,7 +520,13 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             }
             source.originals.require_admitted(self, &source.admitted)?;
             total = total
-                .checked_add(source.originals.encoded()?.len() as u64 + 256)
+                .checked_add(
+                    source
+                        .originals
+                        .encoded(self.maximum_record_payload_bytes)?
+                        .len() as u64
+                        + 256,
+                )
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         Ok(total)
@@ -510,5 +547,75 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         };
         loan.recheck_source_custody()?;
         Ok(loan)
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn require_held_received_incoming_source(
+        &self,
+        request_id: DigestV1,
+        reservation: &iroha_data_model::kagemusha::KagemushaOrdinaryIncomingReservationV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let source = self
+            .received_sources
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        source.originals.require_admitted(self, &source.admitted)?;
+        let request = self
+            .retained_receiver_requests
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let expected =
+            iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1::Receive {
+                sender_commit_transport_original_sha256: source
+                    .admitted
+                    .received_assertion_original_sha256(),
+                sender_outgoing_original_sha256: Sha256::digest(
+                    source.admitted.outgoing_original(),
+                )
+                .into(),
+                recipient_request_original_digest: source.admitted.output().request_digest,
+                encrypted_credit_original_sha256: Sha256::digest(
+                    source.admitted.encrypted_credit(),
+                )
+                .into(),
+            };
+        if reservation.selection.source != expected
+            || reservation.selection.operation_id != source.originals.operation_id
+            || reservation.selection.credit_id != source.admitted.credit_id()
+            || reservation.selection.amount != source.admitted.amount()
+            || request.captured.original() != source.admitted.request_original()
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    /// Exact held source/key framing charge, without a current State/head reinterpretation.
+    pub(super) fn held_received_source_capacity_charge(
+        &self,
+        request_id: DigestV1,
+    ) -> Result<u64, KagemushaStateErrorV1> {
+        let source = self
+            .received_sources
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let key = self
+            .retained_receiver_requests
+            .get(&request_id)
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let key_bytes = key.captured.reservation().capacity_charge_bytes()?;
+        u64::try_from(
+            source
+                .originals
+                .encoded(self.maximum_record_payload_bytes)?
+                .len(),
+        )
+        .map_err(material)?
+        .checked_add(256)
+        .and_then(|n| n.checked_add(key_bytes))
+        .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)
     }
 }

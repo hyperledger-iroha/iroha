@@ -40,9 +40,9 @@ const FIELDS: &[Field] = &[
     actual_field("world.musubi_public_directory"),
 ];
 const READERS: &[TableMaterializer] = &[
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Availability),
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Resolver),
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Directory),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Availability),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Resolver),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Directory),
 ];
 
 fn state() -> State {
@@ -230,5 +230,19 @@ fn semantic_catalog_keeps_exact_order_and_complete_state_required_schema_gate() 
         capture_tables_once(&state, FIELDS, READERS, policy())
             .unwrap()
             .is_some()
+    );
+}
+
+#[test]
+fn static_semantic_selectors_preserve_exact_closed_catalog_without_allocation() {
+    assert_eq!(
+        crate::test_allocations::allocations_during(|| {
+            for (reader, expected) in READERS.iter().zip(FIELDS) {
+                let mut ids = reader.table_ids();
+                assert_eq!(ids.next(), Some(expected.id));
+                assert_eq!(ids.next(), None);
+            }
+        }),
+        0
     );
 }

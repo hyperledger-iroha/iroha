@@ -138,14 +138,15 @@ provider-validation length check; reviewed follow-up repairs are applied. Both
 complete active/inactive mint binding controls pass, but the full mint relation
 exceeds the unchanged production SHA row capacity at K=16. The Musubi original-State
 source and final three semantic table readers are applied; native compilation
-exposes a read-trait mismatch and test callback error, both repaired for the
-five-crate rerun. Full-State capture still rejects its unresolved verifier schema.
+exposes a read-trait mismatch and test callback error, both repaired. The next
+catalog enum-size lint is repaired; native rerunning waits for the separately
+owned merge to finish. Full-State capture still rejects its unresolved verifier schema.
 All nine crypto admission controls pass, including 44 fresh-process checks across
 all 11 algorithms with no Rust allocation requests. Ongoing unrelated
 edits mean these are artifact diagnostics,
 not qualification of one fixed source candidate.
 
-Fresh Linux privacy builds pass. All 50 private-dispatch controls and the four
+Fresh Linux privacy builds pass. All 54 private-dispatch controls and the four
 full-domain X509 oracles pass. The obsolete composite-test expectation is repaired
 and its rerun passes. The five-channel SPKI source repair passes all six native
 controls. All eight TBS/CRL/signature controls and complete source-lookup replay
@@ -154,7 +155,9 @@ all five selected-disclosure controls pass. Its full RFC namespace has 119 passe
 and four stale profile/descriptor/histogram failures. Complete Name OID census and
 uniqueness are applied but await native validation; full value/string policy
 remains open. Corrected private multiply fixtures now
-pass all four controls. The zero-suffix FFT repair passes native parity, but its measured
+pass all four controls. All eight public bit-count controls pass, including the
+maximum proof; the run's late merge-state guard fails and that overall failure
+is retained. Conditional moves await native validation. The zero-suffix FFT repair passes native parity, but its measured
 large-domain gains do not establish the complete proof's time target.
 Current complete proof, resource and cryptographic qualification remain unavailable.
 
@@ -181,11 +184,21 @@ remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact bounda
 
 KAGEMUSHA component coverage includes journal recovery, issuer-key and
 enrollment-floor controls, expired-preparation custody, Guard-generation and
-reciprocal claim-carrier binding. The non-test real-proof frontend, strict privacy
-lint and complete ordinary suite remain under qualification. SDK native-custody
-and assembly tools have explicit feature/target owners; FASTPQ uses the existing
-STARK feature. Current dependency costs and the native proving context remain
-under review.
+reciprocal claim-carrier binding. Primary-owner Privacy library strict lint passes
+with defaults, `privacy-release-evidence` and
+`privacy-release-evidence,test-utils` in an unchanged source/Git interval.
+The current debug-profile Privacy libtest build and all 22 selected controls
+pass. Its registry contains 2,479 tests, including 61 ignored cases; independent
+framing of all 29 native profile fields matches the current source pin. Genuine
+IO, Projection and CA proof checks, the optimized constructor and maximum proof
+with external time/RSS evidence, the full ordinary suite, upstream strict lint
+and merged-source qualification remain open. The non-test real-proof frontend
+remains under qualification. SDK Native custody and genuine production proving
+are mandatory even with SDK defaults disabled; assembly tools remain explicit
+`dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
+CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
+Current source budgets pass with the updated developer-tool manifest fingerprint;
+current native frontend and proof qualification remain open.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit

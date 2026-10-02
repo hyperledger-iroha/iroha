@@ -5,30 +5,12 @@ import {
   resolveNativeRuntimeBinding,
 } from "./nativeRuntime.js";
 
-const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
-
 function nativeFunction(nativeRuntime, name, rustName) {
   const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native?.[name] !== "function") {
     throw new Error(`native binding '${rustName}' is unavailable`);
   }
   return native[name];
-}
-
-function exactLifecycleProposalId(value) {
-  if (value === null) {
-    return null;
-  }
-  if (typeof value !== "string" || !LOWER_HEX_32.test(value)) {
-    throw new TypeError(
-      "payoutLifecycleProposalId must be null or exactly 64 lowercase hexadecimal digits",
-    );
-  }
-  const bytes = Buffer.from(value, "hex");
-  if (bytes.every((byte) => byte === 0)) {
-    throw new TypeError("payoutLifecycleProposalId must be non-zero");
-  }
-  return bytes;
 }
 
 function exactJsonObject(value, name) {
@@ -73,11 +55,10 @@ export function createValidationFeeProposalApi(nativeRuntime) {
   function computePolicy(
     proposalOperator,
     policy,
-    payoutLifecycleProposalId = null,
   ) {
-    if (arguments.length < 2 || arguments.length > 3) {
+    if (arguments.length !== 2) {
       throw new TypeError(
-        "computeValidationFeePolicyProposalFingerprintV1 accepts exactly two or three arguments",
+        "computeValidationFeePolicyProposalFingerprintV1 accepts exactly two arguments",
       );
     }
     const fingerprint = nativeFunction(
@@ -87,7 +68,6 @@ export function createValidationFeeProposalApi(nativeRuntime) {
     )(
       exactProposalOperator(proposalOperator),
       exactJsonObject(policy, "policy"),
-      exactLifecycleProposalId(payoutLifecycleProposalId),
     );
     return exactFingerprint(fingerprint, "validation-fee policy");
   }
@@ -127,22 +107,17 @@ const DEFAULT_VALIDATION_FEE_PROPOSAL_API =
  *
  * @param {string} proposalOperator canonical domainless transaction authority
  * @param {Record<string, unknown>} policy
- * @param {string | null} [payoutLifecycleProposalId]
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
   proposalOperator,
   policy,
-  payoutLifecycleProposalId = null,
 ) {
   const compute =
     DEFAULT_VALIDATION_FEE_PROPOSAL_API
       .computeValidationFeePolicyProposalFingerprintV1;
   if (arguments.length === 2) {
     return compute(proposalOperator, policy);
-  }
-  if (arguments.length === 3) {
-    return compute(proposalOperator, policy, payoutLifecycleProposalId);
   }
   return Reflect.apply(compute, DEFAULT_VALIDATION_FEE_PROPOSAL_API, arguments);
 }

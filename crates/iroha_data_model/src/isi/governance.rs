@@ -268,8 +268,6 @@ impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
 pub struct ProposeValidationFeePolicy {
     /// Complete policy to append if Parliament certifies it.
     pub policy: ValidationFeePolicyV1,
-    /// Exact enacted payout lifecycle required when the policy carries a payout binding.
-    pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
 }
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
 /// Propose one exact validation-fee payout lifecycle through SORA Parliament.
@@ -563,7 +561,6 @@ impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
 });
 impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     policy: ValidationFeePolicyV1,
-    payout_lifecycle_proposal_id: Option<[u8; 32]>,
 });
 impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,

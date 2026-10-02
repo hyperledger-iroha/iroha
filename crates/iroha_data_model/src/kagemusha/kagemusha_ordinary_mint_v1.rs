@@ -438,6 +438,8 @@ impl KagemushaOrdinaryMintApprovalChallengeV1 {
     /// Bind exact pre-debit scope, without granting State/debit/Native authority.
     /// # Errors
     /// Refuses substituted statement, C, original FI decision or clock interval.
+    // The funding approval credential is the mint context recipient app credential.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_against_statement(
         &self,
         statement: &KagemushaOrdinaryMintAuthorizationStatementV1,
@@ -533,10 +535,7 @@ impl KagemushaOrdinaryMintApprovalV1 {
         match (s.platform_class, independent_apple_counter_floor) {
             (KagemushaHardwarePlatformClassV1::AndroidKeyMint, None) => (),
             (KagemushaHardwarePlatformClassV1::AppleAppAttest, Some(floor))
-                if floor >= s.app_attest_counter_floor =>
-            {
-                ()
-            }
+                if floor >= s.app_attest_counter_floor => {}
             _ => return Err("ordinary mint original counter floor differs".into()),
         }
         self.evidence.authenticate_signature(
@@ -693,7 +692,7 @@ impl KagemushaOrdinaryMintAuthorizationV1 {
         )
     }
     /// Reconstruct the neutral finalized Mint statement data from actual finalized debit time.
-    /// Calling this data helper supplies no ledger finality or MintAuthority proof.
+    /// Calling this data helper supplies no ledger finality or `MintAuthority` proof.
     /// # Errors
     /// Refuses malformed authorization or finalized neutral lifecycle statement shape.
     pub fn finalized_credit_statement(
@@ -1248,6 +1247,40 @@ mod tests {
         let mut substituted = request;
         substituted.authorization.proof.eq_proof[0] ^= 1;
         assert!(substituted.verify_account_signature(&signature).is_err());
+    }
+    #[test]
+    fn ordinary_mint_ciphertext_uses_exact_canonical_envelope_not_transport_capacity() {
+        let (_, context, _) = make_context(false);
+        let (statement, raw) = make_statement(context);
+        assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
+        assert_eq!(super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 384);
+        assert!(raw.len() < super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1);
+        statement.validate_encrypted_credit(&raw).unwrap();
+        let envelope =
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &raw,
+                statement.context.recipient_one_time_key,
+            )
+            .unwrap();
+        assert_eq!(
+            envelope
+                .canonical_bytes_against_recipient_key(statement.context.recipient_one_time_key)
+                .unwrap(),
+            raw,
+        );
+        // Padding to the unchanged transport cap is not a canonical original.
+        let mut padded = raw.clone();
+        padded.resize(super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
+        assert!(statement.validate_encrypted_credit(&padded).is_err());
+        for end in 0..raw.len() {
+            assert!(statement.validate_encrypted_credit(&raw[..end]).is_err());
+        }
+        let mut suffix = raw.clone();
+        suffix.push(0);
+        assert!(statement.validate_encrypted_credit(&suffix).is_err());
+        let mut changed_digest = statement.clone();
+        changed_digest.ciphertext_digest[0] ^= 1;
+        assert!(changed_digest.validate_encrypted_credit(&raw).is_err());
     }
 }
 

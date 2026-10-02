@@ -443,8 +443,9 @@ fn main_deep_composition_v1(
     ))
 }
 
-/// Check every complete MAIN relation using only verifier-owned context.
+/// Check isolated MAIN component fixtures using only verifier-owned context.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(test)]
 pub(super) fn verify_main_deep_constraints_v1(
     layout: &AggregateProofLayoutV1,
     deep: &aggregate::AggregateDeepProofV1,

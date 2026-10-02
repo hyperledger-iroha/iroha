@@ -440,6 +440,8 @@ fn core_query_view_nodes_name(nodes: &[EntrypointValueTypeNodeV1]) -> Option<(&s
             Node::Leaf(Kind::String),
             Node::Leaf(Kind::AccountId),
             Node::Leaf(Kind::Quantity),
+            Node::Option,
+            Node::Leaf(Kind::Int),
             Node::Leaf(Kind::Json),
             ..,
         ] if view.name == "AssetDefinitionView"
@@ -450,10 +452,11 @@ fn core_query_view_nodes_name(nodes: &[EntrypointValueTypeNodeV1]) -> Option<(&s
                     "description",
                     "owned_by",
                     "total_quantity",
+                    "numeric_scale",
                     "metadata",
                 ] =>
         {
-            Some((view.name.as_str(), 8))
+            Some((view.name.as_str(), 10))
         }
         [
             Node::Struct(view),
@@ -1638,6 +1641,38 @@ mod tests {
             ],
         }
     }
+    fn asset_definition_view_schema() -> EntrypointValueTypeV1 {
+        use EntrypointValueKindV1 as Kind;
+        use EntrypointValueTypeNodeV1 as Node;
+        EntrypointValueTypeV1 {
+            nodes: vec![
+                Node::Struct(EntrypointStructTypeNodeV1 {
+                    name: "AssetDefinitionView".into(),
+                    fields: [
+                        "id",
+                        "name",
+                        "description",
+                        "owned_by",
+                        "total_quantity",
+                        "numeric_scale",
+                        "metadata",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                }),
+                Node::Leaf(Kind::AssetDefinitionId),
+                Node::Leaf(Kind::String),
+                Node::Option,
+                Node::Leaf(Kind::String),
+                Node::Leaf(Kind::AccountId),
+                Node::Leaf(Kind::Quantity),
+                Node::Option,
+                Node::Leaf(Kind::Int),
+                Node::Leaf(Kind::Json),
+            ],
+        }
+    }
     fn query_page_schema(view: &EntrypointValueTypeV1) -> EntrypointValueTypeV1 {
         let mut nodes = vec![
             EntrypointValueTypeNodeV1::Struct(EntrypointStructTypeNodeV1 {
@@ -2148,6 +2183,62 @@ mod tests {
         ));
     }
     #[test]
+    fn asset_definition_precision_schema_roundtrips_and_rejects_old_or_forged_shapes() {
+        use EntrypointValueKindV1 as Kind;
+        use EntrypointValueTypeNodeV1 as Node;
+        let view = asset_definition_view_schema();
+        assert_eq!(view.word_count(), Some(7));
+        assert_eq!(
+            view.canonical_type_name().as_deref(),
+            Some("AssetDefinitionView")
+        );
+        for schema in [view.clone(), query_page_schema(&view)] {
+            assert!(schema.validate());
+            let bytes = norito::to_bytes(&schema).expect("encode native precision schema");
+            assert_eq!(
+                norito::decode_from_bytes::<EntrypointValueTypeV1>(&bytes).unwrap(),
+                schema
+            );
+            let json = norito::json::to_string(&schema).unwrap();
+            assert_eq!(
+                norito::json::from_str::<EntrypointValueTypeV1>(&json).unwrap(),
+                schema
+            );
+        }
+        let assert_rejected = |label: &str, malformed: EntrypointValueTypeV1| {
+            assert!(!malformed.validate(), "{label}");
+            assert_eq!(malformed.word_count(), None, "{label}");
+            assert_eq!(malformed.canonical_type_name(), None, "{label}");
+            assert!(!query_page_schema(&malformed).validate(), "paged {label}");
+            let json = norito::json::to_string(&malformed).unwrap();
+            assert!(
+                norito::json::from_str::<EntrypointValueTypeV1>(&json).is_err(),
+                "JSON {label}"
+            );
+        };
+        let mut retired = view.clone();
+        let Node::Struct(root) = &mut retired.nodes[0] else {
+            unreachable!()
+        };
+        root.fields.remove(5);
+        retired.nodes.drain(7..9);
+        assert_rejected("retired six-field definition", retired);
+        for kind in [Kind::Decimal, Kind::Quantity, Kind::String] {
+            let mut forged = view.clone();
+            forged.nodes[8] = Node::Leaf(kind);
+            assert_rejected("non-int precision", forged);
+        }
+        let mut required_scale = view.clone();
+        required_scale.nodes.remove(7);
+        assert_rejected("missing precision option", required_scale);
+        let mut reordered = view;
+        let Node::Struct(root) = &mut reordered.nodes[0] else {
+            unreachable!()
+        };
+        root.fields.swap(5, 6);
+        assert_rejected("reordered precision field", reordered);
+    }
+    #[test]
     fn every_reserved_query_projection_has_one_exact_flat_shape() {
         use EntrypointValueKindV1 as Kind;
         use EntrypointValueTypeNodeV1 as Node;
@@ -2163,28 +2254,7 @@ mod tests {
                     Node::Leaf(Kind::Quantity),
                 ],
             },
-            EntrypointValueTypeV1 {
-                nodes: vec![
-                    Node::Struct(EntrypointStructTypeNodeV1 {
-                        name: "AssetDefinitionView".into(),
-                        fields: vec![
-                            "id".into(),
-                            "name".into(),
-                            "description".into(),
-                            "owned_by".into(),
-                            "total_quantity".into(),
-                            "metadata".into(),
-                        ],
-                    }),
-                    Node::Leaf(Kind::AssetDefinitionId),
-                    Node::Leaf(Kind::String),
-                    Node::Option,
-                    Node::Leaf(Kind::String),
-                    Node::Leaf(Kind::AccountId),
-                    Node::Leaf(Kind::Quantity),
-                    Node::Leaf(Kind::Json),
-                ],
-            },
+            asset_definition_view_schema(),
             EntrypointValueTypeV1 {
                 nodes: vec![
                     Node::Struct(EntrypointStructTypeNodeV1 {

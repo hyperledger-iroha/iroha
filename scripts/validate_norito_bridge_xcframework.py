@@ -155,8 +155,9 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
-    "connect_norito_validation_fee_hijiri_quote_request_v1",
-    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    "connect_norito_retail_fee_intent_hash_v1",
+    "connect_norito_retail_fee_assessment_marker_v1",
+    "connect_norito_retail_fee_assessment_decode_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
@@ -187,6 +188,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -201,6 +203,8 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_top_up_signed_request_validate_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
+    "connect_norito_validation_fee_hijiri_quote_request_v1",
+    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_kagemusha_device_response_authenticator_v1_verify",
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",

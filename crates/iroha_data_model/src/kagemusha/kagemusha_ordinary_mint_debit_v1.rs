@@ -43,7 +43,7 @@ pub const KAGEMUSHA_ORDINARY_MINT_DEBIT_DECISION_SIGNING_DOMAIN_V1: &[u8] =
 pub struct KagemushaOrdinaryMintDebitDecisionV1 {
     /// Sole first-release version.
     pub version: u16,
-    /// Exact acyclic full selector, including full unsigned TopUpRequest SHA and predecessor.
+    /// Exact acyclic full selector, including full unsigned `TopUpRequest` SHA and predecessor.
     pub selection: KagemushaOrdinaryIncomingSelectionV1,
     /// Exact independently selected full FI issuer policy digest, also required by Node World grant.
     pub issuer_policy_digest: [u8; 32],
@@ -165,8 +165,7 @@ impl KagemushaOrdinaryMintDebitDecisionV1 {
         if &self.selection != selection
             || self.selection.lineage.owner.runtime != issuer.runtime
             || self.issuer_policy_digest
-                != kagemusha_ordinary_retail_issuer_policy_digest_v1(issuer)
-                    .map_err(|e| e.to_string())?
+                != kagemusha_ordinary_retail_issuer_policy_digest_v1(issuer)?
             || self.issued_at_ms < issuer.valid_from_ms
             || self.expires_at_ms > issuer.expires_at_ms
         {
@@ -338,7 +337,7 @@ mod tests {
             issued_at_ms: 1000,
             expires_at_ms: 1100,
         };
-        let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let key = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         assert_eq!(key.public_key(), &policy.issuer_public_key);
         let signature = Signature::new(
             key.private_key(),
@@ -391,7 +390,7 @@ mod tests {
     #[test]
     fn ordinary_mint_issuer_decision_other_purpose_time_and_noncanonical_refusal() {
         let (policy, signed) = original();
-        let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let key = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let mut wrong_purpose = signed.clone();
         wrong_purpose.signature = Signature::new(
             key.private_key(),
@@ -438,6 +437,27 @@ mod tests {
         .expect_err("bound checked before decode");
     }
     #[test]
+    fn ordinary_mint_issuer_decision_refuses_separate_app_and_core_enrollment_signers() {
+        let (policy, signed) = original();
+        signed
+            .verify_for_selection(&signed.subject.selection, &policy)
+            .unwrap();
+        // The retained fixture separates app authority61, Core enrollment63 and FI issuer64.
+        // Signing the exact complete Mint message cannot upgrade either unrelated role.
+        let message = signed.subject.issuer_signing_message().unwrap();
+        for seed in [61, 63] {
+            let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            assert_ne!(key.public_key(), &policy.issuer_public_key);
+            let mut other_role = signed.clone();
+            other_role.signature = Signature::new(key.private_key(), &message);
+            other_role
+                .verify_for_selection(&signed.subject.selection, &policy)
+                .expect_err(
+                    "another actual fixture role cannot sign the selected FI Mint decision",
+                );
+        }
+    }
+    #[test]
     fn ordinary_mint_issuer_decision_pins_complete_unsigned_topup_original() {
         let f = crate::testing::ordinary_mint::kagemusha_ordinary_mint_codec_fixture_v1();
         let context = &f.request.authorization.statement.context;
@@ -464,7 +484,7 @@ mod tests {
         subject.release_id = context.release_id;
         subject.issuer_policy_digest =
             kagemusha_ordinary_retail_issuer_policy_digest_v1(policy).unwrap();
-        let key = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let key = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let signed = KagemushaSignedOrdinaryMintDebitDecisionV1 {
             signature: Signature::new(
                 key.private_key(),

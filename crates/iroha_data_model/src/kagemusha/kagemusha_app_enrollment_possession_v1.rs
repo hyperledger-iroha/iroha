@@ -285,10 +285,11 @@ impl KagemushaVerifiedAppEnrollmentPossessionV1 {
             || s.security_level != self.raw_subject.security_level
             || s.attested_key_id != self.challenge.attested_key_id
             || s.platform_evidence_digest != self.platform_evidence_digest
-            || match self.app_attest_counter {
-                Some(counter) => s.app_attest_counter_floor != counter,
-                None => s.app_attest_counter_floor != 0,
-            }
+            || self
+                .app_attest_counter
+                .map_or(s.app_attest_counter_floor != 0, |counter| {
+                    s.app_attest_counter_floor != counter
+                })
         {
             return Err("ordinary credential differs from joined possession originals".into());
         }
@@ -482,7 +483,7 @@ mod tests {
             attested_key_id: Sha256::digest(key.as_sec1_bytes()).into(),
             raw_platform_evidence_digest: [11; 32],
             issued_at_ms: 1000,
-            expires_at_ms: 121000,
+            expires_at_ms: 121_000,
         }
     }
     fn joined_fixture(
@@ -673,6 +674,8 @@ mod tests {
 
     #[test]
     fn possession_formatter_and_alias_retain_original_c_scope_and_reject_other_roles() {
+        use p256::ecdsa::signature::Verifier as _;
+
         use super::super::KagemushaOrdinaryAppEnrollmentChallengeV1;
         let signing = SigningKey::from_bytes((&[17; 32]).into()).unwrap();
         let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -698,7 +701,7 @@ mod tests {
             policy_epoch: 1,
             hardware_epoch: 1,
             issued_at_ms: 1000,
-            expires_at_ms: 121000,
+            expires_at_ms: 121_000,
         };
         let e = KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
             &c, &key, [14; 32],
@@ -736,7 +739,6 @@ mod tests {
             )
             .unwrap();
             assert_ne!(changed.canonical_signing_bytes().unwrap(), original_message);
-            use p256::ecdsa::signature::Verifier as _;
             assert!(
                 signing
                     .verifying_key()
@@ -755,7 +757,6 @@ mod tests {
         stable_id.enrollment_attempt_id = c.enrollment_id;
         let stable_signature: p256::ecdsa::Signature =
             signing.sign(&stable_id.canonical_signing_bytes().unwrap());
-        use p256::ecdsa::signature::Verifier as _;
         assert!(
             signing
                 .verifying_key()

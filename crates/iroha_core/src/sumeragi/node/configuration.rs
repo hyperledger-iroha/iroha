@@ -20,10 +20,16 @@ use iroha_data_model::{
 /// # Errors
 /// Rejects invalid signed genesis, omitted/duplicated explicit chain parameters or invalid
 /// native parameter geometry. No retired adapter configuration or implicit fallback is used.
-pub fn consensus_configuration_fingerprint(genesis: &SignedBlock) -> Result<Hash, String> {
-    let epoch = genesis_epoch(genesis)?;
-    let metadata = iroha_genesis::signed_genesis_consensus_metadata(genesis)
-        .map_err(|error| error.to_string())?;
+pub fn consensus_configuration_fingerprint(
+    genesis: &SignedBlock,
+) -> Result<Hash, crate::execution_attempt::ExecutionAttemptError<String>> {
+    let epoch = genesis_epoch(genesis).map_err(|error| {
+        crate::execution_attempt::genesis_read_attempt_error(error, |error| error.to_string())
+    })?;
+    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)
+        .map_err(|error| {
+            crate::execution_attempt::genesis_read_attempt_error(error, |error| error.to_string())
+        })?;
     let mut parameters = ExplicitParameters::new(metadata.block_cadence_ms);
     for transaction in genesis.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {

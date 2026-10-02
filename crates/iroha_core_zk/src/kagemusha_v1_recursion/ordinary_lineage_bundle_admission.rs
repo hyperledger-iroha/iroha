@@ -15,9 +15,12 @@ use iroha_data_model::kagemusha::{
 };
 #[path = "ordinary_lineage_commit_admission.rs"]
 mod commit_admission;
+pub(in crate::kagemusha_v1_recursion) use commit_admission::terminal_public;
 pub use commit_admission::{
     KagemushaOrdinaryCashOutgoingOriginalV1, KagemushaOrdinaryLineageCommitProofBundleV1,
-    KagemushaVerifiedOrdinaryLineageCommitProofV1, verify_ordinary_lineage_commit_v1,
+    KagemushaVerifiedOrdinaryLineageCommitProofV1,
+    KagemushaVerifiedOrdinaryServiceReceivedCashOutputV1, verify_ordinary_lineage_commit_v1,
+    verify_service_ordinary_received_cash_output_v1,
 };
 
 pub(crate) use commit_admission::{
@@ -49,7 +52,7 @@ pub enum KagemushaOrdinaryLineageOutgoingOriginalsV1 {
         request: Box<KagemushaOrdinaryPaymentRequestV1>,
         /// Actual pre-candidate output.
         output: KagemushaOrdinaryPaymentOutputV1,
-        /// Complete canonical ciphertext envelope.
+        /// Complete canonical ciphertext envelope within the 384-byte transport capacity.
         encrypted_credit: Vec<u8>,
         /// Original preparation interval; signed observations are authenticated by the service owner.
         preparation_clock: KagemushaOrdinaryCashClockContextV1,
@@ -534,7 +537,7 @@ fn require_outgoing_originals(
     }
     Ok(())
 }
-fn require_lineage(
+pub(super) fn require_lineage(
     lineage: &KagemushaOrdinaryFinancialLineageV1,
     state: &KagemushaVerifiedOrdinaryLineageStateProofV1,
     credential: &KagemushaVerifiedOrdinaryAppCredentialV1,
@@ -565,7 +568,10 @@ fn require_predecessor_material(
     let p = &before.projection;
     let proof = &before.proof;
     let a = m.artifacts;
-    let (req, rep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+    let (req, rep) = (
+        m.binding.outer_eq_protocol_digest,
+        m.binding.outer_ep_protocol_digest,
+    );
     if proof.eq_protocol_digest != m.binding.outer_eq_protocol_digest
         || proof.ep_protocol_digest != m.binding.outer_ep_protocol_digest
         || proof.guard_eq_credential_audit != req
@@ -657,3 +663,85 @@ pub(crate) fn require_ordinary_incoming_predecessor_v1(
 #[cfg(test)]
 #[path = "ordinary_lineage_bundle_admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod canonical_ciphertext_tests {
+    use super::*;
+    use iroha_data_model::kagemusha::{
+        KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KagemushaAppOperationApprovalEvidenceV1,
+        KagemushaOrdinaryPaymentRequestBodyV1, kagemusha_ordinary_credit_id_v1,
+    };
+    use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+
+    #[test]
+    fn outgoing_send_data_accepts_actual_canonical_cipher_and_refuses_transport_padding() {
+        // Genuine codec/signature data only: this constructs no admitted receiver or Native source.
+        let f =
+            iroha_data_model::testing::ordinary_mint::kagemusha_ordinary_mint_codec_fixture_v1();
+        let context = &f.request.authorization.statement.context;
+        let clock = context.clock_context;
+        let body = KagemushaOrdinaryPaymentRequestBodyV1 {
+            version: 1,
+            release_id: context.release_id,
+            network_id: [1; 32],
+            normalized_asset_id: [2; 32],
+            asset_incarnation: [3; 32],
+            scale: 4,
+            reserve_pool_id: [4; 32],
+            recipient_account_binding: [5; 32],
+            amount: context.amount,
+            recipient_encryption_key: context.recipient_one_time_key,
+            recipient_credential_digest: context.recipient_app_credential_digest,
+            recipient_lane_id: [6; 32],
+            request_id: [7; 32],
+            clock_context: clock,
+            issued_at_ms: clock.lower_at_ms,
+            expires_at_ms: clock.upper_at_ms + 100,
+        };
+        let signer = SigningKey::from_bytes((&[61; 32]).into()).unwrap();
+        let signature: Signature = signer.sign(&body.canonical_signing_bytes().unwrap());
+        let request = KagemushaOrdinaryPaymentRequestV1 {
+            body,
+            evidence: KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                signature_der: signature.to_der().as_bytes().to_vec(),
+            },
+        };
+        let request_digest = request.canonical_original_digest().unwrap();
+        let nullifier = [8; 32];
+        let output = KagemushaOrdinaryPaymentOutputV1 {
+            version: 1,
+            request_digest,
+            amount: context.amount,
+            sender_before_commitment: [9; 32],
+            sender_after_commitment: [10; 32],
+            transition_nullifier: nullifier,
+            credit_id: kagemusha_ordinary_credit_id_v1(nullifier, request_digest),
+            ciphertext_commitment: [11; 32],
+            encrypted_credit_digest: kagemusha_ciphertext_digest_v1(&f.request.encrypted_credit),
+            clock_context_digest: clock.binding_digest().unwrap(),
+            prepared_at_ms: clock.upper_at_ms,
+        };
+        let original = f.request.encrypted_credit;
+        let data = |encrypted_credit: Vec<u8>| KagemushaOrdinaryLineageOutgoingOriginalsV1::Send {
+            request: Box::new(request.clone()),
+            output,
+            encrypted_credit,
+            preparation_clock: clock,
+        };
+        data(original.clone()).validate_data().unwrap();
+        assert_eq!(
+            original.len(),
+            KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+        );
+        assert_eq!(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 384);
+        for end in 0..original.len() {
+            assert!(data(original[..end].to_vec()).validate_data().is_err());
+        }
+        let mut suffix = original.clone();
+        suffix.push(0);
+        assert!(data(suffix).validate_data().is_err());
+        let mut padded = original;
+        padded.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
+        assert!(data(padded).validate_data().is_err());
+    }
+}

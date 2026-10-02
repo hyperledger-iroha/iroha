@@ -42,9 +42,11 @@ def check_abi_projection(source: str) -> None:
     # remove its JS trailing comma, never evaluate executable JavaScript.
     names = json.loads(re.sub(r",\s*]$", "]", arrays[0]))
     assert tuple(names) == node_policy("REQUIRED_SYMBOLS")
-    retired = node_policy("RETIRED_PROTOCOL_SYMBOLS")
-    assert len(retired) == 1
-    assert f'name !== {json.dumps(retired[0])}' in source
+    retired_arrays = re.findall(r"const RETIRED_ABI_SYMBOLS = Object\.freeze\((\[[^\]]*\])\);", source)
+    assert len(retired_arrays) == 1
+    retired = json.loads(re.sub(r",\s*]$", "]", retired_arrays[0]))
+    assert tuple(retired) == node_policy("RETIRED_PROTOCOL_SYMBOLS")
+    assert '!RETIRED_ABI_SYMBOLS.includes(name)' in source
     prefix = 'const retiredPrefix = "connect_norito_" + ["cash", "offline"].reverse().join("_") + "_";'
     assert prefix in OWNER.read_text()
     assert prefix in source
@@ -57,7 +59,11 @@ def test_native_abi_projection_uses_original_policy() -> None:
 @pytest.mark.parametrize("old,new", [
     ('"connectNoritoBridgeAbiVersion",', ''),
     ('"verifySorafsOrderbookSubmissionReceiptV1",', '"verifyOtherReceipt",'),
-    ('name !== "privateSettlementVerifyAuditorCapsuleResponseV1"', 'true'),
+    ('"validationFeeCurrentPolicyProofRequestV1",', ''),
+    ('"validationFeeVerifyCurrentPolicyProofV1",', '"validationFeeVerifyHijiriQuoteResponseV1",'),
+    ('"validationFeeHijiriQuoteRequestV1",', ''),
+    ('"validationFeeVerifyHijiriQuoteResponseV1",', ''),
+    ('!RETIRED_ABI_SYMBOLS.includes(name)', 'true'),
     ('!name.startsWith(retiredPrefix)', 'true'),
     ('["cash", "offline"].reverse().join("_")', '["cash", "offline"].join("_")'),
     (f'version === {bridge_abi_version()}', f'version === {bridge_abi_version() - 1}'),

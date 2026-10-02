@@ -10,44 +10,63 @@ use axum::{
 use iroha_core::governance::parliament::{
     canonical_governance_attempt_ids_v1, validate_parliament_randomness_redraw_lineage_v1,
 };
-use iroha_core::state::WorldReadOnly;
+use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
     governance::types::{
         GovernanceAttemptStatusV1, GovernanceCertificateId, GovernanceCertificateV1,
         ProposalContentId, ProposalKind,
     },
-    hijiri::{HijiriAccountRiskV1, HijiriParametersV1},
     isi::{
         InstructionBox,
         governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
     },
-    validation_fee::{
-        ValidationFeeChargingMode, ValidationFeePolicyRegistryV1,
-        ValidationFeePolicySnapshotCommitmentV1,
-    },
+    validation_fee::{ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1},
 };
 use iroha_torii_shared::validation_fee_api::{
-    VALIDATION_FEE_BASE_MINOR_UNITS_V1, VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
+    VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
-    ValidationFeeHijiriQuoteBaseV1, ValidationFeeHijiriQuoteRequestV1,
-    ValidationFeeHijiriQuoteResponseV1, ValidationFeeProposalDetailQueryV1,
-    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
-    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
-    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListQueryV1,
-    ValidationFeeProposalListV1, ValidationFeeProposalRecordV1, ValidationFeeProposalStatusV1,
-    decode_validation_fee_proposal_cursor_v1, encode_validation_fee_proposal_cursor_v1,
-    evaluate_hijiri_quote_v1, validation_fee_hijiri_quote_execution_height,
-    validation_fee_policy_proof_page_tip,
+    ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalListQueryV1, ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
+    ValidationFeeProposalStatusV1, decode_validation_fee_proposal_cursor_v1,
+    encode_validation_fee_proposal_cursor_v1, validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
 use std::ops::Bound::{Excluded, Unbounded};
+fn fee_read_transport_error(
+    error: iroha_core::execution_attempt::ExecutionAttemptError<String>,
+    rejected: impl FnOnce(String) -> Error,
+) -> Error {
+    match error {
+        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(message) => {
+            rejected(message)
+        }
+        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+            Error::AppServiceUnavailable {
+                code: "retail_fee_local_resources_unavailable",
+                message: "Local fee projection did not complete; retry the original request".into(),
+            }
+        }
+    }
+}
 fn inconsistent(message: impl Into<String>) -> Error {
+    let message = message.into();
+    if message.contains(iroha_data_model::validation_fee::RETAIL_FEE_CATCH_UP_REQUIRED) {
+        return catch_up_required();
+    }
     Error::AppServiceUnavailable {
         code: "validation_fee_state_inconsistent",
         message: message.into(),
+    }
+}
+fn catch_up_required() -> Error {
+    Error::AppServiceUnavailable {
+        code: "ledger_catch_up_required",
+        message: "Consensus is completing bounded historical month settlement; retry after ledger catch-up".into(),
     }
 }
 fn bad_request(message: impl Into<String>) -> Error {
@@ -57,8 +76,12 @@ fn bad_request(message: impl Into<String>) -> Error {
     }
 }
 fn quote_unavailable(message: impl Into<String>) -> Error {
+    let message = message.into();
+    if message.contains(iroha_data_model::validation_fee::RETAIL_FEE_CATCH_UP_REQUIRED) {
+        return catch_up_required();
+    }
     Error::AppConflict {
-        code: "validation_fee_hijiri_quote_unavailable",
+        code: "retail_fee_quote_unavailable",
         message: message.into(),
     }
 }
@@ -287,21 +310,24 @@ fn retained_registry_authorization<'a>(
         return Ok(None);
     };
     let mut found = None;
-    for entry in &registry.registered_policies {
-        let authorizations = std::iter::once(&entry.parliament_authorization).chain(
-            entry
-                .payout_lifecycle
+    let authorizations = registry
+        .registered_policies
+        .iter()
+        .map(|entry| &entry.parliament_authorization)
+        .chain(
+            registry
+                .payout_policies
+                .entries
                 .iter()
-                .map(|reference| &reference.parliament_authorization),
+                .map(|entry| &entry.parliament_authorization),
         );
-        for authorization in authorizations {
-            if authorization.proposal_fingerprint == proposal_id {
-                if found.replace(authorization).is_some() {
-                    return Err(inconsistent(
-                        "protected registry contains duplicate proposal certificate bindings",
-                    ));
-                }
-            }
+    for authorization in authorizations {
+        if authorization.proposal_fingerprint == proposal_id
+            && found.replace(authorization).is_some()
+        {
+            return Err(inconsistent(
+                "protected registry contains duplicate proposal certificate bindings",
+            ));
         }
     }
     Ok(found)
@@ -439,35 +465,14 @@ fn canonical_draft_instruction(
     }
     let proposal_kind = request.proposal.proposal_kind(&request.proposal_operator);
     let instruction: InstructionBox = match &request.proposal {
-        ValidationFeeProposalDraftPayloadV1::Policy {
-            policy,
-            payout_lifecycle_proposal_id,
-        } => {
+        ValidationFeeProposalDraftPayloadV1::Policy { policy } => {
             if let Some(reason) = policy.policy_invariant_error() {
                 return Err(bad_request(format!(
                     "invalid validation-fee policy: {reason}"
                 )));
             }
-            match (
-                policy.treasury_payout_binding.as_ref(),
-                payout_lifecycle_proposal_id,
-            ) {
-                (None, None) => {}
-                (Some(_), Some(id)) if *id != [0; 32] => {}
-                (Some(_), _) => {
-                    return Err(bad_request(
-                        "payout-enabled policy requires a non-zero lifecycle proposal id",
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(bad_request(
-                        "policy without a payout binding cannot select a lifecycle proposal",
-                    ));
-                }
-            }
             ProposeValidationFeePolicy {
                 policy: policy.clone(),
-                payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
             }
             .into()
         }
@@ -541,6 +546,21 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     #[test]
+    fn catch_up_responses_are_temporary_service_unavailability() {
+        for error in [
+            inconsistent(iroha_data_model::validation_fee::RETAIL_FEE_CATCH_UP_REQUIRED),
+            quote_unavailable(iroha_data_model::validation_fee::RETAIL_FEE_CATCH_UP_REQUIRED),
+        ] {
+            assert!(matches!(
+                error,
+                Error::AppServiceUnavailable {
+                    code: "ledger_catch_up_required",
+                    ..
+                }
+            ));
+        }
+    }
+    #[test]
     fn proposal_page_traversal_reads_only_limit_plus_one_index_rows() {
         let rows = (0_u64..10_000)
             .map(|created_height| {
@@ -577,192 +597,17 @@ mod tests {
         assert!(!implementation.contains("governance_proposals().iter()"));
         assert!(!implementation.contains(".sort"));
     }
-    #[test]
-    fn hijiri_quote_selects_the_policy_at_the_checked_next_height() {
-        let activation_height = 1_000_u64;
-        let evaluated_state_height = activation_height - 1;
-        assert_eq!(
-            validation_fee_hijiri_quote_execution_height(evaluated_state_height),
-            Ok(activation_height)
-        );
-        assert!(validation_fee_hijiri_quote_execution_height(u64::MAX).is_err());
-
-        let source = include_str!("validation_fee_api.rs");
-        let start = source
-            .rfind("pub(crate) async fn handler_hijiri_quote")
-            .expect("Hijiri quote handler");
-        let implementation = &source[start..];
-        let end = implementation
-            .find("/// Return one bounded finality page")
-            .expect("Hijiri quote handler terminator");
-        let implementation = &implementation[..end];
-        assert!(implementation.contains("validation_fee_hijiri_quote_execution_height"));
-        assert!(implementation.contains("effective_entry_at_height(quoted_execution_height)"));
-        assert!(!implementation.contains("effective_entry_at_height(evaluated_state_height)"));
-        assert!(implementation.contains("policy_entry.policy.network_id"));
-        assert!(implementation.contains("*app.state.network_id_ref()"));
-        assert!(implementation.contains("is_live_multisig_signatory_in_world"));
-        assert!(implementation.contains("validation_fee_hijiri_quote_account_mismatch"));
-        assert!(implementation.contains("let state_view = app.state.view()"));
-        assert!(implementation.contains("state_view.world()"));
-        assert!(implementation.contains("account-risk parameter changed its reserved identity"));
-        assert!(!implementation.contains(".flatten()"));
-        let authorization = implementation
-            .find("if !is_authorized")
-            .expect("member-aware quote authorization");
-        let risk_lookup = implementation
-            .find("let account_risk_parameter_id")
-            .expect("account-risk lookup");
-        assert!(
-            authorization < risk_lookup,
-            "cross-account authorization must precede account-risk key derivation and lookup"
-        );
-    }
 }
 fn registry_at_height(
     current: Option<ValidationFeePolicyRegistryV1>,
     height: u64,
 ) -> Result<Option<ValidationFeePolicyRegistryV1>, Error> {
-    let Some(mut registry) = current else {
+    let Some(registry) = current else {
         return Ok(None);
     };
     registry
-        .validate()
-        .map_err(|error| inconsistent(format!("protected registry is invalid: {error}")))?;
-    registry
-        .registered_policies
-        .retain(|entry| entry.parliament_authorization.enacted_at_height <= height);
-    if registry.registered_policies.is_empty() {
-        Ok(None)
-    } else {
-        registry.validate().map_err(|error| {
-            inconsistent(format!("historical protected registry is invalid: {error}"))
-        })?;
-        Ok(Some(registry))
-    }
-}
-/// Return one same-snapshot, evaluated-only Hijiri validation-fee quote.
-pub(crate) async fn handler_hijiri_quote(
-    State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-    headers: HeaderMap,
-    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
-    NoritoOnly(request): NoritoOnly<ValidationFeeHijiriQuoteRequestV1>,
-) -> Result<NoritoBody<ValidationFeeHijiriQuoteResponseV1>, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/validation-fee/hijiri/quote",
-    )
-    .await?;
-    request.validate().map_err(bad_request)?;
-    let state_view = app.state.view();
-    let is_authorized = request.account_id == verified.account
-        || match crate::routing::is_live_multisig_signatory_in_world(
-            state_view.world(),
-            &request.account_id,
-            &verified.account,
-        ) {
-            Ok(is_signatory) => is_signatory,
-            Err(error) => {
-                iroha_logger::warn!(
-                    requested_account = %request.account_id,
-                    authenticated_account = %verified.account,
-                    ?error,
-                    "cross-account Hijiri quote authorization could not validate a live multisig controller"
-                );
-                false
-            }
-        };
-    if !is_authorized {
-        return Err(Error::AppForbidden {
-            code: "validation_fee_hijiri_quote_account_mismatch",
-            message: "authenticated account must equal the requested Hijiri quote account or be a direct signatory of that live multisig controller".to_owned(),
-        });
-    }
-
-    let evaluated_state_height = u64::try_from(state_view.height())
-        .map_err(|_| inconsistent("ledger height does not fit the public Hijiri fee quote"))?;
-    let quoted_execution_height =
-        validation_fee_hijiri_quote_execution_height(evaluated_state_height)
-            .map_err(inconsistent)?;
-    let custom_parameters = state_view.world().parameters().custom();
-
-    let registry_parameter = custom_parameters
-        .get(&ValidationFeePolicyRegistryV1::parameter_id())
-        .ok_or_else(|| quote_unavailable("validation-fee policy registry is not configured"))?;
-    let registry = ValidationFeePolicyRegistryV1::from_custom_parameter(registry_parameter)
-        .ok_or_else(|| inconsistent("protected validation-fee registry cannot be decoded"))?;
-    registry
-        .validate()
-        .map_err(|error| inconsistent(format!("protected registry is invalid: {error}")))?;
-    let policy_entry = registry
-        .effective_entry_at_height(quoted_execution_height)
-        .ok_or_else(|| {
-            quote_unavailable("no validation-fee policy is active at the quoted execution height")
-        })?;
-    if policy_entry.policy.network_id != *app.state.network_id_ref() {
-        return Err(inconsistent(
-            "active validation-fee policy targets a different exact network",
-        ));
-    }
-    if policy_entry.policy.charging_mode == ValidationFeeChargingMode::Disabled {
-        return Err(quote_unavailable(
-            "validation-fee charging is disabled at the quoted execution height",
-        ));
-    }
-
-    let hijiri_parameter = custom_parameters
-        .get(&HijiriParametersV1::parameter_id())
-        .ok_or_else(|| quote_unavailable("global Hijiri fee parameters are not configured"))?;
-    let parameters = HijiriParametersV1::from_custom_parameter(hijiri_parameter)
-        .map_err(|error| inconsistent(format!("global Hijiri parameter is invalid: {error}")))?
-        .ok_or_else(|| inconsistent("global Hijiri parameter changed its reserved identity"))?;
-
-    let account_risk_parameter_id = HijiriAccountRiskV1::parameter_id_for(&request.account_id)
-        .map_err(|error| {
-            inconsistent(format!(
-                "Hijiri account-risk parameter id cannot be derived: {error}"
-            ))
-        })?;
-    let account_risk = match custom_parameters.get(&account_risk_parameter_id) {
-        None => None,
-        Some(parameter) => Some(
-            HijiriAccountRiskV1::from_custom_parameter(parameter)
-                .map_err(|error| {
-                    inconsistent(format!("Hijiri account-risk parameter is invalid: {error}"))
-                })?
-                .ok_or_else(|| {
-                    inconsistent("Hijiri account-risk parameter changed its reserved identity")
-                })?,
-        ),
-    };
-
-    let base = ValidationFeeHijiriQuoteBaseV1::try_new(
-        evaluated_state_height,
-        quoted_execution_height,
-        policy_entry.policy.policy_version,
-        policy_entry.policy_hash,
-        policy_entry.policy.ds_asset_id.to_string(),
-        policy_entry.policy.treasury_account_id.to_string(),
-        policy_entry.policy.ds_scale,
-        VALIDATION_FEE_BASE_MINOR_UNITS_V1,
-    )
-    .map_err(|error| {
-        inconsistent(format!(
-            "active validation-fee quote base is invalid: {error}"
-        ))
-    })?;
-    let response = evaluate_hijiri_quote_v1(
-        base,
-        &request.account_id,
-        &parameters,
-        account_risk.as_ref(),
-        request.qualifying_transfer_count,
-    )
-    .map_err(|error| inconsistent(format!("Hijiri validation-fee quote failed: {error}")))?;
-    Ok(NoritoBody(response))
+        .retained_at_height(height)
+        .map_err(|error| inconsistent(format!("protected historical registry is invalid: {error}")))
 }
 /// Return one bounded finality page for the current validation-fee registry.
 pub(crate) async fn handler_current_policy_proof(
@@ -808,9 +653,18 @@ pub(crate) async fn handler_current_policy_proof(
         ),
     };
     let registry = registry_at_height(current_registry, evaluated_height)?;
-    let expected_commitment =
-        ValidationFeePolicySnapshotCommitmentV1::from_registry(evaluated_height, registry.as_ref());
     let proof_view = state_view;
+    let evaluated_timestamp_ms =
+        iroha_core::sumeragi::certified_chain::committed_block(&proof_view, evaluated_height)
+            .map_err(|error| {
+                inconsistent(format!("evaluated policy block is unavailable: {error}"))
+            })?
+            .block_time_ms();
+    let expected_commitment = ValidationFeePolicySnapshotCommitmentV1::from_registry(
+        evaluated_height,
+        evaluated_timestamp_ms,
+        registry.as_ref(),
+    );
     let policy_witness = iroha_core::query::native_receipts::validation_fee_policy_witness(
         &proof_view,
         evaluated_height,
@@ -880,4 +734,350 @@ pub(crate) async fn handler_current_policy_proof(
         });
     }
     Ok(NoritoBody(response))
+}
+
+fn authorize_retail_account(
+    world: &impl WorldReadOnly,
+    requested: &AccountId,
+    authenticated: &AccountId,
+) -> Result<(), Error> {
+    if requested == authenticated
+        || crate::routing::is_live_multisig_signatory_in_world(world, requested, authenticated)
+            .unwrap_or(false)
+        || iroha_core::retail_fee::is_account_issuer_for_primary_alias(
+            world,
+            authenticated,
+            requested,
+        )
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?
+    {
+        return Ok(());
+    }
+    Err(Error::AppForbidden{code:"retail_fee_account_mismatch",message:"authenticated account must be the wallet, its direct multisig signatory, or its registered primary-alias domain issuer".into()})
+}
+/// Evaluate actual finalized wallet counters and bind the complete ordered payment intent.
+pub(crate) async fn handler_retail_quote(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<iroha_data_model::validation_fee::RetailFeeQuoteRequestV1>,
+) -> Result<JsonBody<iroha_torii_shared::validation_fee_api::RetailFeeQuoteResponseV1>, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/validation-fee/quote").await?;
+    let state = app.state.view();
+    authorize_retail_account(state.world(), &request.account_id, &verified.account)?;
+    let height =
+        u64::try_from(state.height()).map_err(|_| inconsistent("ledger height overflow"))?;
+    let now_ms = state.query_ledger_time_ms();
+    let assessment = iroha_core::retail_fee::quote(state.world(), height, now_ms, &request)
+        .map_err(|error| fee_read_transport_error(error, quote_unavailable))?;
+    let policy = iroha_core::retail_fee::policy_at(state.world(), height, now_ms)
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?
+        .ok_or_else(|| quote_unavailable("fee policy is not active"))?;
+    Ok(JsonBody(
+        iroha_torii_shared::validation_fee_api::RetailFeeQuoteResponseV1 {
+            request,
+            assessment,
+            policy_hash_hex: hex::encode(
+                policy
+                    .policy_hash()
+                    .map_err(|e| inconsistent(e.to_string()))?,
+            ),
+            ledger_finalised_height: height,
+        },
+    ))
+}
+/// Return logically settled maintenance and allowance status for an authenticated wallet.
+pub(crate) async fn handler_retail_status(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Path(account_id): Path<String>,
+) -> Result<JsonBody<iroha_torii_shared::validation_fee_api::RetailFeeStatusResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/accounts/{account_id}/status",
+    )
+    .await?;
+    let account = AccountId::parse_encoded(&account_id).map_err(|e| bad_request(e.to_string()))?;
+    let state = app.state.view();
+    authorize_retail_account(state.world(), &account, &verified.account)?;
+    let height =
+        u64::try_from(state.height()).map_err(|_| inconsistent("ledger height overflow"))?;
+    let now_ms = state.query_ledger_time_ms();
+    let policy = iroha_core::retail_fee::policy_at(state.world(), height, now_ms)
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?
+        .ok_or_else(|| quote_unavailable("fee policy is not active"))?;
+    let account_state = iroha_core::retail_fee::status(state.world(), &account, now_ms)
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?;
+    let estimated_maintenance_minor = account_state
+        .as_ref()
+        .map(|account| {
+            policy
+                .retail_schedule
+                .monthly_fee(account.balance_time_minor_ms, account.active_time_ms)
+        })
+        .transpose()
+        .map_err(inconsistent)?
+        .unwrap_or(0);
+    let registry = current_validation_fee_registry(state.world())?;
+    let forthcoming_policy = registry.and_then(|registry| {
+        registry
+            .registered_policies
+            .into_iter()
+            .find(|entry| entry.policy.effective_from_ms > now_ms)
+            .map(|entry| entry.policy)
+    });
+    Ok(JsonBody(
+        iroha_torii_shared::validation_fee_api::RetailFeeStatusResponseV1 {
+            account_state,
+            policy_hash_hex: hex::encode(
+                policy
+                    .policy_hash()
+                    .map_err(|e| inconsistent(e.to_string()))?,
+            ),
+            ledger_finalised_height: height,
+            institutional_fee_minor: iroha_data_model::fastpq::normalized_numeric_to_u64(
+                policy.fee.as_numeric(),
+                2,
+            )
+            .ok_or_else(|| inconsistent("institutional fee is not exact SBD cents"))?,
+            retail_schedule: policy.retail_schedule,
+            estimated_maintenance_minor,
+            forthcoming_policy,
+        },
+    ))
+}
+
+/// Query immutable native receipts without reconstructing fees from treasury deposits.
+pub(crate) async fn handler_retail_receipts(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Path(account_id): Path<String>,
+    NoritoQuery(query): NoritoQuery<
+        iroha_torii_shared::validation_fee_api::RetailFeeReceiptsQueryV1,
+    >,
+) -> Result<JsonBody<iroha_torii_shared::validation_fee_api::RetailFeeReceiptsResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/accounts/{account_id}/receipts",
+    )
+    .await?;
+    let account = AccountId::parse_encoded(&account_id).map_err(|e| bad_request(e.to_string()))?;
+    let state = app.state.view();
+    authorize_retail_account(state.world(), &account, &verified.account)?;
+    let limit = query.limit.unwrap_or(50) as usize;
+    let after = query
+        .after_receipt_id
+        .as_deref()
+        .map(parse_proposal_id)
+        .transpose()?;
+    let receipts = iroha_core::retail_fee::receipts(state.world(), &account, after, limit)
+        .map_err(|error| fee_read_transport_error(error, bad_request))?;
+    let next_receipt_id = (receipts.len() == limit)
+        .then(|| {
+            receipts
+                .last()
+                .map(|receipt| hex::encode(receipt.receipt_id))
+        })
+        .flatten();
+    let ledger_finalised_height =
+        u64::try_from(state.height()).map_err(|_| inconsistent("ledger height overflow"))?;
+    let mut proof_by_height = std::collections::BTreeMap::new();
+    let mut receipt_proofs = Vec::with_capacity(receipts.len());
+    for receipt in &receipts {
+        let key = iroha_data_model::validation_fee::retail_fee_receipt_state_key_v1(receipt)
+            .map_err(inconsistent)?;
+        let proof = iroha_core::query::native_receipts::fee_evidence_record_proof(
+            &state,
+            receipt.recorded_at_height,
+            &key,
+        )
+        .map_err(|e| inconsistent(format!("native fee receipt proof unavailable: {e}")))?
+        .ok_or_else(|| {
+            inconsistent("native fee receipt has no immutable finalized membership proof")
+        })?;
+        if !proof_by_height.contains_key(&receipt.recorded_at_height) {
+            let finality =
+                iroha_core::sumeragi::finality::build_proof(&state, receipt.recorded_at_height)
+                    .map_err(|e| inconsistent(format!("receipt finality unavailable: {e}")))?;
+            proof_by_height.insert(receipt.recorded_at_height, finality);
+        }
+        let root = proof_by_height[&receipt.recorded_at_height]
+            .decode_checked()
+            .map_err(|e| inconsistent(format!("receipt finality is malformed: {e}")))?
+            .execution()
+            .ordinary_writes_root;
+        if !proof.verify(root)
+            || proof.record.payload
+                != iroha_data_model::fee_evidence::FeeEvidencePayloadV1::RetailReceipt(
+                    receipt.clone(),
+                )
+        {
+            return Err(inconsistent(
+                "immutable native receipt proof differs from its finalized receipt",
+            ));
+        }
+        receipt_proofs.push(proof);
+    }
+    let response = iroha_torii_shared::validation_fee_api::RetailFeeReceiptsResponseV1 {
+        receipts,
+        receipt_proofs,
+        finality_proofs: proof_by_height.into_values().collect(),
+        ledger_finalised_height,
+        next_receipt_id,
+        assurance: "NATIVE_RECEIPT_MEMBERSHIP_PROOFS_REQUIRING_TRUSTED_FINALITY_VERIFICATION"
+            .into(),
+    };
+    if norito::json::to_vec(&response)
+        .map_err(|e| inconsistent(e.to_string()))?
+        .len()
+        > 8 * 1024 * 1024
+    {
+        return Err(Error::AppConflict {
+            code: "retail_fee_receipt_page_too_large",
+            message:
+                "Receipt evidence exceeds the bounded response budget; request a smaller page."
+                    .into(),
+        });
+    }
+    Ok(JsonBody(response))
+}
+
+/// Read one current cumulative wallet head against exactly matching finalized evidence.
+pub(crate) async fn handler_retail_statement_head(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Path(account_id): Path<String>,
+) -> Result<JsonBody<iroha_torii_shared::validation_fee_api::RetailFeeCurrentHeadResponseV1>, Error>
+{
+    use iroha_data_model::fee_evidence::RetailFeeCurrentHeadProofV1;
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/accounts/{account_id}/statement/head",
+    )
+    .await?;
+    let account = AccountId::parse_encoded(&account_id).map_err(|e| bad_request(e.to_string()))?;
+    let state = app.state.view();
+    authorize_retail_account(state.world(), &account, &verified.account)?;
+    let head = iroha_core::retail_fee::receipt_head(state.world(), &account)
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?
+        .ok_or_else(|| Error::AppNotFound {
+            code: "retail_fee_head_unavailable",
+            message: "wallet has no committed receipt head".into(),
+        })?;
+    let height =
+        u64::try_from(state.height()).map_err(|_| inconsistent("ledger height overflow"))?;
+    let (root, head_siblings) =
+        iroha_core::validation_fee_rewards::receipt_head_membership(state.world(), &head)
+            .map_err(|error| fee_read_transport_error(error, inconsistent))?;
+    let evidence = iroha_core::query::native_receipts::fee_evidence_block_proof(&state, height)
+        .map_err(|e| inconsistent(format!("finalized wallet head evidence unavailable: {e}")))?;
+    if evidence
+        .snapshot_witness
+        .commitment()
+        .map_err(inconsistent)?
+        .account_heads_root
+        != root
+    {
+        return Err(inconsistent(
+            "current wallet head tree differs from its exact finalized block; retry with a matching checkpoint",
+        ));
+    }
+    let finality_proof = iroha_core::sumeragi::finality::build_proof(&state, height)
+        .map_err(|e| inconsistent(format!("wallet head finality unavailable: {e}")))?;
+    drop(state);
+    let ordinary_writes_root = finality_proof
+        .decode_checked()
+        .map_err(|e| inconsistent(format!("wallet head finality is malformed: {e}")))?
+        .execution()
+        .ordinary_writes_root;
+    let wallet_id = head.wallet_id.clone();
+    let proof = RetailFeeCurrentHeadProofV1 {
+        snapshot_witness: evidence.snapshot_witness,
+        head,
+        head_siblings,
+    };
+    proof
+        .verify(ordinary_writes_root, &wallet_id, &account, height)
+        .map_err(inconsistent)?;
+    let response = iroha_torii_shared::validation_fee_api::RetailFeeCurrentHeadResponseV1 {
+        proof,
+        finality_proof,
+    };
+    if norito::json::to_vec(&response)
+        .map_err(|e| inconsistent(e.to_string()))?
+        .len()
+        > 8 * 1024 * 1024
+    {
+        return Err(Error::AppConflict {
+            code: "retail_fee_head_proof_too_large",
+            message: "native wallet head and finality proof exceed the 8 MiB response budget"
+                .into(),
+        });
+    }
+    Ok(JsonBody(response))
+}
+/// Return bounded immutable account history without requiring intervening block proofs.
+pub(crate) async fn handler_retail_statement(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Path(account_id): Path<String>,
+    NoritoJson(request): NoritoJson<
+        iroha_torii_shared::validation_fee_api::RetailFeeStatementRequestV1,
+    >,
+) -> Result<JsonBody<iroha_torii_shared::validation_fee_api::RetailFeeStatementResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/accounts/{account_id}/statement",
+    )
+    .await?;
+    let account = AccountId::parse_encoded(&account_id).map_err(|e| bad_request(e.to_string()))?;
+    let state = app.state.view();
+    authorize_retail_account(state.world(), &account, &verified.account)?;
+    let expected_wallet = iroha_core::retail_fee::receipt_wallet_id(state.world(), &account)
+        .map_err(|error| fee_read_transport_error(error, inconsistent))?;
+    if request.cursor.wallet_id != expected_wallet {
+        return Err(Error::AppForbidden {
+            code: "retail_fee_account_mismatch",
+            message:
+                "receipt frontier must select exactly the authorized protected wallet identity"
+                    .into(),
+        });
+    }
+    let page = iroha_core::retail_fee::receipt_page(
+        state.world(),
+        &request.cursor,
+        request.limit as usize,
+    )
+    .map_err(|error| fee_read_transport_error(error, bad_request))?;
+    let next_cursor = page.verify(&request.cursor).map_err(inconsistent)?;
+    let response = iroha_torii_shared::validation_fee_api::RetailFeeStatementResponseV1 {
+        cursor: request.cursor,
+        page,
+        next_cursor,
+    };
+    if norito::json::to_vec(&response)
+        .map_err(|e| inconsistent(e.to_string()))?
+        .len()
+        > 1024 * 1024
+    {
+        return Err(Error::AppConflict { code: "retail_fee_statement_too_large", message: "private receipt page exceeds 1 MiB; request a smaller page using the same verified frontier".into() });
+    }
+    Ok(JsonBody(response))
 }

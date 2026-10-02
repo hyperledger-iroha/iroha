@@ -1200,7 +1200,10 @@ fn scheduled_vm_refusal_does_not_advance_retry_policy_or_emit_a_failure() {
             execute_network(producer)?;
             producer.execute_scheduled_time_outputs()
         });
-        assert_eq!(outcome, Err(ExecutionAttemptError::Deferred(reason.into())));
+        assert_eq!(
+            outcome,
+            Err(ExecutionOutputAttemptError::Deferred(reason.into()))
+        );
         assert!(block.retained_execution_outputs_for_test().is_err());
         let action = block.world.triggers.time_triggers().get(&id).unwrap();
         assert_eq!(action.repeats, Repeats::Exactly(2));

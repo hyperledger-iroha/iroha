@@ -5,10 +5,11 @@ use super::*;
 /// Reconcile pinned custody with all bonded and pending shares and exact asset backing.
 pub(crate) fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
-) -> Result<(), String> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
     let currency = world
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .map(|params| params.xor_asset_definition_id);
+    (|| -> Result<(), String> {
     let mut by_validator = BTreeMap::<(LaneId, AccountId), (Quantity, Quantity, Quantity)>::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
         if !public_lane_stake_share_matches_key(key, share) {
@@ -130,6 +131,7 @@ pub(crate) fn validate_public_lane_stake_reserves(
         }
     }
     Ok(())
+    })().map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
 }
 
 #[cfg(test)]
@@ -266,7 +268,9 @@ mod tests {
         // Escrow-owned self stake and outstanding rewards cannot promise the same funds.
         let (id, value) = Asset::new(asset.clone(), Quantity::from(125_u64)).into_key_value();
         world.assets.insert(id, value);
-        let error = validate_public_lane_stake_reserves(&world.view()).unwrap_err();
+        let error = validate_public_lane_stake_reserves(&world.view())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .unwrap_err();
         assert!(error.contains("below combined reserves"), "{error}");
         let (id, value) = Asset::new(asset.clone(), Quantity::from(225_u64)).into_key_value();
         world.assets.insert(id, value);

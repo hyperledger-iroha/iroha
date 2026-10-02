@@ -1045,7 +1045,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .build_raw()
         .expect("build canonical test-network genesis manifest")
         .with_consensus_mode(consensus_mode)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
     let block = raw_genesis
         .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(

@@ -32,6 +32,9 @@ const _: () = assert!(
 /// Why startup failed.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
+    /// Original signed policy could not be decoded with local resources.
+    #[error(transparent)]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// The genesis block is invalid.
     #[error("genesis is invalid: {0}")]
     InvalidGenesis(#[source] Box<crate::block::BlockValidationError>),
@@ -102,7 +105,16 @@ pub fn apply_genesis(
     consensus_mode: ConsensusMode,
     stored: Option<&CommitCertificate>,
 ) -> Result<GenesisTip, StartupError> {
-    let signed_epoch = super::epoch::genesis_epoch(&genesis).map_err(StartupError::Schedule)?;
+    let signed_epoch = super::epoch::genesis_epoch(&genesis).map_err(|error| {
+        match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+            StartupError::Schedule(error.to_string())
+        }) {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                StartupError::Deferred(reason)
+            }
+        }
+    })?;
     let committee = genesis_committee_peers(&genesis)?;
     let topology = Topology::new(committee.clone());
     let block_hash = core_hash_of(&genesis);

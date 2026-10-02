@@ -69,3 +69,10 @@ pub const KAGEMUSHA_V1_REJECTION_REASON_PREFIX: &str = "kagemusha_v1_reason::";
 /// Distinct nonmonetary first-device hardware evidence family.
 pub mod kagemusha_hardware_evidence_bootstrap_v1;
 pub use kagemusha_hardware_evidence_bootstrap_v1::*;
+
+mod kagemusha_ordinary_node_mint_v1;
+pub use kagemusha_ordinary_node_mint_v1::*;
+
+/// Purpose-bound nonmonetary ordinary application installed-context originals.
+pub mod kagemusha_ordinary_installed_context_v1;
+pub use kagemusha_ordinary_installed_context_v1::*;

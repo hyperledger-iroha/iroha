@@ -10,7 +10,7 @@ use iroha_core::{
     state::{State, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -28,44 +28,30 @@ use iroha_data_model::{
         TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
         ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
-    hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, HijiriParametersV1, Q16},
-    isi::{
-        SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        governance::ParliamentSortitionRequestRegistrationV1,
-    },
+    isi::{SetParameter, Transfer, governance::ParliamentSortitionRequestRegistrationV1},
     parameter::Parameter,
     prelude::*,
     smart_contract::{
         ContractAddress,
         manifest::{TriggerCallback, TriggerDescriptor},
     },
-    transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction},
+    transaction::SignedTransaction,
     trigger::action::Repeats,
     validation_fee::{
-        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-        VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-        VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-        VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
+        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-        ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
-        ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+        ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
         ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-        ValidationFeeTreasuryPayoutRecipientV1,
     },
 };
-use iroha_executor_data_model::isi::multisig::MultisigPropose;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
-use iroha_model_base::topology::DataSpaceId;
-use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource};
+use iroha_model_base::{domain::DomainId, metadata::Metadata, topology::DataSpaceId};
+use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 7_202;
-const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
-    TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+const TEST_POLICY_EFFECTIVE_HEIGHT: u64 = TEST_POLICY_ENACTMENT_HEIGHT + 1;
 const TEST_PARLIAMENT_POLICY_VERSION: u64 = 1;
 fn quantity(value: &str) -> Quantity {
     value
@@ -291,15 +277,19 @@ fn payout_binding(
         ds_asset_id: fee_asset.clone(),
         xor_asset_id: xor_asset_definition_id(),
         pool_vault_account_id: pool_contract_address(network).subject_id(),
-        batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
-        min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
-        max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
-        recipients: (3..=6)
-            .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                account_id: account(seed).0,
-                share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(),
-            })
-            .collect(),
+        pool_contract_address: pool_contract_address(network),
+        pool_code_hash: <[u8; 32]>::from(Sha256::digest(pool_contract_artifact().0)),
+        reward_pool_account_id: account(7).0,
+        reference_feed_id: "xor_per_sbd".parse().unwrap(),
+        reference_feed_config_version: 1,
+        reference_provider_accounts: (10..15).map(|seed| account(seed).0).collect(),
+        max_sbd_per_attempt_minor: 1000,
+        max_sbd_per_day_minor: 100000,
+        min_interval_ms: 60000,
+        max_source_age_ms: 300000,
+        max_slippage_bps: 100,
+        validator_lane_id: iroha_model_base::topology::LaneId::new(0),
+        min_reward_claim_xor_minor: 1,
     }
 }
 fn test_state() -> (
@@ -339,7 +329,11 @@ fn test_state() -> (
         Account::new(user.clone()).build(&user),
         Account::new(recipient.clone()).build(&user),
     ];
-    accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
+    accounts.extend(
+        (2..=15)
+            .filter(|seed| *seed != 8)
+            .map(|seed| Account::new(account(seed).0).build(&user)),
+    );
     use iroha_core::sumeragi::{
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},
@@ -384,15 +378,12 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
         .max_clock_drift();
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
-    // Fee-policy fixtures must not age against the process-wide NTS clock.
-    let time_source = TimeSource::new_fixed(tx.creation_time());
-    AcceptedTransaction::accept_with_time_source(
+    AcceptedTransaction::accept(
         tx,
         state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
-        &time_source,
     )
     .expect("transaction admission should pass stateless checks")
 }
@@ -404,6 +395,9 @@ fn validation_fee_policy(
     let payout_binding = payout_binding(state.network_id_ref(), &fee_asset);
     assert_eq!(treasury, payout_binding.treasury_account_id);
     ValidationFeePolicyV1 {
+        retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+        effective_from_ms: 1793451600000,
+        notice_published_at_ms: 1790859600000,
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         network_id: *state.network_id_ref(),
         policy_version: 1,
@@ -412,11 +406,10 @@ fn validation_fee_policy(
         ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
         fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
         treasury_account_id: treasury,
-        charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-        effective_from_height: TEST_POLICY_EFFECTIVE_HEIGHT,
-        expires_after_height: Some(TEST_POLICY_EFFECTIVE_HEIGHT + 100),
+        charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
         exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
-        treasury_payout_binding: Some(payout_binding),
+        reward_custody: payout_binding.custody(),
     }
 }
 fn parliament_test_root(tag: u8) -> [u8; 32] {
@@ -775,26 +768,16 @@ fn test_parliament_authorization(
     assert_eq!(authorization.invariant_error(), None);
     (authorization, attempt)
 }
-fn policy_treasury_account(policy: &ValidationFeePolicyV1) -> AccountId {
-    policy.treasury_account_id.clone()
-}
-fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
+fn payout_lifecycle_proposal(state: &State, policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
         proposal_operator: account(1).0,
-        payout_binding: policy
-            .treasury_payout_binding
-            .clone()
-            .expect("enabled policy must carry its exact payout binding"),
+        payout_binding: payout_binding(state.network_id_ref(), &policy.ds_asset_id),
     })
-}
-fn payout_lifecycle_proposal_id(policy: &ValidationFeePolicyV1) -> [u8; 32] {
-    payout_lifecycle_proposal(policy).fingerprint()
 }
 fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: account(1).0,
         policy: policy.clone(),
-        payout_lifecycle_proposal_id: Some(payout_lifecycle_proposal_id(policy)),
     })
 }
 fn canonical_policy_registry_state(
@@ -804,33 +787,33 @@ fn canonical_policy_registry_state(
     ValidationFeePolicyRegistryV1,
     Vec<(ProposalKind, ParliamentAttemptStateV1)>,
 ) {
-    let enacted_at_height = policy
-        .effective_from_height
-        .checked_sub(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
-        .expect("test policy leaves the full activation delay");
-    let lifecycle_proposal = payout_lifecycle_proposal(policy);
-    let lifecycle_seal = policy
-        .treasury_payout_binding
-        .as_ref()
-        .expect("enabled policy must carry its exact payout binding")
+    let enacted_at_height = TEST_POLICY_EFFECTIVE_HEIGHT - 1;
+    let lifecycle_proposal = payout_lifecycle_proposal(state, policy);
+    let binding = payout_binding(state.network_id_ref(), &policy.ds_asset_id);
+    let lifecycle_seal = binding
         .lifecycle_seal()
-        .expect("derive payout lifecycle seal");
+        .expect("canonical lifecycle binding");
     let policy_proposal = policy_proposal(policy);
     let (lifecycle_authorization, lifecycle_attempt) =
         test_parliament_authorization(state, &lifecycle_proposal, enacted_at_height);
     let (policy_authorization, policy_attempt) =
         test_parliament_authorization(state, &policy_proposal, enacted_at_height);
-    let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
-        policy.clone(),
-        policy_authorization,
-        Some(ValidationFeePayoutLifecycleReferenceV1 {
-            lifecycle_seal,
-            parliament_authorization: lifecycle_authorization,
-        }),
-    )
-    .expect("registry entry");
+    let entry =
+        ValidationFeePolicyRegistryEntryV1::from_enactment(policy.clone(), policy_authorization)
+            .expect("registry entry");
     let registry = ValidationFeePolicyRegistryV1 {
         registered_policies: vec![entry],
+        payout_policies: iroha_data_model::validation_fee::ValidationFeePayoutPolicyRegistryV1 {
+            entries: vec![
+                iroha_data_model::validation_fee::ValidationFeePayoutPolicyEntryV1 {
+                    revision: 1,
+                    proposal_id: lifecycle_proposal.fingerprint(),
+                    lifecycle_seal,
+                    payout_binding: binding,
+                    parliament_authorization: lifecycle_authorization,
+                },
+            ],
+        },
     };
     registry
         .validate()
@@ -965,10 +948,7 @@ fn install_canonical_post_enactment_validation_fee_state(
     )
     .expect("activate pool contract");
 
-    let payout_binding = policy
-        .treasury_payout_binding
-        .as_ref()
-        .expect("enabled policy carries its payout binding");
+    let payout_binding = payout_binding(state.network_id_ref(), &policy.ds_asset_id);
     let wrapper_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: payout_contract_address(state.network_id_ref()),
@@ -1031,339 +1011,91 @@ fn install_canonical_post_enactment_validation_fee_state(
         .commit_world_overlay_for_testing()
         .expect("commit canonical post-enactment validation-fee state");
 }
-fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
+
+fn assessment_metadata(
+    state: &State,
+    user: &AccountId,
+    recipient: &AccountId,
+    fee_asset: &AssetDefinitionId,
+    amount_minor: u64,
+) -> Metadata {
+    let request = iroha_data_model::validation_fee::RetailFeeQuoteRequestV1 {
+        account_id: user.clone(),
+        asset_definition_id: fee_asset.clone(),
+        transfers: vec![iroha_data_model::validation_fee::RetailFeePaymentLegV1 {
+            destination_account_id: recipient.clone(),
+            amount_minor_units: amount_minor,
+        }],
+    };
+    let assessment = iroha_core::retail_fee::quote(
+        state.view().world(),
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        1_793_451_601_000,
+        &request,
+    )
+    .unwrap();
     let mut metadata = Metadata::default();
     metadata.insert(
-        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
+        iroha_data_model::validation_fee::RETAIL_FEE_ASSESSMENT_METADATA_KEY
             .parse()
-            .expect("metadata key"),
-        Json::new(policy.policy_version),
-    );
-    metadata.insert(
-        VALIDATION_FEE_POLICY_HASH_METADATA_KEY
-            .parse()
-            .expect("metadata key"),
-        Json::new(hex::encode(policy.policy_hash().expect("policy hash"))),
-    );
-    metadata.insert(
-        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
-            .parse()
-            .expect("metadata key"),
-        Json::new(u64::try_from(fee_instruction_index).expect("instruction index fits")),
+            .unwrap(),
+        Json::new(assessment),
     );
     metadata
 }
-fn metadata_for_hijiri_policy(
-    policy: &ValidationFeePolicyV1,
-    hijiri_fee_quote_hash: [u8; 32],
-    fee_instruction_index: usize,
-) -> Metadata {
-    let mut metadata = metadata_for_policy(policy, fee_instruction_index);
-    metadata.insert(
-        VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY
-            .parse()
-            .expect("metadata key"),
-        Json::new(hex::encode(hijiri_fee_quote_hash)),
-    );
-    metadata
-}
-fn install_hijiri_state(
+fn signed_payment(
     state: &State,
-    height: u64,
-    parameters: Option<&HijiriParametersV1>,
-    account_risk: Option<&HijiriAccountRiskV1>,
-) {
-    let mut block = state.block(block_header(&state, height, 1_700_000_007_000 + height));
-    let mut state_transaction = block
-        .transaction_for_fastpq_testing(Hash::new(b"validation_fee_admission_original_callback"));
-    if let Some(parameters) = parameters {
-        state_transaction
-            .world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(
-                parameters.clone().into_custom_parameter(),
-            ));
-    }
-    if let Some(account_risk) = account_risk {
-        state_transaction
-            .world
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(
-                account_risk
-                    .clone()
-                    .into_custom_parameter()
-                    .expect("canonical Hijiri account-risk parameter"),
-            ));
-    }
-    state_transaction.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit Hijiri test state");
-}
-fn metadata_for_batch_policy(
-    policy: &ValidationFeePolicyV1,
-    fee_instruction_index: usize,
-    fee_entry_index: usize,
-) -> Metadata {
-    let mut metadata = metadata_for_policy(policy, fee_instruction_index);
-    metadata.insert(
-        VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY
-            .parse()
-            .expect("metadata key"),
-        Json::new(u64::try_from(fee_entry_index).expect("entry index fits")),
-    );
-    metadata
+    user: &AccountId,
+    key: &KeyPair,
+    recipient: &AccountId,
+    asset: &AssetDefinitionId,
+    amount: Quantity,
+    metadata: Metadata,
+) -> SignedTransaction {
+    TransactionBuilder::new(
+        *state.network_id_ref(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        AssetId::new(asset.clone(), user.clone()),
+        amount,
+        recipient.clone(),
+    )])
+    .with_metadata(metadata)
+    .sign(key.private_key())
 }
 fn signed_transfer(
     state: &State,
     user: &AccountId,
-    user_key_pair: &KeyPair,
+    key: &KeyPair,
     recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    policy: &ValidationFeePolicyV1,
-    include_fee: bool,
+    asset: &AssetDefinitionId,
+    _policy: &ValidationFeePolicyV1,
+    reviewed: bool,
 ) -> SignedTransaction {
-    let metadata = if include_fee {
-        metadata_for_policy(policy, 1)
+    let metadata = if reviewed {
+        assessment_metadata(state, user, recipient, asset, 100)
     } else {
         Metadata::default()
     };
-    signed_transfer_with_metadata(
+    signed_payment(
         state,
         user,
-        user_key_pair,
+        key,
         recipient,
-        fee_asset,
-        policy,
-        include_fee,
-        metadata,
-    )
-}
-fn signed_transfer_with_metadata(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    policy: &ValidationFeePolicyV1,
-    include_fee: bool,
-    metadata: Metadata,
-) -> SignedTransaction {
-    let fee_instruction =
-        include_fee.then(|| (policy.fee.clone(), policy_treasury_account(policy)));
-    signed_transfer_with_fee_instruction(
-        state,
-        user,
-        user_key_pair,
-        recipient,
-        fee_asset,
-        fee_instruction,
-        metadata,
-    )
-}
-fn signed_transfer_with_fee_instruction(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    fee_instruction: Option<(Quantity, AccountId)>,
-    metadata: Metadata,
-) -> SignedTransaction {
-    signed_transfer_with_principal_and_fee_instruction(
-        state,
-        user,
-        user_key_pair,
-        recipient,
-        fee_asset,
+        asset,
         Quantity::from(1_u32),
-        fee_instruction,
         metadata,
     )
-}
-fn signed_transfer_with_principal_and_fee_instruction(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    principal_amount: Quantity,
-    fee_instruction: Option<(Quantity, AccountId)>,
-    metadata: Metadata,
-) -> SignedTransaction {
-    let principal = Transfer::asset_quantity(
-        AssetId::new(fee_asset.clone(), user.clone()),
-        principal_amount,
-        recipient.clone(),
-    );
-    let mut instructions: Vec<InstructionBox> = vec![principal.into()];
-    if let Some((fee_amount, fee_recipient)) = fee_instruction {
-        instructions.push(
-            Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), user.clone()),
-                fee_amount,
-                fee_recipient,
-            )
-            .into(),
-        );
-    }
-    TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(instructions)
-    .with_metadata(metadata)
-    .sign(user_key_pair.private_key())
-}
-fn signed_ivm_proved_overlay(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    overlay: Vec<InstructionBox>,
-    metadata: Metadata,
-) -> SignedTransaction {
-    let mut program = ivm::ProgramMetadata {
-        max_cycles: 1_000,
-        ..ivm::ProgramMetadata::default()
-    }
-    .encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000)),
-    )
-    .with_executable(Executable::IvmProved(IvmProved {
-        bytecode: IvmBytecode::from_compiled(program),
-        overlay: overlay.into(),
-        events_commitment: Hash::new(b"events"),
-        gas_policy_commitment: Hash::new(b"gas-policy"),
-    }))
-    .with_metadata(metadata)
-    .sign(user_key_pair.private_key())
-}
-fn signed_transfer_with_explicit_fee_asset_instruction(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    principal_asset: &AssetDefinitionId,
-    fee_asset: &AssetDefinitionId,
-    fee_amount: Quantity,
-    fee_recipient: AccountId,
-    metadata: Metadata,
-) -> SignedTransaction {
-    TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(principal_asset.clone(), user.clone()),
-            1_u32,
-            recipient.clone(),
-        )),
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            fee_amount,
-            fee_recipient,
-        )),
-    ])
-    .with_metadata(metadata)
-    .sign(user_key_pair.private_key())
-}
-fn signed_transfer_with_explicit_fee_source_instruction(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    fee_source: &AccountId,
-    fee_amount: Quantity,
-    fee_recipient: AccountId,
-    metadata: Metadata,
-) -> SignedTransaction {
-    TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            1_u32,
-            recipient.clone(),
-        )),
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), fee_source.clone()),
-            fee_amount,
-            fee_recipient,
-        )),
-    ])
-    .with_metadata(metadata)
-    .sign(user_key_pair.private_key())
-}
-fn signed_batch_transfer_with_principal_amounts(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    recipient: &AccountId,
-    fee_asset: &AssetDefinitionId,
-    policy: &ValidationFeePolicyV1,
-    first_principal_amount: Quantity,
-    second_principal_amount: Quantity,
-) -> SignedTransaction {
-    signed_batch_transfer_with_entries(
-        state,
-        user,
-        user_key_pair,
-        policy,
-        vec![
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                first_principal_amount,
-            ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                second_principal_amount,
-            ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                policy_treasury_account(policy),
-                fee_asset.clone(),
-                quantity("0.2"),
-            ),
-        ],
-    )
-}
-fn signed_batch_transfer_with_entries(
-    state: &State,
-    user: &AccountId,
-    user_key_pair: &KeyPair,
-    policy: &ValidationFeePolicyV1,
-    entries: Vec<TransferAssetBatchEntry>,
-) -> SignedTransaction {
-    let batch = TransferAssetBatch::new(entries);
-    TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([InstructionBox::from(batch)])
-    .with_metadata(metadata_for_batch_policy(policy, 0, 2))
-    .sign(user_key_pair.private_key())
 }
 fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> String {
     let accepted = accept_transaction(state, tx);
-    let mut block = state.block(block_header(&state, height, 1_700_000_002_000 + height));
+    let mut block = state.block(block_header(
+        state,
+        height,
+        1_793_451_601_000 + height.saturating_sub(TEST_POLICY_EFFECTIVE_HEIGHT),
+    ));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut block,
@@ -1376,403 +1108,11 @@ fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> Strin
         Err(error) => format!("{error:?}"),
     }
 }
-fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
-    // Keep signature failures independent of elapsed test time and NTS offsets.
-    let time_source = TimeSource::new_fixed(tx.creation_time());
-    match AcceptedTransaction::accept_with_time_source(
-        tx,
-        state.network_id_ref(),
-        max_clock_drift,
-        tx_params,
-        crypto.as_ref(),
-        &time_source,
-    ) {
-        Ok(_) => "ok".to_string(),
-        Err(error) => format!("{error:?}"),
-    }
-}
 fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     world
         .assets()
         .get(asset_id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
-}
-#[test]
-fn stateless_admission_helpers_use_fixture_time() {
-    let (state, user, user_key_pair, recipient, _, fee_asset) = test_state();
-    let mut builder = TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Transfer::asset_quantity(
-        AssetId::new(fee_asset, user),
-        1_u32,
-        recipient,
-    )]);
-    // This envelope has expired on any live clock, but is valid at fixture time.
-    builder.set_creation_time(Duration::from_millis(1));
-    builder.set_ttl(Duration::from_millis(1));
-    let tx = builder.clone().sign(user_key_pair.private_key());
-    assert_eq!(accept_transaction(&state, tx.clone()).hash(), tx.hash());
-    assert_eq!(accept_transaction_error(&state, tx.clone()), "ok");
-
-    builder.set_creation_time(Duration::from_millis(2));
-    let other_payload = builder.sign(user_key_pair.private_key());
-    let mut tampered = tx;
-    tampered.set_signature(other_payload.signature().clone());
-    let error = accept_transaction_error(&state, tampered);
-    assert!(
-        error.starts_with("SignatureVerification("),
-        "fixture admission must reach signature verification: {error}"
-    );
-}
-#[test]
-fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_canonical_post_enactment_validation_fee_state(
-        &state,
-        &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let missing_fee_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT,
-        signed_transfer(
-            &state,
-            &user,
-            &user_key_pair,
-            &recipient,
-            &fee_asset,
-            &policy,
-            false,
-        ),
-    );
-    assert!(
-        missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
-        "unexpected missing-fee rejection: {missing_fee_error}"
-    );
-    let exact_fee_result = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
-        signed_transfer(
-            &state,
-            &user,
-            &user_key_pair,
-            &recipient,
-            &fee_asset,
-            &policy,
-            true,
-        ),
-    );
-    assert_eq!(exact_fee_result, "ok");
-}
-#[test]
-fn wsv_neutral_hijiri_binds_explicit_account_risk_presence() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_canonical_post_enactment_validation_fee_state(
-        &state,
-        &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let hijiri = HijiriParametersV1::first_release_genesis();
-    install_hijiri_state(
-        &state,
-        TEST_POLICY_ENACTMENT_HEIGHT + 1,
-        Some(&hijiri),
-        None,
-    );
-
-    let absent_risk_quote_hash = hijiri
-        .fee_quote_hash(&user, None)
-        .expect("derive absent-risk Hijiri quote hash");
-    let missing_binding = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
-    );
-    let missing_binding_error =
-        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, missing_binding);
-    assert!(
-        missing_binding_error.contains("missing signed validation-fee Hijiri quote hash metadata"),
-        "active neutral Hijiri state must still require its composite binding: {missing_binding_error}"
-    );
-
-    let absent_risk_exact = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_hijiri_policy(&policy, absent_risk_quote_hash, 1),
-    );
-    assert_eq!(
-        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT + 1, absent_risk_exact,),
-        "ok"
-    );
-
-    let explicit_risk = HijiriAccountRiskV1::try_new(user.clone(), 1, None, Q16::ZERO)
-        .expect("canonical explicit neutral account risk");
-    let explicit_risk_quote_hash = hijiri
-        .fee_quote_hash(&user, Some(&explicit_risk))
-        .expect("derive explicit-risk Hijiri quote hash");
-    assert_ne!(
-        absent_risk_quote_hash, explicit_risk_quote_hash,
-        "record presence must be part of the composite quote binding"
-    );
-    install_hijiri_state(
-        &state,
-        TEST_POLICY_ENACTMENT_HEIGHT + 2,
-        None,
-        Some(&explicit_risk),
-    );
-
-    let stale_absent_risk_binding = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_hijiri_policy(&policy, absent_risk_quote_hash, 1),
-    );
-    let stale_binding_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 2,
-        stale_absent_risk_binding,
-    );
-    assert!(
-        stale_binding_error.contains("wrong signed validation-fee Hijiri quote hash")
-            && stale_binding_error.contains(&hex::encode(explicit_risk_quote_hash))
-            && stale_binding_error.contains(&hex::encode(absent_risk_quote_hash)),
-        "the WSV account-risk record must invalidate an otherwise identical quote: {stale_binding_error}"
-    );
-
-    let explicit_risk_exact = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_hijiri_policy(&policy, explicit_risk_quote_hash, 1),
-    );
-    assert_eq!(
-        validate_in_block(
-            &state,
-            TEST_POLICY_EFFECTIVE_HEIGHT + 3,
-            explicit_risk_exact,
-        ),
-        "ok"
-    );
-}
-#[test]
-fn wsv_neutral_hijiri_binds_nested_multisig_execution_account() {
-    let (state, outer_signer, outer_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
-    install_canonical_post_enactment_validation_fee_state(
-        &state,
-        &outer_signer,
-        &outer_key_pair,
-        policy.clone(),
-    );
-    let hijiri = HijiriParametersV1::first_release_genesis();
-    install_hijiri_state(
-        &state,
-        TEST_POLICY_ENACTMENT_HEIGHT + 1,
-        Some(&hijiri),
-        None,
-    );
-    let nested_multisig = account(4).0;
-    let outer_quote_hash = hijiri
-        .fee_quote_hash(&outer_signer, None)
-        .expect("derive outer-signer Hijiri quote hash");
-    let nested_quote_hash = hijiri
-        .fee_quote_hash(&nested_multisig, None)
-        .expect("derive nested-account Hijiri quote hash");
-    assert_ne!(
-        outer_quote_hash, nested_quote_hash,
-        "the composite Hijiri quote hash must bind the execution account"
-    );
-
-    let transaction = |metadata_quote_hash, marker_quote_hash| {
-        let nested_instructions = vec![
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), nested_multisig.clone()),
-                1_u32,
-                recipient.clone(),
-            )),
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), nested_multisig.clone()),
-                policy.fee.clone(),
-                treasury.clone(),
-            )),
-            ValidationFeeMultisigMarkerV1::new(
-                policy.policy_version,
-                policy.policy_hash().expect("policy hash"),
-                Some(marker_quote_hash),
-                1,
-                None,
-            )
-            .into_instruction(),
-        ];
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            outer_signer.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(MultisigPropose::new(
-            nested_multisig.clone(),
-            nested_instructions,
-            None,
-        ))])
-        .with_metadata(metadata_for_hijiri_policy(&policy, metadata_quote_hash, 1))
-        .sign(outer_key_pair.private_key())
-    };
-
-    let nested_binding_result = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT,
-        transaction(nested_quote_hash, nested_quote_hash),
-    );
-    assert!(
-        !nested_binding_result.contains("validation-fee admission rejected transaction"),
-        "metadata and marker bound to the nested execution account must pass WSV-backed fee admission: {nested_binding_result}"
-    );
-
-    let outer_metadata_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
-        transaction(outer_quote_hash, nested_quote_hash),
-    );
-    assert!(
-        outer_metadata_error.contains("wrong signed validation-fee Hijiri quote hash")
-            && outer_metadata_error.contains(&hex::encode(nested_quote_hash))
-            && outer_metadata_error.contains(&hex::encode(outer_quote_hash)),
-        "outer-signer metadata must not substitute for the nested execution-account binding: {outer_metadata_error}"
-    );
-
-    let outer_marker_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 2,
-        transaction(nested_quote_hash, outer_quote_hash),
-    );
-    assert!(
-        outer_marker_error.contains("wrong multisig validation-fee marker Hijiri quote hash")
-            && outer_marker_error.contains(&hex::encode(nested_quote_hash))
-            && outer_marker_error.contains(&hex::encode(outer_quote_hash)),
-        "outer-signer marker hash must not substitute for the nested execution-account binding: {outer_marker_error}"
-    );
-}
-#[test]
-fn wsv_non_neutral_hijiri_applies_one_ceiling_after_aggregate() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_canonical_post_enactment_validation_fee_state(
-        &state,
-        &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let multiplier = Q16::from_parts(1, 0x4000);
-    let fee_policy = HijiriFeePolicy::new(
-        vec![
-            FeeMultiplierBand::new(Q16::ONE, multiplier)
-                .expect("canonical all-risk multiplier band"),
-        ],
-        multiplier,
-    )
-    .expect("canonical non-neutral Hijiri fee policy");
-    let hijiri = HijiriParametersV1::try_new(1, None, fee_policy, Q16::ZERO)
-        .expect("canonical non-neutral Hijiri parameters");
-    install_hijiri_state(
-        &state,
-        TEST_POLICY_ENACTMENT_HEIGHT + 1,
-        Some(&hijiri),
-        None,
-    );
-    let quote_hash = hijiri
-        .fee_quote_hash(&user, None)
-        .expect("derive default-risk Hijiri quote hash");
-    assert_eq!(
-        hijiri
-            .apply_fee_minor_units(&user, None, 30)
-            .expect("apply account multiplier"),
-        Some(38),
-        "three base fees must be aggregated before the one ceiling operation"
-    );
-    assert_eq!(
-        multiplier
-            .checked_mul_u64_ceil(10)
-            .expect("one-transfer fee")
-            * 3,
-        39,
-        "repeated per-transfer ceilings must remain observably different"
-    );
-
-    let transaction = |fee_amount: Quantity| {
-        let mut instructions = (0..3)
-            .map(|_| {
-                InstructionBox::from(Transfer::asset_quantity(
-                    AssetId::new(fee_asset.clone(), user.clone()),
-                    1_u32,
-                    recipient.clone(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        instructions.push(
-            Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), user.clone()),
-                fee_amount,
-                policy_treasury_account(&policy),
-            )
-            .into(),
-        );
-        TransactionBuilder::new(
-            *state.network_id_ref(),
-            user.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions)
-        .with_metadata(metadata_for_hijiri_policy(&policy, quote_hash, 3))
-        .sign(user_key_pair.private_key())
-    };
-
-    let repeatedly_rounded_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT,
-        transaction(quantity("0.39")),
-    );
-    assert!(
-        repeatedly_rounded_error
-            .contains("wrong validation-fee amount: expected 38 minor units, observed 39"),
-        "per-transfer rounded fee must be rejected: {repeatedly_rounded_error}"
-    );
-    assert_eq!(
-        validate_in_block(
-            &state,
-            TEST_POLICY_EFFECTIVE_HEIGHT + 1,
-            transaction(quantity("0.38")),
-        ),
-        "ok"
-    );
 }
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
@@ -1784,8 +1124,7 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
         TEST_POLICY_ENACTMENT_HEIGHT,
         1_700_000_001_000,
     ));
-    let mut state_transaction = block
-        .transaction_for_fastpq_testing(Hash::new(b"validation_fee_admission_original_callback"));
+    let mut state_transaction = block.transaction();
     let error = SetParameter::new(Parameter::Custom(custom))
         .execute(&user, &mut state_transaction)
         .expect_err("generic parameter writes must not bypass Parliament");
@@ -1901,596 +1240,218 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         );
     }
 }
+
 #[test]
-fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
-    install_canonical_post_enactment_validation_fee_state(
-        &state,
-        &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let principal = || {
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            1_u32,
-            recipient.clone(),
-        ))
-    };
-    let fee = || {
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            policy.fee.clone(),
-            treasury.clone(),
-        ))
-    };
-    let missing_fee_error = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT,
-        signed_ivm_proved_overlay(
-            &state,
-            &user,
-            &user_key_pair,
-            vec![principal()],
-            Metadata::default(),
-        ),
-    );
+fn direct_submission_requires_signed_assessment_and_native_charging_is_atomic() {
+    let (state, user, key, recipient, treasury, asset) = test_state();
+    let policy = validation_fee_policy(&state, asset.clone(), treasury.clone());
+    install_canonical_post_enactment_validation_fee_state(&state, &user, &key, policy.clone());
+    let missing = signed_transfer(&state, &user, &key, &recipient, &asset, &policy, false);
     assert!(
-        missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
-        "unexpected proved-IVM missing-fee rejection: {missing_fee_error}"
+        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, missing)
+            .contains("validation_fee_assessment")
     );
-    let exact_fee_result = validate_in_block(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
-        signed_ivm_proved_overlay(
-            &state,
-            &user,
-            &user_key_pair,
-            vec![principal(), fee()],
-            metadata_for_policy(&policy, 1),
-        ),
-    );
-    assert!(
-        !exact_fee_result.contains("validation-fee admission rejected transaction")
-            && !exact_fee_result.contains("UnsupportedExecutable"),
-        "exact proved-IVM overlay fee must pass validation-fee admission: {exact_fee_result}"
-    );
-}
-#[test]
-fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
-    install_canonical_post_enactment_validation_fee_state(
+    // Principal fits but its overage does not: neither leg nor receipt may commit.
+    let underfunded = signed_payment(
         &state,
         &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let recipient_asset = AssetId::new(fee_asset.clone(), recipient.clone());
-    let treasury_asset = AssetId::new(fee_asset.clone(), treasury.clone());
-    let missing_fee_tx = signed_transfer(
-        &state,
-        &user,
-        &user_key_pair,
+        &key,
         &recipient,
-        &fee_asset,
-        &policy,
-        false,
-    );
-    let accepted = accept_transaction(&state, missing_fee_tx);
-    let mut block = state.block(block_header(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT,
-        1_700_000_003_000,
-    ));
-    let mut ivm_cache = IvmCache::new();
-    let result = iroha_core::tx::execute_component_transaction_for_testing(
-        &mut block,
-        accepted,
-        &mut ivm_cache,
-        None,
-    );
-    assert!(result.is_err(), "missing fee must reject before commit");
-    drop(block);
-    let view = state.view();
-    assert_eq!(
-        asset_balance(view.world(), &recipient_asset),
-        Quantity::zero(),
-        "principal transfer must not commit when validation-fee admission fails"
-    );
-    assert_eq!(
-        asset_balance(view.world(), &treasury_asset),
-        Quantity::zero(),
-        "treasury must not be credited by a transaction rejected before execution"
-    );
-    drop(view);
-    let underpaid_fee_tx = signed_transfer_with_principal_and_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Quantity::from(1_u32),
-        Some((quantity("0.09"), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
-    );
-    let accepted = accept_transaction(&state, underpaid_fee_tx);
-    let mut block = state.block(block_header(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
-        1_700_000_004_000,
-    ));
-    let mut ivm_cache = IvmCache::new();
-    let result = iroha_core::tx::execute_component_transaction_for_testing(
-        &mut block,
-        accepted,
-        &mut ivm_cache,
-        None,
-    );
-    assert!(result.is_err(), "underpaid fee must reject before commit");
-    drop(block);
-    let view = state.view();
-    assert_eq!(
-        asset_balance(view.world(), &recipient_asset),
-        Quantity::zero(),
-        "principal transfer must not commit when the fee amount is wrong"
-    );
-    assert_eq!(
-        asset_balance(view.world(), &treasury_asset),
-        Quantity::zero(),
-        "wrong fee amount must not credit the treasury"
-    );
-    drop(view);
-    let fee_then_overdrawn_principal_tx = TransactionBuilder::new(
-        *state.network_id_ref(),
-        user.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            policy.fee.clone(),
-            policy_treasury_account(&policy),
-        )),
-        InstructionBox::from(Transfer::asset_quantity(
-            AssetId::new(fee_asset.clone(), user.clone()),
-            100_u32,
-            recipient.clone(),
-        )),
-    ])
-    .with_metadata(metadata_for_policy(&policy, 0))
-    .sign(user_key_pair.private_key());
-    let accepted = accept_transaction(&state, fee_then_overdrawn_principal_tx);
-    let mut block = state.block(block_header(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 2,
-        1_700_000_005_000,
-    ));
-    let mut ivm_cache = IvmCache::new();
-    let result = iroha_core::tx::execute_component_transaction_for_testing(
-        &mut block,
-        accepted,
-        &mut ivm_cache,
-        None,
-    );
-    assert!(
-        result.is_err(),
-        "overdrawn principal after fee execution must reject"
-    );
-    drop(block);
-    let view = state.view();
-    assert_eq!(
-        asset_balance(view.world(), &recipient_asset),
-        Quantity::zero(),
-        "recipient must not be credited by a rejected transaction"
-    );
-    assert_eq!(
-        asset_balance(view.world(), &treasury_asset),
-        Quantity::zero(),
-        "fee transfer must roll back when the later principal transfer fails"
-    );
-    drop(view);
-    let principal_then_overdrawn_fee_tx = signed_transfer_with_principal_and_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
+        &asset,
         quantity("99.95"),
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
-    );
-    let accepted = accept_transaction(&state, principal_then_overdrawn_fee_tx);
-    let mut block = state.block(block_header(
-        &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 3,
-        1_700_000_006_000,
-    ));
-    let mut ivm_cache = IvmCache::new();
-    let result = iroha_core::tx::execute_component_transaction_for_testing(
-        &mut block,
-        accepted,
-        &mut ivm_cache,
-        None,
+        assessment_metadata(&state, &user, &recipient, &asset, 9995),
     );
     assert!(
-        result.is_err(),
-        "overdrawn fee after principal execution must reject"
-    );
-    drop(block);
-    let view = state.view();
-    assert_eq!(
-        asset_balance(view.world(), &recipient_asset),
-        Quantity::zero(),
-        "principal transfer must roll back when the later fee transfer fails"
+        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, underfunded)
+            .contains("insufficient")
     );
     assert_eq!(
-        asset_balance(view.world(), &treasury_asset),
-        Quantity::zero(),
-        "treasury must not be credited by a rejected transaction"
+        asset_balance(
+            state.view().world(),
+            &AssetId::new(asset.clone(), recipient.clone())
+        ),
+        Quantity::zero()
     );
-    drop(view);
-    let exact_fee_tx = signed_transfer(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        true,
+    assert!(
+        iroha_core::retail_fee::receipts(state.view().world(), &user, None, 10)
+            .unwrap()
+            .is_empty()
     );
-    let accepted = accept_transaction(&state, exact_fee_tx);
+    let tx = signed_transfer(&state, &user, &key, &recipient, &asset, &policy, true);
+    let accepted = accept_transaction(&state, tx);
     let mut block = state.block(block_header(
         &state,
-        TEST_POLICY_EFFECTIVE_HEIGHT + 4,
-        1_700_000_007_000,
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        1_793_451_601_000,
     ));
-    let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut block,
         accepted,
-        &mut ivm_cache,
+        &mut IvmCache::new(),
         None,
     );
-    assert_eq!(result, Ok(Vec::new()));
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit exact validation-fee transfer");
-    let view = state.view();
+    assert!(result.is_ok(), "{result:?}");
+    block.commit_world_overlay_for_testing().unwrap();
     assert_eq!(
-        asset_balance(view.world(), &recipient_asset),
-        Quantity::from(1_u64),
-        "principal transfer must commit with the exact fee"
+        asset_balance(
+            state.view().world(),
+            &AssetId::new(asset.clone(), user.clone())
+        ),
+        quantity("98.90")
     );
     assert_eq!(
-        asset_balance(view.world(), &treasury_asset),
-        policy.fee.clone(),
-        "fee transfer must commit with the principal transfer"
+        asset_balance(
+            state.view().world(),
+            &AssetId::new(asset.clone(), recipient)
+        ),
+        quantity("1")
     );
+    assert_eq!(
+        asset_balance(state.view().world(), &AssetId::new(asset, treasury)),
+        quantity("0.10")
+    );
+    let receipts = iroha_core::retail_fee::receipts(state.view().world(), &user, None, 10).unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].collected_minor, 10);
 }
 #[test]
-fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
-    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
-    install_canonical_post_enactment_validation_fee_state(
+fn signed_assessment_cannot_be_repurposed_for_another_amount_or_charge() {
+    let (state, user, key, recipient, treasury, asset) = test_state();
+    let policy = validation_fee_policy(&state, asset.clone(), treasury);
+    install_canonical_post_enactment_validation_fee_state(&state, &user, &key, policy);
+    let metadata = assessment_metadata(&state, &user, &recipient, &asset, 100);
+    let wrong_amount = signed_payment(
         &state,
         &user,
-        &user_key_pair,
-        policy.clone(),
-    );
-    let mut exact_fee_tx = signed_transfer(
-        &state,
-        &user,
-        &user_key_pair,
+        &key,
         &recipient,
-        &fee_asset,
-        &policy,
-        true,
+        &asset,
+        quantity("2"),
+        metadata.clone(),
     );
-    let exact_fee_result = validate_in_block(&state, 3, exact_fee_tx.clone());
-    assert_eq!(exact_fee_result, "ok");
-    let mut wrong_policy_hash_metadata = metadata_for_policy(&policy, 1);
-    wrong_policy_hash_metadata.insert(
-        VALIDATION_FEE_POLICY_HASH_METADATA_KEY
+    assert!(
+        validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, wrong_amount).contains("differs")
+    );
+    let mut assessment = metadata
+        .get(iroha_data_model::validation_fee::RETAIL_FEE_ASSESSMENT_METADATA_KEY)
+        .unwrap()
+        .try_into_any_norito::<iroha_data_model::validation_fee::RetailFeeAssessmentV1>()
+        .unwrap();
+    assessment.fee_minor = 0;
+    let mut altered = Metadata::default();
+    altered.insert(
+        iroha_data_model::validation_fee::RETAIL_FEE_ASSESSMENT_METADATA_KEY
             .parse()
-            .expect("metadata key"),
-        Json::new(hex::encode([0x55u8; 32])),
+            .unwrap(),
+        Json::new(assessment),
     );
-    let wrong_policy_hash_tx = signed_transfer_with_metadata(
+    let tx = signed_payment(
         &state,
         &user,
-        &user_key_pair,
+        &key,
         &recipient,
-        &fee_asset,
-        &policy,
-        true,
-        wrong_policy_hash_metadata,
+        &asset,
+        quantity("1"),
+        altered,
     );
-    let mut policy_hash_mutation_tx = exact_fee_tx.clone();
-    policy_hash_mutation_tx.set_signature(wrong_policy_hash_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, policy_hash_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "policy-hash payload mutation must fail signature admission, got {signature_error}"
-    );
-    let mut wrong_policy_version_metadata = metadata_for_policy(&policy, 1);
-    wrong_policy_version_metadata.insert(
-        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
-            .parse()
-            .expect("metadata key"),
-        Json::new(policy.policy_version + 1),
-    );
-    let wrong_policy_version_tx = signed_transfer_with_metadata(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        true,
-        wrong_policy_version_metadata,
-    );
-    let mut policy_version_mutation_tx = exact_fee_tx.clone();
-    policy_version_mutation_tx.set_signature(wrong_policy_version_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, policy_version_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "policy-version payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_fee_coordinate_tx = signed_transfer_with_metadata(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        true,
-        metadata_for_policy(&policy, 0),
-    );
-    let mut fee_coordinate_mutation_tx = exact_fee_tx.clone();
-    fee_coordinate_mutation_tx.set_signature(wrong_fee_coordinate_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, fee_coordinate_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "fee-coordinate payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_principal_amount_tx = signed_transfer_with_principal_and_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Quantity::from(2_u32),
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
-    );
-    let mut principal_amount_mutation_tx = exact_fee_tx.clone();
-    principal_amount_mutation_tx.set_signature(wrong_principal_amount_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, principal_amount_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "principal-amount payload mutation must fail signature admission, got {signature_error}"
-    );
-    let (alternate_recipient, _) = account(4);
-    let wrong_principal_recipient_tx = signed_transfer_with_principal_and_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &alternate_recipient,
-        &fee_asset,
-        Quantity::from(1_u32),
-        Some((policy.fee.clone(), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
-    );
-    let mut principal_recipient_mutation_tx = exact_fee_tx.clone();
-    principal_recipient_mutation_tx.set_signature(wrong_principal_recipient_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, principal_recipient_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "principal-recipient payload mutation must fail signature admission, got {signature_error}"
-    );
-    let exact_batch_tx = signed_batch_transfer_with_principal_amounts(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        Quantity::from(1_u64),
-        Quantity::from(1_u64),
-    );
-    let exact_batch_result = accept_transaction_error(&state, exact_batch_tx.clone());
-    assert_eq!(exact_batch_result, "ok");
-    let wrong_batch_principal_tx = signed_batch_transfer_with_principal_amounts(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        Quantity::from(1_u64),
-        Quantity::from(2_u64),
-    );
-    let mut batch_principal_mutation_tx = exact_batch_tx.clone();
-    batch_principal_mutation_tx.set_signature(wrong_batch_principal_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, batch_principal_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "batch-principal payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_batch_source_tx = signed_batch_transfer_with_entries(
-        &state,
-        &user,
-        &user_key_pair,
-        &policy,
-        vec![
-            TransferAssetBatchEntry::new(
-                recipient.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                1_u32,
-            ),
-            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
-            TransferAssetBatchEntry::new(
+    assert!(validate_in_block(&state, TEST_POLICY_EFFECTIVE_HEIGHT, tx).contains("differs"));
+}
+
+#[test]
+fn concurrent_reviewed_retail_payments_and_replay_do_not_double_spend_inclusion() {
+    let (state, user, key, recipient, treasury, asset) = test_state();
+    let policy = validation_fee_policy(&state, asset.clone(), treasury.clone());
+    install_canonical_post_enactment_validation_fee_state(&state, &user, &key, policy);
+    {
+        let mut record = iroha_data_model::validation_fee::RetailFeeAccountStateV1::enroll(
+            user.clone(),
+            1_793_451_600_000,
+            10_000,
+        )
+        .unwrap();
+        record.payments_used = 49;
+        let storage_key = format!(
+            "retail_fee_v1/{}",
+            hex::encode(iroha_crypto::Hash::new(user.to_string().as_bytes()).as_ref())
+        )
+        .parse()
+        .unwrap();
+        let mut store = state.world.smart_contract_state.block();
+        store.insert(storage_key, norito::to_bytes(&record).unwrap());
+        store.commit();
+    }
+    let metadata = assessment_metadata(&state, &user, &recipient, &asset, 100);
+    let transactions = (1..=2)
+        .map(|nonce| {
+            let mut builder = TransactionBuilder::new(
+                *state.network_id_ref(),
                 user.clone(),
-                policy_treasury_account(&policy),
-                fee_asset.clone(),
-                quantity("0.2"),
-            ),
-        ],
-    );
-    let mut batch_source_mutation_tx = exact_batch_tx.clone();
-    batch_source_mutation_tx.set_signature(wrong_batch_source_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, batch_source_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "batch-source payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_batch_amount_tx = signed_batch_transfer_with_principal_amounts(
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Transfer::asset_quantity(
+                AssetId::new(asset.clone(), user.clone()),
+                Quantity::from(1_u32),
+                recipient.clone(),
+            )])
+            .with_metadata(metadata.clone());
+            builder.set_nonce(std::num::NonZeroU32::new(nonce).unwrap());
+            builder.sign(key.private_key())
+        })
+        .collect::<Vec<_>>();
+    let mut block = state.block(block_header(
         &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &policy,
-        Quantity::from(2_u64),
-        Quantity::from(1_u64),
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        1_793_451_601_000,
+    ));
+    let mut cache = IvmCache::new();
+    let first = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accept_transaction(&state, transactions[0].clone()),
+        &mut cache,
+        None,
     );
-    let mut batch_amount_mutation_tx = exact_batch_tx.clone();
-    batch_amount_mutation_tx.set_signature(wrong_batch_amount_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, batch_amount_mutation_tx);
+    assert!(first.is_ok(), "{first:?}");
+    let stale = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accept_transaction(&state, transactions[1].clone()),
+        &mut cache,
+        None,
+    );
     assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "batch-amount payload mutation must fail signature admission, got {signature_error}"
+        stale.is_err(),
+        "concurrent free assessment cannot acquire an overage charge"
     );
-    let wrong_batch_asset = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("fees", "paynet").expect("domain id"),
-        "wrong_batch_token".parse().expect("asset name"),
+    let replay = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accept_transaction(&state, transactions[0].clone()),
+        &mut cache,
+        None,
     );
-    let wrong_batch_asset_tx = signed_batch_transfer_with_entries(
-        &state,
-        &user,
-        &user_key_pair,
-        &policy,
-        vec![
-            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), wrong_batch_asset, 1_u32),
-            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                policy_treasury_account(&policy),
-                fee_asset.clone(),
-                quantity("0.2"),
-            ),
-        ],
-    );
-    let mut batch_asset_mutation_tx = exact_batch_tx.clone();
-    batch_asset_mutation_tx.set_signature(wrong_batch_asset_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, batch_asset_mutation_tx);
     assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "batch-asset payload mutation must fail signature admission, got {signature_error}"
+        replay.is_err(),
+        "same signed payment cannot consume another included payment"
     );
-    let wrong_batch_recipient_tx = signed_batch_transfer_with_principal_amounts(
-        &state,
-        &user,
-        &user_key_pair,
-        &alternate_recipient,
-        &fee_asset,
-        &policy,
-        Quantity::from(1_u64),
-        Quantity::from(1_u64),
+    block.commit_world_overlay_for_testing().unwrap();
+    let view = state.view();
+    assert_eq!(
+        iroha_core::retail_fee::account_state(view.world(), &user)
+            .unwrap()
+            .unwrap()
+            .payments_used,
+        50
     );
-    let mut batch_recipient_mutation_tx = exact_batch_tx;
-    batch_recipient_mutation_tx.set_signature(wrong_batch_recipient_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, batch_recipient_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "batch-recipient payload mutation must fail signature admission, got {signature_error}"
+    assert_eq!(
+        asset_balance(view.world(), &AssetId::new(asset.clone(), user.clone())),
+        quantity("99")
     );
-    let wrong_fee_amount_tx = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((quantity("0.11"), policy_treasury_account(&policy))),
-        metadata_for_policy(&policy, 1),
+    assert_eq!(
+        asset_balance(view.world(), &AssetId::new(asset, treasury)),
+        Quantity::zero()
     );
-    let mut fee_amount_mutation_tx = exact_fee_tx.clone();
-    fee_amount_mutation_tx.set_signature(wrong_fee_amount_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, fee_amount_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "fee-amount payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_fee_asset = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("fees", "paynet").expect("domain id"),
-        "wrong_fee_token".parse().expect("asset name"),
-    );
-    let wrong_fee_asset_tx = signed_transfer_with_explicit_fee_asset_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &wrong_fee_asset,
-        policy.fee.clone(),
-        policy_treasury_account(&policy),
-        metadata_for_policy(&policy, 1),
-    );
-    let mut fee_asset_mutation_tx = exact_fee_tx.clone();
-    fee_asset_mutation_tx.set_signature(wrong_fee_asset_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, fee_asset_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "fee-asset payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_fee_source_tx = signed_transfer_with_explicit_fee_source_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        &recipient,
-        policy.fee.clone(),
-        policy_treasury_account(&policy),
-        metadata_for_policy(&policy, 1),
-    );
-    let mut fee_source_mutation_tx = exact_fee_tx.clone();
-    fee_source_mutation_tx.set_signature(wrong_fee_source_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, fee_source_mutation_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "fee-source payload mutation must fail signature admission, got {signature_error}"
-    );
-    let wrong_treasury_tx = signed_transfer_with_fee_instruction(
-        &state,
-        &user,
-        &user_key_pair,
-        &recipient,
-        &fee_asset,
-        Some((policy.fee.clone(), recipient.clone())),
-        metadata_for_policy(&policy, 1),
-    );
-    exact_fee_tx.set_signature(wrong_treasury_tx.signature().clone());
-    let signature_error = accept_transaction_error(&state, exact_fee_tx);
-    assert!(
-        signature_error.contains("SignatureVerification")
-            || signature_error.contains("signature verification"),
-        "fee-treasury payload mutation must fail signature admission, got {signature_error}"
+    assert_eq!(
+        iroha_core::retail_fee::receipts(view.world(), &user, None, 10)
+            .unwrap()
+            .len(),
+        1
     );
 }

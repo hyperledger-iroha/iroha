@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(p.https_origin().unwrap(), "https://storage.example.com");
         let cap = p.to_capability().unwrap();
         assert_eq!(
-            RegisteredAccountReadV1::from_capabilities(&[cap.clone()]).unwrap(),
+            RegisteredAccountReadV1::from_capabilities(std::slice::from_ref(&cap)).unwrap(),
             Some(p.clone())
         );
         assert_eq!(

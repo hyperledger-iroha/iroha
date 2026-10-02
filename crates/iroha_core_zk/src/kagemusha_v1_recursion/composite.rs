@@ -27,36 +27,17 @@ mod apple_governed_policy_opening;
 #[path = "keymint_one_use_head_stage.rs"]
 mod keymint_one_use_head_stage;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 #[path = "ordinary_state_prepared_binding.rs"]
 mod ordinary_state_prepared_binding;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 #[path = "ordinary_state_subject_binding.rs"]
 mod ordinary_state_subject_binding;
 
-#[cfg(all(
-    unix,
-    feature = "zk-halo2-ipa",
-    any(test, feature = "kagemusha-production-prover")
-))]
+#[cfg(unix)]
 #[path = "ordinary_cash_terminal_math.rs"]
 pub(super) mod ordinary_cash_terminal_math;
 
 #[cfg(test)]
 use super::terminal_authorization::constrain_candidate_envelope_digest_v1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use ff::Field as _;
 #[cfg(test)]
 use halo2_base::utils::power_of_two;
@@ -65,11 +46,6 @@ use halo2_base::{
     gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
     utils::fe_to_biguint,
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use halo2_base::{
     gates::{GateInstructions as _, RangeInstructions as _},
     utils::{BigPrimeField, CurveAffineExt},
@@ -87,11 +63,6 @@ use halo2_proofs::{
         ipa::commitment::ParamsIPA,
     },
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use snark_verifier::{
     loader::native::NativeLoader, pcs::ipa::IpaAccumulator, verifier::plonk::PlonkProtocol,
 };
@@ -100,29 +71,9 @@ use snark_verifier::{
     util::arithmetic::{Domain, root_of_unity},
 };
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::canonical_preimage::stream::KagemushaBoundedByteStreamV1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::deferred_parent::verify_ordinary_proof_with_canonical_bytes_v1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::typed_sha_consumer::validate_recursive_hash_claim_v1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::{
     DigestV1, KagemushaEpAccumulatorV1, KagemushaEpFoldProofV1, KagemushaEqAccumulatorV1,
     KagemushaEqFoldProofV1, KagemushaGuardBundleRelationWitnessV1, KagemushaOperationV1,
@@ -154,15 +105,11 @@ use super::{
         TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, public_instance as incoming_public_instance,
     },
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::{
     canonical_preimage::assemble_bounded_canonical_frame_v1,
     deferred_parent::{
         KagemushaDeferredParentWitnessV1, constrain_parent_and_history_into_loader_v1,
+        constrain_parent_and_history_with_original_into_loader_v1,
     },
     guard_bundle::{KagemushaAssignedGuardBundleV1, constrain_guard_bundle_semantics_v1},
     terminal_authorization::{
@@ -173,32 +120,12 @@ use super::{
     },
 };
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const INCOMING_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize =
     TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const INCOMING_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize =
     TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use crate::kagemusha_v1_state::KagemushaMintFoldOpeningWitnessV1;
 use crate::pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1};
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_PASTA_STATE_COMMITMENT_DOMAIN_V1, KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
@@ -210,11 +137,6 @@ use iroha_data_model::kagemusha::{
     kagemusha_mint_credit_opening_commitment_preimage_layout_v1,
     kagemusha_recipient_credential_commitment_preimage_layout_v1,
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use {
     crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     crate::kagemusha_v1_state::KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1,
@@ -229,163 +151,38 @@ use {
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const PARENT_EQUATION_TAG: u32 = 1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const INCOMING_CREDIT_EQUATION_TAG: u32 = 2;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const GUARD_BUNDLE_EQUATION_TAG: u32 = 3;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FINALITY_EQUATION_TAG: u32 = 4;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use sha2::Digest as _;
 
 const MINT_AUTHORIZATION_EQUATION_TAG: u32 = 5;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const STATE_HASH_CLAIM_CURRENT_EQUATION_TAG: u32 = 6;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const STATE_HASH_CLAIM_HISTORY_EQUATION_TAG: u32 = 7;
 // These private data-model domains are repeated next to the circuit relation deliberately. Native
 // parity tests below pin them to the model-owned canonical digest APIs.
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_ASSET_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_LIFECYCLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:lifecycle-binding";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-authorization-statement";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_AUTHORIZATION_CONTEXT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-authorization-context";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-authorization";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-statement";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_CREDIT_ENVELOPE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_RECIPIENT_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:recipient-credential-commitment";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-credit-opening-commitment";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_ASSET_PAYLOAD_BYTES_V1: usize = 32;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_ASSET_FRAME_BYTES_V1: usize = 72;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_LIFECYCLE_PAYLOAD_BYTES_V1: usize = 422;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const MINT_FOLD_LIFECYCLE_FRAME_BYTES_V1: usize = 462;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn mint_fold_padding_lifecycle_v1(
     state: &KagemushaStateRelationWitnessV1,
 ) -> KagemushaLifecycleBindingV1 {
@@ -411,11 +208,6 @@ fn mint_fold_padding_lifecycle_v1(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn mint_fold_lifecycle_witness_v1(
     state: &KagemushaStateRelationWitnessV1,
     opening: Option<KagemushaMintFoldOpeningWitnessV1<'_>>,
@@ -426,11 +218,6 @@ fn mint_fold_lifecycle_witness_v1(
     )
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn validate_mint_fold_opening_against_state_v1(
     state: &KagemushaStateRelationWitnessV1,
     opening: Option<KagemushaMintFoldOpeningWitnessV1<'_>>,
@@ -495,11 +282,6 @@ fn validate_mint_fold_opening_against_state_v1(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// One Eq/Fp incoming sender proof slot consumed by `ReceiveFold`.
 ///
 /// Inactive positions carry the release-pinned valid padding proof and history; only their
@@ -512,11 +294,6 @@ pub(super) struct KagemushaRecursiveIncomingEqWitnessV1<'a> {
     pub(super) merge_fold_proof: &'a KagemushaEqFoldProofV1,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// One Ep/Fq incoming sender proof slot consumed by `ReceiveFold`.
 pub(super) struct KagemushaRecursiveIncomingEpWitnessV1<'a> {
     pub(super) instances: &'a [Vec<Fq>],
@@ -526,11 +303,6 @@ pub(super) struct KagemushaRecursiveIncomingEpWitnessV1<'a> {
     pub(super) merge_fold_proof: &'a KagemushaEpFoldProofV1,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 struct KagemushaRecursiveIncomingParityWitnessV1<'a, C>
 where
     C: CurveAffineExt,
@@ -542,11 +314,6 @@ where
     merge_fold_proof: &'a [u8],
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn validate_incoming_authorization_proof_shape_v1(
     protocol_num_instance: &[usize],
     slot_instance_lengths: impl IntoIterator<Item = usize>,
@@ -567,11 +334,20 @@ fn validate_incoming_authorization_proof_shape_v1(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
+#[derive(Clone, Copy)]
+struct OrdinaryOuterParentParityWitnessV1<'a, C: CurveAffineExt> {
+    protocol: &'a PlonkProtocol<C>,
+    instances: &'a [Vec<C::ScalarExt>],
+    proof: &'a [u8],
+    history: &'a IpaAccumulator<C, NativeLoader>,
+    history_fold: &'a [u8],
+    merge_fold: &'a [u8],
+    counterpart_proof: &'a [u8],
+    counterpart_history: &'a [u8],
+    public_original: Option<&'a [u8]>,
+    widths: [usize; 2],
+}
+
 /// One parity's predecessor and GuardBundle proof material consumed by the aggregate circuit.
 pub(super) struct KagemushaRecursiveParityWitnessV1<'a, C>
 where
@@ -584,6 +360,7 @@ where
         Option<super::generation::KagemushaOrdinaryAppRecursiveSelectionWitnessV1<'a>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
     mint_original_widths: [usize; 4],
+    outer_parent: Option<OrdinaryOuterParentParityWitnessV1<'a, C>>,
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) parent_protocol: &'a PlonkProtocol<C>,
@@ -614,11 +391,6 @@ where
     pub(super) mint_merge_fold_proof: &'a [u8],
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Complete paired witness used to construct one Eq/Ep recursive transition circuit pair.
 pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) hash_claim: Option<super::generation::KagemushaMintHashClaimGenerationWitnessV1<'a>>,
@@ -787,11 +559,6 @@ impl_recursive_circuit!(
     "Kagemusha Ep recursive state"
 );
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Build both mutually-audited recursive circuits from one exact state transition.
 pub(super) fn build_kagemusha_recursive_state_pair_v1(
     eq_params: &ParamsIPA<EqAffine>,
@@ -825,11 +592,6 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(super) enum RecursiveStateBuildV1 {
     Authenticated(
         KagemushaRecursiveStateEqCircuitV1,
@@ -840,11 +602,6 @@ pub(super) enum RecursiveStateBuildV1 {
     Messages(Vec<Vec<u8>>, Vec<Vec<u8>>),
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Discover exact typed messages without exposing an unauthenticated circuit or changing bytes.
 ///
 /// The queue depends on state/Guard semantics and already-existing incoming/mint proofs. Neither
@@ -870,12 +627,6 @@ pub(super) fn recursive_state_sha_messages_v1(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-
 /// Closed construction dispatch. The shipping variant preserves the explicit refusal.
 /// Test variants exercise the identical complete ordinary State body with exact originals.
 /// Their outputs cannot install a Native owner or enter a production monetary operation.
@@ -888,13 +639,10 @@ pub(super) enum RecursiveStateConstructionV1 {
     OrdinaryOutgoingQualification,
     #[cfg(test)]
     OrdinaryMintIncomingQualification,
+    #[cfg(test)]
+    OrdinaryReceiveIncomingQualification,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 impl RecursiveStateConstructionV1 {
     fn require_allowed_witness(
         self,
@@ -957,16 +705,34 @@ impl RecursiveStateConstructionV1 {
                 return Err("ordinary Mint qualification requires complete real incoming source/W2/credit openings".into());
             }
         }
+        #[cfg(test)]
+        if self == Self::OrdinaryReceiveIncomingQualification {
+            if witness.state.operation != KagemushaOperationV1::ReceiveFold
+                || witness.state.predecessor.is_none()
+                || witness.state.amount == 0
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.incoming_receive)
+                    .is_none()
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.incoming_mint)
+                    .is_some()
+                || witness
+                    .ordinary_selection
+                    .and_then(|o| o.prepared)
+                    .is_some()
+                || witness.hardware_selection.is_some()
+                || witness.mint_fold_opening.is_some()
+            {
+                return Err("ordinary Receive qualification requires actual Wrapper/source/request/opening/W2".into());
+            }
+        }
         let _ = witness;
         Ok(())
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(super) fn build_recursive_state_pair_impl_v1(
     eq_params: &ParamsIPA<EqAffine>,
     ep_params: &ParamsIPA<EpAffine>,
@@ -986,6 +752,7 @@ pub(super) fn build_recursive_state_pair_impl_v1(
     }
     witness.state.validate()?;
     let ordinary_mint = witness.ordinary_selection.and_then(|o| o.incoming_mint);
+    let ordinary_receive = witness.ordinary_selection.and_then(|o| o.incoming_receive);
     let ordinary = witness.ordinary_selection.is_some();
     let mint_original_widths = [
         super::deferred_parent::ordinary_ipa_proof_profile_v1(
@@ -1000,11 +767,16 @@ pub(super) fn build_recursive_state_pair_impl_v1(
         super::deferred_parent::ordinary_ipa_proof_profile_v1(witness.ep_mint_protocol)?.byte_len,
     ];
     if ordinary {
-        if witness.state.operation == KagemushaOperationV1::ReceiveFold {
+        if ordinary_receive.is_some()
+            != (witness.state.operation == KagemushaOperationV1::ReceiveFold)
+        {
             return Err(
-                "ordinary Receive requires its exact compact Wrapper83/source/opening consumer"
+                "ordinary Receive requires its distinct actual compact source only on ReceiveFold"
                     .into(),
             );
+        }
+        if let Some(received) = ordinary_receive {
+            require_ordinary_receive_originals_v1(&witness, received)?;
         }
         if witness.mint_fold_opening.is_some()
             || ordinary_mint.is_some()
@@ -1231,6 +1003,63 @@ pub(super) fn build_recursive_state_pair_impl_v1(
         }
     }
     witness.guard_relation.validate()?;
+    let outer = witness
+        .ordinary_selection
+        .map(|o| {
+            o.outer_parent
+                .ok_or("ordinary State complete outer predecessor operands absent")
+        })
+        .transpose()?;
+    let eq_outer_history = outer
+        .map(|o| o.eq_history.to_native().map_err(|e| e.to_string()))
+        .transpose()?;
+    let ep_outer_history = outer
+        .map(|o| o.ep_history.to_native().map_err(|e| e.to_string()))
+        .transpose()?;
+    let outer_widths = outer
+        .map(|o| {
+            Ok::<_, String>([
+                super::deferred_parent::ordinary_ipa_proof_profile_v1(o.eq_protocol)?.byte_len,
+                super::deferred_parent::ordinary_ipa_proof_profile_v1(o.ep_protocol)?.byte_len,
+            ])
+        })
+        .transpose()?;
+    if let Some(o) = outer {
+        if witness.state.operation == KagemushaOperationV1::Bootstrap {
+            if o.public_original.is_some() {
+                return Err("Bootstrap cannot import a live public predecessor".into());
+            }
+        } else {
+            let raw = o
+                .public_original
+                .ok_or("ordinary actual public predecessor original absent")?;
+            let held = super::KagemushaOrdinaryLineageStateOriginalV1::decode_original(raw)?;
+            let (eq, ep) = held.public_columns()?;
+            let p = held.proof();
+            if o.eq_instances
+                .first()
+                .and_then(|c| c.get(..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT))
+                != Some(eq.as_slice())
+                || o.ep_instances
+                    .first()
+                    .and_then(|c| c.get(..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT))
+                    != Some(ep.as_slice())
+                || o.eq_proof != p.eq_proof
+                || o.ep_proof != p.ep_proof
+                || o.eq_history.as_bytes().as_slice() != p.eq_history
+                || o.ep_history.as_bytes().as_slice() != p.ep_history
+                || native_parent_protocol_digest_v1(o.eq_protocol, KagemushaPastaParityV1::Eq)?
+                    != p.eq_protocol_digest
+                || native_parent_protocol_digest_v1(o.ep_protocol, KagemushaPastaParityV1::Ep)?
+                    != p.ep_protocol_digest
+            {
+                return Err(
+                    "ordinary outer predecessor exact full original/protocol/history differs"
+                        .into(),
+                );
+            }
+        }
+    }
     let eq_history = witness
         .eq_predecessor_history
         .to_native()
@@ -1368,6 +1197,20 @@ pub(super) fn build_recursive_state_pair_impl_v1(
             mint_original_widths,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
+            outer_parent: outer.zip(eq_outer_history.as_ref()).zip(outer_widths).map(
+                |((o, history), widths)| OrdinaryOuterParentParityWitnessV1 {
+                    protocol: o.eq_protocol,
+                    instances: o.eq_instances,
+                    proof: o.eq_proof,
+                    history,
+                    history_fold: o.eq_history_fold.as_bytes(),
+                    merge_fold: o.eq_merge_fold.as_bytes(),
+                    counterpart_proof: o.ep_proof,
+                    counterpart_history: o.ep_history.as_bytes(),
+                    public_original: o.public_original,
+                    widths,
+                },
+            ),
             parent_protocol: witness.eq_parent_protocol,
             parent_instances: witness.eq_parent_instances,
             parent_proof: witness.eq_parent_proof,
@@ -1433,6 +1276,20 @@ pub(super) fn build_recursive_state_pair_impl_v1(
             mint_original_widths,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
+            outer_parent: outer.zip(ep_outer_history.as_ref()).zip(outer_widths).map(
+                |((o, history), widths)| OrdinaryOuterParentParityWitnessV1 {
+                    protocol: o.ep_protocol,
+                    instances: o.ep_instances,
+                    proof: o.ep_proof,
+                    history,
+                    history_fold: o.ep_history_fold.as_bytes(),
+                    merge_fold: o.ep_merge_fold.as_bytes(),
+                    counterpart_proof: o.eq_proof,
+                    counterpart_history: o.eq_history.as_bytes(),
+                    public_original: o.public_original,
+                    widths,
+                },
+            ),
             parent_protocol: witness.ep_parent_protocol,
             parent_instances: witness.ep_parent_instances,
             parent_proof: witness.ep_parent_proof,
@@ -1539,11 +1396,6 @@ pub(super) fn assigned_digest_bytes<F: halo2_base::utils::ScalarField>(
     Ok(digest)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn require_complete_hardware_selection_fold_v1(
     predecessor: Option<&KagemushaStateV1>,
     successor: &KagemushaStateV1,
@@ -1566,11 +1418,6 @@ fn require_complete_hardware_selection_fold_v1(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_unqualified_hardware_selection_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     assigned: &state_relation::KagemushaAssignedStateRelationV1<F>,
@@ -1582,11 +1429,6 @@ fn constrain_unqualified_hardware_selection_v1<F: KagemushaPoseidonFieldV1>(
     );
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_unqualified_hardware_selection_limbs_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     predecessor: [AssignedValue<F>; 2],
@@ -1932,11 +1774,6 @@ fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
     Ok(enrolled_sec1)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn build_scalar_half<C>(
     construction: RecursiveStateConstructionV1,
     state: KagemushaStateRelationWitnessV1,
@@ -1999,7 +1836,7 @@ where
         let range = builder.range_chip();
         let ctx = builder.main(0);
         let role: u64 = if ordinary_data.is_some() {
-            0x4f_53_54_01
+            0x4f_53_54_03
         } else {
             0
         };
@@ -2170,7 +2007,7 @@ where
         .map_err(|_| "Kagemusha Ep credential audit public limbs have wrong shape".to_owned())?;
 
     if ordinary_data.is_some() {
-        super::ordinary_state_reserved::constrain_ordinary_state_reserved_guard_positions_v1(
+        super::ordinary_state_reserved::constrain_ordinary_state_outer_protocol_positions_v1(
             &mut builder,
             guard_eq_audit,
             guard_ep_audit,
@@ -2234,6 +2071,33 @@ where
     let history_limbs = assign_history_limbs(builder.main(0), &range, witness.successor_history)?;
     builder.assigned_instances[0].extend(history_limbs.iter().copied());
 
+    let ordinary_receive_opening =
+        if let (Some(original), Some(selected)) = (&ordinary_data, witness.ordinary_selection) {
+            let slot = witness
+                .incoming_credits
+                .first()
+                .ok_or("ordinary Receive fixed incoming slot absent")?;
+            let column = slot
+                .instances
+                .first()
+                .ok_or("ordinary Receive fixed incoming column absent")?;
+            Some(
+                super::ordinary_state_receive_consumer::constrain_ordinary_receive_opening_v1(
+                    &mut builder,
+                    &mut sha_jobs,
+                    &assigned_state,
+                    &state,
+                    original,
+                    selected.credential,
+                    selected.approval,
+                    column,
+                    selected.incoming_receive,
+                )?,
+            )
+        } else {
+            None
+        };
+
     let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
     let loader = deferred_loader_v1(&mut builder, &coordinate, &scalar_integer);
     let structure = kagemusha_protocol_structure_digest_v1(witness.parent_protocol, parity)?;
@@ -2246,7 +2110,7 @@ where
         Some(non_bootstrap),
     )
     .map_err(|error| format!("failed to bind predecessor protocol: {error:?}"))?;
-    let base_successor_history = constrain_parent_and_history_into_loader_v1(
+    let mut base_successor_history = constrain_parent_and_history_into_loader_v1(
         succinct_vk,
         &parent_protocol.protocol,
         KagemushaDeferredParentWitnessV1 {
@@ -2262,6 +2126,122 @@ where
         &loader,
     )
     .map_err(|error| format!("failed to verify/fold predecessor proof: {error:?}"))?;
+    let mut full_outer_parent_sha = None;
+    if let Some(outer) = &witness.outer_parent {
+        let expected = match parity {
+            KagemushaPastaParityV1::Eq => [
+                public[public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO],
+                public[public_instance::GUARD_EQ_CREDENTIAL_AUDIT_HI],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                public[public_instance::GUARD_EP_CREDENTIAL_AUDIT_LO],
+                public[public_instance::GUARD_EP_CREDENTIAL_AUDIT_HI],
+            ],
+        };
+        let structure = kagemusha_protocol_structure_digest_v1(outer.protocol, parity)?;
+        let protocol = load_and_constrain_parent_protocol_v1(
+            &loader,
+            outer.protocol,
+            parity,
+            structure,
+            &expected,
+        )
+        .map_err(|e| format!("actual outer protocol identity failed: {e:?}"))?;
+        let current = constrain_parent_and_history_with_original_into_loader_v1(
+            succinct_vk,
+            &protocol.protocol,
+            KagemushaDeferredParentWitnessV1 {
+                instances: outer.instances,
+                proof_bytes: outer.proof,
+                predecessor_history: outer.history,
+                fold_proof_bytes: outer.history_fold,
+            },
+            expected_predecessor_state,
+            assigned_state.predecessor_outer,
+            [expected_incoming_eq_protocol, expected_incoming_ep_protocol],
+            non_bootstrap,
+            &loader,
+        )
+        .map_err(|e| format!("actual outer parent proof/history failed: {e:?}"))?;
+        let merged = verify_fold(
+            &loader,
+            succinct_vk,
+            &[base_successor_history.clone(), current.history],
+            outer.merge_fold,
+        )
+        .map_err(|e| format!("actual complete outer predecessor merge failed: {e:?}"))?;
+        base_successor_history =
+            select_accumulator_v1(&loader, &merged, &base_successor_history, non_bootstrap)
+                .map_err(|e| format!("actual complete outer predecessor selector failed: {e:?}"))?;
+        let padding;
+        let parent = if let Some(raw) = outer.public_original {
+            super::KagemushaOrdinaryLineageStateOriginalV1::decode_original(raw)?
+        } else {
+            padding = super::KagemushaOrdinaryLineageStateOriginalV1::canonical_codec_padding();
+            padding
+        };
+        let chip = loader.ecc_chip();
+        let mut context = loader.ctx_mut();
+        // The public outer original must identify the same actual release-pinned protocols
+        // which verified it. These public positions cannot be supplied by a different key.
+        for (parent_slot, current_slot) in [
+            (
+                public_instance::EQ_PROTOCOL_LO,
+                public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO,
+            ),
+            (
+                public_instance::EP_PROTOCOL_LO,
+                public_instance::GUARD_EP_CREDENTIAL_AUDIT_LO,
+            ),
+            (
+                public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO,
+                public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO,
+            ),
+            (
+                public_instance::GUARD_EP_CREDENTIAL_AUDIT_LO,
+                public_instance::GUARD_EP_CREDENTIAL_AUDIT_LO,
+            ),
+        ] {
+            for limb in 0..2 {
+                let difference = chip.range().gate().sub(
+                    context.main(),
+                    current.column[parent_slot + limb],
+                    public[current_slot + limb],
+                );
+                let selected = chip
+                    .range()
+                    .gate()
+                    .mul(context.main(), difference, non_bootstrap);
+                chip.range()
+                    .gate()
+                    .assert_is_const(context.main(), &selected, &C::ScalarExt::ZERO);
+            }
+        }
+        let canonical = current
+            .column
+            .get(..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT)
+            .ok_or("actual outer parent public column short")?
+            .iter()
+            .map(|v| chip.assigned_scalar_bytes(&mut context, *v))
+            .collect::<Vec<_>>();
+        let (_, hash) =
+            super::ordinary_parent_canonical_stream::constrain_outer_parent_public_original_v1(
+                context.main(),
+                chip.range(),
+                &mut sha_jobs,
+                super::ordinary_parent_canonical_stream::OrdinaryOuterParentCanonicalSourcesV1 {
+                    column: &current.column,
+                    canonical_column: &canonical,
+                    canonical_current_original: &current.canonical_current_original,
+                    counterpart_current_original: outer.counterpart_proof,
+                    counterpart_history: outer.counterpart_history,
+                    proof_widths: outer.widths,
+                    parity,
+                },
+                &parent,
+            )?;
+        full_outer_parent_sha = Some(hash);
+    }
     let parent_end = loader.ecc_chip().equation_count();
     if parent_end == 0 {
         return Err("Kagemusha predecessor verifier emitted no equations".to_owned());
@@ -2313,7 +2293,7 @@ where
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let incoming_current = verify_ordinary_proof_v1(
+        let incoming_current = verify_ordinary_proof_with_canonical_bytes_v1(
             &loader,
             succinct_vk,
             &incoming_protocol,
@@ -2339,29 +2319,117 @@ where
             |error| format!("failed to bind incoming sender history slot {index}: {error:?}"),
         )?;
 
-        constrain_incoming_scalar_if_v1(
-            &loader,
-            &mut sha_jobs,
-            incoming_column,
-            &assigned_state,
-            assigned_slot,
-            assigned_slot.active,
-            expected_incoming_eq_protocol,
-            expected_incoming_ep_protocol,
-        )?;
-        constrain_incoming_common_binding_v1(
-            &loader,
-            &mut sha_jobs,
-            incoming_column,
-            assigned_slot,
-            assigned_slot.active,
-            expected_incoming_eq_protocol,
-            expected_incoming_ep_protocol,
-        )?;
+        if let (Some(original), Some(opened)) = (&ordinary_data, &ordinary_receive_opening) {
+            let chip = loader.ecc_chip();
+            let mut context = loader.ctx_mut();
+            let actual = incoming_column
+                .iter()
+                .map(|v| *v.assigned())
+                .collect::<Vec<_>>();
+            if actual.len() != opened.column.len() {
+                return Err("ordinary actual Wrapper83 column differs".into());
+            }
+            for (actual, early) in actual.iter().zip(&opened.column) {
+                context.main().constrain_equal(actual, early);
+            }
+            super::ordinary_state_receive_consumer::constrain_ordinary_receive_column_v1(
+                context.main(),
+                chip.range(),
+                &actual,
+                &assigned_state,
+                [expected_incoming_eq_protocol, expected_incoming_ep_protocol],
+            )?;
+            let incoming = witness.ordinary_selection.and_then(|o| o.incoming_receive);
+            let padding;
+            let reservation = if let Some(source) = incoming {
+                source.reservation
+            } else {
+                let parser = ordinary_mint_codec_padding_v1(&state, witness.mint_authorization)?;
+                padding = iroha_data_model::kagemusha::KagemushaOrdinaryIncomingReservationV1 {
+                    selection: iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSelectionV1 {
+                        version: 0, lineage: parser.statement.context.lineage,
+                        operation_id: [0;32], predecessor: parser.statement.context.predecessor,
+                        source: iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1::Receive {
+                            sender_commit_transport_original_sha256:[0;32], sender_outgoing_original_sha256:[0;32],
+                            recipient_request_original_digest:[0;32], encrypted_credit_original_sha256:[0;32],
+                        }, credit_id:[0;32], amount:0, scale:0, recipient_app_credential_digest:[0;32],
+                        financial_control_original_sha256:[0;32], clock_context_digest:[0;32],
+                    }, finalized_source_original_sha256:[0;32], source_proof_original_sha256:[0;32], source_semantic_digest:[0;32],
+                };
+                &padding
+            };
+            let envelope =
+                super::ordinary_state_receive_consumer::constrain_ordinary_receive_reservation_v1(
+                    context.main(),
+                    chip.range(),
+                    &mut sha_jobs,
+                    &assigned_state,
+                    original,
+                    opened,
+                    reservation,
+                    full_outer_parent_sha
+                        .as_ref()
+                        .ok_or("ordinary full PUBLIC parent SHA absent")?,
+                )?;
+            let fresh_fi = assign_bytes(
+                context.main(),
+                chip.range(),
+                &incoming.map_or([0; 32], |s| s.preparation.financial_control_original_sha256),
+            )
+            .try_into()
+            .map_err(|_| "ordinary Receive W2 FI width")?;
+            let fresh_clock = assign_bytes(
+                context.main(),
+                chip.range(),
+                &incoming.map_or([0; 32], |s| s.preparation.clock_context_digest),
+            )
+            .try_into()
+            .map_err(|_| "ordinary Receive W2 clock width")?;
+            let envelope_cells = digest_limbs_assigned(context.main(), &envelope);
+            let receive_operation = chip.range().gate().mul(
+                context.main(),
+                assigned_state.operation,
+                assigned_state.receive_credit.active,
+            );
+            super::ordinary_incoming_preparation_binding::constrain_ordinary_incoming_preparation_v1(
+                context.main(),chip.range(),&mut sha_jobs,
+                super::ordinary_incoming_preparation_binding::OrdinaryIncomingPreparationCellsV1 {
+                    operation:receive_operation, reservation_digest:envelope_cells,
+                    operation_id:original.approval_operation_id, approval_nonce:original.approval_nonce,
+                    transition_statement_digest:transition_digest,predecessor_state:assigned_state.predecessor_outer,
+                    successor_state:assigned_state.successor_outer,financial_control_original_sha256:fresh_fi,
+                    clock_context_digest:fresh_clock,financial_index_before:assigned_state.predecessor.secure_index,
+                    financial_index_after:assigned_state.successor.secure_index,journal_before:assigned_state.journal_revision_before,
+                    journal_after:assigned_state.journal_revision_after,approval_purpose:original.approval_purpose,
+                    transition_effect:assigned_state.transition_effect_digest,guard_intent:assigned_guard.transition_intent,
+                    guard_recovery:assigned_guard.recovery_record,
+                },
+            )?;
+        } else {
+            constrain_incoming_scalar_if_v1(
+                &loader,
+                &mut sha_jobs,
+                incoming_column,
+                &assigned_state,
+                assigned_slot,
+                assigned_slot.active,
+                expected_incoming_eq_protocol,
+                expected_incoming_ep_protocol,
+            )?;
+            constrain_incoming_common_binding_v1(
+                &loader,
+                &mut sha_jobs,
+                incoming_column,
+                assigned_slot,
+                assigned_slot.active,
+                expected_incoming_eq_protocol,
+                expected_incoming_ep_protocol,
+            )?;
+        }
         let incoming_complete = verify_fold(
             &loader,
             succinct_vk,
-            &[incoming_current, incoming_history],
+            &[incoming_current.accumulator, incoming_history],
             slot.history_fold_proof,
         )
         .map_err(|error| {
@@ -2400,7 +2468,9 @@ where
     if incoming_end <= parent_end {
         return Err("Kagemusha incoming sender verifier emitted no equations".to_owned());
     }
-    constrain_receive_credit_binding_v1(&loader, &mut sha_jobs, &assigned_state)?;
+    if ordinary_data.is_none() {
+        constrain_receive_credit_binding_v1(&loader, &mut sha_jobs, &assigned_state)?;
+    }
 
     if witness.guard_protocol.num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1] {
         return Err("Kagemusha GuardBundle proof has wrong public shape".to_owned());
@@ -2709,6 +2779,15 @@ where
         let chip = loader.ecc_chip();
         let mut context = loader.ctx_mut();
         let ctx = context.main();
+        super::ordinary_parent_canonical_stream::constrain_mint_parent_original_sha_v1(
+            ctx,
+            chip.range(),
+            full_outer_parent_sha
+                .as_ref()
+                .ok_or("ordinary actual full PUBLIC parent hash absent")?,
+            &authorization_cells,
+            mint,
+        )?;
         let originals = super::ordinary_mint_full_canonical_consumer::constrain_ordinary_mint_canonical_originals_v1(
             ctx, chip.range(), &mut sha_jobs,
             super::ordinary_mint_full_canonical_consumer::OrdinaryMintCanonicalProofSourcesV1 {
@@ -2770,12 +2849,13 @@ where
         .try_into()
         .map_err(|_| "ordinary fresh incoming clock SHA width")?;
         let envelope_cells = digest_limbs_assigned(ctx, &envelope);
+        let mint_operation = chip.range().gate().mul(ctx, assigned_state.operation, mint);
         super::ordinary_incoming_preparation_binding::constrain_ordinary_incoming_preparation_v1(
             ctx,
             chip.range(),
             &mut sha_jobs,
             super::ordinary_incoming_preparation_binding::OrdinaryIncomingPreparationCellsV1 {
-                operation: assigned_state.operation,
+                operation: mint_operation,
                 reservation_digest: envelope_cells,
                 operation_id: original.approval_operation_id,
                 approval_nonce: original.approval_nonce,
@@ -2930,11 +3010,6 @@ where
     Ok((builder, sha_jobs, output, claim_binding))
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
@@ -2957,22 +3032,12 @@ fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
     Ok(limbs)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn adaptive_payload_v1<T: norito::codec::Encode>(value: &T) -> Result<Vec<u8>, String> {
     let mut payload = Vec::new();
     norito::codec::encode_adaptive_into(value, &mut payload).map_err(|error| error.to_string())?;
     Ok(payload)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn changed_range_v1(
     original: &[u8],
     mutated: &[u8],
@@ -3007,11 +3072,6 @@ fn changed_range_v1(
     Ok(start..end)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn replace_assigned_range_v1<F: KagemushaPoseidonFieldV1>(
     payload: &mut [PastaSha256ByteV1<F>],
     range: core::ops::Range<usize>,
@@ -3028,11 +3088,6 @@ fn replace_assigned_range_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn replace_mutated_field_v1<F, T, M>(
     payload: &mut [PastaSha256ByteV1<F>],
     value: &T,
@@ -3057,11 +3112,6 @@ where
     replace_assigned_range_v1(payload, range, replacement, label)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn locate_unique_subslice_v1(
     haystack: &[u8],
     needle: &[u8],
@@ -3083,11 +3133,6 @@ fn locate_unique_subslice_v1(
     Ok(matches[0]..matches[0] + needle.len())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn locate_subslice_after_v1(
     haystack: &[u8],
     needle: &[u8],
@@ -3108,11 +3153,6 @@ fn locate_subslice_after_v1(
     Ok(begin..begin + needle.len())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assigned_canonical_frame_v1<F, T>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
@@ -3137,11 +3177,6 @@ where
     )
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn assigned_paired_proof_payload_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
@@ -3256,11 +3291,6 @@ fn assigned_paired_proof_payload_v1<F: KagemushaPoseidonFieldV1>(
     Ok(payload)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn hash_model_frame_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -3278,11 +3308,6 @@ fn hash_model_frame_v1<F: KagemushaPoseidonFieldV1>(
     hash(ctx, jobs, message)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn hash_state_envelope_frame_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -3304,11 +3329,6 @@ fn hash_state_envelope_frame_v1<F: KagemushaPoseidonFieldV1>(
     hash(ctx, jobs, message)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn deferred_digest_cells_v1<C>(
     column: &[DeferredScalar<'_, C>],
     offset: usize,
@@ -3329,11 +3349,6 @@ where
         .map_err(|_| format!("{label} digest cell width changed"))
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn deferred_history_bytes_v1<C>(
     ctx: &mut halo2_base::Context<C::ScalarExt>,
     gate: &halo2_base::gates::GateChip<C::ScalarExt>,
@@ -3358,11 +3373,6 @@ where
         .collect())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_digest_bytes_if_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
@@ -3377,11 +3387,6 @@ fn constrain_digest_bytes_if_v1<F: KagemushaPoseidonFieldV1>(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_byte_bit_pattern_if_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
@@ -3403,11 +3408,6 @@ fn constrain_byte_bit_pattern_if_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn mint_fold_asset_payload_v1<F: KagemushaPoseidonFieldV1>(
     asset_bytes: &[PastaSha256ByteV1<F>],
 ) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
@@ -3427,11 +3427,6 @@ fn mint_fold_asset_payload_v1<F: KagemushaPoseidonFieldV1>(
     Ok(payload)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 struct MintFoldLifecyclePayloadBytesV1<'a, F: KagemushaPoseidonFieldV1> {
     network_id: &'a [PastaSha256ByteV1<F>],
     protocol_version: &'a [PastaSha256ByteV1<F>],
@@ -3448,11 +3443,6 @@ struct MintFoldLifecyclePayloadBytesV1<'a, F: KagemushaPoseidonFieldV1> {
     ciphertext_digest: &'a [PastaSha256ByteV1<F>],
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn mint_fold_lifecycle_payload_v1<F: KagemushaPoseidonFieldV1>(
     fields: MintFoldLifecyclePayloadBytesV1<'_, F>,
 ) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
@@ -3512,11 +3502,6 @@ fn mint_fold_lifecycle_payload_v1<F: KagemushaPoseidonFieldV1>(
     Ok(payload)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_mint_fold_opening_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -3661,11 +3646,6 @@ fn constrain_mint_fold_opening_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_incoming_scalar_if_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
@@ -3782,11 +3762,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Join the original authorized recipient and both plaintext openings to this aggregate lane.
 ///
 /// The authorization verifier establishes the credential ID and commitment values. Opening that
@@ -3949,11 +3924,6 @@ fn constrain_mint_fold_recipient_opening_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_mint_authorization_statement_digest_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
@@ -3992,11 +3962,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn constrain_exact_mint_envelope_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
@@ -4712,11 +4677,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_mint_authorization_binding_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     authorization: &[DeferredScalar<'chip, C>],
@@ -4809,11 +4769,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_mint_authority_binding_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     mint: &[DeferredScalar<'chip, C>],
@@ -4891,11 +4846,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_loader_equal_if_v1<C>(
     loader: &DeferredLoader<'_, C>,
     left: AssignedValue<C::ScalarExt>,
@@ -4915,11 +4865,6 @@ fn constrain_loader_equal_if_v1<C>(
         .assert_is_const(ctx.main(), &selected, &C::ScalarExt::ZERO);
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_incoming_common_binding_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
@@ -5002,11 +4947,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Keep recipient plaintext knowledge separate from the sender-authenticated output claims.
 fn hash_receiver_plaintext_opening_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
@@ -5031,11 +4971,6 @@ fn hash_receiver_plaintext_opening_v1<F: KagemushaPoseidonFieldV1>(
     hash(ctx, jobs, message)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(super) fn assigned_uint_bytes_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
@@ -5048,11 +4983,6 @@ pub(super) fn assigned_uint_bytes_v1<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(super) fn assigned_digest_bytes_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
@@ -5064,11 +4994,6 @@ pub(super) fn assigned_digest_bytes_v1<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_receive_credit_binding_v1<C>(
     loader: &DeferredLoader<'_, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
@@ -5118,11 +5043,6 @@ where
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn assigned_ordinary_guard_verifier_column_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     digests: &[[PastaSha256ByteV1<F>; 32]; 5],
@@ -5142,11 +5062,6 @@ fn assigned_ordinary_guard_verifier_column_v1<F: KagemushaPoseidonFieldV1>(
     Ok(column)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Build the exact verified Guard column from the aggregate's SHA-bound credential statements.
 /// The normalized Guard digest omits the issuance records, so its two limbs cannot substitute
 /// for the credential digest cells when authenticating a credential opening.
@@ -5178,11 +5093,6 @@ fn assigned_guard_verifier_column_v1<F: KagemushaPoseidonFieldV1>(
     Ok(column)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     state: &state_relation::KagemushaAssignedStateRelationV1<F>,
@@ -5266,11 +5176,6 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn constrain_outer_state_head_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -6956,11 +6861,6 @@ mod tests {
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn ordinary_mint_codec_padding_v1(
     state: &KagemushaStateRelationWitnessV1,
     parser: &KagemushaMintAuthorizationV1,
@@ -7053,4 +6953,188 @@ fn ordinary_mint_codec_padding_v1(
             ep_history: parser.proof.ep_history.clone(),
         },
     })
+}
+
+/// Exact mathematical original checks before building either parity. Native/source authority
+/// is supplied separately by the closed producer and stateless service source, never this DTO.
+fn require_ordinary_receive_originals_v1(
+    witness: &KagemushaRecursiveStateWitnessV1<'_>,
+    received: super::generation::KagemushaOrdinaryRecursiveReceiveIncomingOpeningV1<'_>,
+) -> Result<(), String> {
+    use super::ordinary_cash_terminal_verifier::{
+        OrdinaryCashTerminalPublicV1, decode_profile_exact,
+    };
+    use iroha_data_model::kagemusha::*;
+    received.reservation.validate_shape()?;
+    received.preparation.validate_shape()?;
+    let super::KagemushaOrdinaryLineageOutgoingOriginalsV1::Send {
+        request,
+        output,
+        encrypted_credit,
+        ..
+    } = received.outgoing.outgoing_originals()
+    else {
+        return Err("ordinary Receive mathematical source is not Send".into());
+    };
+    let ordinary = witness
+        .ordinary_selection
+        .ok_or("ordinary Receive selection absent")?;
+    let own_digest = ordinary.credential.canonical_digest()?;
+    let n = received.outgoing.normalized_preparation();
+    let record = received.outgoing.terminal_record();
+    let body = &record.body;
+    // Decode the sole existing DATA frame against the exact released protocol identities
+    // and byte geometry already consumed by this circuit. The independent Native/service
+    // source capability authenticates manifest custody; the recursion below proves the pair.
+    let lengths = [
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(witness.eq_incoming_protocol)?
+            .byte_len,
+        super::deferred_parent::ordinary_ipa_proof_profile_v1(witness.ep_incoming_protocol)?
+            .byte_len,
+    ];
+    let wire = decode_profile_exact(
+        received.outgoing.wrapper_original(),
+        2,
+        witness.state.successor.release_id,
+        witness.mint_credit.artifact_manifest_digest,
+        [
+            witness.state.commit_wrapper_eq_protocol_digest,
+            witness.state.commit_wrapper_ep_protocol_digest,
+        ],
+        lengths,
+    )
+    .map_err(|e| e.to_string())?;
+    let before = witness
+        .state
+        .predecessor
+        .as_ref()
+        .ok_or("ordinary Receive predecessor absent")?;
+    let s = &received.reservation.selection;
+    let KagemushaOrdinaryIncomingSourceSelectionV1::Receive {
+        sender_commit_transport_original_sha256,
+        sender_outgoing_original_sha256,
+        recipient_request_original_digest,
+        encrypted_credit_original_sha256,
+    } = s.source
+    else {
+        return Err("ordinary Receive source selector differs".into());
+    };
+    let outgoing_sha = <[u8; 32]>::from(sha2::Sha256::digest(received.outgoing.canonical_bytes()?));
+    let digest = request.canonical_original_digest()?;
+    if body.operation != 2
+        || s.source.operation() != KagemushaOperationKindV1::ReceiveFold
+        || output.amount != witness.state.amount
+        || output.credit_id != s.credit_id
+        || output.amount != s.amount
+        || received.credit_opening.credit_id != output.credit_id
+        || received.credit_opening.amount != output.amount
+        || request.body.recipient_credential_digest != own_digest
+        || received.receiver_credential.canonical_bytes()?
+            != ordinary.credential.canonical_bytes()?
+        || recipient_request_original_digest != digest
+        || output.request_digest != digest
+        || encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+        || encrypted_credit_original_sha256
+            != <[u8; 32]>::from(sha2::Sha256::digest(encrypted_credit))
+        || sender_outgoing_original_sha256 != outgoing_sha
+        || received.reservation.source_proof_original_sha256 != outgoing_sha
+        || received.reservation.finalized_source_original_sha256
+            != sender_commit_transport_original_sha256
+        || received.reservation.source_semantic_digest != output.binding_digest()?
+        || received.preparation.reservation_digest != received.reservation.digest()?
+        || received.preparation.operation_id != ordinary.approval.challenge.operation_id
+        || received.preparation.nonce != ordinary.approval.challenge.nonce
+        || received.preparation.transition_statement_digest
+            != witness
+                .state
+                .public_inputs_v1()?
+                .transition_statement_digest_v1()?
+        || received.preparation.predecessor_state_commitment != before.state_commitment
+        || received.preparation.successor_state_commitment
+            != witness.state.successor.state_commitment
+        || received.preparation.financial_index_before != before.secure_index
+        || received.preparation.financial_index_after != witness.state.successor.secure_index
+        || u128::from(received.preparation.logical_journal_sequence_before)
+            != witness.state.journal_revision_before
+        || u128::from(received.preparation.logical_journal_sequence_after)
+            != witness.state.journal_revision_after
+        || wire.eq_protocol_digest != witness.state.commit_wrapper_eq_protocol_digest
+        || wire.ep_protocol_digest != witness.state.commit_wrapper_ep_protocol_digest
+    {
+        return Err("ordinary Receive exact source/request/preparation originals differ".into());
+    }
+    received
+        .credit_opening
+        .validate_shape_against(output.credit_id, output.amount)
+        .map_err(|e| e.to_string())?;
+    let public = OrdinaryCashTerminalPublicV1 {
+        operation: 2,
+        suite_id: n.successor_suite_id,
+        vk_set_digest: n.successor_vk_digest,
+        release_id: n.release_id,
+        network_id: n.network_id,
+        asset_id: n.asset_id,
+        asset_incarnation: *n.asset_incarnation.as_bytes(),
+        asset_scale: n.asset_scale,
+        liability_pool_id: n.liability_pool_id,
+        app_credential_profile_id: n.hardware_profile_id,
+        policy_epoch: n.policy_epoch,
+        lifecycle_digest: n.lifecycle_binding_digest,
+        body_digest: body.binding_digest()?,
+        candidate_digest: body.candidate_digest,
+        terminal_record_digest: record.binding_digest()?,
+        transition_nullifier: output.transition_nullifier,
+        request_digest: digest,
+        receiver_credential_digest: own_digest,
+        ciphertext_commitment: output.ciphertext_commitment,
+        amount: output.amount,
+        output_binding_digest: kagemusha_ordinary_output_binding_digest_v1(
+            output.binding_digest()?,
+            body.candidate_digest,
+            record.binding_digest()?,
+        )?,
+        redemption_manifest_digest: [0; 32],
+        eq_deferred_audit: wire.eq_deferred_audit,
+        ep_deferred_audit: wire.ep_deferred_audit,
+        eq_protocol_digest: wire.eq_protocol_digest,
+        ep_protocol_digest: wire.ep_protocol_digest,
+    };
+    let eq = &witness.eq_incoming_credits[0];
+    let ep = &witness.ep_incoming_credits[0];
+    if eq.instances
+        != [public
+            .public_column::<Fp>(&wire.eq_history)
+            .map_err(|e| e.to_string())?]
+        || ep.instances
+            != [public
+                .public_column::<Fq>(&wire.ep_history)
+                .map_err(|e| e.to_string())?]
+        || eq.proof != wire.eq_proof
+        || ep.proof != wire.ep_proof
+        || eq.history.as_bytes().as_slice() != wire.eq_history.as_slice()
+        || ep.history.as_bytes().as_slice() != wire.ep_history.as_slice()
+    {
+        return Err(
+            "ordinary Receive actual Wrapper current/history/public originals differ".into(),
+        );
+    }
+    let credit = witness
+        .state
+        .receive_credit
+        .as_ref()
+        .ok_or("ordinary Receive actual credit opening absent")?;
+    if credit.request_digest != digest
+        || credit.recipient_encryption_key != request.body.recipient_encryption_key
+        || credit.recipient_lane_id != request.body.recipient_lane_id
+        || credit.receiver_binding_digest != own_digest
+        || credit.payment_output_digest != output.binding_digest()?
+        || credit.transition_nullifier != output.transition_nullifier
+        || credit.ciphertext_commitment != output.ciphertext_commitment
+        || credit.credit_opening != *received.credit_opening
+        || credit.prepared_transfer_digest != body.binding_digest()?
+        || credit.incoming_proof_binding_digest != body.candidate_digest
+    {
+        return Err("ordinary Receive State private source/opening differs".into());
+    }
+    Ok(())
 }

@@ -189,11 +189,12 @@ enabled = true
 admission_provider_handle = "sealed-cas:prod/stream-token/gateway-admission/v1"
 admission_provider_revision = 7
 admission_provider_policy_digest_hex = "{}"
-{}{}
+{}{}{}
 "#,
         "a5".repeat(32),
         signer_tables(fields),
-        format!("{}{}", native_signer_bindings(), native_gateway_bindings())
+        native_signer_bindings(),
+        native_gateway_bindings()
     )
 }
 fn enabled_overlay() -> String {

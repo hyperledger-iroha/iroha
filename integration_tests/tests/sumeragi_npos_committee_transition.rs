@@ -297,7 +297,7 @@ fn validator_xor_escrow(
                 && custom.id() == &SumeragiNposParameters::parameter_id()
             {
                 signed_npos += 1;
-                let parameters = SumeragiNposParameters::from_custom_parameter(custom)
+                let parameters = SumeragiNposParameters::from_custom_parameter(custom)?
                     .ok_or_else(|| eyre!("signed genesis NPoS parameters are invalid"))?;
                 ensure!(
                     parameters.xor_asset_definition_id == *xor,

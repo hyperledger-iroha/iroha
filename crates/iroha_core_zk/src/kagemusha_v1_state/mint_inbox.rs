@@ -463,7 +463,7 @@ impl VerifiedMintStageV1 {
     /// The sealed token has no unchecked constructor. Its owner verifies the actual generated
     /// authorization and finality proofs and their exact instances/histories before creating it.
     /// This entry is absent from runtime builds and does not qualify a hardware provider.
-    #[cfg(all(test, unix, feature = "zk-halo2-ipa"))]
+    #[cfg(all(test, unix))]
     pub(crate) fn from_genuine_diagnostic_proofs(
         reservation: MintInboxReservationV1,
         credit: KagemushaMintCreditV1,
@@ -546,7 +546,7 @@ fn verify_mint_stage_v1(
 
 /// Authenticate exact recipient authorization and native finality under the held production
 /// verifier. The result must still match the hardware-selected original local reservation.
-#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+#[cfg(unix)]
 pub(super) fn verify_governed_mint_stage_v1(
     verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
     artifacts: KagemushaRecursionArtifactsV1,
@@ -859,7 +859,7 @@ impl KagemushaMintInboxV1 {
         Ok(total)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Compute a reservation successor only; the caller must certify it before installation.
     pub fn reserve_successor(
         &self,
@@ -889,7 +889,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Compute nonauthorizing staging projection before hardware supplies the final certificate.
     /// Its placeholder certificate cannot be installed via `staged_successor` or recovered.
     pub fn preview_staged_successor(
@@ -929,7 +929,7 @@ impl KagemushaMintInboxV1 {
         self.stage_projection(verified, &certificate)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Compute the final checked staging successor; hardware/physical-ledger verification remains
     /// mandatory in the state-machine operation before publishing it.
     pub fn staged_successor(
@@ -947,7 +947,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn stage_projection(
         &self,
         verified: &VerifiedMintStageV1,
@@ -991,7 +991,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Require the exact pending bytes before a monetary fold may consume them.
     pub fn validate_fold(
         &self,
@@ -1015,7 +1015,7 @@ impl KagemushaMintInboxV1 {
         Err(KagemushaStateErrorV1::CreditNotStaged(id))
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Prepare pending removal/compact receipt installation before the irreversible replay CAS.
     pub fn folded_successor(
         &self,

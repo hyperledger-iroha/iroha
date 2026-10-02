@@ -141,7 +141,6 @@ impl<'a> KagemushaAuthenticatedBootstrapProvingSelectionV1<'a> {
 
     /// Independently verify the genuine generated paired State against this exact initial preview.
     /// Hardware registration Guard and INITIAL checkpoint authority are still required afterward.
-    #[cfg(feature = "kagemusha-production-prover")]
     pub(crate) fn verify_state_proof(
         &self,
         proof: &KagemushaPairedProofV1,

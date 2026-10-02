@@ -658,5 +658,5 @@ pub mod http;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, unix, feature = "kagemusha-ordinary-native"))]
+#[cfg(all(test, unix))]
 pub(crate) use tests::NativeCustodyFixture;

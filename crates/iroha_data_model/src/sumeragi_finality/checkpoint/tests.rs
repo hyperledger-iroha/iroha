@@ -417,3 +417,146 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
     assert!(forged.decode_checked().is_ok());
     assert!(verifier.verify_retained_decision(&forged).is_err());
 }
+
+#[test]
+fn original_checkpoint_binary_refusal_preserves_exact_fields_and_retries() {
+    let fixture = Fixture::new();
+    let selected = checkpoint(&fixture);
+    let original = selected.encode_canonical().unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let producer = norito::with_decode_limits_scope(limits, || {
+        norito::with_decode_limits_scope(
+            norito::canonical_decode_limits(selected.genesis_wire.len()),
+            || decode_versioned_signed_block(&selected.genesis_wire),
+        )
+    })
+    .unwrap_err();
+    let iroha_version::error::Error::NoritoResourceLimit(expected) = producer else {
+        panic!("original binary decoder must retain its resource fields: {producer:?}");
+    };
+    assert!(
+        matches!(expected, norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 } if attempted > 0)
+    );
+    let error = norito::with_decode_limits_scope(limits, || {
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, super::super::FinalityReadError::DecodeResource(actual) if actual == expected),
+        "{error:?}"
+    );
+    assert_eq!(selected.encode_canonical().unwrap(), original);
+    let retried =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)
+            .unwrap();
+    assert_eq!(retried.export_checkpoint(selected.tip()).unwrap(), selected);
+    let mut malformed = selected.clone();
+    malformed.genesis_wire[0] = u8::MAX;
+    let error =
+        SumeragiFinalityVerifier::from_trusted_checkpoint(&malformed, &fixture.network, CHAIN)
+            .unwrap_err();
+    assert!(
+        matches!(error, super::super::FinalityReadError::Invalid(_)),
+        "{error:?}"
+    );
+    assert_eq!(selected.encode_canonical().unwrap(), original);
+}
+
+#[test]
+fn native_decision_data_retains_exact_selected_genesis_and_all_three_parents() {
+    use crate::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let mut fixture = NativeFinalityFixture::start("native-decision-data-fixture");
+    let original = fixture
+        .verifier()
+        .export_checkpoint(fixture.latest())
+        .unwrap();
+    let mut proofs = vec![fixture.latest().clone()];
+    for _ in 0..4 {
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        proofs.push(
+            fixture.certify_with_world_root(block, Hash::new(b"known public synthetic World")),
+        );
+    }
+    let bounded = &proofs[2..];
+    let checkpoint = original
+        .with_independently_authenticated_decision_data(bounded)
+        .unwrap();
+    let actual = fixture
+        .verifier()
+        .export_checkpoint(fixture.latest())
+        .unwrap();
+    assert_eq!(
+        checkpoint.encode_canonical().unwrap(),
+        actual.encode_canonical().unwrap()
+    );
+    assert_eq!(checkpoint.network_id(), original.network_id());
+    assert_eq!(checkpoint.chain_id(), original.chain_id());
+    let admitted = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &checkpoint,
+        &fixture.network_id(),
+        "native-decision-data-fixture",
+    )
+    .unwrap();
+    admitted.verify_retained_decision(fixture.latest()).unwrap();
+    assert!(
+        original
+            .with_independently_authenticated_decision_data(&bounded[1..])
+            .is_err()
+    );
+    assert!(
+        original
+            .with_independently_authenticated_decision_data(&[
+                bounded[1].clone(),
+                bounded[0].clone(),
+                bounded[2].clone()
+            ])
+            .is_err()
+    );
+    assert!(
+        original
+            .with_independently_authenticated_decision_data(&proofs)
+            .is_err()
+    );
+    assert!(
+        original
+            .with_independently_authenticated_decision_data(&[])
+            .is_err()
+    );
+}
+
+#[test]
+fn decoded_decision_equality_never_labels_different_execution_as_native() {
+    use crate::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let fixture = NativeFinalityFixture::new();
+    let genuine = fixture
+        .verifier()
+        .verify_retained_decision(fixture.latest())
+        .unwrap();
+    let decoded = fixture.latest().decode_checked().unwrap();
+    assert!(decoded.matches_native_execution_decision(
+        &fixture.latest().block_header.hash(),
+        genuine.core_hash().0,
+        genuine.result().0,
+        genuine.commitment()
+    ));
+    let mut altered = genuine.commitment().clone();
+    altered.execution.world_state_root = Hash::new(b"different synthetic World");
+    assert!(!decoded.matches_native_execution_decision(
+        &fixture.latest().block_header.hash(),
+        genuine.core_hash().0,
+        genuine.result().0,
+        &altered
+    ));
+    assert!(!decoded.matches_native_execution_decision(
+        &fixture.latest().block_header.hash(),
+        [1; 32],
+        genuine.result().0,
+        genuine.commitment()
+    ));
+    assert!(!decoded.matches_native_execution_decision(
+        &fixture.latest().block_header.hash(),
+        genuine.core_hash().0,
+        [1; 32],
+        genuine.commitment()
+    ));
+}

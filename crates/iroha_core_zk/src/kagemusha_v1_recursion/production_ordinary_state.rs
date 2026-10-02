@@ -23,7 +23,7 @@ use sha2::Sha256;
 use zeroize::Zeroize as _;
 
 #[path = "production_ordinary_bootstrap_inputs.rs"]
-mod bootstrap_inputs;
+pub(super) mod bootstrap_inputs;
 
 /// Borrow public auxiliary original proofs without exposing financial witness material.
 /// These data alone authorize no wallet or proof; the Native prover replaces the financial
@@ -54,7 +54,100 @@ struct Originals {
     approval: KagemushaAppOperationApprovalV1,
     lease: Option<KagemushaPlayIntegrityRefreshLeaseV1>,
     guard: OrdinaryGuardProofWireV1,
+    outer: BootstrapOuterParent,
 }
+struct BootstrapOuterParent {
+    eq_protocol: PlonkProtocol<EqAffine>,
+    ep_protocol: PlonkProtocol<EpAffine>,
+    eq_instances: Vec<Vec<Fp>>,
+    ep_instances: Vec<Vec<Fq>>,
+    eq_proof: Vec<u8>,
+    ep_proof: Vec<u8>,
+    eq_history: KagemushaEqAccumulatorV1,
+    ep_history: KagemushaEpAccumulatorV1,
+    eq_fold: KagemushaEqFoldProofV1,
+    ep_fold: KagemushaEpFoldProofV1,
+}
+impl BootstrapOuterParent {
+    fn from_actual(
+        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        use halo2_proofs::halo2curves::group::{GroupEncoding as _, prime::PrimeCurveAffine as _};
+        let m = verifier.state_checkpoint_material();
+        let eq_history = initial_kagemusha_eq_accumulator_v1(m.eq_parameters)
+            .map_err(|e| proving_error(e.to_string()))?;
+        let ep_history = initial_kagemusha_ep_accumulator_v1(m.ep_parameters)
+            .map_err(|e| proving_error(e.to_string()))?;
+        fn column<F: KagemushaPoseidonFieldV1>(
+            sizes: &[usize],
+            history: &[u8],
+        ) -> Result<Vec<Vec<F>>, KagemushaArtifactGenerationErrorV1> {
+            if sizes
+                != [
+                    super::super::super::state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+                        + 34,
+                ]
+                || history.len() != 544
+            {
+                return Err(proving_error("actual outer Bootstrap parser width differs"));
+            }
+            let mut values = vec![
+                    F::ZERO;
+                    super::super::super::state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+                ];
+            values.extend(history.chunks_exact(16).map(|b| {
+                crate::kagemusha_v1_poseidon::from_u128::<F>(u128::from_le_bytes(
+                    b.try_into().expect("fixed16 chunk"),
+                ))
+            }));
+            Ok(vec![values])
+        }
+        let eq = EqAffine::generator().to_bytes();
+        let ep = EpAffine::generator().to_bytes();
+        Ok(Self {
+            eq_protocol: m.outer_eq_protocol.clone(),
+            ep_protocol: m.outer_ep_protocol.clone(),
+            eq_instances: column(&m.outer_eq_protocol.num_instance, eq_history.as_bytes())?,
+            ep_instances: column(&m.outer_ep_protocol.num_instance, ep_history.as_bytes())?,
+            eq_proof: dummy_ordinary_proof_bytes(
+                m.outer_eq_protocol,
+                eq.as_ref(),
+                KagemushaPastaParityV1::Eq,
+            )?,
+            ep_proof: dummy_ordinary_proof_bytes(
+                m.outer_ep_protocol,
+                ep.as_ref(),
+                KagemushaPastaParityV1::Ep,
+            )?,
+            eq_fold: KagemushaEqFoldProofV1::try_from_bytes(&dummy_fold_proof_bytes(eq.as_ref()))
+                .map_err(|e| proving_error(e.to_string()))?,
+            ep_fold: KagemushaEpFoldProofV1::try_from_bytes(&dummy_fold_proof_bytes(ep.as_ref()))
+                .map_err(|e| proving_error(e.to_string()))?,
+            eq_history,
+            ep_history,
+        })
+    }
+    fn borrowed(
+        &self,
+    ) -> super::super::super::generation::KagemushaOrdinaryRecursiveOuterParentWitnessV1<'_> {
+        super::super::super::generation::KagemushaOrdinaryRecursiveOuterParentWitnessV1 {
+            public_original: None,
+            eq_protocol: &self.eq_protocol,
+            ep_protocol: &self.ep_protocol,
+            eq_instances: &self.eq_instances,
+            ep_instances: &self.ep_instances,
+            eq_proof: &self.eq_proof,
+            ep_proof: &self.ep_proof,
+            eq_history: &self.eq_history,
+            ep_history: &self.ep_history,
+            eq_history_fold: &self.eq_fold,
+            ep_history_fold: &self.ep_fold,
+            eq_merge_fold: &self.eq_fold,
+            ep_merge_fold: &self.ep_fold,
+        }
+    }
+}
+
 impl Originals {
     fn bind<'s>(
         &'s self,
@@ -69,6 +162,8 @@ impl Originals {
             previous_app_attest_counter: floor,
             prepared: None,
             incoming_mint: None,
+            incoming_receive: None,
+            outer_parent: Some(self.outer.borrowed()),
         });
         witness
     }
@@ -265,6 +360,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             approval: original,
             lease,
             guard,
+            outer: BootstrapOuterParent::from_actual(&self.verifier)?,
         })
     }
 
@@ -292,7 +388,7 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         let artifacts = self.artifacts.ordinary_recursion_artifacts()?;
         let state = &witness.state;
         let (eq_reserved, ep_reserved) =
-            super::super::super::ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1();
+            super::super::super::ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1(&self.verifier);
         let preview = selection.preview().map_err(owner_error)?;
         let guard = &preview.normalized_guard_statement;
         if !valid_placeholders

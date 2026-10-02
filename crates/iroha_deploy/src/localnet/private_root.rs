@@ -861,7 +861,7 @@ fn private_genesis(
         SumeragiConsensusMode::Permissioned,
     )?;
     let genesis = append_peer_pop(genesis, peers)?;
-    Ok(apply_localnet_crypto_overrides(genesis)?.with_consensus_meta())
+    Ok(apply_localnet_crypto_overrides(genesis)?.with_consensus_meta()?)
 }
 
 #[cfg(test)]

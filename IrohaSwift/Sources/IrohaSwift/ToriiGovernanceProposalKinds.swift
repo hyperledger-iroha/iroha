@@ -929,388 +929,248 @@ public struct ToriiGovernanceSccpRouteProposal: Decodable, Sendable, Equatable {
     }
 }
 
-/// Closed validation-fee charging mode stored in a governed policy.
-public enum ToriiGovernanceValidationFeeChargingMode: String, Decodable, Sendable, Equatable {
-    case disabled = "DISABLED"
-    case perQualifyingTransferInstruction = "PER_QUALIFYING_TRANSFER_INSTRUCTION"
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case chargingMode = "charging_mode"
-        case value
+/// Exact first-release native fee hashes use uppercase hexadecimal JSON.
+private func governanceNativeFeeHash(_ value:String,codingPath:[CodingKey]) throws -> Data {
+    guard value.count == 64, value.range(of:"^[0-9A-F]{64}$",options:.regularExpression) != nil, value != String(repeating:"0",count:64) else {
+        throw DecodingError.dataCorrupted(.init(codingPath:codingPath,debugDescription:"Native fee hash must be nonzero uppercase hexadecimal"))
     }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "validation-fee charging mode"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.contains(.value), try container.decodeNil(forKey: .value) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .value,
-                in: container,
-                debugDescription: "validation-fee charging-mode value must be explicit null"
-            )
-        }
-        let raw = try container.decode(String.self, forKey: .chargingMode)
-        guard let value = Self(rawValue: raw) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .chargingMode,
-                in: container,
-                debugDescription: "unsupported validation-fee charging mode"
-            )
-        }
-        self = value
+    var result=Data();var index=value.startIndex
+    for _ in 0..<32 {let end=value.index(index,offsetBy:2);result.append(UInt8(value[index..<end],radix:16)!);index=end}
+    return result
+}
+private func governanceFeeRequire(_ condition:Bool,_ decoder:Decoder,_ message:String) throws {
+    guard condition else {throw DecodingError.dataCorrupted(.init(codingPath:decoder.codingPath,debugDescription:message))}
+}
+public enum ToriiGovernanceValidationFeeChargingMode:String,Decodable,Sendable,Equatable {
+    case retailMonthlyAllowance="RETAIL_MONTHLY_ALLOWANCE"
+    private enum CodingKeys:String,CodingKey,CaseIterable {case chargingMode="charging_mode",value}
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"fee charging mode")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        try governanceFeeRequire((try c.decodeNil(forKey:.value)),decoder,"Fee mode payload must be null")
+        let raw=try c.decode(String.self,forKey:.chargingMode)
+        try governanceFeeRequire(raw==Self.retailMonthlyAllowance.rawValue,decoder,"Unknown fee mode")
+        self = .retailMonthlyAllowance
     }
 }
 
-/// One exact payout recipient in a governed validation-fee lifecycle.
-public struct ToriiGovernanceValidationFeePayoutRecipient: Decodable, Sendable, Equatable {
-    public let accountId: String
-    public let share: String
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case accountId = "account_id"
-        case share
+/// Balance band in SBD cents.
+public struct ToriiGovernanceRetailFeeTier:Decodable,Sendable,Equatable {
+    public let minimumAverageBalanceMinor:UInt64
+    public let monthlyFeeMinor:UInt64
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case minimumAverageBalanceMinor="minimum_average_balance_minor"
+        case monthlyFeeMinor="monthly_fee_minor"
     }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "validation-fee payout recipient"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        accountId = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .accountId),
-            codingPath: container.codingPath + [CodingKeys.accountId],
-            field: "account_id"
-        )
-        share = try governanceCanonicalNumeric(
-            container.decode(String.self, forKey: .share),
-            codingPath: container.codingPath + [CodingKeys.share],
-            field: "share"
-        )
-        guard share == "0.25" else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .share,
-                in: container,
-                debugDescription: "validation-fee payout recipient share must be exactly 0.25"
-            )
-        }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceRetailFeeTier")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        minimumAverageBalanceMinor=try c.decode(UInt64.self,forKey:.minimumAverageBalanceMinor)
+        monthlyFeeMinor=try c.decode(UInt64.self,forKey:.monthlyFeeMinor)
+        try governanceFeeRequire(monthlyFeeMinor>0,decoder,"Monthly fee must be positive")
     }
 }
 
-/// Exact contract and six-transfer plan authorized for validation-fee treasury payout.
-public struct ToriiGovernanceValidationFeePayoutBinding: Decodable, Sendable, Equatable {
-    public let contractAddress: String
-    public let codeHash: Data
-    public let entrypoint: String
-    public let treasuryAccountId: String
-    public let dsAssetId: String
-    public let xorAssetId: String
-    public let poolVaultAccountId: String
-    public let batchDs: String
-    public let minXorOut: String
-    public let maxXorOut: String
-    public let recipients: [ToriiGovernanceValidationFeePayoutRecipient]
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case contractAddress = "contract_address"
-        case codeHash = "code_hash"
-        case entrypoint
-        case treasuryAccountId = "treasury_account_id"
-        case dsAssetId = "ds_asset_id"
-        case xorAssetId = "xor_asset_id"
-        case poolVaultAccountId = "pool_vault_account_id"
-        case batchDs = "batch_ds"
-        case minXorOut = "min_xor_out"
-        case maxXorOut = "max_xor_out"
-        case recipients
+/// Parliament tariff.
+public struct ToriiGovernanceRetailFeeSchedule:Decodable,Sendable,Equatable {
+    public let includedPayments:UInt32
+    public let overageMinor:UInt64
+    public let maintenanceTiers:[ToriiGovernanceRetailFeeTier]
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case includedPayments="included_payments"
+        case overageMinor="overage_minor"
+        case maintenanceTiers="maintenance_tiers"
     }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "validation-fee payout binding"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        contractAddress = try governanceCanonicalContractAddress(
-            container.decode(String.self, forKey: .contractAddress),
-            codingPath: container.codingPath + [CodingKeys.contractAddress],
-            field: "contract_address"
-        )
-        codeHash = try governanceFixedBytes(
-            container.decode([UInt8].self, forKey: .codeHash),
-            count: 32,
-            nonzero: true,
-            codingPath: container.codingPath + [CodingKeys.codeHash],
-            field: "code_hash"
-        )
-        entrypoint = try container.decode(String.self, forKey: .entrypoint)
-        treasuryAccountId = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .treasuryAccountId),
-            codingPath: container.codingPath + [CodingKeys.treasuryAccountId],
-            field: "treasury_account_id"
-        )
-        dsAssetId = try governanceCanonicalAssetDefinition(
-            container.decode(String.self, forKey: .dsAssetId),
-            codingPath: container.codingPath + [CodingKeys.dsAssetId],
-            field: "ds_asset_id"
-        )
-        xorAssetId = try governanceCanonicalAssetDefinition(
-            container.decode(String.self, forKey: .xorAssetId),
-            codingPath: container.codingPath + [CodingKeys.xorAssetId],
-            field: "xor_asset_id"
-        )
-        poolVaultAccountId = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .poolVaultAccountId),
-            codingPath: container.codingPath + [CodingKeys.poolVaultAccountId],
-            field: "pool_vault_account_id"
-        )
-        batchDs = try governanceCanonicalQuantity(
-            container.decode(String.self, forKey: .batchDs),
-            codingPath: container.codingPath + [CodingKeys.batchDs],
-            field: "batch_ds"
-        )
-        minXorOut = try governanceCanonicalQuantity(
-            container.decode(String.self, forKey: .minXorOut),
-            codingPath: container.codingPath + [CodingKeys.minXorOut],
-            field: "min_xor_out"
-        )
-        maxXorOut = try governanceCanonicalQuantity(
-            container.decode(String.self, forKey: .maxXorOut),
-            codingPath: container.codingPath + [CodingKeys.maxXorOut],
-            field: "max_xor_out"
-        )
-        recipients = try container.decode(
-            [ToriiGovernanceValidationFeePayoutRecipient].self,
-            forKey: .recipients
-        )
-        let recipientAccounts = Set(recipients.map(\.accountId))
-        guard entrypoint == "autonomous_validation_fee_tick",
-              treasuryAccountId != poolVaultAccountId,
-              dsAssetId != xorAssetId,
-              batchDs == "10",
-              minXorOut == "4",
-              maxXorOut == "100",
-              recipients.count == 4,
-              recipientAccounts.count == 4,
-              !recipientAccounts.contains(treasuryAccountId),
-              !recipientAccounts.contains(poolVaultAccountId) else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "validation-fee payout binding violates V1 invariants"
-                )
-            )
-        }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceRetailFeeSchedule")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        includedPayments=try c.decode(UInt32.self,forKey:.includedPayments)
+        overageMinor=try c.decode(UInt64.self,forKey:.overageMinor)
+        maintenanceTiers=try c.decode([ToriiGovernanceRetailFeeTier].self,forKey:.maintenanceTiers)
+        try governanceFeeRequire(includedPayments>0 && overageMinor>0 && !maintenanceTiers.isEmpty && maintenanceTiers.count<=32 && maintenanceTiers.first?.minimumAverageBalanceMinor==0,decoder,"Invalid retail schedule")
+        for index in 1..<maintenanceTiers.count {try governanceFeeRequire(maintenanceTiers[index].minimumAverageBalanceMinor>maintenanceTiers[index-1].minimumAverageBalanceMinor && maintenanceTiers[index].monthlyFeeMinor>=maintenanceTiers[index-1].monthlyFeeMinor,decoder,"Invalid maintenance tiers")}
     }
 }
 
-/// Exact-network validation-fee policy stored in a governance proposal.
-public struct ToriiGovernanceValidationFeePolicy: Decodable, Sendable, Equatable {
-    public let schemaVersion: UInt16
-    public let networkId: NetworkId
-    public let policyVersion: String
-    public let previousPolicyHash: Data?
-    public let dsAssetId: String
-    public let dsScale: UInt8
-    public let fee: String
-    public let treasuryAccountId: String
-    public let chargingMode: ToriiGovernanceValidationFeeChargingMode
-    public let effectiveFromHeight: String
-    public let expiresAfterHeight: String?
-    public let exemptionClasses: [String]
-    public let treasuryPayoutBinding: ToriiGovernanceValidationFeePayoutBinding?
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion = "schema_version"
-        case networkId = "network_id"
-        case policyVersion = "policy_version"
-        case previousPolicyHash = "previous_policy_hash"
-        case dsAssetId = "ds_asset_id"
-        case dsScale = "ds_scale"
-        case fee
-        case treasuryAccountId = "treasury_account_id"
-        case chargingMode = "charging_mode"
-        case effectiveFromHeight = "effective_from_height"
-        case expiresAfterHeight = "expires_after_height"
-        case exemptionClasses = "exemption_classes"
-        case treasuryPayoutBinding = "treasury_payout_binding"
+/// Immutable fee reward custody.
+public struct ToriiGovernanceValidationFeeRewardCustody:Decodable,Sendable,Equatable {
+    public let contractAddress:String
+    public let treasuryAccountId:String
+    public let dsAssetId:String
+    public let xorAssetId:String
+    public let rewardPoolAccountId:String
+    public let validatorLaneId:UInt32
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case contractAddress="contract_address"
+        case treasuryAccountId="treasury_account_id"
+        case dsAssetId="ds_asset_id"
+        case xorAssetId="xor_asset_id"
+        case rewardPoolAccountId="reward_pool_account_id"
+        case validatorLaneId="validator_lane_id"
     }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "validation-fee policy"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(UInt16.self, forKey: .schemaVersion)
-        networkId = try container.decode(NetworkId.self, forKey: .networkId)
-        policyVersion = try governanceCanonicalUInt64String(
-            container.decode(String.self, forKey: .policyVersion),
-            codingPath: container.codingPath + [CodingKeys.policyVersion],
-            field: "policy_version",
-            positive: true
-        )
-        guard container.contains(.previousPolicyHash) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.previousPolicyHash,
-                .init(codingPath: container.codingPath, debugDescription: "previous_policy_hash must be explicit")
-            )
-        }
-        if let bytes = try container.decodeIfPresent([UInt8].self, forKey: .previousPolicyHash) {
-            previousPolicyHash = try governanceFixedBytes(
-                bytes,
-                count: 32,
-                nonzero: true,
-                codingPath: container.codingPath + [CodingKeys.previousPolicyHash],
-                field: "previous_policy_hash"
-            )
-        } else {
-            previousPolicyHash = nil
-        }
-        dsAssetId = try governanceCanonicalAssetDefinition(
-            container.decode(String.self, forKey: .dsAssetId),
-            codingPath: container.codingPath + [CodingKeys.dsAssetId],
-            field: "ds_asset_id"
-        )
-        dsScale = try container.decode(UInt8.self, forKey: .dsScale)
-        fee = try governanceCanonicalQuantity(
-            container.decode(String.self, forKey: .fee),
-            codingPath: container.codingPath + [CodingKeys.fee],
-            field: "fee"
-        )
-        treasuryAccountId = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .treasuryAccountId),
-            codingPath: container.codingPath + [CodingKeys.treasuryAccountId],
-            field: "treasury_account_id"
-        )
-        chargingMode = try container.decode(
-            ToriiGovernanceValidationFeeChargingMode.self,
-            forKey: .chargingMode
-        )
-        effectiveFromHeight = try governanceCanonicalUInt64String(
-            container.decode(String.self, forKey: .effectiveFromHeight),
-            codingPath: container.codingPath + [CodingKeys.effectiveFromHeight],
-            field: "effective_from_height"
-        )
-        guard container.contains(.expiresAfterHeight) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.expiresAfterHeight,
-                .init(codingPath: container.codingPath, debugDescription: "expires_after_height must be explicit")
-            )
-        }
-        if let expiry = try container.decodeIfPresent(String.self, forKey: .expiresAfterHeight) {
-            expiresAfterHeight = try governanceCanonicalUInt64String(
-                expiry,
-                codingPath: container.codingPath + [CodingKeys.expiresAfterHeight],
-                field: "expires_after_height"
-            )
-        } else {
-            expiresAfterHeight = nil
-        }
-        exemptionClasses = try container.decode([String].self, forKey: .exemptionClasses)
-        guard container.contains(.treasuryPayoutBinding) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.treasuryPayoutBinding,
-                .init(codingPath: container.codingPath, debugDescription: "treasury_payout_binding must be explicit")
-            )
-        }
-        treasuryPayoutBinding = try container.decodeIfPresent(
-            ToriiGovernanceValidationFeePayoutBinding.self,
-            forKey: .treasuryPayoutBinding
-        )
-        let policyNumber = UInt64(policyVersion)!
-        let effectiveNumber = UInt64(effectiveFromHeight)!
-        let expiryNumber = expiresAfterHeight.flatMap(UInt64.init)
-        let exemptionsValid = Set(exemptionClasses).count == exemptionClasses.count
-            && exemptionClasses.allSatisfy({ $0 == "TREASURY_PAYOUT" })
-        let payoutClassPresent = exemptionClasses.contains("TREASURY_PAYOUT")
-        let modeValid: Bool
-        switch chargingMode {
-        case .disabled:
-            modeValid = fee == "0" && exemptionClasses.isEmpty && treasuryPayoutBinding == nil
-        case .perQualifyingTransferInstruction:
-            modeValid = fee == "0.1"
-        }
-        guard schemaVersion == 1,
-              dsScale == 2,
-              (policyNumber == 1) == (previousPolicyHash == nil),
-              exemptionsValid,
-              payoutClassPresent == (treasuryPayoutBinding != nil),
-              treasuryPayoutBinding.map({
-                  $0.treasuryAccountId == treasuryAccountId && $0.dsAssetId == dsAssetId
-              }) ?? true,
-              expiryNumber.map({ $0 > effectiveNumber }) ?? true,
-              modeValid else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: container.codingPath, debugDescription: "validation-fee policy violates V1 invariants")
-            )
-        }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceValidationFeeRewardCustody")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        contractAddress=try governanceCanonicalContractAddress(c.decode(String.self,forKey:.contractAddress),codingPath:decoder.codingPath,field:"contract_address")
+        treasuryAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.treasuryAccountId),codingPath:decoder.codingPath,field:"treasury_account_id")
+        dsAssetId=try governanceCanonicalAssetDefinition(c.decode(String.self,forKey:.dsAssetId),codingPath:decoder.codingPath,field:"ds_asset_id")
+        xorAssetId=try governanceCanonicalAssetDefinition(c.decode(String.self,forKey:.xorAssetId),codingPath:decoder.codingPath,field:"xor_asset_id")
+        rewardPoolAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.rewardPoolAccountId),codingPath:decoder.codingPath,field:"reward_pool_account_id")
+        validatorLaneId=try c.decode(UInt32.self,forKey:.validatorLaneId)
+        try governanceFeeRequire(treasuryAccountId != rewardPoolAccountId && dsAssetId != xorAssetId,decoder,"Reward custody roles must differ")
     }
 }
 
-/// Stored payload for a governed validation-fee policy proposal.
-public struct ToriiGovernanceValidationFeePolicyProposal: Decodable, Sendable, Equatable {
-    public let proposalOperator: String
-    public let policy: ToriiGovernanceValidationFeePolicy
-    public let payoutLifecycleProposalId: Data?
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case proposalOperator = "proposal_operator"
-        case policy
-        case payoutLifecycleProposalId = "payout_lifecycle_proposal_id"
+/// Independent Parliament conversion and validator allocation settings.
+public struct ToriiGovernanceValidationFeePayoutBinding:Decodable,Sendable,Equatable {
+    public let contractAddress:String
+    public let codeHash:Data
+    public let entrypoint:String
+    public let treasuryAccountId:String
+    public let dsAssetId:String
+    public let xorAssetId:String
+    public let poolContractAddress:String
+    public let poolCodeHash:Data
+    public let poolVaultAccountId:String
+    public let rewardPoolAccountId:String
+    public let referenceFeedId:[String]
+    public let referenceFeedConfigVersion:UInt32
+    public let referenceProviderAccounts:[String]
+    public let maxSbdPerAttemptMinor:UInt64
+    public let maxSbdPerDayMinor:UInt64
+    public let minIntervalMs:UInt64
+    public let maxSourceAgeMs:UInt64
+    public let maxSlippageBps:UInt16
+    public let validatorLaneId:UInt32
+    public let minRewardClaimXorMinor:UInt64
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case contractAddress="contract_address"
+        case codeHash="code_hash"
+        case entrypoint="entrypoint"
+        case treasuryAccountId="treasury_account_id"
+        case dsAssetId="ds_asset_id"
+        case xorAssetId="xor_asset_id"
+        case poolContractAddress="pool_contract_address"
+        case poolCodeHash="pool_code_hash"
+        case poolVaultAccountId="pool_vault_account_id"
+        case rewardPoolAccountId="reward_pool_account_id"
+        case referenceFeedId="reference_feed_id"
+        case referenceFeedConfigVersion="reference_feed_config_version"
+        case referenceProviderAccounts="reference_provider_accounts"
+        case maxSbdPerAttemptMinor="max_sbd_per_attempt_minor"
+        case maxSbdPerDayMinor="max_sbd_per_day_minor"
+        case minIntervalMs="min_interval_ms"
+        case maxSourceAgeMs="max_source_age_ms"
+        case maxSlippageBps="max_slippage_bps"
+        case validatorLaneId="validator_lane_id"
+        case minRewardClaimXorMinor="min_reward_claim_xor_minor"
     }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "validation-fee policy proposal"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        proposalOperator = try governanceCanonicalAccount(
-            container.decode(String.self, forKey: .proposalOperator),
-            codingPath: container.codingPath + [CodingKeys.proposalOperator],
-            field: "proposal_operator"
-        )
-        policy = try container.decode(ToriiGovernanceValidationFeePolicy.self, forKey: .policy)
-        guard container.contains(.payoutLifecycleProposalId) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.payoutLifecycleProposalId,
-                .init(codingPath: container.codingPath, debugDescription: "payout lifecycle id must be explicit")
-            )
-        }
-        if let bytes = try container.decodeIfPresent(
-            [UInt8].self,
-            forKey: .payoutLifecycleProposalId
-        ) {
-            payoutLifecycleProposalId = try governanceFixedBytes(
-                bytes,
-                count: 32,
-                nonzero: true,
-                codingPath: container.codingPath + [CodingKeys.payoutLifecycleProposalId],
-                field: "payout_lifecycle_proposal_id"
-            )
-        } else {
-            payoutLifecycleProposalId = nil
-        }
-        guard (policy.treasuryPayoutBinding != nil) == (payoutLifecycleProposalId != nil) else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "payout lifecycle id presence must match the policy payout binding"
-                )
-            )
-        }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceValidationFeePayoutBinding")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        contractAddress=try governanceCanonicalContractAddress(c.decode(String.self,forKey:.contractAddress),codingPath:decoder.codingPath,field:"contract_address")
+        codeHash=try governanceNativeFeeHash(c.decode(String.self,forKey:.codeHash),codingPath:decoder.codingPath)
+        entrypoint=try c.decode(String.self,forKey:.entrypoint)
+        treasuryAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.treasuryAccountId),codingPath:decoder.codingPath,field:"treasury_account_id")
+        dsAssetId=try governanceCanonicalAssetDefinition(c.decode(String.self,forKey:.dsAssetId),codingPath:decoder.codingPath,field:"ds_asset_id")
+        xorAssetId=try governanceCanonicalAssetDefinition(c.decode(String.self,forKey:.xorAssetId),codingPath:decoder.codingPath,field:"xor_asset_id")
+        poolContractAddress=try governanceCanonicalContractAddress(c.decode(String.self,forKey:.poolContractAddress),codingPath:decoder.codingPath,field:"pool_contract_address")
+        poolCodeHash=try governanceNativeFeeHash(c.decode(String.self,forKey:.poolCodeHash),codingPath:decoder.codingPath)
+        poolVaultAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.poolVaultAccountId),codingPath:decoder.codingPath,field:"pool_vault_account_id")
+        rewardPoolAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.rewardPoolAccountId),codingPath:decoder.codingPath,field:"reward_pool_account_id")
+        referenceFeedId=try c.decode([String].self,forKey:.referenceFeedId)
+        referenceFeedConfigVersion=try c.decode(UInt32.self,forKey:.referenceFeedConfigVersion)
+        referenceProviderAccounts=try c.decode([String].self,forKey:.referenceProviderAccounts)
+        maxSbdPerAttemptMinor=try c.decode(UInt64.self,forKey:.maxSbdPerAttemptMinor)
+        maxSbdPerDayMinor=try c.decode(UInt64.self,forKey:.maxSbdPerDayMinor)
+        minIntervalMs=try c.decode(UInt64.self,forKey:.minIntervalMs)
+        maxSourceAgeMs=try c.decode(UInt64.self,forKey:.maxSourceAgeMs)
+        maxSlippageBps=try c.decode(UInt16.self,forKey:.maxSlippageBps)
+        validatorLaneId=try c.decode(UInt32.self,forKey:.validatorLaneId)
+        minRewardClaimXorMinor=try c.decode(UInt64.self,forKey:.minRewardClaimXorMinor)
+        try governanceFeeRequire(entrypoint=="autonomous_validation_fee_tick" && Set([treasuryAccountId,poolVaultAccountId,rewardPoolAccountId]).count==3 && dsAssetId != xorAssetId,decoder,"Invalid conversion custody")
+        try governanceFeeRequire(referenceFeedId.count==1 && !(referenceFeedId.first?.isEmpty ?? true) && referenceFeedConfigVersion>0 && referenceProviderAccounts.count==5 && Set(referenceProviderAccounts).count==5,decoder,"Invalid reference feed")
+        for provider in referenceProviderAccounts {_ = try governanceCanonicalAccount(provider,codingPath:decoder.codingPath,field:"reference provider")}
+        try governanceFeeRequire(maxSbdPerAttemptMinor>0 && maxSbdPerDayMinor>=maxSbdPerAttemptMinor && minIntervalMs>0 && maxSourceAgeMs>0 && maxSlippageBps<10000 && minRewardClaimXorMinor>0,decoder,"Invalid governed conversion limits")
     }
 }
 
+/// Calendar-activated customer fee policy. Conversion rules have a separate enactment.
+public struct ToriiGovernanceValidationFeePolicy:Decodable,Sendable,Equatable {
+    public let schemaVersion:UInt16
+    public let networkId:NetworkId
+    public let policyVersion:String
+    public let previousPolicyHash:Data?
+    public let dsAssetId:String
+    public let dsScale:UInt8
+    public let retailSchedule:ToriiGovernanceRetailFeeSchedule
+    public let effectiveFromMs:UInt64
+    public let noticePublishedAtMs:UInt64
+    public let fee:String
+    public let treasuryAccountId:String
+    public let chargingMode:ToriiGovernanceValidationFeeChargingMode
+    public let exemptionClasses:[String]
+    public let rewardCustody:ToriiGovernanceValidationFeeRewardCustody
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case schemaVersion="schema_version"
+        case networkId="network_id"
+        case policyVersion="policy_version"
+        case previousPolicyHash="previous_policy_hash"
+        case dsAssetId="ds_asset_id"
+        case dsScale="ds_scale"
+        case retailSchedule="retail_schedule"
+        case effectiveFromMs="effective_from_ms"
+        case noticePublishedAtMs="notice_published_at_ms"
+        case fee="fee"
+        case treasuryAccountId="treasury_account_id"
+        case chargingMode="charging_mode"
+        case exemptionClasses="exemption_classes"
+        case rewardCustody="reward_custody"
+    }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceValidationFeePolicy")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        schemaVersion=try c.decode(UInt16.self,forKey:.schemaVersion)
+        networkId=try c.decode(NetworkId.self,forKey:.networkId)
+        policyVersion=try governanceCanonicalUInt64String(c.decode(String.self,forKey:.policyVersion),codingPath:decoder.codingPath,field:"policy_version",positive:true)
+        try governanceFeeRequire(c.contains(.previousPolicyHash),decoder,"previous_policy_hash must be explicit")
+        previousPolicyHash=try c.decodeIfPresent(String.self,forKey:.previousPolicyHash).map {try governanceNativeFeeHash($0,codingPath:decoder.codingPath)}
+        dsAssetId=try governanceCanonicalAssetDefinition(c.decode(String.self,forKey:.dsAssetId),codingPath:decoder.codingPath,field:"ds_asset_id")
+        dsScale=try c.decode(UInt8.self,forKey:.dsScale)
+        retailSchedule=try c.decode(ToriiGovernanceRetailFeeSchedule.self,forKey:.retailSchedule)
+        effectiveFromMs=try c.decode(UInt64.self,forKey:.effectiveFromMs)
+        noticePublishedAtMs=try c.decode(UInt64.self,forKey:.noticePublishedAtMs)
+        fee=try governanceCanonicalQuantity(c.decode(String.self,forKey:.fee),codingPath:decoder.codingPath,field:"fee")
+        treasuryAccountId=try governanceCanonicalAccount(c.decode(String.self,forKey:.treasuryAccountId),codingPath:decoder.codingPath,field:"treasury_account_id")
+        chargingMode=try c.decode(ToriiGovernanceValidationFeeChargingMode.self,forKey:.chargingMode)
+        exemptionClasses=try c.decode([String].self,forKey:.exemptionClasses)
+        rewardCustody=try c.decode(ToriiGovernanceValidationFeeRewardCustody.self,forKey:.rewardCustody)
+        try governanceFeeRequire(schemaVersion==1 && dsScale==2 && (policyVersion=="1")== (previousPolicyHash==nil) && fee != "0" && (fee.split(separator:".").dropFirst().first?.count ?? 0) <= 2,decoder,"Invalid tariff policy")
+        try governanceFeeRequire(effectiveFromMs>=noticePublishedAtMs && effectiveFromMs-noticePublishedAtMs>=30*86_400_000,decoder,"Fee changes require public notice")
+        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(secondsFromGMT:11*3600)!
+        let date=Date(timeIntervalSince1970:Double(effectiveFromMs)/1000)
+        let components=calendar.dateComponents([.day,.hour,.minute,.second],from:date)
+        try governanceFeeRequire(effectiveFromMs%1000==0 && components.day==1 && components.hour==0 && components.minute==0 && components.second==0,decoder,"Fee activation requires Honiara month boundary")
+        try governanceFeeRequire(exemptionClasses==["TREASURY_PAYOUT"] && rewardCustody.treasuryAccountId==treasuryAccountId && rewardCustody.dsAssetId==dsAssetId,decoder,"Fee reward custody differs from tariff")
+    }
+}
+
+/// Exact customer fee proposal.
+public struct ToriiGovernanceValidationFeePolicyProposal:Decodable,Sendable,Equatable {
+    public let proposalOperator:String
+    public let policy:ToriiGovernanceValidationFeePolicy
+    private enum CodingKeys:String,CodingKey,CaseIterable {
+        case proposalOperator="proposal_operator"
+        case policy="policy"
+    }
+    public init(from decoder:Decoder)throws {
+        try governanceRejectUnknownFields(decoder,allowed:Set(CodingKeys.allCases.map(\.stringValue)),name:"ToriiGovernanceValidationFeePolicyProposal")
+        let c=try decoder.container(keyedBy:CodingKeys.self)
+        proposalOperator=try governanceCanonicalAccount(c.decode(String.self,forKey:.proposalOperator),codingPath:decoder.codingPath,field:"proposal_operator")
+        policy=try c.decode(ToriiGovernanceValidationFeePolicy.self,forKey:.policy)
+
+    }
+}
 /// Stored payload authorizing one exact validation-fee payout lifecycle.
 public struct ToriiGovernanceValidationFeePayoutLifecycleProposal: Decodable, Sendable, Equatable {
     public let proposalOperator: String

@@ -477,7 +477,14 @@ fn build_half<F: KagemushaPoseidonFieldV1>(
     }));
     builder.assigned_instances = vec![public];
     super::super::base_packing::finalize_base_params_v1(&mut builder, 9)?;
-    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)?;
+    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - 9)
+        .map_err(|reason| {
+            // Public circuit shape only; original financial/platform witnesses are not logged.
+            format!(
+                "{reason}; ordinary Mint Base layout: {:?}",
+                builder.config_params
+            )
+        })?;
     Ok((builder, jobs, provider_cells, issuer_cells, profile_cells))
 }
 pub(crate) fn build_ordinary_mint_eq_v1(

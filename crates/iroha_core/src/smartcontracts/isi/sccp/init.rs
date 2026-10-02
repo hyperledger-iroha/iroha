@@ -35,6 +35,13 @@ pub fn execute_initialize(
     let max_validators = state_transaction
         .world
         .sumeragi_npos_parameters()
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(message) => refuse(message),
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                let _ = state_transaction.defer_execution(reason);
+                refuse("local NPoS read did not complete")
+            }
+        })?
         .ok_or_else(|| refuse("NPoS consensus parameters are required"))?
         .max_validators();
     if !usize::try_from(max_validators)

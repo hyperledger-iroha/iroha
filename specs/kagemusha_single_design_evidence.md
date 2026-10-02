@@ -7,6 +7,8 @@ Section 0 is the claim map for revision 5 of the proposal and is the place to
 start. Sections 1 to 6 are the research behind revisions 2 to 4, kept as
 history under the section numbers of the revision each was written for.
 Section 7 lists sources the revision-5 drafts added.
+Section 8 lists the sources for what revision 6 added. The claim map in
+section 0 was made for revision 5 and has not been redone for revision 6.
 
 ## How to read this
 
@@ -996,3 +998,428 @@ Prior art (proposal §4.1):
   statement that prevention needs wallet code in secure hardware therefore
   holds only for value the receiver can spend again offline.
 
+
+## 8. Sources added for revision 6
+
+One automated research pass per track and one adversarial pass, on 2026-10-02.
+Nothing was run on a device. Web pages were read through a fetch tool unless a
+line says a local copy of source code was read. Each line gives the source as
+the research pass recorded it.
+
+
+### Android: what the secure hardware signs about the operating system
+
+- At the boot preceding key generation the phone's bootloader was locked and a
+  vendor-signed image was verified (rootOfTrust: verifiedBootKey, deviceLocked,
+  verifiedBootState, verifiedBootHash). (confidence: high)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/KeyCreationResult.aidl
+    (lines 63-80, 98-122, 127-240; commit 1a56e38edc2f)
+  - https://source.android.com/docs/security/features/keystore/attestation
+  - https://developer.android.com/privacy-and-security/security-key-attestation
+  - https://github.com/android/keyattestation (testdata vectors, decoded
+    2026-10-02)
+  - https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/lib.rs
+    (lines 556-592; commit fda4e68d32f8)
+  - https://github.com/privacy-scaling-explorations/circom-ecdsa-p256
+  - https://github.com/zkp-application/circom-rsa-verify
+- The OS version and the system, vendor and boot patch levels the secure
+  hardware was told at the last boot (osVersion, osPatchLevel,
+  vendorPatchLevel, bootPatchLevel). (confidence: high)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (lines 564-606, 784-824)
+  - https://android.googlesource.com/trusty/app/keymaster/+/refs/heads/main/trusty_keymaster_context.cpp
+    (lines 898-908; commit 21232396125c)
+  - https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/lib.rs
+    (lines 289-300, 600-612, 1221-1241)
+- The key was requested by the installed package with our package name,
+  versionCode and signing-certificate digest (attestationApplicationId).
+  (confidence: high)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (lines 654-678)
+  - https://android.googlesource.com/platform/system/security/+/refs/heads/main/keystore2/src/security_level.rs
+    (lines 457-476; commit 3d45d0dd72a7)
+  - https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/security/KeyAttestationApplicationIdProviderService.java
+    (lines 48-91)
+- The key was generated inside a TEE or StrongBox and can only be used for the
+  stated purpose (attestationSecurityLevel, origin, purpose). (confidence:
+  high)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (lines 34-46, 543-550)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/KeyPurpose.aidl
+    (lines 32-52)
+  - https://developer.android.com/privacy-and-security/keystore
+- A signature made later by an attested key implies that the boot before that
+  signature had the same boot key, lock state and boot state as at key
+  generation, and patch levels not lower. (confidence: medium)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
+    (lines 191-223, 505-524)
+  - https://source.android.com/docs/security/features/keystore/features
+  - https://source.android.com/docs/security/features/keystore/version-binding
+  - https://android.googlesource.com/trusty/app/keymaster/+/refs/heads/main/trusty_keymaster_context.cpp
+    (lines 342-370, 1238-1270)
+  - https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/lib.rs
+    (lines 430-501, 556-592)
+  - https://source.android.com/docs/security/features/verifiedboot/device-state
+- A fresh, offline hardware statement of the current boot state and patch
+  levels, bound to a value of the wallet's choosing (a Request digest or a
+  sequence number). (confidence: medium)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/KeyCreationResult.aidl
+    (lines 74-80)
+  - https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/keystore/java/android/security/keystore/KeyGenParameterSpec.java
+    (lines 1832-1852)
+  - https://android.googlesource.com/platform/system/security/+/refs/heads/main/keystore2/src/attestation_key_utils.rs
+    (lines 65-79)
+  - https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/keys.rs
+    (lines 169-193, 398-421)
+  - https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/cert.rs
+    (lines 298-348, 1284-1299)
+  - https://android.googlesource.com/platform/cts/+/refs/heads/main/tests/tests/keystore/src/android/keystore/cts/AttestKeyTest.java
+    (lines 153-207)
+  - https://arxiv.org/html/2507.07927 (third-party)
+- On a stated day the issuer (or a witness quorum) verified the phone's Google
+  chain, its expiry and revocation status, and recorded the attested level,
+  boot state, patch levels and app id. (confidence: medium)
+  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_single_design_proposal.md
+    (sections 4 T2 and 5.1)
+- The attestation key's certificate was not on Google's revocation list as of a
+  cached copy. (confidence: high)
+  - https://android.googleapis.com/attestation/status (measured 2026-10-02)
+  - https://www.guardsquare.com/blog/bypassing-key-attestation-api
+    (third-party)
+- The running operating system is uncompromised at the time of the payment.
+  (confidence: high)
+  - https://source.android.com/docs/security/features/verifiedboot
+  - https://source.android.com/docs/security/features/verifiedboot/dm-verity
+  - https://developer.android.com/google/play/integrity/overview
+  - https://developer.android.com/google/play/integrity/verdicts
+  - https://source.android.com/docs/security/bulletin/2022-05-01
+  - https://source.android.com/docs/security/bulletin/2025-09-01
+  - https://www.usenix.org/system/files/sec22fall_shakevsky.pdf
+
+### iPhone: App Attest, secure boot and what no evidence shows
+
+- At the instant the attestation was minted, a genuine Apple Secure Enclave
+  generated this P-256 key on genuine Apple hardware, bound to App ID X
+  (TeamID.BundleID) in environment Y. (confidence: high)
+  - https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server
+  - https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide
+  - https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity
+  - https://developer.apple.com/videos/play/wwdc2026/201/
+  - repo fixture
+    python/iroha_app_attestation/tests/fixtures/apple_official_sample_attestation.cbor
+    and apple_app_attestation_root.der (parsed with openssl)
+- At signing time, something holding the attested P-256 key signed this exact
+  transition, with no network. (confidence: high)
+  - https://developer.apple.com/documentation/devicecheck/dcappattestservice/generateassertion(_:clientdatahash:completionhandler:)
+  - repo
+    crates/iroha_core_zk/src/kagemusha_v1_recursion/app_attest_assertion_fold.rs,
+    app_attest_assertion_cbor.rs; kagemusha_p256_curve_gadget.rs lines 640-732
+  - third-party regulad/aaoracled README (scratchpad aa_master_README.md)
+- The paying device booted only Apple-signed system software (boot-time
+  guarantee), enforced locally by the hardware chain of trust and Sealed Key
+  Protection. (confidence: high)
+  - Apple Platform Security guide Aug 2026: Secure Enclave, Boot process for
+    iPad and iPhone devices, Sealed Key Protection (SKP), OS-bound keys/PKA
+    (support.apple.com/guide/security/)
+  - https://support.apple.com/guide/security/sealed-key-protection-skp-secdc7c6c88e/web
+  - https://support.apple.com/guide/iphone/iphe3fa5df43/ios (iOS 27 requires
+    iPhone 11/A13)
+  - Wikipedia/MacRumors checkm8 device range A5-A11 (third-party)
+- Signed OS version, sepOS version, LLB version, and boot-measurement hashes
+  exist on Apple silicon and can be attested to a relying party (Managed Device
+  Attestation) — but not for a store app. (confidence: high)
+  - Apple Platform Security guide Aug 2026: Managed Device Attestation for
+    Apple devices (aps.txt lines 10322-10600)
+  - https://support.apple.com/guide/deployment/managed-device-attestation-dep28afbde6a/web
+  - repo specs/kagemusha_v1_phone_algorithm.md:524 (same conclusion)
+
+### What the repository checks today, and the cost of checks inside a proof
+
+- Android: the key that signs each hop was generated inside secure hardware
+  (TEE or StrongBox) of a phone whose attestation key chains to a Google root,
+  and at the boot during which the key was generated the bootloader was locked
+  and the boot chain was verified against the manufacturer's root of trust.
+  (confidence: high)
+  - https://source.android.com/docs/security/features/keystore/attestation
+  - https://developer.android.com/privacy-and-security/security-key-attestation
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/rkp/README.md
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
+  - Google test vector android/keyattestation
+    testdata/sony-xperia10-iii/sdk33/TEE_EC.pem (copy in session scratchpad,
+    parsed with openssl)
+  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:974-1061
+  - https://github.com/o1-labs/o1js/pull/1885
+  - https://github.com/crema-labs/ecdsa-p384-circom
+  - https://arxiv.org/abs/2603.25190 (third-party preprint)
+  - https://github.com/noir-lang/noir_rsa
+  - https://arxiv.org/abs/2401.11735
+  - https://zkmopro.org/docs/performance
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/pasta_sha256.rs:36-39
+- Android: at the boot during which the key was generated, the OS version and
+  the system, vendor and boot patch levels were at or above a floor.
+  (confidence: high)
+  - https://raw.githubusercontent.com/LineageOS/android_hardware_interfaces/lineage-22.2/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (OS_PATCHLEVEL lines 588-606, VENDOR_PATCHLEVEL 786-804, BOOT_PATCHLEVEL
+    806-824)
+  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attested_enrollment.py:178-217
+- Android: the operating system named the wallet's package, version and
+  signing-certificate digest as the app allowed to use the key. (confidence:
+  high)
+  - https://raw.githubusercontent.com/LineageOS/android_hardware_interfaces/lineage-22.2/security/keymint/aidl/android/hardware/security/keymint/Tag.aidl
+    (lines 655-678)
+  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:1039-1048
+- Android, implied by a valid device signature with nothing added: the phone
+  booted under the same verified-boot key and lock state as at enrollment and
+  was not rolled back to an older release. (confidence: medium)
+  - https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl
+    (Root of Trust Binding, Version Binding)
+  - /private/tmp/claude-501/-Users-takemiyamakoto-devstuff-iroha/0ff45d0f-fe0f-4fdc-aaa7-2ad563428e01/scratchpad/rev6/properties.md
+    (A.2 row 2, sibling note)
+- Android, optional per hop: at the boot in which this hop was signed, the
+  phone was locked, verified and at patch level X. (confidence: low)
+  - /private/tmp/claude-501/-Users-takemiyamakoto-devstuff-iroha/0ff45d0f-fe0f-4fdc-aaa7-2ad563428e01/scratchpad/rev6/properties.md
+    (A.2 row 3)
+  - https://developer.android.com/privacy-and-security/security-key-attestation
+    (rule that only the extension nearest the root is trusted)
+- iPhone, at enrollment: Apple certified an App Attest key for the wallet's App
+  ID in the production environment, with the launch category and bundle version
+  Apple reports, and the attestation names 32 bytes the caller chose (which can
+  commit to the payment key). (confidence: high)
+  - https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server
+  - https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity
+  - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
+  - sample c0.der and c1.der in the session scratchpad, parsed with openssl
+  - /Users/takemiyamakoto/devstuff/iroha/python/iroha_app_attestation/src/iroha_app_attestation/attestation.py:574-652
+- iPhone, optional per hop: the holder of the Apple-certified App Attest key
+  signed this transition, with an assertion counter value and the App ID hash.
+  (confidence: medium)
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/app_attest_assertion_fold.rs:36-101
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_platform_equation.rs:158-255
+  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_v1_phone_algorithm.md:112-148
+- A named party checked what only a vendor server can answer, at a time it
+  recorded: the chain was not on Google's revocation list, the Play Integrity
+  verdict met policy, Apple's receipt verified. (confidence: high)
+  - https://developer.android.com/google/play/integrity/overview
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_data_model/src/kagemusha/kagemusha_ordinary_app_enrollment_v1.rs:857-914
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_zk/src/kagemusha_v1_recursion/ordinary_issuer_equation.rs:162-197
+  - /Users/takemiyamakoto/devstuff/iroha/specs/kagemusha_v1_provider_policy_binding.md
+- HarmonyOS: a key was generated or imported in the HUKS key store for a named
+  application id. (confidence: low)
+  - OpenHarmony huks-key-attestation-overview.md (copy in the session
+    scratchpad)
+
+### Samsung, Huawei, Xiaomi, OPPO, vivo, Honor, Meizu
+
+- Samsung (and other Play-certified Android phones): at the boot in which key K
+  was generated, the bootloader was locked and Verified Boot state was Verified
+  with boot key B and boot hash H; OS, vendor and boot patch levels were P; K
+  is held in TEE or StrongBox (Knox Vault on Galaxy S21 and later); the request
+  carried challenge C and came, according to the OS, from package/signer A.
+  (confidence: medium)
+  - https://source.android.com/docs/security/features/keystore/attestation
+  - https://developer.android.com/privacy-and-security/security-key-attestation
+  - https://source.android.com/docs/compatibility/16/android-16-cdd
+  - https://android-developers.googleblog.com/2022/03/upgrading-android-attestation-remote.html
+  - https://github.com/android/keyattestation/tree/main/testdata
+    (caiman/sdk36/TEE_EC_RKP.pem, akita/sdk34/TEE_EC_NONE.pem)
+  - https://android.googlesource.com/platform/packages/modules/RemoteKeyProvisioning/+/refs/heads/main/app/src/com/android/rkpdapp/utils/Settings.java
+    lines 42-44
+  - https://docs.samsungknox.com/admin/fundamentals/whitepaper/samsung-knox-mobile-security/system-security/knox-vault/
+  - https://storage.googleapis.com/play_public/supported_devices.csv
+  - third-party:
+    https://raw.githubusercontent.com/GrapheneOS/Auditor/40/app/src/main/java/app/attestation/auditor/AttestationProtocol.java
+    lines 268-290, 382-428
+  - third-party: arXiv 2507.07927
+  - https://github.com/privacy-scaling-explorations/circom-ecdsa-p256
+  - https://eprint.iacr.org/2024/2010
+  - /Users/takemiyamakoto/devstuff/iroha/crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs
+    lines 20-30
+- Samsung Knox Enhanced Attestation v3: Samsung's server judged that this
+  Galaxy device's warranty fuse is untripped, its boot chain is official and
+  not OEM-unlocked, its device ID is unmodified, and the request came from app
+  package/signature A, for nonce N. (confidence: high)
+  - https://docs.samsungknox.com/dev/knox-attestation/enhanced-attestation-v3/
+  - https://docs.samsungknox.com/dev/knox-attestation/tutorial/tutorial-knox-attestation-v3/
+  - https://docs.samsungknox.com/devref/knox-sdk/reference/com/samsung/android/knox/integrity/EnhancedAttestationPolicy.html
+  - https://docs.samsungknox.com/devref/knox-sdk/reference/com/samsung/android/knox/integrity/EnhancedAttestationResult.html
+  - https://docs.samsungknox.com/admin/fundamentals/whitepaper/samsung-knox-mobile-security/system-security/device-health-attestation/
+  - https://docs.samsungknox.com/dev/knox-sdk/introduction/license-permissions/
+  - https://docs.samsungknox.com/dev/knox-sdk/faq/licensing/
+  - https://docs.samsungknox.com/dev/knox-sdk/release-notes/knox-sdk-371/
+  - https://docs.samsungknox.com/admin/knox-platform-for-enterprise/faq/
+  - third-party: https://github.com/vvb2060/KeyAttestation RootPublicKey.java
+    lines 52-68 (commit b223a9be86cb)
+- Samsung SAK key attestation: a key certificate carrying Samsung's integrity
+  status (trust boot, warranty fuse, ICD, kernel status, system status, caller
+  authentication) alongside the Android KeyDescription. (confidence: low)
+  - third-party: https://github.com/vvb2060/KeyAttestation commit b223a9be86cb:
+    Attestation.java line 38; KnoxAttestation.java lines 13-16;
+    IntegrityStatus.java lines 10-15; AuthResult.java lines 10-13;
+    HomeViewModel.kt lines 108-115; AndroidKeyStore.java lines 240-276
+  - https://docs.samsungknox.com/admin/fundamentals/whitepaper/samsung-knox-mobile-security/system-security/real-time-kernel-protection/
+- Huawei HarmonyOS NEXT: public key K was generated (or imported) in HUKS on a
+  device holding a Huawei-certified device key, for app {appId, bundleName},
+  with challenge C, on product model M. (confidence: high)
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/huks-key-attestation-overview
+    (updated 2026-09-04)
+  - https://github.com/openharmony/security_huks
+    services/huks_standard/huks_engine/main/device_cert_manager/src/dcm_attest.c
+    commit 82fd7821d33b, lines 67-78, 254-260, 328-341, 1136-1141, 1286-1301,
+    1330-1333
+  - https://github.com/openharmony/docs/blob/master/en/application-dev/security/UniversalKeystoreKit/huks-offline-anon-attestation-arkts.md
+  - https://pki.consumer.huawei.com/ca/
+- Huawei system integrity verdict: Huawei's server judged at time T that the
+  device passed (or failed, with reasons) its integrity check for app A and
+  nonce N. (confidence: high)
+  - https://developer.huawei.com/consumer/en/doc/development/Security-Guides/dysintegritydevelopment-0000001050156331
+    (updated 2023-08-10)
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/devicesecurity-introduction
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/devicesecurity-sysintegrity-check
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/devicesecurity-sysintegrityenhanced-check
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/devicesecurity-sysintegrity-check-onlocal
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/devicesecurity-safetydetect-queryriskfactors
+- Xiaomi, OPPO, vivo mainland builds: the same Android key-attestation
+  statement as on Samsung, under Google-issued attestation certificates.
+  (confidence: medium)
+  - https://trust.mi.com/pdf/MIUI_Security_and_Privacy_White_Paper_CN_April_2020.pdf
+  - https://trust.mi.com/docs/miui-security-white-paper-global/3/2
+  - https://www.oppo.com/content/dam/oppo/file/pdf/ColorOS%2011%E5%AE%89%E5%85%A8%E6%8A%80%E6%9C%AF%E7%99%BD%E7%9A%AE%E4%B9%A6.pdf
+  - https://privacy.vivo.com.cn/static/pdf/security-book-pdf.pdf
+  - https://storage.googleapis.com/play_public/supported_devices.csv (last
+    modified 2026-10-02)
+  - https://support.google.com/googleplay/answer/1727131
+  - https://android.googlesource.com/platform/packages/modules/RemoteKeyProvisioning/+/refs/heads/main/app/src/com/android/rkpdapp/interfaces/ServerInterface.java
+    lines 74, 245-250, 364-385
+  - https://android.googlesource.com/platform/packages/modules/RemoteKeyProvisioning/+/refs/heads/main/app/src/com/android/rkpdapp/utils/Settings.java
+    lines 235-251
+- Xiaomi trusted-device service: this Xiaomi phone reports bootloader lock
+  (from the normal OS and from the TEE), root state, SELinux mode and
+  factory-reset count, for calling app package/version/signer and challenge C.
+  (confidence: high)
+  - https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1746 (updated
+    2025-08-22)
+  - https://trust.mi.com/docs/miui-security-white-paper-global/2/1
+- Honor and Meizu mainland builds: no hardware- or vendor-signed OS statement
+  obtainable by an ordinary app has been shown. (confidence: low)
+  - https://www.honor.com/content/dam/honor/global/overview-test/img/MagicOS-10.0-Security-Technical-White-Paper.pdf
+- Negative result: on no vendor examined does any evidence available to an
+  ordinary app distinguish a genuine, locked, fully booted phone from the same
+  phone after a run-time takeover of its operating system. (confidence: high)
+  - third-party:
+    https://blog.quarkslab.com/bypassing-android-hardware-attestation.html
+
+### Ways to pay twice with every proposed constraint in the proof
+
+- Run-time kernel/root exploit on a locked, Verified, fully-patched Android
+  phone (Android (Pixel, Samsung, Xiaomi/OPPO/vivo on Play-certified builds)).
+  Verdict: passes every constraint.
+  - https://source.android.com/docs/security/bulletin/2022-05-01
+  - https://source.android.com/docs/security/bulletin/2025-09-01
+  - https://developer.android.com/privacy-and-security/keystore
+  - https://source.android.com/docs/security/features/keystore/attestation
+  - AOSP KeyCreationResult.aidl / Tag.aidl: ATTESTATION_APPLICATION_ID 'Cannot
+    be hardware-enforced'
+  - specs/kagemusha_single_design_proposal.md sec 4, 4.1 (compromised-phone M)
+- Unlocked/rooted Android phone presenting a leaked factory keybox
+  (TrickyStore-style attestation spoof) (Android (any model whose factory batch
+  key or keybox has leaked)). Verdict: stopped by a constraint.
+  - https://developer.android.com/privacy-and-security/security-key-attestation
+  - https://android.googleapis.com/attestation/status
+  - https://android-developers.googleblog.com/2022/03/upgrading-android-attestation-remote.html
+  - Guardsquare, How Attackers Bypass Key Attestation Remotely, 2026-01-27
+    (third-party)
+  - https://source.android.com/docs/compatibility/16/android-16-cdd (CDD 9.11
+    factory-key sharing)
+- Compromised TEE / secure element: extraction of a genuine device attestation
+  key (Android (demonstrated on Samsung Galaxy S8-S21; TEE/SE bugs exist across
+  vendors)). Verdict: passes every constraint.
+  - https://www.usenix.org/system/files/sec22fall_shakevsky.pdf
+  - https://docs.samsungknox.com/admin/fundamentals/whitepaper/samsung-knox-mobile-security/system-security/real-time-kernel-protection/
+  - https://android.googleapis.com/attestation/status
+- Jailbroken iPhone/iPad minting attestations and assertions for the wallet App
+  ID (aaoracled-style) (iPhone/iPad (App Attest)). Verdict: passes every
+  constraint.
+  - regulad/aaoracled (third-party; SETUP.md:
+    checkm8+palera1n-roothide+Dopamine2-roothide)
+  - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
+  - Apple WWDC26 session 201 'Mitigate fraud with App Attest and DeviceCheck'
+  - repo crates/iroha_core_zk/src/kagemusha_p256_curve_gadget.rs (counter
+    floor, not == prev+1)
+- iOS app on an Apple-silicon Mac or in a tampered/resigned app container
+  (iPhone app binary running on macOS (M-series) or in a modified container).
+  Verdict: stopped by a constraint.
+  - https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server
+  - https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide
+  - https://developer.apple.com/documentation/devicecheck/assessing-fraud-risk
+  - Apple WWDC26 session 201 (launch category, bundle version)
+- Relaying signing/attestation requests to a genuine phone the attacker also
+  owns (Android and iPhone). Verdict: stopped by a constraint.
+  - https://blog.quarkslab.com/bypassing-android-hardware-attestation.html
+  - Apple WWDC26 session 201
+  - specs/kagemusha_single_design_proposal.md sec 4.1 (challenge binding;
+    broker reduces to M)
+- Old, unpatched phone enrolled at an acceptable patch level that never renews
+  (Android (any model past vendor support, or kept offline)). Verdict: stopped
+  only online.
+  - https://source.android.com/docs/security/bulletin/2025-09-01
+  - https://source.android.com/docs/security/bulletin/2025-03-01
+  - specs/kagemusha_single_design_proposal.md sec 5.4 (floors on receiver's own
+    time; R8)
+  - rev6 os_circuit.md sec 5.4 (patch floor vs forced renewal conflict)
+- Phone on a vendor whose attestation carries no boot state (Huawei HarmonyOS
+  NEXT) (Huawei HarmonyOS NEXT (HUKS attestation); any platform with no
+  hardware-signed boot/lock/patch field). Verdict: passes every constraint.
+  - https://developer.huawei.com/consumer/en/doc/harmonyos-guides/huks-key-attestation-overview
+  - OpenHarmony security_huks dcm_attest.c (VerifyIdsInfo empty check), commit
+    82fd7821d33b
+  - rev6 os_vendors.md sec 3.2, 3.4, 5
+
+### The acceptance-criterion design (assumptions, properties, removed rules)
+
+Read on 2026-10-02. Local copies are files saved by the earlier study from
+android.googlesource.com and Apple's documentation. Pages fetched in this
+pass were read through an automated summary, not line by line.
+
+- `IKeyMintDevice.aidl`, AOSP `hardware/interfaces`, local copy: lines
+  191-221 (root-of-trust binding and version binding, restated in A.2), lines
+  356-366 (the caller's attestation key), lines 505-520 (`upgradeKey` and
+  `KEY_REQUIRES_UPGRADE`).
+- `Tag.aidl`, same tree, local copy: the creation time belongs in the
+  software-enforced list; the application id cannot be hardware-enforced;
+  the OS patch level must be hardware-enforced; the root-of-trust tag is
+  defined for the attestation record only.
+- `ta/src/keys.rs`, AOSP `platform/system/keymint`, local copy: lines
+  145-190 and 395-420. The attestation extension is built from the boot
+  information whenever a challenge is present; a caller's attestation key
+  changes only the signing key and the issuer name.
+- https://android.googlesource.com/platform/system/keymint/+/refs/heads/main/ta/src/cert.rs
+  fetched: the root of trust is placed in the hardware-enforced list.
+- https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/keymint/aidl/android/hardware/security/keymint/KeyCreationResult.aidl
+  fetched: with a caller-provided attestation key the returned chain holds
+  only the one certificate signed with that key.
+- `keystore2/src/attestation_key_utils.rs`, AOSP `system/security`, local
+  copy, lines 51-80: the remote-provisioning path is taken only when no
+  attestation key is named.
+- `KeyGenParameterSpec.java` (`setAttestKeyAlias`) and `KeyProperties.java`
+  lines 116-121 (`PURPOSE_ATTEST_KEY`), AOSP `frameworks/base`, local
+  copies.
+- https://source.android.com/docs/security/features/keystore/attestation
+  fetched: the fields of the attestation record and the verified-boot
+  states.
+- https://source.android.com/docs/core/architecture/bootloader/locking_unlocking
+  fetched: an unlock is followed by a factory data reset.
+- `RemovePackageHelper.java`, AOSP `frameworks/base`, local copy, lines
+  349-358: removal of a package clears its key-store data. The attribute
+  `manageSpaceActivity` is in `core/res/res/values/attrs_manifest.xml`,
+  local copy, lines 110-118.
+- Apple's page on validating apps that connect to a server, local copy: the
+  assertion's authenticator data and the rule that the counter must exceed
+  the previous one.
+- The study of counter and commitment primitives of 2026-10-02
+  (`uniq_full.md`): the App Attest counter, the passcode-only keychain
+  class, the attestation-key chain, vendor feature files, leaf sizes.
+- Not read: any vendor's KeyMint implementation; any device.
+
+### The marker that carries a checkpoint
+
+No separate source list was recorded by that pass.

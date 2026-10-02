@@ -18,6 +18,8 @@ pub(crate) mod retained_commitment;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "aggregate_stark/streaming_commitment.rs"]
 mod streaming_commitment;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::transparent_stark::map_digest_stream_error_v1;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     PrivacyOuterDigestV1, PrivacyOuterMerkleTreeV1, TransparentStarkDigestContextV1,
@@ -29,12 +31,10 @@ use super::transparent_stark::{
 };
 #[cfg(test)]
 use super::transparent_stark::{
-    ReplayableTraceMaskV1, masked_trace_coefficients_on_coset_v1,
+    ReplayableTraceMaskV1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, masked_trace_lde_column_with_mask_v1,
     privacy_outer_last_field_stream_v1, sample_trace_mask_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::transparent_stark::{goldilocks_ifft_v1, map_digest_stream_error_v1};
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
@@ -2276,6 +2276,7 @@ impl StreamingRowCommitmentV1 {
         ))
     }
     /// Finalize the exact-width vector rows into a streaming Merkle commitment.
+    #[cfg(test)]
     pub(crate) fn finish(
         mut self,
     ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
@@ -3209,7 +3210,7 @@ pub(crate) fn recompose_composition_value_v1(
     }
     Ok(value)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
         .iter()
@@ -3228,7 +3229,7 @@ fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
             value.mul(point).add(coefficient)
         })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn base_coset_coefficients_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3270,7 +3271,7 @@ fn fp4_coset_coefficients_v1(
     Ok(coefficients)
 }
 /// Evaluate one committed base-field coset codeword at arbitrary Fp4 points.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3416,7 +3417,7 @@ pub(crate) fn evaluate_composition_chunks_at_deep_v1(
         .collect()
 }
 /// Build a DEEP payload from retained materialized common-domain codewords.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn build_materialized_deep_proof_v1(
     trace_groups: &[AggregateTraceGroupMaterialV1],
     compositions: &[Vec<Vec<E>>],

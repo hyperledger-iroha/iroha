@@ -176,6 +176,21 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_current_retail_codec_inventory_is_required_and_quote_aliases_forbidden(self) -> None:
+        for symbol in (
+            "connect_norito_retail_fee_intent_hash_v1",
+            "connect_norito_retail_fee_assessment_marker_v1",
+            "connect_norito_retail_fee_assessment_decode_v1",
+        ):
+            self.assertEqual(validator.EXPECTED_REQUIRED_SYMBOLS.count(symbol), 1)
+            self.assertNotIn(symbol, validator.EXPECTED_FORBIDDEN_SYMBOLS)
+        for symbol in (
+            "connect_norito_validation_fee_hijiri_quote_request_v1",
+            "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+        ):
+            self.assertNotIn(symbol, validator.EXPECTED_REQUIRED_SYMBOLS)
+            self.assertEqual(validator.EXPECTED_FORBIDDEN_SYMBOLS.count(symbol), 1)
+
     def test_native_symbol_inventories_match_authoritative_header(self) -> None:
         """Source inventories must require current C exports before packaging."""
         header = (
@@ -395,6 +410,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_kagemusha_core_coordinator_close_v1",
             "connect_norito_kagemusha_ordinary_runtime_startup_v1",
             "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",

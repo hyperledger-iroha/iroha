@@ -77,6 +77,8 @@ pub mod compliance;
 pub(crate) mod crypto_util;
 /// Data availability orchestration and ingest helpers.
 pub mod da;
+/// Signed committee and monetary staking authority for opaque deferred execution.
+pub(crate) mod deferred_authority;
 /// Guard-owned execution witness recorder, its sparse Merkle tree and state-root projections.
 pub mod exec_witness;
 /// Local execution attempts and non-consensus retry outcomes.
@@ -135,6 +137,8 @@ pub mod queue;
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
 pub mod release_identity;
+/// Native monthly retail fee accounting and read APIs.
+pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.
 pub mod retained_gossip;
 mod secure_file_metadata;
@@ -168,6 +172,8 @@ pub mod torii_proxy;
 pub mod tx;
 /// Validation-fee admission enforcement.
 pub mod validation_fee;
+/// Protected conversion accounting and validator rewards.
+pub mod validation_fee_rewards;
 /// Independently anchored evidence for pending committee signer custody.
 pub mod validator_committee_evidence;
 /// Crate-local path to `iroha_core_zk`; external crates import `iroha_core_zk` directly.
@@ -503,34 +509,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
 pub mod role {
     //! Module with extension for [`RoleId`] to be stored inside state.
     use super::*;
-    use core::{fmt, str::FromStr};
     use derive_more::Constructor;
+    /// Sole Model-owned canonical native role-assignment key.
+    pub use iroha_data_model::role::RoleIdWithOwner;
     use iroha_primitives::impl_as_dyn_key;
-    use norito::json;
-    use norito::json::JsonKeyCodec;
-    /// [`RoleId`] with owner [`AccountId`] attached to it.
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::role::RoleIdWithOwner")]
-    #[derive(
-        Debug,
-        Clone,
-        Constructor,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Hash,
-        Decode,
-        Encode,
-        crate::json_macros::JsonDeserialize,
-        crate::json_macros::JsonSerialize,
-    )]
-    pub struct RoleIdWithOwner {
-        /// [`AccountId`] of the owner.
-        pub account: AccountId,
-        /// [`RoleId`]  of the given role.
-        pub id: RoleId,
-    }
     /// Reference to [`RoleIdWithOwner`].
     #[derive(Debug, Clone, Copy, Constructor, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct RoleIdWithOwnerRef<'role> {
@@ -551,43 +533,6 @@ pub mod role {
         target: RoleIdWithOwner,
         key: RoleIdWithOwnerRef<'_>,
         trait: AsRoleIdWithOwnerRef
-    }
-    impl fmt::Display for RoleIdWithOwner {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}|{}", self.account, self.id)
-        }
-    }
-    impl FromStr for RoleIdWithOwner {
-        type Err = iroha_model_base::error::ParseError;
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            const SEPARATOR: char = '|';
-            let (account_raw, role_raw) =
-                s.split_once(SEPARATOR)
-                    .ok_or(iroha_model_base::error::ParseError::new(
-                        "RoleIdWithOwner must be formatted as `account|role`",
-                    ))?;
-            let account = AccountId::parse_encoded(account_raw).map_err(|_| {
-                iroha_model_base::error::ParseError::new(
-                    "Invalid account component in RoleIdWithOwner",
-                )
-            })?;
-            let id = role_raw.parse().map_err(|_| {
-                iroha_model_base::error::ParseError::new(
-                    "Invalid role component in RoleIdWithOwner",
-                )
-            })?;
-            Ok(RoleIdWithOwner { account, id })
-        }
-    }
-    impl JsonKeyCodec for RoleIdWithOwner {
-        fn encode_json_key(&self, out: &mut String) {
-            json::write_json_string(&self.to_string(), out);
-        }
-        fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-            encoded
-                .parse::<RoleIdWithOwner>()
-                .map_err(|err| json::Error::Message(err.to_string()))
-        }
     }
 }
 // RoleIdWithOwner derives codec implementations in the role module above.
@@ -1423,3 +1368,6 @@ mod tests {
 #[cfg(test)]
 #[allow(unsafe_code)]
 mod test_allocations;
+
+#[cfg(test)]
+mod retail_fee_tests;

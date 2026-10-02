@@ -7,8 +7,8 @@
 
 use super::{
     KagemushaAppAttestationAuthorityPolicyV1, KagemushaAppOperationApprovalChallengeV1,
-    KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1, KagemushaAuthenticatedReleaseV1,
-    KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
+    KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1, KagemushaDevicePublicKeyV1,
+    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
     KagemushaOrdinaryAppIdentityProfileV1, KagemushaVerifiedOrdinaryAppEnrollmentPreparationV1,
     kagemusha_device_key_reference_v1,
 };
@@ -377,8 +377,7 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
                     || self.allowed_android_security_levels.len() > 2
                     || self
                         .allowed_android_security_levels
-                        .iter()
-                        .any(|level| *level == KagemushaAppKeySecurityLevelV1::AppleAppAttest)
+                        .contains(&KagemushaAppKeySecurityLevelV1::AppleAppAttest)
                     || !self
                         .allowed_android_security_levels
                         .windows(2)
@@ -416,14 +415,13 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
                 "Play distribution requires distinct recognized-app Integrity policy".into(),
             );
         }
-        if let Some(policy) = self.play_integrity_policy {
-            if policy.policy_digest == [0; 32]
+        if let Some(policy) = self.play_integrity_policy
+            && (policy.policy_digest == [0; 32]
                 || policy.maximum_evidence_age_ms == 0
                 || policy.maximum_refresh_interval_ms == 0
-                || !matches!(policy.minimum_device_integrity, 1 | 2)
-            {
-                return Err("Play Integrity policy incomplete".into());
-            }
+                || !matches!(policy.minimum_device_integrity, 1 | 2))
+        {
+            return Err("Play Integrity policy incomplete".into());
         }
         Ok(())
     }
@@ -462,6 +460,8 @@ impl KagemushaOrdinaryAppTrustPolicyV1 {
     /// Match the policy to independently selected enabled-profile and app-authority originals.
     /// # Errors
     /// Rejects any policy, class, issuer, app or lifetime substitution.
+    // The hardware profile names the same platform roots as attestation roots.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn validate_for_profile(
         &self,
         profile: &KagemushaHardwareProfileV1,
@@ -1277,6 +1277,8 @@ pub(crate) fn sole_changed_raw_position(
 
 impl KagemushaOrdinaryAppCredentialSubjectV1 {
     // Sole original checked scope/Play validator shared by unsigned builder and signature admission.
+    // Credential issuance must be at or after the independently selected profile activation.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub(super) fn validate_checked_originals(
         &self,
         policy: &KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
@@ -2739,7 +2741,7 @@ mod tests {
         raw.extend_from_slice(&auth);
         raw.push(0x69);
         raw.extend_from_slice(b"signature");
-        raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+        raw.extend_from_slice(&[0x58, u8::try_from(der.as_bytes().len()).unwrap()]);
         raw.extend_from_slice(der.as_bytes());
         original.evidence =
             KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw };

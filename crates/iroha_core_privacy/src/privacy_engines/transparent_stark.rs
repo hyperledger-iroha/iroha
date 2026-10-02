@@ -1213,7 +1213,7 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     Ok(mask)
 }
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -1381,6 +1381,7 @@ impl PrivacyOuterMerkleTreeV1 {
     }
     /// Exact allocated tree storage, including all retained vector capacities.
     /// Callers can charge this public commitment owner alongside private LDEs.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn allocated_payload_bytes_v1(&self) -> Result<usize, TransparentStarkErrorV1> {
         let lists = self
             .levels

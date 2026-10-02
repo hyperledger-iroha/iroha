@@ -3,7 +3,7 @@
 
 package org.hyperledger.iroha.sdk.offline.attested
 
-/** Why this installation cannot hold offline value; the app stays online-only. */
+/** Hardware or evidence failure that prevents KAGEMUSHA value admission. */
 enum class KagemushaUnsupportedReason {
     /** No TEE, StrongBox or Secure Enclave P-256 key could be created. */
     NO_HARDWARE_KEY,

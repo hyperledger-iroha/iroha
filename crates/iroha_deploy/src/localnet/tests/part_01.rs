@@ -1059,7 +1059,8 @@ fn localnet_genesis_for_opts_and_client(
             .effective_parameters()
             .expect("generated localnet genesis has one structured parameter block"),
         requested_stake_amount,
-    );
+    )
+    .unwrap();
     if npos_bootstrap {
         genesis = append_localnet_npos_bootstrap(
             genesis,
@@ -1159,7 +1160,10 @@ fn generated_configs_parse_with_current_schema() {
     let npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()
+        .expect("valid fixture NPoS parameters")
+        .flatten()
         .expect("generated NPoS parameters");
     assert_eq!(npos.max_validators(), u32::from(opts.peers.get()));
     for index in 0..opts.peers.get() {
@@ -2486,7 +2490,10 @@ fn perf_profile_npos_applies_election_and_runtime_limits() {
     let npos = params
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()
+        .expect("valid fixture NPoS parameters")
+        .flatten()
         .expect("npos parameters must be present");
     assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
 }
@@ -2727,7 +2734,8 @@ fn localnet_npos_bootstraps_public_lane_stake() {
         opts.perf_profile
             .map(LocalnetPerfProfile::spec)
             .map(|spec| spec.stake_amount),
-    );
+    )
+    .unwrap();
     for register in &validators {
         assert_eq!(register.lane_id, LaneId::SINGLE);
         assert_eq!(register.validator, register.stake_account);
@@ -2880,7 +2888,7 @@ fn localnet_npos_stake_amount_respects_min_self_bond() {
     };
     let expected = npos.min_self_bond.clone();
     params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
-    let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT));
+    let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT)).unwrap();
     assert_eq!(stake_amount, expected);
 }
 fn assert_localnet_dataspace_catalog_quorum(out_dir: &Path, peer_count: NonZeroU16) {
@@ -3025,11 +3033,14 @@ fn localnet_npos_election_ceiling_matches_generated_committee() {
     for count in [4, 7, 31] {
         let peers = NonZeroU16::new(count).expect("nonzero committee");
         let mut parameters = Parameters::default();
-        apply_localnet_npos_overrides(&mut parameters, &chain_id, peers);
+        apply_localnet_npos_overrides(&mut parameters, &chain_id, peers).unwrap();
         let npos = parameters
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()
+            .expect("valid fixture NPoS parameters")
+            .flatten()
             .expect("generated NPoS parameters");
         assert_eq!(npos.max_validators(), u32::from(count));
         assert_eq!(

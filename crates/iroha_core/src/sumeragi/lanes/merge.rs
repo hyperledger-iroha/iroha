@@ -13,6 +13,8 @@
 //! active, a gap, an oversized range, a tip that differs from the lane's committed block, or
 //! more transactions than the block may execute) makes the global block invalid.
 
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
+
 use std::{borrow::Cow, collections::BTreeMap, time::Duration};
 
 use iroha_data_model::{
@@ -52,7 +54,11 @@ pub trait LaneBlockSource: Send + Sync {
     ///
     /// # Errors
     /// Storage corruption, I/O, unresolved authenticated authority or resource refusal.
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>>;
+    fn tip(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+    ) -> Result<Option<u64>, Attempt<std::io::Error>>;
     /// The committed block at `height`.
     ///
     /// # Errors
@@ -62,7 +68,7 @@ pub trait LaneBlockSource: Send + Sync {
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> std::io::Result<Option<CommittedLaneBlock>>;
+    ) -> Result<Option<CommittedLaneBlock>, Attempt<std::io::Error>>;
     /// Block until the committed tip reaches `height` or `timeout` passes; whether it did.
     ///
     /// # Errors
@@ -73,7 +79,7 @@ pub trait LaneBlockSource: Send + Sync {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> std::io::Result<bool>;
+    ) -> Result<bool, Attempt<std::io::Error>>;
 }
 
 /// A node that follows no lane.
@@ -81,7 +87,11 @@ pub trait LaneBlockSource: Send + Sync {
 pub struct NoLanes;
 
 impl LaneBlockSource for NoLanes {
-    fn tip(&self, _lane: LaneId, _incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+    fn tip(
+        &self,
+        _lane: LaneId,
+        _incarnation: &[u8; 32],
+    ) -> Result<Option<u64>, Attempt<std::io::Error>> {
         Ok(None)
     }
     fn block(
@@ -89,7 +99,7 @@ impl LaneBlockSource for NoLanes {
         _lane: LaneId,
         _incarnation: &[u8; 32],
         _height: u64,
-    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+    ) -> Result<Option<CommittedLaneBlock>, Attempt<std::io::Error>> {
         Ok(None)
     }
     fn wait_for(
@@ -98,7 +108,7 @@ impl LaneBlockSource for NoLanes {
         _incarnation: &[u8; 32],
         _height: u64,
         _timeout: Duration,
-    ) -> std::io::Result<bool> {
+    ) -> Result<bool, Attempt<std::io::Error>> {
         Ok(false)
     }
 }
@@ -111,7 +121,7 @@ pub enum MergeError {
     RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// Local storage failed; this does not prove that a peer's global block is invalid.
     #[error("lane storage failed: {0}")]
-    Storage(#[source] std::io::Error),
+    Storage(#[source] Attempt<std::io::Error>),
     /// The node has not committed the referenced lane blocks yet: execution waits.
     #[error("lane blocks are not available yet: {0}")]
     Pending(String),
@@ -397,9 +407,14 @@ pub fn propose<V: StateReadOnly>(
     view: &V,
     source: &dyn LaneBlockSource,
     height: u64,
-) -> std::io::Result<MergeProposal> {
-    let Some(policy) = lane_policy(view.world())
-        .map_err(|reason| std::io::Error::new(std::io::ErrorKind::WouldBlock, reason))?
+) -> Result<MergeProposal, Attempt<std::io::Error>> {
+    let Some(policy) = lane_policy(view.world()).map_err(|reason| {
+        if cfg!(all(test, sumeragi_core_mutation = "HC51")) {
+            Attempt::Rejected(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        } else {
+            Attempt::Deferred(reason)
+        }
+    })?
     else {
         return Ok(MergeProposal::default());
     };

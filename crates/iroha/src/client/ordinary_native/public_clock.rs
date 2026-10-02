@@ -26,19 +26,7 @@ impl ClockNodes {
     pub(super) fn public(origins: [String; 4], network: NetworkId) -> Result<Self> {
         let mut nodes = Vec::with_capacity(4);
         for origin in origins {
-            let url = Url::parse(&origin)?;
-            ensure!(
-                url.scheme() == "https"
-                    && url.host().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-                    && url.path().ends_with('/')
-                    && url.as_str() == origin
-                    && !url.path().split('/').any(|p| p == "." || p == ".."),
-                "public clock origin rejected"
-            );
+            let url = super::endpoint::require_https_directory_base(&origin)?;
             nodes.push(PublicClockNode {
                 origin: url,
                 network,

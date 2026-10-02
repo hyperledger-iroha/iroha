@@ -888,7 +888,13 @@ fn terminal_publication_errors_stop_all_scheduled_work() {
         if failure_in_commit {
             rig.sched.done(0, ExecDone::Prepared(Ok(Some(result))));
             assert!(matches!(rig.start(), Some(ExecOp::Append(_))));
-            rig.sched.done(0, ExecDone::Appended(true));
+            rig.sched.done(
+                0,
+                ExecDone::Appended {
+                    durable: true,
+                    deferred: None,
+                },
+            );
             assert!(matches!(rig.start(), Some(ExecOp::Commit(_))));
         }
         // These queues must not invoke the worker after the terminal answer.

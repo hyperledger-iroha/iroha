@@ -75,7 +75,7 @@ fn render_model<T: JsonSerialize>(value: &T) -> CodecResult<Value> {
 ///
 /// # Errors
 /// Rejects missing/extra fields, noncanonical u64 decimal strings and noncanonical hashes.
-pub(crate) fn parse_artifact_id(
+pub fn parse_artifact_id(
     value: Value,
     context: &str,
 ) -> CodecResult<iroha_data_model::smart_contract::ContractArtifactId> {
@@ -98,7 +98,7 @@ pub(crate) fn parse_artifact_id(
 ///
 /// # Errors
 /// Returns an error if the model-owned code hash cannot be serialized to JSON.
-pub(crate) fn render_artifact_id(
+pub fn render_artifact_id(
     value: &iroha_data_model::smart_contract::ContractArtifactId,
 ) -> CodecResult<Value> {
     let mut fields = json::Map::new();

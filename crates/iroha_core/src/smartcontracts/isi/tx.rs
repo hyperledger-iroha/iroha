@@ -1037,16 +1037,16 @@ pub fn indexed_kaigi_signal_candidates_page(
                 .and_then(NonZeroUsize::new)
                 .ok_or(QueryExecutionFail::CursorMismatch)?;
             let loaded = (|| {
-                let block = state_ro.canonical_history().executed_block(
-                    height,
-                    |source_blocks, wire_bytes| {
+                let block = state_ro
+                    .canonical_history()
+                    .executed_block(height, |source_blocks, wire_bytes| {
                         if work.try_charge(limits, wire_bytes, 0, source_blocks) {
                             Ok(())
                         } else {
                             Err(QueryExecutionFail::GasBudgetExceeded)
                         }
-                    },
-                )?;
+                    })
+                    .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
                 if block.hash() != position.block_hash() {
                     return Err(QueryExecutionFail::Expired);
                 }
@@ -1195,63 +1195,67 @@ pub(crate) fn visit_committed_transactions(
     // Both callbacks use the same admission owner sequentially; no charge borrow
     // survives either callback or the walker's subsequent source operation.
     let before_project = std::cell::RefCell::new(before_project);
-    state_ro.canonical_history().visit_executed_backwards_until(
-        first,
-        last,
-        |source_blocks, wire_len| before_project.borrow_mut()(source_blocks, wire_len),
-        |receipt| {
-            let height = NonZeroUsize::new(
-                usize::try_from(receipt.height())
-                    .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
-            )
-            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            if candidates
-                .as_ref()
-                .is_some_and(|heights| !heights.contains(&height))
-            {
-                return Ok(ControlFlow::Continue(()));
-            }
-            let block = std::sync::Arc::clone(receipt.block());
-            let work = block
-                .network_entrypoint_count()
-                .max(block.execution_outputs().len())
-                .max(1);
-            before_project.borrow_mut()(
-                u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
-                0,
-            )?;
-            let projection = NetworkCarrierProjection::new(block)?;
-            let transaction_offset = resume
-                .filter(|cursor| cursor.height == height.get())
-                .map_or(0, |cursor| cursor.transaction_offset);
-            let transaction_count = projection.count as usize;
-            if transaction_offset > transaction_count {
-                return Err(QueryExecutionFail::CursorMismatch);
-            }
-            for index in transaction_offset..transaction_count {
-                let input_index = projection.count - 1 - index as u32;
-                let transaction = projection
-                    .transaction_at(input_index, |bytes| before_project.borrow_mut()(0, bytes))?;
-                let matches =
-                    transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
-                let next_cursor = if index + 1 < transaction_count {
-                    TransactionHistoryCursor {
-                        height: height.get(),
-                        transaction_offset: index + 1,
-                    }
-                } else {
-                    TransactionHistoryCursor {
-                        height: height.get() - 1,
-                        transaction_offset: 0,
-                    }
-                };
-                if visitor(transaction, matches, next_cursor)?.is_break() {
-                    return Ok(ControlFlow::Break(()));
+    state_ro
+        .canonical_history()
+        .visit_executed_backwards_until(
+            first,
+            last,
+            |source_blocks, wire_len| before_project.borrow_mut()(source_blocks, wire_len),
+            |receipt| {
+                let height = NonZeroUsize::new(
+                    usize::try_from(receipt.height())
+                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+                )
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                if candidates
+                    .as_ref()
+                    .is_some_and(|heights| !heights.contains(&height))
+                {
+                    return Ok(ControlFlow::Continue(()));
                 }
-            }
-            Ok(ControlFlow::Continue(()))
-        },
-    )
+                let block = std::sync::Arc::clone(receipt.block());
+                let work = block
+                    .network_entrypoint_count()
+                    .max(block.execution_outputs().len())
+                    .max(1);
+                before_project.borrow_mut()(
+                    u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+                    0,
+                )?;
+                let projection = NetworkCarrierProjection::new(block)?;
+                let transaction_offset = resume
+                    .filter(|cursor| cursor.height == height.get())
+                    .map_or(0, |cursor| cursor.transaction_offset);
+                let transaction_count = projection.count as usize;
+                if transaction_offset > transaction_count {
+                    return Err(QueryExecutionFail::CursorMismatch);
+                }
+                for index in transaction_offset..transaction_count {
+                    let input_index = projection.count - 1 - index as u32;
+                    let transaction = projection.transaction_at(input_index, |bytes| {
+                        before_project.borrow_mut()(0, bytes)
+                    })?;
+                    let matches =
+                        transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
+                    let next_cursor = if index + 1 < transaction_count {
+                        TransactionHistoryCursor {
+                            height: height.get(),
+                            transaction_offset: index + 1,
+                        }
+                    } else {
+                        TransactionHistoryCursor {
+                            height: height.get() - 1,
+                            transaction_offset: 0,
+                        }
+                    };
+                    if visitor(transaction, matches, next_cursor)?.is_break() {
+                        return Ok(ControlFlow::Break(()));
+                    }
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        )
+        .map_err(crate::smartcontracts::isi::query::query_transport_error)
 }
 /// Visit history within cumulative source/output work and byte limits.
 ///
@@ -2368,7 +2372,8 @@ pub(crate) mod tests {
             crate::sumeragi::certified_chain::read_frame(Arc::new(decoded), expected_height)
                 .expect_err("original execution certificate cannot commit the changed output");
         assert!(matches!(&frame_error,
-            crate::sumeragi::certified_chain::ChainReadError::ExecutionMismatch { height }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(
+                crate::sumeragi::certified_chain::ChainReadError::ExecutionMismatch { height })
                 if *height == expected_height));
         let expected_error = QueryExecutionFail::Conversion(frame_error.to_string());
         fixture.store.overwrite_body(fixture.target_height, &wire);
@@ -2456,54 +2461,67 @@ pub(crate) mod tests {
     #[test]
     fn bounded_transaction_visitor_does_not_charge_chain_age_as_retained_memory() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.state.view();
-        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
-            prototype.equals("field_that_does_not_exist", true)
-        });
-        let work_per_carrier: Vec<u64> = fixture
+        // The authentic genesis now contains three signed inputs; each successor has two.
+        // These finite fixture bounds follow the original source, not a larger production cap.
+        let geometry: Vec<_> = fixture
             .store
             .blocks
             .iter()
             .map(|block| {
-                u64::try_from(
-                    block
-                        .network_entrypoint_count()
-                        .max(block.execution_outputs().len())
-                        .max(1),
+                (
+                    block.network_entrypoint_count(),
+                    block.execution_outputs().len(),
                 )
-                .expect("original carrier work fits u64")
             })
             .collect();
-        let carrier_bound = *work_per_carrier.iter().max().expect("original carriers");
-        let total_bound = work_per_carrier.iter().copied().sum::<u64>();
+        assert_eq!(geometry[0], (3, 3));
+        assert_eq!(geometry[1..], [(2, 2); 16]);
         assert_eq!(
-            work_per_carrier[0], 3,
-            "genuine genesis has three native inputs"
+            geometry
+                .iter()
+                .map(|(inputs, outputs)| inputs.max(outputs))
+                .sum::<usize>(),
+            35
         );
-        assert!(work_per_carrier[1..].iter().all(|work| *work == 2));
-        assert_eq!(carrier_bound, 3);
-        assert_eq!(total_bound, 35);
-        // The original two-row carrier limit still rejects the three-row
-        // genesis; an authenticated complete scan must budget its actual rows.
-        let mut refused_visits = 0_usize;
-        let refused = visit_committed_transactions_with_work_budget(
-            &state_view,
-            false_filter.clone(),
-            2,
-            total_bound,
-            TRANSACTION_HISTORY_MAX_BYTES,
-            |_, matches| {
-                assert!(!matches);
-                refused_visits += 1;
-                Ok(ControlFlow::Continue(()))
-            },
+        let carrier_bound = u64::try_from(
+            geometry
+                .iter()
+                .map(|(inputs, outputs)| (*inputs).max(*outputs))
+                .max()
+                .unwrap(),
         )
-        .expect_err("a two-row carrier policy must refuse the original three-row genesis");
-        assert_eq!(refused, QueryExecutionFail::GasBudgetExceeded);
-        assert_eq!(
-            refused_visits, 32,
-            "all sixteen two-row successors remain admitted"
-        );
+        .unwrap();
+        let total_bound = u64::try_from(
+            geometry
+                .iter()
+                .map(|(inputs, outputs)| inputs.max(outputs))
+                .sum::<usize>(),
+        )
+        .unwrap();
+        let state_view = fixture.state.view();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        // Preserve the former 2/33 bound as a refusal, then isolate each insufficient bound.
+        // All 32 successor rows may be projected; the three-row genesis must be prepaid whole.
+        for (carrier_work, total_work) in [(2, 33), (2, 35), (3, 34)] {
+            let mut visited = 0;
+            let error = visit_committed_transactions_with_work_budget(
+                &state_view,
+                false_filter.clone(),
+                carrier_work,
+                total_work,
+                TRANSACTION_HISTORY_MAX_BYTES,
+                |_, matches| {
+                    assert!(!matches);
+                    visited += 1;
+                    Ok(ControlFlow::Continue(()))
+                },
+            )
+            .expect_err("unpaid whole genesis must not reach row projection");
+            assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
+            assert_eq!(visited, 32);
+        }
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions_with_work_budget(
             &state_view,
@@ -2602,7 +2620,12 @@ pub(crate) mod tests {
                 |_| Ok(ControlFlow::Continue(())),
             )
             .expect_err("a complete walk must authenticate the corrupt older source");
-        assert!(matches!(err, QueryExecutionFail::Conversion(_)));
+        assert!(matches!(
+            err,
+            crate::execution_attempt::ExecutionAttemptError::Rejected(
+                QueryExecutionFail::Conversion(_)
+            )
+        ));
         store.kura.reset_canonical_query_reads_for_test();
         let err = source
             .visit_executed_backwards_until(
@@ -2612,7 +2635,12 @@ pub(crate) mod tests {
                 |_| panic!("unpaid source cannot reach a receipt visitor"),
             )
             .expect_err("source work and bytes are admitted before physical I/O");
-        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(
+            err,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+            )
+        );
         assert_eq!(store.kura.canonical_query_reads_for_test(), (0, 0));
     }
 

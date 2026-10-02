@@ -138,7 +138,7 @@ class SecurityCorporaReplayTests(unittest.TestCase):
 
         workflow = WORKFLOW.read_text(encoding="utf-8")
         readme = (ROOT / "fuzz" / "README.md").read_text(encoding="utf-8")
-        self.assertIn("name: Adversarial Norito and IVM fuzz gate", workflow)
+        self.assertIn("name: Adversarial Norito and IVM fuzz diagnostics", workflow)
         self.assertIn(
             "cargo +nightly-2025-05-08 install cargo-fuzz", workflow
         )

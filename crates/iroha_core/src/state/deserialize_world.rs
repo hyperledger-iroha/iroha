@@ -6823,10 +6823,10 @@ mod validation_fee_registry_restore_tests {
         governance::types::{GovernanceCertificateId, ProposalKind, ValidationFeePolicyProposal},
         parameter::Parameter,
         validation_fee::{
-            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
-            ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            ValidationFeeChargingMode, ValidationFeeParliamentAuthorizationV1,
+            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicyV1,
         },
     };
 
@@ -6856,10 +6856,68 @@ mod validation_fee_registry_restore_tests {
         let parliament_network_id = network_id();
         let proposal_operator = account(250);
         let enacted_at_height = RESTORED_HEIGHT;
-        let effective_from_height = enacted_at_height
-            .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
-            .expect("validation-fee activation height");
+
+        let wrapper = iroha_data_model::smart_contract::ContractAddress::derive(
+            &policy_network_id,
+            &account(249),
+            1,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .expect("restore wrapper");
+        let mut binding = crate::validation_fee::tests::treasury_payout_binding(
+            wrapper,
+            b"restore conversion wrapper",
+        );
+        binding.ds_asset_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("validation", "fees").expect("fee domain"),
+            "ds".parse().expect("fee name"),
+        );
+        let pool = iroha_data_model::smart_contract::ContractAddress::derive(
+            &policy_network_id,
+            &account(246),
+            2,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .expect("restore pool");
+        binding.pool_vault_account_id = pool.subject_id();
+        binding.pool_contract_address = pool;
+        let lifecycle_kind = ProposalKind::ValidationFeePayoutLifecycle(
+            iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal {
+                proposal_operator: proposal_operator.clone(),
+                payout_binding: binding.clone(),
+            },
+        );
+        let lifecycle_fixture =
+            crate::governance::parliament::tests::enacted_parliament_attempt_restore_fixture_v1(
+                &lifecycle_kind,
+                candidates(REGISTRY_CANDIDATE_SEED),
+                &parliament_network_id,
+                enacted_at_height,
+            );
+        let lifecycle_certificate = lifecycle_fixture
+            .attempt
+            .certificate()
+            .cloned()
+            .expect("finalized lifecycle certificate");
+        let lifecycle_entry = iroha_data_model::validation_fee::ValidationFeePayoutPolicyEntryV1 {
+            revision: 1,
+            proposal_id: lifecycle_kind.fingerprint(),
+            payout_binding: binding.clone(),
+            lifecycle_seal: binding.lifecycle_seal().expect("lifecycle seal"),
+            parliament_authorization: ValidationFeeParliamentAuthorizationV1 {
+                proposal_operator: proposal_operator.clone(),
+                proposal_fingerprint: lifecycle_kind.fingerprint(),
+                governance_certificate_id: GovernanceCertificateId::derive_v1(
+                    &lifecycle_certificate,
+                ),
+                governance_certificate: lifecycle_certificate,
+                enacted_at_height,
+            },
+        };
         let policy = ValidationFeePolicyV1 {
+            retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+            effective_from_ms: 1793451600000,
+            notice_published_at_ms: 1790859600000,
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             network_id: policy_network_id,
             policy_version: 1,
@@ -6869,18 +6927,18 @@ mod validation_fee_registry_restore_tests {
                 "ds".parse().expect("fee asset name"),
             ),
             ds_scale: VALIDATION_FEE_DS_SCALE,
-            fee: Quantity::zero(),
-            treasury_account_id: account(249),
-            charging_mode: ValidationFeeChargingMode::Disabled,
-            effective_from_height,
-            expires_after_height: None,
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
+            treasury_account_id: binding.treasury_account_id.clone(),
+            charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+            exemption_classes: vec![
+                iroha_data_model::validation_fee::VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS
+                    .to_owned(),
+            ],
+            reward_custody: binding.custody(),
         };
         let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             proposal_operator: proposal_operator.clone(),
             policy: policy.clone(),
-            payout_lifecycle_proposal_id: None,
         });
         let registry_fixture =
             crate::governance::parliament::tests::enacted_parliament_attempt_restore_fixture_v1(
@@ -6903,21 +6961,50 @@ mod validation_fee_registry_restore_tests {
         };
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![
-                ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
+                ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization)
                     .expect("canonical validation-fee registry entry"),
             ],
+            payout_policies:
+                iroha_data_model::validation_fee::ValidationFeePayoutPolicyRegistryV1 {
+                    entries: vec![lifecycle_entry],
+                },
         };
         registry
             .validate()
             .expect("restore fixture registry is intrinsically valid");
 
-        let stored_fixture =
+        let mut stored_fixture =
             crate::governance::parliament::tests::enacted_parliament_attempt_restore_fixture_v1(
                 &kind,
                 candidates(stored_candidate_seed),
                 &parliament_network_id,
                 enacted_at_height,
             );
+        stored_fixture
+            .tle_key_sessions
+            .extend(lifecycle_fixture.tle_key_sessions);
+        stored_fixture
+            .tle_key_session_rosters
+            .extend(lifecycle_fixture.tle_key_session_rosters);
+        stored_fixture
+            .timed_ovn_evidence
+            .extend(lifecycle_fixture.timed_ovn_evidence);
+        for (id, lifecycle) in lifecycle_fixture.tle_key_session_lifecycles {
+            if let Some((_, existing)) = stored_fixture
+                .tle_key_session_lifecycles
+                .iter_mut()
+                .find(|(key, _)| *key == id)
+            {
+                existing.fresh_ballot_uses = existing
+                    .fresh_ballot_uses
+                    .checked_add(lifecycle.fresh_ballot_uses)
+                    .expect("combined TLE fixture uses");
+            } else {
+                stored_fixture
+                    .tle_key_session_lifecycles
+                    .push((id, lifecycle));
+            }
+        }
         let stored_attempt = stored_fixture.attempt;
         assert_eq!(
             stored_attempt.attempt().id,
@@ -6932,6 +7019,20 @@ mod validation_fee_registry_restore_tests {
             );
         }
         let mut world = World::default();
+        world.governance_proposals.insert(
+            lifecycle_kind.fingerprint(),
+            GovernanceProposalRecord {
+                proposer: proposal_operator.clone(),
+                kind: lifecycle_kind,
+                created_height: 1,
+                status: GovernanceProposalStatus::Enacted,
+            },
+        );
+        world.parliament_attempts.insert(
+            lifecycle_fixture.attempt.attempt().id,
+            lifecycle_fixture.attempt,
+        );
+
         world.governance_proposals.insert(
             kind.fingerprint(),
             GovernanceProposalRecord {
@@ -7210,7 +7311,7 @@ mod validation_fee_registry_restore_tests {
         .map_err(crate::execution_attempt::expect_completed_rejection)
         .expect_err("a restored registry cannot target another exact network");
         assert!(
-            error.contains("validation-fee policy network mismatch"),
+            error.contains("fee policy network mismatch"),
             "restore rejection identifies the foreign validation-fee network: {error}"
         );
         assert!(matches!(
@@ -7284,9 +7385,7 @@ mod validation_fee_registry_restore_tests {
         .err()
         .expect("emergency-fast construction cannot bypass exact fee-policy network binding");
         assert!(
-            error
-                .to_string()
-                .contains("validation-fee policy network mismatch"),
+            error.to_string().contains("fee policy network mismatch"),
             "emergency-fast rejection identifies the foreign validation-fee network: {error}"
         );
     }
@@ -8948,9 +9047,11 @@ fn parse_world(
             })?;
         world
             .validate_quantity_ledger_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "world.numeric_ledgers".into(),
-                message,
+            .map_err(|error| {
+                error.map_rejection(|message| json::Error::InvalidField {
+                    field: "world.numeric_ledgers".into(),
+                    message,
+                })
             })?;
     }
     world.rebuild_domain_owner_index();

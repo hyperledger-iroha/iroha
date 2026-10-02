@@ -334,13 +334,17 @@ mod committed_hash_journal;
 mod committed_transaction_context;
 mod da_hydration;
 mod exec_witness_capture;
+/// Original local owners and completed errors from witness capture.
+pub use exec_witness_capture::WitnessCaptureError;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
 mod output_publication;
-pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
+pub(crate) use output_capacity::{
+    ExecutionOutputAttemptError, ExecutionOutputSealError, ExecutionOutputSealMetadata,
+};
 mod fastpq_governance_source;
 mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
@@ -1534,6 +1538,7 @@ macro_rules! build_world_transaction_from_fields {
         // borrowing the entire prepaid owner through DerefMut.
         let fields = &mut **$state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
+            execution_deferral: std::cell::RefCell::new(None),
             dataspace_catalog: fields.dataspace_catalog.clone(),
             quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation::default(),
             axt_last_authorization_identities: authorization_identities,
@@ -1545,6 +1550,15 @@ macro_rules! build_world_transaction_from_fields {
             axt_current_slot: $axt_current_slot,
             axt_lane_map: $axt_lane_map,
             current_dataspace_id: None,
+            retail_fee_now_ms: 0,
+            retail_fee_height: 0,
+            retail_fee_source_transaction_hash: None,
+            retail_fee_assessment: None,
+            retail_fee_assessment_marker_pending: false,
+            retail_fee_observed_payments: Vec::new(),
+            retail_fee_pending_credits: Vec::new(),
+            retail_fee_pending_transcripts: Vec::new(),
+            retail_fee_exempt_payments: Vec::new(),
             external_event_sink: &mut fields.external_event_buf,
             dataspace_catalog_sink: &mut fields.dataspace_catalog,
             external_event_buf: Vec::new(),
@@ -2830,6 +2844,9 @@ impl EvidencePreparationError {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// The original committed NPoS policy is invalid or its local read is unfinished.
+    #[error(transparent)]
+    NposPolicy(#[from] crate::execution_attempt::ExecutionAttemptError<String>),
     /// Process-local evidence preparation cannot fund one complete prune and penalty plan.
     #[error(
         "consensus evidence preparation pool {configured_bytes} bytes is below the required {minimum_bytes} bytes"
@@ -6333,8 +6350,42 @@ impl WorldBlock<'_> {
 /// not copy every store's checkpoint onto each caller's stack. Dropping the box
 /// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
+    /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
+    pub(crate) execution_deferral:
+        std::cell::RefCell<Option<crate::execution_attempt::ExecutionDeferred>>,
     /// Rollback-local observation for incomplete typed quantity capture.
     pub(crate) quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation,
+    /// Consensus block clock for lazy calendar accounting.
+    pub(crate) retail_fee_now_ms: u64,
+    /// Consensus block height retaining immutable collection receipts.
+    pub(crate) retail_fee_height: u64,
+    /// Signed transaction whose successful execution earned a payment receipt.
+    pub(crate) retail_fee_source_transaction_hash: Option<[u8; 32]>,
+    /// Customer-signed reviewed assessment for this disposable execution overlay.
+    pub(crate) retail_fee_assessment:
+        Option<iroha_data_model::validation_fee::RetailFeeAssessmentV1>,
+    /// The single authenticated deferred assessment marker must execute exactly once.
+    pub(crate) retail_fee_assessment_marker_pending: bool,
+    /// Actual user-authorized payment legs; rolled back with failed execution.
+    pub(crate) retail_fee_observed_payments: Vec<(
+        AssetId,
+        iroha_data_model::validation_fee::RetailFeePaymentLegV1,
+    )>,
+    /// Exact transfers authorized by a verified native conversion operation.
+    pub(crate) retail_fee_exempt_payments:
+        Vec<(AssetId, AccountId, iroha_primitives::numeric::Quantity)>,
+    /// Exact intrinsic deductions awaiting source-bound FastPQ capture in mutation order.
+    pub(crate) retail_fee_pending_transcripts: Vec<(
+        AccountId,
+        iroha_crypto::Hash,
+        iroha_data_model::fastpq::TransferDeltaTranscript,
+    )>,
+    /// Authenticated collections awaiting the reward-credit hook at atomic completion.
+    pub(crate) retail_fee_pending_credits: Vec<(
+        iroha_data_model::validation_fee::ValidationFeePolicyV1,
+        u64,
+        u64,
+    )>,
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Publish the transaction's derived catalog only when its World changes are applied.
@@ -13966,8 +14017,6 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) execution_fee_meter: Option<crate::executor::ExecutionFeeMeter>,
     /// Single actual signed-root instruction budget, including any sticky refusal.
     pub(crate) execution_effects: crate::executor::ExecutionEffects,
-    /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
-    pub(crate) execution_deferral: Option<crate::execution_attempt::ExecutionDeferred>,
     /// Bridge proof hashes recorded by this transaction and still available for one receipt.
     pub(crate) bridge_receipt_proofs_available_in_tx: BTreeSet<[u8; 32]>,
     /// Block-level gas limit, captured at the beginning of this block.
@@ -15035,20 +15084,22 @@ where
 fn bounded_global_committee_size(
     world: &impl WorldReadOnly,
     available_candidates: usize,
-) -> Option<usize> {
+) -> Result<Option<usize>, crate::execution_attempt::ExecutionAttemptError<String>> {
     let configured = world
-        .sumeragi_npos_parameters()
+        .sumeragi_npos_parameters()?
         .and_then(|params| usize::try_from(params.max_validators()).ok())
         .unwrap_or(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     let capped = available_candidates
         .min(configured)
         .min(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     if capped < iroha_data_model::block::consensus::MIN_VALIDATORS_PER_HEIGHT {
-        return None;
+        return Ok(None);
     }
     let committee_size = capped - (capped - 1) % 3;
-    iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
-        .then_some(committee_size)
+    Ok(
+        iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
+            .then_some(committee_size),
+    )
 }
 #[cfg_attr(
     not(test),
@@ -15073,10 +15124,12 @@ fn select_threshold_beacon_committee(
     epoch: u64,
     seed: [u8; 32],
     mut candidates: Vec<PeerId>,
-) -> Option<Vec<PeerId>> {
+) -> Result<Option<Vec<PeerId>>, crate::execution_attempt::ExecutionAttemptError<String>> {
     candidates.sort();
     candidates.dedup();
-    let committee_size = bounded_global_committee_size(world, candidates.len())?;
+    let Some(committee_size) = bounded_global_committee_size(world, candidates.len())? else {
+        return Ok(None);
+    };
     let mut scored = candidates
         .into_iter()
         .map(|peer| (threshold_beacon_seat_score(seed, epoch, &peer), peer))
@@ -15089,7 +15142,7 @@ fn select_threshold_beacon_committee(
     scored.truncate(committee_size);
     let mut committee = scored.into_iter().map(|(_, peer)| peer).collect::<Vec<_>>();
     committee.sort();
-    Some(committee)
+    Ok(Some(committee))
 }
 /// Resolve the exact global election candidate pool, optionally projecting one
 /// validator record replacement before any custody or lifecycle mutation.
@@ -15273,7 +15326,7 @@ pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
     nexus: &iroha_config::parameters::actual::Nexus,
     epoch: u64,
     selection_seed: [u8; 32],
-) -> Option<Vec<PeerId>>
+) -> Result<Option<Vec<PeerId>>, crate::execution_attempt::ExecutionAttemptError<String>>
 where
     I: IntoIterator<Item = PeerId>,
 {
@@ -15297,6 +15350,7 @@ impl StateView<'_> {
         let selection_seed = self
             .world()
             .sumeragi_npos_parameters()
+            .expect("valid original test policy")
             .map_or([0; 32], |params| params.epoch_seed);
         epoch_validator_peer_ids_from_world_with_seed(
             self.world(),
@@ -15306,6 +15360,7 @@ impl StateView<'_> {
             epoch,
             selection_seed,
         )
+        .expect("original test committee policy")
     }
 }
 #[cfg(test)]
@@ -17482,7 +17537,11 @@ mod custom_parameter_tests {
     #[test]
     fn npos_parameters_absent_when_custom_missing() {
         let params = Parameters::default();
-        assert!(sumeragi_npos_parameters_from_parameters(&params).is_none());
+        assert!(
+            sumeragi_npos_parameters_from_parameters(&params)
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn npos_parameters_roundtrip() {
@@ -17491,10 +17550,10 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(expected.clone().into_custom_parameter()));
         let decoded =
             sumeragi_npos_parameters_from_parameters(&params).expect("decode npos parameters");
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded.unwrap(), expected);
     }
     #[test]
-    fn npos_parameters_invalid_payload_is_ignored() {
+    fn npos_parameters_invalid_payload_is_rejected() {
         let mut params = Parameters::default();
         let bad_payload = Json::new(norito::json!({ "unexpected": "shape" }));
         let custom = iroha_data_model::parameter::CustomParameter::new(
@@ -17502,7 +17561,10 @@ mod custom_parameter_tests {
             bad_payload,
         );
         params.set_parameter(Parameter::Custom(custom));
-        assert!(sumeragi_npos_parameters_from_parameters(&params).is_none());
+        assert!(matches!(
+            sumeragi_npos_parameters_from_parameters(&params),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+        ));
     }
     #[test]
     fn npos_parameters_string_wrapped_payload_is_rejected() {
@@ -17517,7 +17579,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "string-wrapped compatibility payload must be rejected"
         );
     }
@@ -17554,7 +17619,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "numeric-string compatibility payload must be rejected"
         );
     }
@@ -17586,7 +17654,7 @@ mod custom_parameter_tests {
         params.set_parameter(Parameter::Custom(custom));
         let decoded = sumeragi_npos_parameters_from_parameters(&params)
             .expect("decode npos parameters from hex epoch seed payload");
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded.unwrap(), expected);
     }
     #[test]
     fn npos_parameters_epoch_seed_nested_quotes_payload_is_rejected() {
@@ -17616,7 +17684,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "nested-quoted compatibility payload must be rejected"
         );
     }
@@ -17632,7 +17703,10 @@ mod custom_parameter_tests {
         );
         params.set_parameter(Parameter::Custom(custom));
         assert!(
-            sumeragi_npos_parameters_from_parameters(&params).is_none(),
+            matches!(
+                sumeragi_npos_parameters_from_parameters(&params),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+            ),
             "retired NPoS fields and an all-zero seed must fail closed"
         );
     }
@@ -18339,35 +18413,40 @@ impl World {
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
-    fn validate_quantity_ledger_invariants(&self) -> Result<(), String> {
+    fn validate_quantity_ledger_invariants(
+        &self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
             if rwa.held_quantity > rwa.quantity {
-                return Err(format!(
+                return Err((format!(
                     "RWA {rwa_id} held quantity {} exceeds total quantity {}",
                     rwa.held_quantity, rwa.quantity
-                ));
+                ))
+                .into());
             }
             for (label, quantity) in [
                 ("quantity", &rwa.quantity),
                 ("held quantity", &rwa.held_quantity),
             ] {
                 if rwa.spec.check(quantity.as_numeric()).is_err() {
-                    return Err(format!(
+                    return Err((format!(
                         "RWA {rwa_id} {label} {quantity} violates numeric spec {}",
                         rwa.spec
-                    ));
+                    ))
+                    .into());
                 }
             }
         }
         for (escrow_id, escrow) in self.asset_escrows.view().iter() {
             if escrow.remaining_amount > escrow.amount {
-                return Err(format!(
+                return Err((format!(
                     "asset escrow {:?} remaining amount {} exceeds total amount {}",
                     escrow_id.as_hash(),
                     escrow.remaining_amount,
                     escrow.amount
-                ));
+                ))
+                .into());
             }
         }
         for (agreement_id, agreement) in self.repo_agreements.view().iter() {
@@ -18376,15 +18455,16 @@ impl World {
                 ("collateral", agreement.collateral_leg().quantity()),
             ] {
                 if quantity.is_zero() {
-                    return Err(format!(
+                    return Err((format!(
                         "repo agreement {agreement_id} {label} quantity must be positive"
-                    ));
+                    ))
+                    .into());
                 }
             }
         }
         let parameters = self.parameters.view();
         let npos_penalty_window =
-            sumeragi_npos_parameters_from_parameters(&parameters).map(|parameters| {
+            sumeragi_npos_parameters_from_parameters(&parameters)?.map(|parameters| {
                 (
                     parameters.evidence_horizon_blocks(),
                     parameters.slashing_delay_blocks(),
@@ -18395,59 +18475,60 @@ impl World {
         let mut bonded_totals = BTreeMap::<(LaneId, AccountId), (Quantity, Quantity)>::new();
         for ((lane_id, validator_id), validator) in validators.iter() {
             if validator.lane_id != *lane_id || &validator.validator != validator_id {
-                return Err(format!(
+                return Err((format!(
                     "public-lane validator key ({lane_id}, {validator_id}) does not match embedded identity ({}, {})",
                     validator.lane_id, validator.validator
-                ));
+                )).into());
             }
             if validator.stake_account != *validator_id {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} stake account {} must match the validator account",
                     validator.stake_account
-                ));
+                )).into());
             }
             if validator.activation_height == 0 {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} activation height must be positive"
-                ));
+                ))
+                .into());
             }
             if validator
                 .deactivation_height
                 .is_some_and(|height| height < validator.activation_height)
             {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} deactivation height precedes activation height {}",
                     validator.activation_height
-                ));
+                )).into());
             }
             match validator.status {
                 PublicLaneValidatorStatus::PendingActivation(height) => {
                     if height != validator.activation_height {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} pending height {height} does not match activation height {}",
                             validator.activation_height
-                        ));
+                        )).into());
                     }
                     if validator.deactivation_height.is_some() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} pending tenure already has a deactivation height"
-                        ));
+                        )).into());
                     }
                 }
                 PublicLaneValidatorStatus::Active => {
                     if validator.deactivation_height.is_some() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} active tenure already has a deactivation height"
-                        ));
+                        )).into());
                     }
                 }
                 PublicLaneValidatorStatus::Exiting(_)
                 | PublicLaneValidatorStatus::Exited
                 | PublicLaneValidatorStatus::Slashed(_) => {
                     if validator.deactivation_height.is_none() {
-                        return Err(format!(
+                        return Err((format!(
                             "lane {lane_id} validator {validator_id} terminal tenure has no deactivation height"
-                        ));
+                        )).into());
                     }
                 }
             }
@@ -18461,10 +18542,10 @@ impl World {
                 || &share.validator != validator_id
                 || &share.staker != staker_id
             {
-                return Err(format!(
+                return Err((format!(
                     "public-lane stake-share key ({lane_id}, {validator_id}, {staker_id}) does not match embedded identity ({}, {}, {})",
                     share.lane_id, share.validator, share.staker
-                ));
+                )).into());
             }
             let validator_key = (*lane_id, validator_id.clone());
             validators.get(&validator_key).ok_or_else(|| {
@@ -18476,26 +18557,26 @@ impl World {
             let mut pending_total = Quantity::zero();
             for (request_id, pending) in &share.pending_unbonds {
                 if request_id != &pending.request_id {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending-unbond key {request_id:?} does not match embedded request id {:?}",
                         pending.request_id
-                    ));
+                    )).into());
                 }
                 if pending.amount.is_zero() {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} amount must be positive"
-                    ));
+                    )).into());
                 }
                 if pending.slashable_through_height == 0 {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} slashable-through height must be positive"
-                    ));
+                    )).into());
                 }
                 if pending.liability_release_height < pending.slashable_through_height {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} precedes slashable-through height {}",
                         pending.liability_release_height, pending.slashable_through_height
-                    ));
+                    )).into());
                 }
                 let (evidence_horizon, slashing_delay) = npos_penalty_window.ok_or_else(|| {
                     format!(
@@ -18512,10 +18593,10 @@ impl World {
                         )
                     })?;
                 if pending.liability_release_height < minimum_release_height {
-                    return Err(format!(
+                    return Err((format!(
                         "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} does not cover the signed evidence-and-slashing window through {minimum_release_height}",
                         pending.liability_release_height
-                    ));
+                    )).into());
                 }
                 pending_total = pending_total.checked_add(&pending.amount).map_err(|_| {
                     format!(
@@ -18546,16 +18627,16 @@ impl World {
                 .get(&(*lane_id, validator_id.clone()))
                 .expect("canonical validator initialized an aggregate row");
             if &validator.total_stake != bonded {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} total stake {} does not match bonded share total {bonded}",
                     validator.total_stake
-                ));
+                )).into());
             }
             if &validator.self_stake != self_bonded {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} validator {validator_id} self stake {} does not match self-supplied bonded share total {self_bonded}",
                     validator.self_stake
-                ));
+                )).into());
             }
         }
         for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
@@ -18566,10 +18647,11 @@ impl World {
                 })?;
             }
             if total != reward.total_reward {
-                return Err(format!(
+                return Err((format!(
                     "lane {lane_id} epoch {epoch} reward shares total {total} does not match {}",
                     reward.total_reward
-                ));
+                ))
+                .into());
             }
         }
         Ok(())
@@ -18590,9 +18672,10 @@ impl World {
         if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
             && existing_contract != *contract_address
         {
-            return Err(Error::InvariantViolation(
+            return Err((Error::InvariantViolation(
                 format!("contract alias `{alias}` is already bound").into(),
-            ));
+            ))
+            .into());
         }
         self.contract_alias_bindings.insert(
             contract_address.clone(),
@@ -21396,7 +21479,15 @@ macro_rules! world_ro_accessors {
 pub trait WorldReadOnly {
     world_ro_accessors!(configuration, declaration);
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
-    fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
+    ///
+    /// # Errors
+    /// Matching malformed policy is rejected; an unfinished local decoder read is deferred.
+    fn sumeragi_npos_parameters(
+        &self,
+    ) -> Result<
+        Option<SumeragiNposParameters>,
+        crate::execution_attempt::ExecutionAttemptError<String>,
+    > {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
     world_ro_accessors!(identity, declaration);
@@ -24606,11 +24697,26 @@ impl<'block> WorldTransaction<'block, '_> {
     /// Apply the heap-owned transaction journal to its original World block.
     #[allow(clippy::too_many_lines)]
     pub fn apply(mut self: Box<Self>) {
+        // A locally incomplete World journal must remain disposable even when a
+        // caller invokes its raw apply facade instead of StateTransaction::apply.
+        if self.execution_deferral.borrow().is_some() {
+            return;
+        }
         // Keep exhaustive field coverage without moving the complete journal
         // off its heap allocation before applying the individual fields.
         let Self {
+            execution_deferral: _,
             dataspace_catalog: _,
             quantity_mutation_observation: _,
+            retail_fee_now_ms: _,
+            retail_fee_height: _,
+            retail_fee_source_transaction_hash: _,
+            retail_fee_assessment: _,
+            retail_fee_assessment_marker_pending: _,
+            retail_fee_observed_payments: _,
+            retail_fee_pending_credits: _,
+            retail_fee_pending_transcripts: _,
+            retail_fee_exempt_payments: _,
             dataspace_catalog_sink: _,
             parameters: _,
             peers: _,
@@ -27421,7 +27527,14 @@ impl State {
             .expect("initial world contains invalid numeric asset state");
         world
             .validate_quantity_ledger_invariants()
-            .expect("initial world contains invalid quantity ledger state");
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(error)
+                }
+            })?;
         u64::try_from(exact_durable_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
                 "persisted block height exceeds u64 during startup".to_owned(),
@@ -28935,6 +29048,14 @@ impl State {
         let epoch_length = sb
             .world
             .sumeragi_npos_parameters()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    StateBlockStartError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    StateBlockStartError::Policy(error)
+                }
+            })?
             .map_or(
                 iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks.get(),
@@ -32219,7 +32340,7 @@ impl State {
         if !nexus_fee_asset_selector_is_canonical(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
-        if let Some(params) = self.world.view().sumeragi_npos_parameters() {
+        if let Some(params) = self.world.view().sumeragi_npos_parameters()? {
             // Runtime selectors cannot replace the identity authenticated by genesis.
             // Aliases are resolved at execution; the literal XOR alias is only a
             // routing convenience and every monetary use still checks this pin.
@@ -34837,31 +34958,21 @@ static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
 static DEFAULT_TEST_NETWORK_ID: LazyLock<iroha_data_model::NetworkId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.1);
-fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<SumeragiNposParameters> {
+pub(crate) fn sumeragi_npos_parameters_from_parameters(
+    params: &Parameters,
+) -> Result<Option<SumeragiNposParameters>, crate::execution_attempt::ExecutionAttemptError<String>>
+{
     let id = SumeragiNposParameters::parameter_id();
-    let custom = params.custom().get(&id)?;
-    if let Some(parsed) = SumeragiNposParameters::from_custom_parameter(custom) {
-        return Some(parsed);
+    let Some(custom) = params.custom().get(&id) else {
+        return Ok(None);
+    };
+    let decoded = SumeragiNposParameters::from_custom_parameter(custom);
+    if cfg!(all(test, sumeragi_core_mutation = "HC50")) && decoded.is_err() {
+        return Ok(None);
     }
-    let payload = custom.payload();
-    let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<SumeragiNposParameters>() {
-        Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
-        Ok(parsed) => {
-            warn!(
-                error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-            );
-            None
-        }
-        Err(error) => {
-            warn!(
-                ?error,
-                "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-            );
-            None
-        }
-    }
+    decoded.map_err(|error| {
+        crate::execution_attempt::json_decode_attempt_error(error, |error| error.to_string())
+    })
 }
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
@@ -36881,19 +36992,19 @@ impl<'state> StateBlock<'state> {
     /// Rejects absent, failed, stale or mutated source ownership before ordinary witness
     /// work, or mismatched ordinary transcript contents and unexpected prepared batches.
     /// Content failures remain latched and invalidate every cached witness-derived output.
-    pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+    pub fn capture_exec_witness_attempt(&mut self) -> Result<(), WitnessCaptureError> {
         self.observe_quantity_block_journals();
         self.verify_sumeragi_lane_state_seal()?;
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
             Ok(inventory) => inventory,
             Err(error) => {
                 self.clear_cached_exec_witness();
-                return Err(error);
+                return Err(error.into());
             }
         };
         if self.exec_witness.is_none() {
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
-            let result = (|| {
+            let result = (|| -> Result<(), WitnessCaptureError> {
                 let state = &mut *capture.state;
                 // Authority loss is a terminal local capture failure. Latch it without
                 // draining a recorder that may now belong to another execution.
@@ -36903,7 +37014,7 @@ impl<'state> StateBlock<'state> {
                         source_inventory.verify_finalized_transcript_map(transcripts)
                     }) {
                         Ok(witness) => witness,
-                        Err(error) => return Err(error),
+                        Err(error) => return Err(error.into()),
                     };
                 let receiver_height = state._curr_block.height().get();
                 // Commit the complete protected validation-fee registry selection
@@ -36920,6 +37031,8 @@ impl<'state> StateBlock<'state> {
                 let validation_fee_commitment =
                     iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
                         receiver_height,
+                        u64::try_from(state._curr_block.creation_time().as_millis())
+                            .map_err(|_| "block timestamp exceeds u64")?,
                         validation_fee_custom,
                     );
                 let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
@@ -36971,6 +37084,7 @@ impl<'state> StateBlock<'state> {
                     witness.writes.push(sccp_write);
                 }
                 state.capture_sumeragi_lane_state(&mut witness)?;
+                crate::validation_fee_rewards::capture_fee_evidence(state, &mut witness)?;
                 witness
                     .writes
                     .sort_by(|left, right| left.key.cmp(&right.key));
@@ -37010,20 +37124,43 @@ impl<'state> StateBlock<'state> {
             })();
             match result {
                 Ok(()) => capture.finish(),
-                Err(error) => return Err(capture.reject(error)),
+                Err(WitnessCaptureError::Rejected(error)) => {
+                    return Err(capture.reject(error).into());
+                }
+                Err(WitnessCaptureError::Deferred(reason)) => {
+                    return Err(WitnessCaptureError::Deferred(capture.defer(reason)));
+                }
+                Err(WitnessCaptureError::StorageAdmission(error)) => {
+                    capture.abandon();
+                    return Err(WitnessCaptureError::StorageAdmission(error));
+                }
             }
         } else {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
                 // This capture call still owns the exclusive block recorder guard. Clear any
                 // rejected recorder state, preserving the earlier cached-content failure.
                 let _ = crate::exec_witness::finish_cached_exec_witness_capture();
-                return Err(self.reject_fastpq_witness_content(error));
+                return Err(self.reject_fastpq_witness_content(error).into());
             }
             if let Err(error) = crate::exec_witness::finish_cached_exec_witness_capture() {
-                return Err(self.reject_fastpq_witness_content(error));
+                return Err(self.reject_fastpq_witness_content(error).into());
             }
         }
         Ok(())
+    }
+    /// Completed-rejection assertion surface for deterministic component tests.
+    /// A genuine local retry cannot be represented by this helper's String.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+    pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+        self.capture_exec_witness_attempt().map_err(|error| match error {
+            WitnessCaptureError::Rejected(error) => error,
+            WitnessCaptureError::Deferred(reason) => {
+                panic!("completed witness control encountered an original local refusal: {reason}")
+            }
+            WitnessCaptureError::StorageAdmission(error) => {
+                panic!("completed witness control encountered original storage admission refusal: {error}")
+            }
+        })
     }
     /// Check the exact ordinary recorder surface retained with the owned source inventory.
     ///
@@ -37299,6 +37436,9 @@ impl<'state> StateBlock<'state> {
             }
         };
         world.dataspace_catalog = fields.nexus.dataspace_catalog.clone();
+        world.retail_fee_now_ms =
+            u64::try_from(fields._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+        world.retail_fee_height = fields._curr_block.height().get();
         let executor_fuel_remaining = world.parameters.get().executor().fuel.get();
         let zk = fields.zk.clone();
         let privacy_budget_after_block = fields.privacy_budget_in_block;
@@ -37412,7 +37552,6 @@ impl<'state> StateBlock<'state> {
             last_tx_gas_used: 0,
             execution_fee_meter: None,
             execution_effects: crate::executor::ExecutionEffects::default(),
-            execution_deferral: None,
             bridge_receipt_proofs_available_in_tx: BTreeSet::new(),
             gas_limit_per_block: fields.gas_limit_per_block,
             gas_used_in_block_so_far: fields.gas_used_in_block,
@@ -38091,7 +38230,7 @@ impl<'state> StateBlock<'state> {
     fn prepare_owned_time_phase(
         &mut self,
         block_header: &BlockHeader,
-    ) -> Result<(TimeEvent, usize), crate::execution_attempt::ExecutionAttemptError<String>> {
+    ) -> Result<(TimeEvent, usize), ExecutionOutputAttemptError> {
         // Refuse a pristine/probe scope before events, maintenance or matching.
         let max_time_trigger_invocations = self.time_trigger_invocation_limit()?;
         if *block_header != self._curr_block
@@ -38106,7 +38245,7 @@ impl<'state> StateBlock<'state> {
         self.world.external_event_buf.push(time_event.into());
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
-            let mut maintenance_tx = self.try_transaction().map_err(|error| error.to_string())?;
+            let mut maintenance_tx = self.try_transaction()?;
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
             let removed_asset_aliases = maintenance_tx
                 .world
@@ -38130,16 +38269,17 @@ impl<'state> StateBlock<'state> {
         if let Err(error) = crate::sns::process_alias_auto_renewals(self, &native_scope) {
             return Err(match error {
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+                    ExecutionOutputAttemptError::Deferred(reason)
                 }
                 crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                     if self.local_storage_refusal.is_none() {
                         self.local_storage_refusal = Some(error.clone());
                     }
-                    crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+                    ExecutionOutputAttemptError::Storage(error)
                 }
             });
         }
+        crate::validation_fee_rewards::publish_conversion_offers(self)?;
         Ok((time_event, max_time_trigger_invocations))
     }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
@@ -41213,6 +41353,7 @@ impl StateTransaction<'_, '_> {
         batch_hash: iroha_crypto::Hash,
         deltas: Vec<TransferDeltaTranscript>,
     ) -> Result<(), Error> {
+        self.flush_retail_fee_transfer_transcripts()?;
         self.stage_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
     }
     /// Exercise native transcript capture in state tests without exposing a
@@ -41362,7 +41503,7 @@ impl StateTransaction<'_, '_> {
             )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
-            || self.execution_deferral.is_some()
+            || self.world.execution_deferral.borrow().is_some()
             || self.canonical_runtime.touched_value().is_some()
             || !self.fastpq_source_quota.allows_apply()
             || !self.pending_transfer_transcripts.is_empty()
@@ -41396,7 +41537,12 @@ impl StateTransaction<'_, '_> {
     /// Validate the final transaction boundary while rollback owners remain armed.
     /// A refusal poisons the enclosing carrier before any State field is applied.
     fn prepare_apply(&mut self) -> Result<(), &'static str> {
-        let error = if self.local_storage_refusal.is_some() {
+        // Stage native fee deductions queued after the last principal occurrence so
+        // the source-quota and execution-effect checks below cover them.
+        let fee_transcripts = self.flush_retail_fee_transfer_transcripts();
+        let error = if fee_transcripts.is_err() {
+            Some("transaction native fee transcript preparation was refused")
+        } else if self.local_storage_refusal.is_some() {
             Some("transaction local State storage admission was refused")
         } else if matches!(
             self.block_execution_output_plan,
@@ -41414,7 +41560,7 @@ impl StateTransaction<'_, '_> {
             Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
             Some("transaction execution-effect owner does not authorize application")
-        } else if self.execution_deferral.is_some() {
+        } else if self.world.execution_deferral.borrow().is_some() {
             Some("transaction execution was locally deferred")
         } else if self
             .pending_kagemusha_registry_transition_authorization
@@ -41489,7 +41635,6 @@ impl StateTransaction<'_, '_> {
                 last_tx_gas_used: _,
             execution_fee_meter: _,
             execution_effects: _,
-            execution_deferral: _,
             pending_nexus_fee_event,
             pending_nexus_fee_receipt: _,
             block_pending_public_lane_slash_observability,
@@ -42385,7 +42530,11 @@ impl StateTransaction<'_, '_> {
         host.set_zk_config(&self.zk);
         host.set_chain_id(self.chain_id());
         host.set_public_inputs_from_parameters(self.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_state(self);
+        host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+            self.attempt_error_to_validation_fail(
+                error.map_rejection(ValidationFail::InternalError),
+            )
+        })?;
         host.set_query_state(self);
         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
         crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
@@ -42887,7 +43036,11 @@ impl StateTransaction<'_, '_> {
                 host.set_zk_config(&self.zk);
                 host.set_chain_id(self.chain_id());
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_state(self);
+                host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+                    self.attempt_error_to_validation_fail(
+                        error.map_rejection(ValidationFail::InternalError),
+                    )
+                })?;
                 host.set_query_state(self);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -43171,7 +43324,11 @@ impl StateTransaction<'_, '_> {
                             host.set_zk_config(&self.zk);
                             host.set_chain_id(self.chain_id());
                             host.set_public_inputs_from_parameters(self.world.parameters.get());
-                            host.set_vrf_epoch_seeds_from_state(self);
+                            host.set_vrf_epoch_seeds_from_state(self).map_err(|error| {
+                                self.attempt_error_to_validation_fail(
+                                    error.map_rejection(ValidationFail::InternalError),
+                                )
+                            })?;
                             host.set_query_state(self);
                             host.set_contract_runtime_context(contract_runtime_context.clone());
                             host.set_contract_entrypoint_authorization(Some(

@@ -342,7 +342,9 @@ fn multisig_proposal_terminal_state_key(
     ))
     .expect("multisig proposal terminal state path must be valid")
 }
-fn multisig_proposal_terminal_execution_state_key(
+/// Canonical immutable native multisig terminal-execution record key.
+#[must_use]
+pub fn multisig_proposal_terminal_execution_state_key(
     terminal_entrypoint_hash: [u8; Hash::LENGTH],
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -354,7 +356,9 @@ fn multisig_proposal_terminal_execution_state_key(
     ))
     .expect("multisig proposal terminal execution path must be valid")
 }
-fn multisig_approval_outcome_state_key(
+/// Canonical immutable native multisig approval-outcome record key.
+#[must_use]
+pub fn multisig_approval_outcome_state_key(
     entrypoint_hash: [u8; Hash::LENGTH],
     entrypoint_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -744,6 +748,8 @@ fn rekey_account_id(
                 .then_some(migrated_grantee)
         })
         .collect::<BTreeSet<_>>();
+    crate::retail_fee::prepare_rekey(state_transaction, old_account, new_account)?;
+    crate::validation_fee_rewards::rekey_beneficiary(state_transaction, old_account, new_account)?;
     state_transaction
         .validate_fastpq_governance_rekey(old_account, new_account)
         .map_err(|error| state_transaction.mandatory_source_instruction_error(error))?;
@@ -886,6 +892,7 @@ fn rekey_account_id(
                 .insert(new_asset_id, meta);
         }
     }
+    crate::retail_fee::finish_rekey(state_transaction, old_account, new_account)?;
     let nft_ids: Vec<_> = state_transaction
         .world
         .nfts_in_account_iter(old_account)

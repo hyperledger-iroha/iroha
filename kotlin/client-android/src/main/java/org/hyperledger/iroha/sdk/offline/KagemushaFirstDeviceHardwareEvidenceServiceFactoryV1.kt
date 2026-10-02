@@ -67,9 +67,10 @@ class KagemushaAndroidFirstDeviceHardwareEvidenceServiceFactoryV1 : KagemushaFir
                     KagemushaFirstDeviceHardwareEvidenceSelectionV1.Reason.NATIVE_NOT_PACKAGED) }
             if(native==null) return KagemushaFirstDeviceHardwareEvidenceSelectionV1.Declined(
                 KagemushaFirstDeviceHardwareEvidenceSelectionV1.Reason.AUTHENTIC_BOOTSTRAP_NOT_INSTALLED)
-            val owner=KagemushaFirstDeviceHardwareEvidenceServiceOwnerV1 { native }
             // Authenticate its exact original identity before publishing the service to the app.
-            owner.recoverOriginalOrReserve()
+            val owner=KagemushaFirstDeviceHardwareEvidenceServiceOwnerV1.fromOwnedNativeView(
+                native, native::releaseView,
+            )
             originalRoot=storage;original=owner
             return KagemushaFirstDeviceHardwareEvidenceSelectionV1.Available(owner)
         }

@@ -125,7 +125,7 @@ fn circuit<F: KagemushaPoseidonFieldV1>(
         }
         Some(Mutation::TrailingCiphertext) => cipher.push(0),
         Some(Mutation::TransportPaddedCiphertext) => {
-            cipher.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0)
+            cipher.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
         }
         Some(Mutation::InactiveColumn) => data[0] = F::ONE,
         _ => {}
@@ -231,29 +231,78 @@ fn ordinary_mint113_inactive_semantics_emit_same_opening_sha_graph_and_cannot_ca
 #[test]
 fn ordinary_mint113_ciphertext_requires_canonical_width_and_equal_branch_sha_geometry() {
     fn check_geometry<F: KagemushaPoseidonFieldV1>() {
+        use crate::pasta_sha256::PastaSha256PlanMessageV1;
+
         let active = circuit::<F>(true, None).unwrap();
         let inactive = circuit::<F>(false, None).unwrap();
-        let active_messages = active.jobs.canonical_messages().unwrap();
-        let inactive_messages = inactive.jobs.canonical_messages().unwrap();
+        let active_messages = active.jobs.canonical_plan_messages().unwrap();
+        let inactive_messages = inactive.jobs.canonical_plan_messages().unwrap();
         assert_eq!(active_messages.len(), 3);
+        let geometry = |messages: &[PastaSha256PlanMessageV1]| {
+            messages
+                .iter()
+                .map(|message| match message {
+                    PastaSha256PlanMessageV1::Ordinary(message) => (message.len(), None),
+                    PastaSha256PlanMessageV1::Bounded {
+                        capacity,
+                        max_blocks,
+                        ..
+                    } => (*capacity, Some(*max_blocks)),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(geometry(&active_messages), geometry(&inactive_messages));
         assert_eq!(
-            active_messages.iter().map(Vec::len).collect::<Vec<_>>(),
-            inactive_messages.iter().map(Vec::len).collect::<Vec<_>>()
+            active.jobs.capacity_profile().unwrap(),
+            inactive.jobs.capacity_profile().unwrap()
         );
         let prefix = b"iroha:kagemusha:v1:ciphertext\0";
         let size = KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1;
-        let cipher = &active_messages[2];
+        let PastaSha256PlanMessageV1::Bounded {
+            logical_message: cipher,
+            capacity,
+            selected_block,
+            ..
+        } = &active_messages[2]
+        else {
+            panic!("active ciphertext must use the bounded SHA relation");
+        };
         assert_eq!(cipher.len(), prefix.len() + 8 + size);
+        assert_eq!(
+            *capacity,
+            prefix.len() + 8 + KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1
+        );
+        assert_eq!(*selected_block, (cipher.len() + 9).div_ceil(64) - 1);
         assert_eq!(&cipher[..prefix.len()], prefix);
         assert_eq!(
             &cipher[prefix.len()..prefix.len() + 8],
             &(size as u64).to_le_bytes()
         );
-        assert!(
-            inactive_messages[2][prefix.len() + 8..]
-                .iter()
-                .all(|byte| *byte == 0)
+        assert_eq!(
+            &cipher[prefix.len() + 8..],
+            kagemusha_ordinary_mint_codec_fixture_v1()
+                .request
+                .encrypted_credit
+                .as_slice()
         );
+        let PastaSha256PlanMessageV1::Bounded {
+            logical_message: inactive_cipher,
+            selected_block: inactive_block,
+            ..
+        } = &inactive_messages[2]
+        else {
+            panic!("inactive ciphertext must use the same bounded SHA relation");
+        };
+        assert_eq!(inactive_cipher.len(), prefix.len() + 8);
+        assert_eq!(&inactive_cipher[..prefix.len()], prefix);
+        assert_eq!(&inactive_cipher[prefix.len()..], &0_u64.to_le_bytes());
+        assert_eq!(
+            *inactive_block,
+            (inactive_cipher.len() + 9).div_ceil(64) - 1
+        );
+        // A fixed-capacity claim must retain its active-length/selected-block relation.
+        assert!(active.jobs.canonical_messages().is_err());
+        assert!(inactive.jobs.canonical_messages().is_err());
         for mutation in [
             Mutation::TruncatedCiphertext,
             Mutation::TrailingCiphertext,
@@ -261,7 +310,7 @@ fn ordinary_mint113_ciphertext_requires_canonical_width_and_equal_branch_sha_geo
         ] {
             assert_eq!(
                 circuit::<F>(true, Some(mutation)).err().as_deref(),
-                Some("ordinary Mint State full column/cipher capacity differs")
+                Some("ordinary Mint State full column/canonical cipher length differs")
             );
         }
     }

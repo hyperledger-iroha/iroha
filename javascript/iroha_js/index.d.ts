@@ -523,11 +523,8 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
-  validationFeePolicyVersion?: number | string | bigint | null;
-  validationFeePolicyHash?: string | null;
-  validationFeeHijiriFeeQuoteHash?: string | null;
-  validationFeeInstructionIndex?: number | string | bigint | null;
-  validationFeeTransferEntryIndex?: number | string | bigint | null;
+  validation_fee_assessment?: RetailFeeAssessmentV1;
+  memo?: string | null;
   draftIntent?: LocalTransactionDraftIntent;
   draft_intent?: LocalTransactionDraftIntent;
   multisig_account_id?: string;
@@ -548,11 +545,8 @@ export interface MultisigProposePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
-  validation_fee_policy_version?: string;
-  validation_fee_policy_hash?: string;
-  validation_fee_hijiri_fee_quote_hash?: string;
-  validation_fee_instruction_index?: string;
-  validation_fee_transfer_entry_index?: string;
+  validation_fee_assessment?: RetailFeeAssessmentV1;
+  memo?: string;
 }
 
 export interface MultisigContractCallProposeRequest
@@ -3441,7 +3435,12 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1"
+  | "encodeRetailFeeQuoteRequestV1"
+  | "retailFeePaymentIntentHash"
+  | "encodeRetailFeeAssessmentV1"
+  | "retailFeeAssessmentMarkerMessage"
+  | "decodeRetailFeeAssessmentMarkerMessage"
+  | "CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1"
   | "CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1"
   | "CONFIDENTIAL_MEMO_WIRE_MAGIC_V1"
   | "decodeCancelAssetLockV1"
@@ -4268,50 +4267,54 @@ export interface ToriiGovernanceSccpRouteProposal {
   };
 }
 
-export type ToriiGovernanceValidationFeeChargingMode = Readonly<
-  | { charging_mode: "DISABLED"; value: null }
-  | { charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION"; value: null }
->;
-
-export interface ToriiGovernanceValidationFeePayoutRecipient {
-  account_id: string;
-  share: "0.25";
-}
+export type ToriiGovernanceValidationFeeChargingMode = Readonly<{
+  charging_mode: "RETAIL_MONTHLY_ALLOWANCE";
+  value: null;
+}>;
 
 export interface ToriiGovernanceValidationFeePayoutBinding {
   contract_address: string;
-  code_hash: ReadonlyArray<number>;
+  code_hash: string;
   entrypoint: "autonomous_validation_fee_tick";
   treasury_account_id: string;
   ds_asset_id: string;
   xor_asset_id: string;
+  pool_contract_address: string;
+  pool_code_hash: string;
   pool_vault_account_id: string;
-  batch_ds: "10";
-  min_xor_out: "4";
-  max_xor_out: "100";
-  recipients: ReadonlyArray<ToriiGovernanceValidationFeePayoutRecipient>;
+  reward_pool_account_id: string;
+  reference_feed_id: readonly [string];
+  reference_feed_config_version: number;
+  reference_provider_accounts: ReadonlyArray<string>;
+  max_sbd_per_attempt_minor: number | bigint;
+  max_sbd_per_day_minor: number | bigint;
+  min_interval_ms: number | bigint;
+  max_source_age_ms: number | bigint;
+  max_slippage_bps: number;
+  validator_lane_id: number;
+  min_reward_claim_xor_minor: number | bigint;
 }
 
 export interface ToriiGovernanceValidationFeePolicyV1 {
   schema_version: 1;
   network_id: string;
   policy_version: string;
-  previous_policy_hash: ReadonlyArray<number> | null;
+  previous_policy_hash: string | null;
   ds_asset_id: string;
   ds_scale: 2;
   fee: string;
   treasury_account_id: string;
   charging_mode: ToriiGovernanceValidationFeeChargingMode;
-  effective_from_height: string;
-  expires_after_height: string | null;
-  exemption_classes: ReadonlyArray<"TREASURY_PAYOUT">;
-  treasury_payout_binding: ToriiGovernanceValidationFeePayoutBinding | null;
+  exemption_classes: readonly ["TREASURY_PAYOUT"];
+  effective_from_ms: number | bigint;
+  notice_published_at_ms: number | bigint;
+  retail_schedule: RetailFeeScheduleV1;
+  reward_custody: ValidationFeeRewardCustodyV1;
 }
 
 export interface ToriiGovernanceValidationFeePolicyProposal {
   proposal_operator: string;
   policy: ToriiGovernanceValidationFeePolicyV1;
-  payout_lifecycle_proposal_id: ReadonlyArray<number> | null;
 }
 
 export interface ToriiGovernanceValidationFeePayoutLifecycleProposal {
@@ -10108,45 +10111,19 @@ export interface ValidationFeeVerifiedParliamentProposalV1 {
   readonly enacted_at_height: string;
 }
 
-export interface ValidationFeeVerifiedParliamentV1 {
-  readonly validationFeePolicy: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
-  readonly payoutLifecycle: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
-  readonly payoutLifecycleSealHash: string;
-}
-
-export interface ValidationFeeVerifiedPayoutRecipientV1 {
-  readonly account_id: string;
-  readonly share_basis_points: 2500;
-}
-
-export interface ValidationFeeVerifiedPayoutV1 {
-  readonly contractAddress: string;
-  readonly codeHash: string;
-  readonly entrypoint: "autonomous_validation_fee_tick";
-  readonly dsAssetDefinitionId: string;
-  readonly xorAssetDefinitionId: string;
-  readonly treasuryAccountId: string;
-  readonly vaultAccountId: string;
-  readonly batchDsMinorUnits: "1000";
-  readonly dsScale: 2;
-  readonly xorOutputMin: "4";
-  readonly xorOutputMax: "100";
-  readonly recipients: ReadonlyArray<
-    Readonly<ValidationFeeVerifiedPayoutRecipientV1>
-  >;
-}
-
 export interface ValidationFeeVerifiedCurrentPolicyV1 {
   readonly activePolicyVersion: string;
   readonly activePolicyHash: string;
   readonly feeAssetDefinitionId: string;
   readonly feeScale: 2;
-  readonly feeMinorUnits: "10";
-  readonly chargingMode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  readonly feeMinorUnits: string;
+  readonly chargingMode: "RETAIL_MONTHLY_ALLOWANCE";
+  readonly effective_from_ms: number | string | bigint;
+  readonly notice_published_at_ms: number | string | bigint;
+  readonly retail_schedule: RetailFeeScheduleV1;
   readonly effectiveFromHeight: string;
-  readonly expiresAfterHeight: string | null;
-  readonly parliament: Readonly<ValidationFeeVerifiedParliamentV1>;
-  readonly payout: Readonly<ValidationFeeVerifiedPayoutV1>;
+  readonly parliament: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly reward_custody: Readonly<ValidationFeeRewardCustodyV1>;
 }
 
 export interface ValidationFeeVerifiedPolicyProjectionV1 {
@@ -10158,6 +10135,7 @@ export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly head_policy_version: bigint;
   readonly head_policy_hash: string;
   readonly current_policy: Readonly<ValidationFeeVerifiedCurrentPolicyV1> | null;
+  readonly conversion_policy: Readonly<ValidationFeeVerifiedConversionPolicyV1> | null;
   readonly trusted_checkpoint_height: bigint;
   readonly trusted_checkpoint_context_id: string;
   readonly evaluated_block_height: bigint;
@@ -10176,33 +10154,7 @@ export interface ValidationFeeCurrentPolicyProofPageV1 extends ValidationFeeVeri
   readonly proofNorito: Buffer;
 }
 
-export interface ValidationFeeHijiriQuoteProjectionV1 {
-  readonly schema: "iroha.torii.v1.validation_fee.hijiri_quote.response";
-  readonly version: 1;
-  readonly assurance: "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED";
-  readonly evaluatedStateHeight: string;
-  readonly quotedExecutionHeight: string;
-  readonly accountId: string;
-  readonly activePolicyVersion: string;
-  readonly activePolicyHash: string;
-  readonly feeAssetDefinitionId: string;
-  readonly treasuryAccountId: string;
-  readonly feeScale: number;
-  readonly hijiriParametersVersion: 1;
-  readonly hijiriParametersRevision: string;
-  readonly hijiriParametersDigest: string;
-  readonly defaultAccountRiskQ16: number;
-  readonly effectiveAccountRiskQ16: number;
-  readonly accountRiskRevision: string | null;
-  readonly accountRiskDigest: string | null;
-  readonly feeMultiplierQ16: number;
-  readonly hijiriFeeQuoteHash: string;
-  readonly basePerTransferFeeMinorUnits: string;
-  readonly adjustedPerTransferFeeMinorUnits: string;
-  readonly qualifyingTransferCount: number;
-  readonly aggregateBaseFeeMinorUnits: string;
-  readonly aggregateAdjustedFeeMinorUnits: string;
-}
+
 
 export interface ValidationFeePolicyProofCatchUpV1
   extends ValidationFeeCurrentPolicyProofPageV1 {
@@ -10464,11 +10416,6 @@ export declare class ToriiClient {
     payload: Record<string, unknown> | TransactionPayloadDraftResult,
     options: RequiredCanonicalRequestOptions,
   ): Promise<FeeQuoteResponse>;
-  quoteValidationFeeHijiri(
-    accountId: string,
-    qualifyingTransferCount: number,
-    options: RequiredCanonicalRequestOptions,
-  ): Promise<ValidationFeeHijiriQuoteProjectionV1>;
   getValidationFeeCurrentPolicyProofPage(
     binding: ValidationFeeLedgerBindingV1,
     checkpoint: ValidationFeeCheckpointV1 | null,
@@ -11803,11 +11750,7 @@ export interface MultisigProposeNoritoRequest {
   fee_payment?: NoritoFeePaymentIntent;
   feePayment?: NoritoFeePaymentIntent;
   memo?: string | null;
-  validation_fee_policy_version?: string | null;
-  validation_fee_policy_hash?: string | null;
-  validation_fee_hijiri_fee_quote_hash?: string | null;
-  validation_fee_instruction_index?: string | null;
-  validation_fee_transfer_entry_index?: string | null;
+  validation_fee_assessment?: RetailFeeAssessmentV1 | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(
@@ -11850,7 +11793,6 @@ export function inspectSubscriptionTriggerAction(
 export function computeValidationFeePolicyProposalFingerprintV1(
   proposalOperator: string,
   policy: Readonly<Record<string, JsonValue>>,
-  payoutLifecycleProposalId?: string | null,
 ): string;
 
 /**
@@ -12091,22 +12033,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   networkPrefix: number,
 ): ValidationFeeVerifiedPageV1;
 
-export const VALIDATION_FEE_HIJIRI_QUOTE_PATH: "/v1/validation-fee/hijiri/quote";
-export const VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA: "iroha.torii.v1.validation_fee.hijiri_quote.response";
-export const VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE: "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_WITNESS_VERIFIED";
-export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES: 4096;
-export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES: 65536;
-export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS: 100000;
-export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 25;
-export function encodeValidationFeeHijiriQuoteRequestV1(
-  accountId: string,
-  qualifyingTransferCount: number,
-): Buffer;
-export function verifyValidationFeeHijiriQuoteResponseV1(
-  responseNorito: Buffer | ArrayBuffer | ArrayBufferView,
-  requestNorito: Buffer | ArrayBuffer | ArrayBufferView,
-  networkPrefix: number,
-): ValidationFeeHijiriQuoteProjectionV1;
+
 
 export function buildMintAssetTransaction(
   input: MintAssetInput & FeePaymentRequired,
@@ -13650,3 +13577,70 @@ export function defaultConfidentialDiversifier(): Buffer;
  * Does not consume the opening or authenticate membership. Private strings remain caller-owned.
  */
 export function confidentialChangeToInput(change: ConfidentialUnshieldProofOutputV3, leafIndex: number): ConfidentialTransferProofInputV2;
+
+
+export interface RetailFeeScheduleV1 {
+  included_payments: number;
+  overage_minor: number | bigint;
+  maintenance_tiers: Array<{ minimum_average_balance_minor: number | bigint; monthly_fee_minor: number | bigint }>;
+}
+
+
+
+export interface ValidationFeeRewardCustodyV1 {
+  contract_address: string;
+  treasury_account_id: string;
+  ds_asset_id: string;
+  xor_asset_id: string;
+  reward_pool_account_id: string;
+  validator_lane_id: number;
+}
+
+
+
+export interface ValidationFeeVerifiedConversionPolicyV1 {
+  readonly revision: number | bigint;
+  readonly binding: Readonly<ToriiGovernanceValidationFeePayoutBinding>;
+  readonly authority: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly lifecycle_seal_hash: string;
+}
+
+
+
+/** Canonical wallet intent; counters are supplied exclusively by the ledger. */
+export interface RetailFeeQuoteRequestV1 {
+  account_id: string;
+  asset_definition_id: string;
+  transfers: Array<{ destination_account_id: string; amount_minor_units: number | string | bigint }>;
+}
+
+
+/** Canonical assessment DATA; ledger admission binds its exact intent and authenticated state. */
+export interface RetailFeeAssessmentV1 {
+  account_id: string;
+  retail_enrolled: boolean;
+  billing_month_start_ms: number | bigint;
+  policy_revision: number | bigint;
+  payments_used_before: number | bigint;
+  qualifying_payments: number | bigint;
+  fee_minor: number | bigint;
+  state_commitment: string;
+  intent_hash: string;
+  expires_at_ms: number | bigint;
+}
+
+
+export function encodeRetailFeeQuoteRequestV1(request: RetailFeeQuoteRequestV1): Buffer;
+
+
+export function retailFeePaymentIntentHash(request: RetailFeeQuoteRequestV1): Uint8Array;
+
+
+export function encodeRetailFeeAssessmentV1(assessment: RetailFeeAssessmentV1): Buffer;
+
+
+export function retailFeeAssessmentMarkerMessage(assessment: RetailFeeAssessmentV1): string;
+
+
+
+export function decodeRetailFeeAssessmentMarkerMessage(message: string): RetailFeeAssessmentV1;

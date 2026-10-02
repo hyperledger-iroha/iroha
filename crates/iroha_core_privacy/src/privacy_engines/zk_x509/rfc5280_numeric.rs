@@ -17,7 +17,7 @@ pub(super) const SLACK_BITS_V1: usize = 38;
 pub(super) const TIME_NODE_DOMAIN_V1: u64 = 100;
 pub(super) const TIMESTAMP_DOMAIN_V1: u64 = 101;
 pub(super) const LOOKUP_LANES_V1: usize = 4;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(super) const LOOKUP_AUX_WIDTH_V1: usize = 4 * LOOKUP_LANES_V1;
 pub(super) const LOOKUP_RESIDUES_V1: usize = 3 + 12 * LOOKUP_LANES_V1;
 const _: () = assert!(MAXIMUM_TIMESTAMP_V1 + 300 < 1_u64 << SLACK_BITS_V1);

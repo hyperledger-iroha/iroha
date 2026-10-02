@@ -42,6 +42,17 @@ impl KagemushaOrdinaryCanonicalFieldStreamGrammarV1 {
         value: &T,
     ) -> Result<Self, String> {
         let fields = value.canonical_field_payloads()?;
+        Self::from_sole_encoded_fields(value, fields)
+    }
+    /// Check an exact field inventory for a Core-owned public data type against its sole encoder.
+    /// This generic structural reader grants no schema trust, Native ownership, or proof authority;
+    /// the enclosing circuit must still constrain every semantic field and exact original byte.
+    /// # Errors
+    /// Refuses field order, payload, schema, codec flags or framing drift.
+    pub fn from_sole_encoded_fields<T: norito::NoritoSerialize>(
+        value: &T,
+        fields: Vec<Vec<u8>>,
+    ) -> Result<Self, String> {
         let payload = bare(value)?;
         let mut reconstructed = Vec::new();
         for field in &fields {
@@ -307,8 +318,8 @@ impl KagemushaOrdinaryApprovalEvidenceStreamGrammarV1 {
     /// # Errors
     /// Refuses any enum framing change or competing byte-vector layout.
     pub fn from_sole_encoder() -> Result<Self, String> {
-        fn tag(v: KagemushaAppOperationApprovalEvidenceV1) -> Result<[u8; 4], String> {
-            let raw = bare(&v)?;
+        fn tag(v: &KagemushaAppOperationApprovalEvidenceV1) -> Result<[u8; 4], String> {
+            let raw = bare(v)?;
             let mut suffix = Vec::new();
             norito::core::write_len_to_vec_with_flags(
                 &mut suffix,
@@ -324,10 +335,10 @@ impl KagemushaOrdinaryApprovalEvidenceStreamGrammarV1 {
                 .map_err(|_| "ordinary evidence tag width".into())
         }
         Ok(Self {
-            android_tag: tag(KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+            android_tag: tag(&KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
                 signature_der: Vec::new(),
             })?,
-            apple_tag: tag(KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+            apple_tag: tag(&KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
                 raw_assertion: Vec::new(),
             })?,
         })

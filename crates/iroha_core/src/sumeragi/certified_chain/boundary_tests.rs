@@ -567,7 +567,9 @@ fn retained_generation_still_binds_new_epoch_and_fresh_leader_randomness() {
     });
     assert!(matches!(
         reader.check_certificate(old_epoch, 7),
-        Err(ChainReadError::HeaderMismatch { height: 7 })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::HeaderMismatch { height: 7 }
+        ))
     ));
 }
 
@@ -605,7 +607,9 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
                 .unwrap()
                 .with_attestation_verifier(&TestAttestations)
                 .certified(14),
-            Err(ChainReadError::Malformed { height: 6, .. })
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                ChainReadError::Malformed { height: 6, .. }
+            ))
         ));
     }
     let mut missing = history;
@@ -617,7 +621,9 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
             .unwrap()
             .with_attestation_verifier(&TestAttestations)
             .certified(14),
-        Err(ChainReadError::MissingCertificate { height: 6 })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::MissingCertificate { height: 6 }
+        ))
     ));
 }
 
@@ -642,10 +648,17 @@ fn boundary_authority_and_parent_links_cannot_self_authorize() {
         if kind == 1 {
             assert!(matches!(
                 result,
-                Err(ChainReadError::Discontinuous { height: 7 })
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    ChainReadError::Discontinuous { height: 7 }
+                ))
             ));
         } else {
-            assert!(matches!(result, Err(ChainReadError::Certificate { .. })));
+            assert!(matches!(
+                result,
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    ChainReadError::Certificate { .. }
+                ))
+            ));
         }
     }
 }
@@ -731,7 +744,9 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
             .unwrap()
             .with_attestation_verifier(&TestAttestations)
             .certified(1),
-        Err(ChainReadError::Committee { height: 1, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Committee { height: 1, .. }
+        ))
     ));
 }
 
@@ -780,7 +795,9 @@ fn result_pulses_require_exact_height_network_session_and_parent_bindings() {
     });
     assert!(matches!(
         read_frame(bad, 5),
-        Err(ChainReadError::Malformed { height: 5, .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Malformed { height: 5, .. }
+        ))
     ));
 }
 

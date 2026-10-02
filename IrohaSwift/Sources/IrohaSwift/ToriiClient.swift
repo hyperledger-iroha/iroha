@@ -12292,8 +12292,8 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             expected = (["id", "amount"], ["AssetId", "quantity"])
         case "AssetDefinitionView":
             expected = (
-                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
-                ["AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Json"]
+                ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
+                ["AssetDefinitionId", "string", "Option<string>", "AccountId", "quantity", "Option<int>", "Json"]
             )
         case "DomainView":
             expected = (
@@ -16706,11 +16706,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var creationTimeMs: UInt64?
     public var feePayment: FeePaymentIntent
     public var memo: String?
-    public var validationFeePolicyVersion: UInt64?
-    public var validationFeePolicyHash: String?
-    public var validationFeeHijiriFeeQuoteHash: String?
-    public var validationFeeInstructionIndex: UInt64?
-    public var validationFeeTransferEntryIndex: UInt64?
+    public var validationFeeAssessment: RetailFeeAssessmentV1?
     public var instructions: [ToriiMultisigProposeInstruction]
     /// Local-only exact transaction commitment required before an unsigned
     /// response can be exposed for signing. It is not part of the Torii DTO.
@@ -16722,11 +16718,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 memo: String? = nil,
-                validationFeePolicyVersion: UInt64? = nil,
-                validationFeePolicyHash: String? = nil,
-                validationFeeHijiriFeeQuoteHash: String? = nil,
-                validationFeeInstructionIndex: UInt64? = nil,
-                validationFeeTransferEntryIndex: UInt64? = nil,
+                validationFeeAssessment: RetailFeeAssessmentV1? = nil,
                 instructions: [ToriiMultisigProposeInstruction],
                 feePayment: FeePaymentIntent,
                 unsignedTransactionIntent: ToriiMultisigUnsignedTransactionIntent? = nil) {
@@ -16737,11 +16729,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         self.creationTimeMs = creationTimeMs
         self.feePayment = feePayment
         self.memo = memo
-        self.validationFeePolicyVersion = validationFeePolicyVersion
-        self.validationFeePolicyHash = validationFeePolicyHash
-        self.validationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash
-        self.validationFeeInstructionIndex = validationFeeInstructionIndex
-        self.validationFeeTransferEntryIndex = validationFeeTransferEntryIndex
+        self.validationFeeAssessment = validationFeeAssessment
         self.instructions = instructions
         self.unsignedTransactionIntent = unsignedTransactionIntent
     }
@@ -16752,11 +16740,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 memo: String? = nil,
-                validationFeePolicyVersion: UInt64? = nil,
-                validationFeePolicyHash: String? = nil,
-                validationFeeHijiriFeeQuoteHash: String? = nil,
-                validationFeeInstructionIndex: UInt64? = nil,
-                validationFeeTransferEntryIndex: UInt64? = nil,
+                validationFeeAssessment: RetailFeeAssessmentV1? = nil,
                 noritoInstructionBoxBytes: [Data],
                 feePayment: FeePaymentIntent,
                 unsignedTransactionIntent: ToriiMultisigUnsignedTransactionIntent? = nil) throws {
@@ -16767,11 +16751,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
             signatureB64: signatureB64,
             creationTimeMs: creationTimeMs,
             memo: memo,
-            validationFeePolicyVersion: validationFeePolicyVersion,
-            validationFeePolicyHash: validationFeePolicyHash,
-            validationFeeHijiriFeeQuoteHash: validationFeeHijiriFeeQuoteHash,
-            validationFeeInstructionIndex: validationFeeInstructionIndex,
-            validationFeeTransferEntryIndex: validationFeeTransferEntryIndex,
+            validationFeeAssessment: validationFeeAssessment,
             instructions: noritoInstructionBoxBytes.map {
                 try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: $0)
             },
@@ -16789,11 +16769,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case creationTimeMs = "creation_time_ms"
         case feePayment = "fee_payment"
         case memo
-        case validationFeePolicyVersion = "validation_fee_policy_version"
-        case validationFeePolicyHash = "validation_fee_policy_hash"
-        case validationFeeHijiriFeeQuoteHash = "validation_fee_hijiri_fee_quote_hash"
-        case validationFeeInstructionIndex = "validation_fee_instruction_index"
-        case validationFeeTransferEntryIndex = "validation_fee_transfer_entry_index"
+        case validationFeeAssessment = "validation_fee_assessment"
         case instructions
     }
 
@@ -16809,44 +16785,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         }
         _ = try feePayment.canonicalJSONData()
         let normalizedMemo = try ToriiRequestValidation.normalizedOptionalNonEmpty(memo, field: "memo")
-        let hasValidationFeePolicyVersion = validationFeePolicyVersion != nil
-        let hasValidationFeePolicyHash = validationFeePolicyHash != nil
-        let hasValidationFeeHijiriFeeQuoteHash = validationFeeHijiriFeeQuoteHash != nil
-        let hasValidationFeeInstructionIndex = validationFeeInstructionIndex != nil
-        let hasValidationFeeTransferEntryIndex = validationFeeTransferEntryIndex != nil
-        guard hasValidationFeePolicyVersion == hasValidationFeePolicyHash else {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_policy_version and validation_fee_policy_hash must be provided together."
-            )
+        if let validationFeeAssessment {
+            // Require the native typed parser before an assessment enters a proposal.
+            _ = try validationFeeAssessment.marker()
         }
-        guard hasValidationFeePolicyVersion || !hasValidationFeeHijiriFeeQuoteHash else {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata."
-            )
-        }
-        guard hasValidationFeePolicyVersion || !hasValidationFeeInstructionIndex else {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_instruction_index requires validation fee policy metadata."
-            )
-        }
-        guard hasValidationFeePolicyVersion || !hasValidationFeeTransferEntryIndex else {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_transfer_entry_index requires validation fee policy metadata."
-            )
-        }
-        guard !hasValidationFeeTransferEntryIndex || hasValidationFeeInstructionIndex else {
-            throw ToriiClientError.invalidPayload(
-                "validation_fee_transfer_entry_index requires validation_fee_instruction_index."
-            )
-        }
-        let normalizedValidationFeePolicyHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
-            validationFeePolicyHash,
-            field: "validation_fee_policy_hash"
-        )
-        let normalizedValidationFeeHijiriFeeQuoteHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
-            validationFeeHijiriFeeQuoteHash,
-            field: "validation_fee_hijiri_fee_quote_hash"
-        )
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -16860,11 +16802,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encode(feePayment, forKey: .feePayment)
         try container.encodeIfPresent(normalizedMemo, forKey: .memo)
-        try container.encodeIfPresent(validationFeePolicyVersion.map(String.init), forKey: .validationFeePolicyVersion)
-        try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
-        try container.encodeIfPresent(normalizedValidationFeeHijiriFeeQuoteHash, forKey: .validationFeeHijiriFeeQuoteHash)
-        try container.encodeIfPresent(validationFeeInstructionIndex.map(String.init), forKey: .validationFeeInstructionIndex)
-        try container.encodeIfPresent(validationFeeTransferEntryIndex.map(String.init), forKey: .validationFeeTransferEntryIndex)
+        try container.encodeIfPresent(validationFeeAssessment, forKey: .validationFeeAssessment)
         try container.encode(instructions, forKey: .instructions)
     }
 }
@@ -24426,7 +24364,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func proposeMultisig(noritoBody: Data) async throws -> ToriiMultisigContractCallResponse {
         guard !noritoBody.isEmpty else {
-            throw ToriiClientError.invalidPayload("noritoBody must be a non-empty MultisigProposeDto frame.")
+            throw ToriiClientError.invalidPayload("noritoBody must be a non-empty MultisigProposeDtoV1 frame.")
         }
         let request = try makeRequest(path: "/v1/multisig/propose",
                                       method: .post,
@@ -24440,7 +24378,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let response = try decodeJSON(ToriiMultisigContractCallResponse.self, from: data)
         guard response.submitted else {
             throw ToriiClientError.invalidPayload(
-                "raw MultisigProposeDto responses cannot safely expose unsigned signing bytes because Swift cannot bind an opaque DTO body to its executable; use the typed request with unsignedTransactionIntent."
+                "raw MultisigProposeDtoV1 responses cannot safely expose unsigned signing bytes because Swift cannot bind an opaque DTO body to its executable; use the typed request with unsignedTransactionIntent."
             )
         }
         return response
@@ -25737,192 +25675,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            contentType: "application/json",
                                            idempotencyKey: idempotencyKey,
                                            exactSuccessStatus: 202)
-    }
-
-    /// Request one bounded, account-authenticated, native-Norito Hijiri validation-fee quote.
-    public func postValidationFeeHijiriQuote(
-        _ quoteRequest: ValidationFeeHijiriQuoteRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ValidationFeeHijiriQuoteV1 {
-        try await postValidationFeeHijiriQuote(
-            quoteRequest,
-            canonicalAuth: canonicalAuth,
-            codec: NativeValidationFeeHijiriQuoteCodec()
-        )
-    }
-
-    /// Convenience overload for one canonical account and aggregate transfer count.
-    public func postValidationFeeHijiriQuote(
-        accountId: String,
-        qualifyingTransferCount: UInt32,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ValidationFeeHijiriQuoteV1 {
-        try await postValidationFeeHijiriQuote(
-            ValidationFeeHijiriQuoteRequestV1(
-                accountId: accountId,
-                qualifyingTransferCount: qualifyingTransferCount
-            ),
-            canonicalAuth: canonicalAuth
-        )
-    }
-
-    func postValidationFeeHijiriQuote(
-        _ quoteRequest: ValidationFeeHijiriQuoteRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        codec: ValidationFeeHijiriQuoteCoding
-    ) async throws -> ValidationFeeHijiriQuoteV1 {
-        guard baseURL.scheme?.lowercased() == "https" else {
-            throw ToriiClientError.invalidPayload(
-                "Hijiri validation-fee quotes require an HTTPS Torii base URL"
-            )
-        }
-        let requestBody = try codec.encode(quoteRequest)
-        guard !requestBody.isEmpty,
-              requestBody.count <= ValidationFeeHijiriQuoteRequestV1.maximumRequestBytes else {
-            throw ToriiClientError.invalidPayload(
-                "native Hijiri quote request exceeded its frozen 4096-byte bound"
-            )
-        }
-        let request = try makeCanonicalAccountRequest(
-            path: "/v1/validation-fee/hijiri/quote",
-            method: .post,
-            body: requestBody,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-                "Accept-Encoding": "identity",
-                "Cache-Control": "no-store"
-            ],
-            canonicalAuth: canonicalAuth
-        )
-        let (responseBody, response) = try await sendBoundedResponse(
-            request,
-            context: "Hijiri validation-fee quote",
-            maximumBytes: ValidationFeeHijiriQuoteV1.maximumResponseBytes
-        )
-        guard response.url?.absoluteString == request.url?.absoluteString else {
-            throw ToriiClientError.invalidPayload(
-                "Hijiri quote response did not originate from the exact signed URL"
-            )
-        }
-        guard response.value(forHTTPHeaderField: "Content-Type") == "application/x-norito" else {
-            throw ToriiClientError.invalidPayload(
-                "Hijiri quote response Content-Type must be exactly application/x-norito"
-            )
-        }
-        let contentEncoding = response.value(forHTTPHeaderField: "Content-Encoding")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard contentEncoding == nil || contentEncoding == "identity" else {
-            throw ToriiClientError.invalidPayload(
-                "Hijiri quote response must preserve the identity representation"
-            )
-        }
-        guard Self.hijiriQuoteCacheControlIsPrivateNoStore(
-            response.value(forHTTPHeaderField: "Cache-Control")
-        ) else {
-            throw ToriiClientError.invalidPayload(
-                "Hijiri quote response must carry unqualified private and no-store directives without public"
-            )
-        }
-        let hasRejectCodeHeader = response.allHeaderFields.keys.contains { key in
-            guard let field = key as? String else { return false }
-            return field.caseInsensitiveCompare("X-Iroha-Reject-Code") == .orderedSame
-        }
-        try ensureStatus(response, equals: 200, responseBody: responseBody)
-        guard !hasRejectCodeHeader else {
-            throw ToriiClientError.invalidPayload(
-                "a successful Hijiri quote response must not carry a reject code"
-            )
-        }
-        guard !responseBody.isEmpty else { throw ToriiClientError.emptyBody }
-        let quote = try codec.verify(responseBody, requestNorito: requestBody)
-        guard quote.qualifyingTransferCount == quoteRequest.qualifyingTransferCount,
-              try Self.sameHijiriQuoteAccountIdentity(
-                  quote.accountId,
-                  quoteRequest.accountId
-              ) else {
-            throw ToriiClientError.invalidPayload(
-                "native Hijiri quote projection did not echo the requested account and count"
-            )
-        }
-        return quote
-    }
-
-    private static func hijiriQuoteCacheControlIsPrivateNoStore(_ value: String?) -> Bool {
-        guard let value, !value.isEmpty else { return false }
-
-        var directives: [String] = []
-        var current = ""
-        var isQuoted = false
-        var isEscaped = false
-        for character in value {
-            if isEscaped {
-                current.append(character)
-                isEscaped = false
-                continue
-            }
-            if isQuoted && character == "\\" {
-                current.append(character)
-                isEscaped = true
-                continue
-            }
-            if character == "\"" {
-                current.append(character)
-                isQuoted.toggle()
-                continue
-            }
-            if character == "," && !isQuoted {
-                directives.append(current)
-                current = ""
-                continue
-            }
-            current.append(character)
-        }
-        guard !isQuoted, !isEscaped else { return false }
-        directives.append(current)
-
-        var hasPrivate = false
-        var hasNoStore = false
-        for directive in directives {
-            let trimmed = directive.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return false }
-            let name: String
-            let isQualified: Bool
-            if let separator = trimmed.firstIndex(of: "=") {
-                name = String(trimmed[..<separator])
-                isQualified = true
-            } else {
-                name = trimmed
-                isQualified = false
-            }
-            let normalizedName = name
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            guard !normalizedName.isEmpty else { return false }
-            switch normalizedName {
-            case "public":
-                return false
-            case "private":
-                guard !isQualified else { return false }
-                hasPrivate = true
-            case "no-store":
-                guard !isQualified else { return false }
-                hasNoStore = true
-            default:
-                continue
-            }
-        }
-        return hasPrivate && hasNoStore
-    }
-
-    private static func sameHijiriQuoteAccountIdentity(
-        _ left: String,
-        _ right: String
-    ) throws -> Bool {
-        let leftAddress = try AccountAddress.parseEncoded(left)
-        let rightAddress = try AccountAddress.parseEncoded(right)
-        return try leftAddress.canonicalBytes() == rightAddress.canonicalBytes()
     }
 
     /// Fetch Torii's authoritative committed Exact12 manifest as the exact

@@ -15,6 +15,13 @@ use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
+#[path = "kagemusha_ordinary_app_identity_policy_v1/proof_context.rs"]
+mod proof_context;
+pub use proof_context::{
+    KagemushaOrdinaryEnrollmentProofOriginalsV1, KagemushaOrdinaryIntegrityProofOriginalsV1,
+    KagemushaVerifiedOrdinaryEnrollmentProofContextV1,
+};
+
 /// Bound before decoding one policy, root configuration or complete signed policy original.
 pub const KAGEMUSHA_ORDINARY_APP_IDENTITY_POLICY_MAX_BYTES_V1: usize = 16 * 1024;
 /// Maximum independently selected threshold authorities and approvals.
@@ -44,7 +51,7 @@ pub struct KagemushaOrdinaryAppIdentityProfileV1 {
     pub version: u16,
     /// Domain-separated identity of this exact nonmonetary profile body.
     pub identity_profile_id: [u8; 32],
-    /// Independently governed ordinary platform; only Android KeyMint or Apple App Attest.
+    /// Independently governed ordinary platform; only Android `KeyMint` or Apple App Attest.
     pub platform_class: KagemushaHardwarePlatformClassV1,
     /// Planned signed financial release coordinate; no release existence/qualification asserted.
     pub planned_release_id: [u8; 32],

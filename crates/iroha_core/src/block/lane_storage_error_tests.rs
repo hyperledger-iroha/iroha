@@ -22,10 +22,9 @@ fn lane_io_failure_retains_kind_and_original_source_without_rejection() {
         io::ErrorKind::PermissionDenied,
     ] {
         let identity = Arc::new(());
-        let error = BlockValidationError::from(MergeError::Storage(io::Error::new(
-            kind,
-            OriginalFailure(identity.clone()),
-        )));
+        let error = BlockValidationError::from(MergeError::Storage(
+            io::Error::new(kind, OriginalFailure(identity.clone())).into(),
+        ));
         assert_eq!(event::map_block_err_to_reason(&error), None);
         let BlockValidationError::LaneStorage(original) = &error else {
             panic!("local storage failure lost its owner: {error:?}");

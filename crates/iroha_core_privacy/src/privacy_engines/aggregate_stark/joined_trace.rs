@@ -145,6 +145,7 @@ impl JoinedTraceCommitmentPlanV1 {
     /// Replay immutable native sources with their original explicit masks.
     /// The callback transfers one clearing coefficient allocation at a time;
     /// at most eight transforms coexist and the leaf framing is unchanged.
+    #[cfg(test)]
     pub(crate) fn commit_replayed_v1(
         &self,
         domains: AggregateStarkDomainsV1,

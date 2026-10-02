@@ -172,3 +172,34 @@ def test_required_nonce_cannot_be_omitted_or_repriced() -> None:
     assert changed != credential
     with pytest.raises(SCREEN["GeometryError"], match="component sizes disagree"):
         SCREEN["screen"](profile, stark, changed, accumulator, native_test)
+
+
+def test_main_frame_must_match_independent_native_codec_accounting() -> None:
+    profile, stark, credential, accumulator, native_test = _sources()
+    repriced_profile = profile.replace(
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_002;",
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_003;",
+        1,
+    ).replace(
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_945;",
+        1,
+    )
+    repriced_native = stark.replace(
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_002);",
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_003);",
+        1,
+    )
+    assert repriced_profile != profile
+    assert repriced_native != stark
+    for candidate_profile, candidate_stark in (
+        (repriced_profile, stark),
+        (profile, repriced_native),
+    ):
+        with pytest.raises(
+            SCREEN["GeometryError"],
+            match="MAIN frame disagrees with independent native codec accounting",
+        ):
+            SCREEN["screen"](
+                candidate_profile, candidate_stark, credential, accumulator, native_test
+            )

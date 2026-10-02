@@ -379,6 +379,10 @@ impl KagemushaSignedOrdinaryCurrentIssuerStateV1 {
     /// # Errors
     /// Rejects foreign issuer/namespace/signer, governed-cap excess, nonce, original, key,
     /// scope, interval, epoch or trusted-time regression.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "independent current policy, issuer, installed namespace, historical original, native nonce, retained epoch floor and trusted time must remain explicit"
+    )]
     pub fn authenticate(
         &self,
         policy: &KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,
@@ -446,6 +450,10 @@ impl KagemushaVerifiedOrdinaryCurrentIssuerStateV1 {
     /// # Errors
     /// Rejects retirement/rotation, issuer/namespace/cap drift, changed nonce/floor,
     /// current-policy/history or time regression.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "completion independently rechecks current policy, issuer, installed namespace, historical original, native nonce, retained epoch floor and trusted time"
+    )]
     pub fn require_active(
         &self,
         policy: &KagemushaAuthenticatedOrdinaryAppIdentityPolicyV1,

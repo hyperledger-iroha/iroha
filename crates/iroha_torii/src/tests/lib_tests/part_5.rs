@@ -728,19 +728,18 @@ async fn optional_canonical_body_auth_rejects_partial_headers_before_decode() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 #[tokio::test]
-async fn oversized_hijiri_quote_keeps_canonical_account_private_cache_headers() {
+async fn oversized_retail_fee_quote_keeps_canonical_account_private_cache_headers() {
     use axum::{Router, routing::post};
     use tower::ServiceExt as _;
 
     async fn unreachable_handler() -> StatusCode {
-        panic!("oversized Hijiri quote must be rejected before handler dispatch")
+        panic!("oversized retail fee quote must be rejected before handler dispatch")
     }
 
     let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
-    let max_body_bytes =
-        iroha_torii_shared::validation_fee_api::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
+    let max_body_bytes = 256 * 1024;
     let router = Router::new()
-        .route("/v1/validation-fee/hijiri/quote", post(unreachable_handler))
+        .route("/v1/validation-fee/quote", post(unreachable_handler))
         .layer(axum::middleware::from_fn_with_state(
             CanonicalAccountBodyAuthState {
                 app,
@@ -754,12 +753,12 @@ async fn oversized_hijiri_quote_keeps_canonical_account_private_cache_headers() 
         .oneshot(
             axum::http::Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/validation-fee/hijiri/quote")
+                .uri("/v1/validation-fee/quote")
                 .body(Body::from(vec![0_u8; max_body_bytes + 1]))
-                .expect("oversized Hijiri quote request"),
+                .expect("oversized retail fee quote request"),
         )
         .await
-        .expect("oversized Hijiri quote response");
+        .expect("oversized retail fee quote response");
 
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(
@@ -784,10 +783,10 @@ async fn oversized_hijiri_quote_keeps_canonical_account_private_cache_headers() 
         .into_body()
         .collect()
         .await
-        .expect("oversized Hijiri quote error body")
+        .expect("oversized retail fee quote error body")
         .to_bytes();
     let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body)
-        .expect("oversized Hijiri quote ErrorEnvelope");
+        .expect("oversized retail fee quote ErrorEnvelope");
     assert_eq!(envelope.code(), "request_payload_too_large");
 }
 #[tokio::test]

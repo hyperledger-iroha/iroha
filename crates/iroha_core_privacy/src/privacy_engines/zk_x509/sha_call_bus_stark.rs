@@ -547,11 +547,12 @@ pub(crate) struct ZkX509ShaCallEventV1 {
     /// Constrained 32-bit big-endian word; inactive capacity rows are zero.
     pub(crate) value: u32,
 }
-/// Per-call composite-proof terminals.
+/// Reference per-call terminal products retained by material and algebraic controls.
 ///
 /// Raw lengths, active block counts, and digest words are deliberately absent: exposing any of them
 /// in proof metadata would defeat the fixed-capacity privacy contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaCallTerminalV1 {
     /// Canonical call identity.
     pub(crate) call: u8,
@@ -1360,7 +1361,8 @@ fn manifest_role_v1(call: usize) -> Result<ZkX509ShaCallRoleV1, ZkX509ShaCallBus
         _ => Err(ZkX509ShaCallBusStarkErrorV1::Topology),
     }
 }
-/// Return the verifier-owned identity for one compact-CA boundary claim.
+/// Return the verifier-owned identity for one reference compact-CA boundary fixture.
+#[cfg(test)]
 pub(crate) fn zk_x509_sha_ca_call_identity_v1(
     index: usize,
 ) -> Result<(u8, ZkX509ShaCallRoleV1), ZkX509ShaCallBusStarkErrorV1> {
@@ -3290,7 +3292,7 @@ fn physical_padding_row_v1(_segment_row: usize) -> ZkX509ShaBatchRowV1 {
         fixed,
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 /// Evaluate one opened fixed-capacity batch row.
 ///
 /// Calls never cross a physical segment boundary.  Every active segment
@@ -3320,6 +3322,7 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
 /// Public challenges and terminal claims embed from the base field; all opened
 /// private and fixed columns stay in the evaluation field. No row value selects
 /// a host-language branch. This does not authenticate the supplied openings.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509ShaBatchRowV1<A>,
     next: &ZkX509ShaBatchRowV1<A>,

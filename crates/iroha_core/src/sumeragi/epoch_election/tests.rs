@@ -462,7 +462,9 @@ fn frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbe
     let budget = AllocationBudget::new(0);
     assert!(matches!(
         freeze_boundary(&world.view(), &hashes, &current, &policy, 10, &budget),
-        Err(BoundaryCaptureError::Admission(_))
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            BoundaryCaptureError::Admission(_)
+        ))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     let old = world

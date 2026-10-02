@@ -35,6 +35,8 @@ pub use preparation_reservation::{
     KagemushaOrdinaryReceivedLineageCommitOriginalV1,
 };
 pub(crate) use preparation_reservation::{
+    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1,

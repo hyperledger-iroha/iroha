@@ -53,6 +53,9 @@ pub(super) struct MintOriginals {
     statement: KagemushaOrdinaryMintAuthorizationStatementV1,
     challenge: KagemushaOrdinaryMintApprovalChallengeV1,
     request_capacity: u64,
+    // Mandatory complete incoming Prepared frame allowance, captured before Mint reserve/fence.
+    // An old/missing layout cannot enlarge an already fenced reservation or reconstruct custody.
+    incoming_prepared_capacity: u64,
     private_key: MintSecret,
     opening: MintOpening,
     sealing_entropy: MintEntropy,
@@ -241,6 +244,11 @@ impl MintOriginals {
                 .min(owner.credential_floor()?.approval_valid_until_ms())
                 .min(signed.subject.expires_at_ms),
         };
+        let incoming_prepared_capacity =
+            super::incoming_preparation::mint_incoming_prepared_byte_budget_v1(
+                owner,
+                &statement.context,
+            )?;
         let this = Self {
             publication_originals: owner.publication.historical_original_commitments()?,
             financial_control: control,
@@ -252,6 +260,7 @@ impl MintOriginals {
             statement,
             challenge,
             request_capacity: u64::try_from(capacity).map_err(material)?,
+            incoming_prepared_capacity,
             private_key,
             opening,
             sealing_entropy,
@@ -324,7 +333,13 @@ impl MintOriginals {
         )
         .map_err(material)?
         .maximum_original_bytes();
-        if self.request_capacity != u64::try_from(actual_capacity).map_err(material)? {
+        if self.request_capacity != u64::try_from(actual_capacity).map_err(material)?
+            || self.incoming_prepared_capacity
+                != super::incoming_preparation::mint_incoming_prepared_byte_budget_v1(
+                    owner,
+                    &self.statement.context,
+                )?
+        {
             return Err(KagemushaStateErrorV1::InvalidDurableCapacity);
         }
         let retained = owner
@@ -423,6 +438,7 @@ impl MintOriginals {
         u64::try_from(raw.len())
             .map_err(material)?
             .checked_add(self.request_capacity)
+            .and_then(|n| n.checked_add(self.incoming_prepared_capacity))
             .and_then(|n| n.checked_add(1024))
             .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)
     }
@@ -444,6 +460,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .recheck_originals(self, p.lease.as_deref(), p.retained.is_none())?;
             return Ok(p.originals.challenge.operation_id);
         }
+        self.require_incoming_rows(20)?;
         if self.pending_incoming.is_some()
             || self.pending.is_some()
             || self.pending_receiver_request.is_some()
@@ -657,6 +674,32 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
                 .ok_or(KagemushaStateErrorV1::InvalidDurableCapacity)?;
         }
         Ok(sum)
+    }
+    /// Require a complete incoming Prepared frame under this exact pre-fence whole-chronology reservation.
+    /// Numeric capacity never admits source/finality/current authority or exposes private originals.
+    pub(super) fn require_mint_incoming_prepared_capacity(
+        &self,
+        actual_frame_bytes: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let expected = super::incoming_preparation::mint_incoming_prepared_byte_budget_v1(
+            self,
+            &p.originals.statement.context,
+        )?;
+        super::incoming_preparation::require_recorded_allowance_v1(
+            p.originals.incoming_prepared_capacity,
+            expected,
+        )?;
+        super::incoming_preparation::require_prepared_frame_quota_v1(
+            actual_frame_bytes,
+            p.originals.incoming_prepared_capacity,
+            self.mint_capacity_charge(&p.originals)?,
+            self.capacity.inbox_bytes,
+            self.maximum_record_payload_bytes,
+        )
     }
     /// Retain only the genuinely admitted exact complete request, without current debit authority.
     pub(crate) fn retain_proven_mint_request(
@@ -1204,6 +1247,44 @@ mod tests {
             changed[index] ^= 1;
             assert_ne!(seal(&context, &opening, &changed).unwrap(), original);
         }
+        // Transport padding/truncation is never part of the actual AEAD original.
+        let mut padded = original.clone();
+        padded.resize(
+            iroha_data_model::kagemusha::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1,
+            0,
+        );
+        assert!(
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &padded,
+                context.recipient_one_time_key,
+            )
+            .is_err()
+        );
+        for end in 0..original.len() {
+            assert!(
+                KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                    &original[..end],
+                    context.recipient_one_time_key,
+                )
+                .is_err()
+            );
+        }
+        let mut suffix = original.clone();
+        suffix.push(0);
+        assert!(
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &suffix,
+                context.recipient_one_time_key,
+            )
+            .is_err()
+        );
+        let mut clamped = entropy;
+        clamped[0] ^= 1;
+        assert_eq!(seal(&context, &opening, &clamped).unwrap(), original);
+        let mut changed = entropy;
+        // X25519 discards the lowest three scalar bits; change an effective bit.
+        changed[0] ^= 0x08;
+        assert_ne!(seal(&context, &opening, &changed).unwrap(), original);
     }
     #[test]
     fn mint_crypto_original_rejects_foreign_context_key_and_credit_openings() {
@@ -1283,5 +1364,43 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         p.originals
             .recheck_originals(self, p.lease.as_deref(), false)?;
         Ok(p.originals.financial_control)
+    }
+}
+
+impl PendingMint {
+    pub(super) fn capacity_charge_bytes(&self) -> Result<u64, KagemushaStateErrorV1> {
+        self.originals.capacity_charge()
+    }
+}
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    pub(super) fn require_held_mint_incoming_source(
+        &self,
+        reservation: &iroha_data_model::kagemusha::KagemushaOrdinaryIncomingReservationV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let p = self
+            .pending_mint
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let request = p
+            .proven_request
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+        let expected = match reservation.selection.source {
+            iroha_data_model::kagemusha::KagemushaOrdinaryIncomingSourceSelectionV1::Mint {
+                topup_request_original_sha256,
+            } => topup_request_original_sha256,
+            _ => return Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        };
+        if !p.fenced
+            || p.capture.is_none()
+            || p.retained.is_none()
+            || <DigestV1>::from(Sha256::digest(request)) != expected
+            || p.originals.statement.context.operation_id != reservation.selection.operation_id
+            || p.originals.opening.0.credit_id != reservation.selection.credit_id
+            || p.originals.opening.0.amount != reservation.selection.amount
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
     }
 }

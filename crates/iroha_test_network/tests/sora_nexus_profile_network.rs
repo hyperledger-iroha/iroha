@@ -320,7 +320,9 @@ fn profile_manifest(
         let mut npos = typed
             .custom
             .get(&id)
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten()
             .ok_or_else(|| eyre!("Kagami genesis omitted NPoS parameters"))?;
         let epoch = profile.genesis_recipe().epoch_length_blocks;
         npos.epoch_length_blocks = NonZeroU64::new(epoch).ok_or_else(|| eyre!("zero epoch"))?;
@@ -349,7 +351,7 @@ fn profile_manifest(
         "Kagami Taira genesis never names its custody account"
     );
     let raw = RawGenesisTransaction::from_json_slice_at_path(&json::to_vec(&value)?, output)?
-        .with_consensus_meta();
+        .with_consensus_meta()?;
     fs::write(output, json::to_vec(&raw)?)?;
     Ok(())
 }

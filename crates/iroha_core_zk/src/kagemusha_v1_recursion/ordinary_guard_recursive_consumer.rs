@@ -177,7 +177,9 @@ mod tests {
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
     use halo2_proofs::halo2curves::pasta::{Fp, Fq};
     fn check<F: KagemushaPoseidonFieldV1>() {
-        let mut builder = BaseCircuitBuilder::<F>::new(false);
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(iroha_data_model::kagemusha::KAGEMUSHA_HALO2_K_V1 as usize)
+            .use_lookup_bits((iroha_data_model::kagemusha::KAGEMUSHA_HALO2_K_V1 - 1) as usize);
         let range = builder.range_chip();
         let ctx = builder.main(0);
         let digest = |ctx: &mut Context<F>, tag: u8| {

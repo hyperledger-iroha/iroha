@@ -54,8 +54,8 @@ impl KagemushaOrdinaryEnrollmentIssuerPolicyV1 {
             || self.enrollment_issuer_key.algorithm() != Algorithm::Ed25519
             || self.app_authority_key.algorithm() != Algorithm::Ed25519
             || self.enrollment_issuer_key == self.app_authority_key
-            || !(1..=120000).contains(&self.maximum_pending_lifetime_ms)
-            || !(1..=120000).contains(&self.maximum_current_state_lifetime_ms)
+            || !(1..=120_000).contains(&self.maximum_pending_lifetime_ms)
+            || !(1..=120_000).contains(&self.maximum_current_state_lifetime_ms)
             || self.maximum_credential_lifetime_ms == 0
         {
             return Err("ordinary issuer policy original malformed".into());

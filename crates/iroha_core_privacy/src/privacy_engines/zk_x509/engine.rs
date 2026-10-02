@@ -755,10 +755,12 @@ mod tests {
         let recomputed =
             recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
         assert_eq!(recomputed, independent);
-        if ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent) {
+        if cfg!(feature = "privacy-release-evidence")
+            || ZK_X509_COMPILED_PROFILE_DIGEST_V1 != Some(independent)
+        {
             // These are public profile descriptors, never witness material.
-            // Retain the exact independent inputs when a deliberate first-
-            // release protocol change requires a new native pin.
+            // Release evidence retains the genuine native framing inputs even
+            // when the current stored pin already matches the constructor.
             eprintln!(
                 "zk-x509-independent-compiled-profile-sha256={}",
                 hex::encode(independent)

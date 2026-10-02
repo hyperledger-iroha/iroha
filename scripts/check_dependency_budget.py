@@ -990,13 +990,12 @@ def run_source_mode(args: argparse.Namespace) -> int:
     return 1 if violations else 0
 
 
-# These two state-free proof/custody owners are the complete reviewed Native
-# admission. This is not a layer-wide exemption or an extensible allowlist.
+# These two state-free proof/custody owners are mandatory for every shipping SDK
+# TLS selection and the fixed SDK consumers below. This is not a layer-wide
+# exemption or an extensible allowlist.
 NATIVE_CUSTODY_OWNER_CONTRACTS: dict[str, dict[str, Any]] = {
     "iroha_core_zk": {
         "features": [
-            "circuit-params", "kagemusha-production-prover", "proofs-halo2",
-            "zk-halo2", "zk-halo2-ipa", "zk-ipa-native",
         ],
         "required_path": ["iroha", "iroha_core_zk"],
         "permitted_layer": "node_execution",
@@ -1011,29 +1010,72 @@ NATIVE_CUSTODY_OWNER_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
+# The prefix ends at the SDK. Each consumer keeps its own runtime boundary:
+# Musubi owns telemetry/storage work, SCCP owns client configuration and its
+# wallet journal, and storage owns archive runtimes but never the Musubi service.
+NATIVE_CUSTODY_CONSUMER_CONTEXTS: dict[str, dict[str, Any]] = {
+    "iroha": {
+        "sdk_path": ["iroha"],
+        "forbidden_layers": [
+            "node_execution", "node_configuration", "telemetry_runtime", "storage_runtime",
+        ],
+        "tls_selections": True,
+    },
+    "iroha_musubi_service": {
+        "sdk_path": ["iroha_musubi_service", "iroha"],
+        "forbidden_layers": ["node_execution"],
+        "tls_selections": False,
+    },
+    "iroha_sccp_wallet": {
+        "sdk_path": ["iroha_sccp_wallet", "iroha_wallet", "iroha"],
+        "forbidden_layers": ["node_execution"],
+        "tls_selections": False,
+    },
+    "iroha_storage_client": {
+        "sdk_path": ["iroha_storage_client", "iroha"],
+        "forbidden_layers": ["node_execution", "service_runtime"],
+        "tls_selections": True,
+    },
+}
+
+
 def _native_owner_contracts(selection: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Validate the complete fixed Native context before granting any admission."""
+    """Validate a fixed SDK-owned Native path before granting either admission."""
 
     contracts = selection.get("package_contracts", {})
     if not isinstance(contracts, dict):
         raise ValueError("package_contracts must be an object")
+    context = NATIVE_CUSTODY_CONSUMER_CONTEXTS.get(selection.get("package"))
     if not contracts:
+        if context is not None:
+            raise ValueError("Every shipping SDK consumer requires the mandatory Native owner contracts")
         return contracts
+    supported_selections = {(True, ())}
+    if context is not None and context["tls_selections"]:
+        supported_selections.update(
+            (False, tuple(sorted([tls, "gost", "sm"]))) for tls in (
+                "tls-native", "tls-native-vendored", "tls-rustls-native-roots", "tls-rustls-webpki-roots"
+            )
+        )
     if (
-        selection.get("package") != "iroha"
-        or selection.get("features") != ["kagemusha-ordinary-native"]
-        or selection.get("default_features") is not True
+        context is None
+        or (selection.get("default_features"), tuple(sorted(selection.get("features", []))))
+        not in supported_selections
         or selection.get("include_root_dev_dependencies", False) is not False
         or selection.get("target") != "all"
     ):
-        raise ValueError("Native owner contracts require the exact shipping SDK selection")
-    if contracts != NATIVE_CUSTODY_OWNER_CONTRACTS:
-        raise ValueError("Native owner contracts differ from the reviewed exact admission")
-    required_layers = {
-        "node_execution", "node_configuration", "telemetry_runtime", "storage_runtime",
+        raise ValueError("Native owner contracts require an exact shipping SDK consumer selection")
+    expected_contracts = {
+        package: {
+            **contract,
+            "required_path": context["sdk_path"] + contract["required_path"][1:],
+        }
+        for package, contract in NATIVE_CUSTODY_OWNER_CONTRACTS.items()
     }
-    if not required_layers.issubset(selection.get("forbidden_layers", [])):
-        raise ValueError("Native owner contracts must retain every SDK runtime denial")
+    if contracts != expected_contracts:
+        raise ValueError("Native owner contracts differ from the reviewed exact admission")
+    if not set(context["forbidden_layers"]).issubset(selection.get("forbidden_layers", [])):
+        raise ValueError("Native owner contracts must retain every consumer runtime denial")
     if not {"iroha_p2p", "kotodama_lang", "kotodama_toolchain"}.issubset(
         selection.get("forbidden_packages", [])
     ):
@@ -1192,12 +1234,6 @@ def evaluate_boundary_tree(
     contracts = _native_owner_contracts(selection)
     admitted: Mapping[str, Any] = {}
     if contracts:
-        if "kagemusha-ordinary-native" not in rows[0]["features"]:
-            violations[(selection["package"], "contract")] = {
-                "package": selection["package"],
-                "owner_contract": "Native capability is absent from the selected root",
-                "path": rows[0]["path"],
-            }
         for package, contract in contracts.items():
             matching = [row for row in rows if row["package"] == package]
             if not matching:

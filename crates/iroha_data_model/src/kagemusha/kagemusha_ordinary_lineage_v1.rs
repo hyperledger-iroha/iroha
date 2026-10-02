@@ -21,6 +21,160 @@ pub const KAGEMUSHA_ORDINARY_LINEAGE_REQUEST_DOMAIN_V1: &[u8] =
 pub const KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:ordinary-lineage-cas-result\0";
 
+/// Sole asset-owner metadata key selecting one authoritative DATA domain for a liability pool.
+/// The complete value is this first-release type encoded through the maintained Norito JSON
+/// `Json` wrapper, and its exact `AssetDefinition` preimage must be proved in current World.
+pub const KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1: &str =
+    "kagemusha_ordinary_lineage_data_authority_v1";
+
+/// Independently governed exclusive DATA domain. This public type is data only: neither decoding
+/// it nor learning an incarnation admits a service. Installed purpose, current asset-owner World
+/// selection and the real Native DATA session must independently agree on the full original.
+/// A replacement database cannot initialize another exclusion domain for the same liability pool.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::kagemusha::KagemushaOrdinaryLineageDataAuthorityV1")]
+pub struct KagemushaOrdinaryLineageDataAuthorityV1 {
+    /// Sole first-release version.
+    pub version: u16,
+    /// Exact network/asset/incarnation liability pool, shared across FI lineages in that pool.
+    pub liability_pool_id: [u8; 32],
+    /// Purpose-bound exact installed client-profile, collection-schema and Kasumi release originals.
+    /// The client profile independently pins the approved service/TLS endpoints and trust identities.
+    pub service_identity_digest: [u8; 32],
+    /// Exact immutable DATA incarnation identity, using the maintained current-control domain.
+    pub data_incarnation_digest: [u8; 32],
+    /// Exact logical dataspace, never an account alias or caller routing choice.
+    pub dataspace: String,
+    /// Exact authenticated DATA tenant.
+    pub tenant: String,
+    /// Exact independently delegated DATA principal.
+    pub principal: String,
+    /// Exact collection containing all lineage heads and source/nullifier exclusions.
+    pub collection: String,
+}
+impl KagemushaOrdinaryLineageDataAuthorityV1 {
+    /// Derive service identity only from independently retained complete original digests.
+    /// This deterministic data helper does not establish custody or admit those originals.
+    /// # Errors
+    /// Refuses absent original identity.
+    pub fn service_identity_digest_for_originals(
+        client_profile: [u8; 32],
+        collections: [u8; 32],
+        kasumi_release: [u8; 32],
+    ) -> Result<[u8; 32], String> {
+        nonzero(&[client_profile, collections, kasumi_release])?;
+        let mut h = Sha256::new();
+        h.update(b"iroha:kagemusha:v1:ordinary-lineage-data-service-originals\0");
+        for original in [client_profile, collections, kasumi_release] {
+            h.update(original);
+        }
+        Ok(h.finalize().into())
+    }
+    /// Shape check under the exact original financial asset scope; no financial grant is returned.
+    /// # Errors
+    /// Refuses another liability pool, absent service/incarnation or ambiguous namespace strings.
+    pub fn validate_for_runtime(
+        &self,
+        runtime: &super::KagemushaRetailEnrollmentRuntimeV1,
+    ) -> Result<(), String> {
+        self.validate_for_pool(
+            &runtime.network_id,
+            &runtime.asset,
+            runtime.asset_incarnation,
+        )
+    }
+    /// Validate the pool selected by actual Node network and asset registry incarnation.
+    /// This deterministic data check supplies no World permission or DATA session authority.
+    /// # Errors
+    /// Refuses malformed shape or substitution of the exclusive liability pool.
+    pub fn validate_for_pool(
+        &self,
+        network: &crate::NetworkId,
+        asset: &crate::asset::AssetDefinitionId,
+        incarnation: crate::nexus::AxtAssetIncarnationV1,
+    ) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.liability_pool_id
+            != super::kagemusha_liability_pool_id_v1(network, asset, incarnation)
+                .map_err(|error| error.to_string())?
+        {
+            return Err("ordinary lineage authoritative DATA pool differs".into());
+        }
+        Ok(())
+    }
+    /// Validate finite exact authority data; installation and current World remain separate gates.
+    /// # Errors
+    /// Refuses unsupported version, missing original identity or ambiguous namespace spelling.
+    pub fn validate_shape(&self) -> Result<(), String> {
+        nonzero(&[
+            self.liability_pool_id,
+            self.service_identity_digest,
+            self.data_incarnation_digest,
+        ])?;
+        let name = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        if self.version != 1
+            || ![
+                &self.dataspace,
+                &self.tenant,
+                &self.principal,
+                &self.collection,
+            ]
+            .into_iter()
+            .all(|s| name(s))
+        {
+            return Err("ordinary lineage authoritative DATA domain differs".into());
+        }
+        Ok(())
+    }
+    /// Require this exact full value in the current certified `AssetDefinition` metadata.
+    /// The caller must independently verify the complete `AssetDefinition` against actual World.
+    /// No raw metadata value or supplied `AssetDefinition` can select service authority.
+    /// # Errors
+    /// Refuses absence, malformed value or any service/incarnation/namespace substitution.
+    pub fn require_asset_definition_metadata(
+        &self,
+        definition: &crate::asset::AssetDefinition,
+    ) -> Result<(), String> {
+        let key = KAGEMUSHA_ORDINARY_LINEAGE_DATA_AUTHORITY_METADATA_KEY_V1
+            .parse::<iroha_model_base::name::Name>()
+            .map_err(|error| error.to_string())?;
+        let raw = definition.metadata.get(&key).ok_or_else(|| {
+            "ordinary lineage DATA authority is absent from current asset World".to_owned()
+        })?;
+        let actual: Self = raw
+            .try_into_any_norito()
+            .map_err(|error| error.to_string())?;
+        if actual != *self {
+            return Err("ordinary lineage DATA World authority was substituted".into());
+        }
+        Ok(())
+    }
+    /// Exact complete bounded original; a hash is never a substitute for installed/World custody.
+    /// # Errors
+    /// Refuses unsupported version, missing identity or unsupported canonical framing.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate_shape()?;
+        bounded(self)
+    }
+}
+
 /// Original financial lineage, unchanged by refreshed FI nonce, PI lease or app session.
 #[derive(
     Debug,
@@ -133,7 +287,7 @@ pub struct KagemushaOrdinaryLineageOperationSelectionV1 {
     pub receiver_request_original_sha256: [u8; 32],
     /// Complete pre-W2 output body SHA; committed by the actual selected State/Guard relation.
     pub output_body_original_sha256: [u8; 32],
-    /// Full genuine Native neutral OutboxReservation original SHA.
+    /// Full genuine Native neutral `OutboxReservation` original SHA.
     pub neutral_reservation_original_sha256: [u8; 32],
     /// Model-owned neutral reservation digest used by actual purpose2 S/W.
     pub neutral_reservation_digest: [u8; 32],
@@ -437,10 +591,10 @@ impl KagemushaOrdinaryLineageRequestV1 {
     /// # Errors
     /// Refuses invalid request shape.
     pub fn account_signing_message(&self) -> Result<Vec<u8>, String> {
-        message(
+        Ok(message(
             KAGEMUSHA_ORDINARY_LINEAGE_REQUEST_DOMAIN_V1,
             &self.canonical_bytes()?,
-        )
+        ))
     }
     /// Verify exact single-member Ed account consent, matching the actual Native wallet selection.
     /// # Errors
@@ -536,7 +690,10 @@ impl KagemushaOrdinaryLineageResultSubjectV1 {
         {
             return Err("ordinary lineage result lacks actual committed context".into());
         }
-        message(KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1, &bounded(self)?)
+        Ok(message(
+            KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1,
+            &bounded(self)?,
+        ))
     }
 }
 /// Complete purpose-bound result original. Public signature verification still supplies neither
@@ -604,14 +761,14 @@ fn bounded<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn message(domain: &[u8], bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn message(domain: &[u8], bytes: &[u8]) -> Vec<u8> {
     let mut out = domain.to_vec();
     out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     out.extend_from_slice(bytes);
-    Ok(out)
+    out
 }
 fn digest<T: norito::NoritoSerialize>(domain: &[u8], value: &T) -> Result<[u8; 32], String> {
-    Ok(Sha256::digest(message(domain, &bounded(value)?)?).into())
+    Ok(Sha256::digest(message(domain, &bounded(value)?)).into())
 }
 
 /// Public signing-purpose original admitted by the independently installed runtime inventory.
@@ -641,8 +798,11 @@ pub struct KagemushaOrdinaryLineageIssuerPolicyV1 {
     pub issuer_public_key: PublicKey,
     /// Exact existing independently admitted FI/runtime/network/asset incarnation tuple.
     pub runtime: super::KagemushaRetailEnrollmentRuntimeV1,
-    /// Purpose fingerprint for Anchor0/Reserve1/Commit2 plus their exact request/result domains.
+    /// Purpose fingerprint for Anchor0/Reserve1/Commit2/ReserveIncoming3/CommitIncoming4
+    /// plus their exact request/result domains. The first-release signed policy must admit all five.
     pub purpose_domain_digest: [u8; 32],
+    /// Complete independently governed exclusive DATA domain for the original liability pool.
+    pub data_authority: KagemushaOrdinaryLineageDataAuthorityV1,
     /// Explicit owner-admitted financial CAS authorization. Qualified source requires true.
     pub enabled: bool,
 }
@@ -659,7 +819,8 @@ impl KagemushaOrdinaryLineageIssuerPolicyV1 {
             h.update((bytes.len() as u64).to_le_bytes());
             h.update(bytes);
         }
-        h.update([0, 1, 2]);
+        h.update([0, 1, 2, 3, 4]);
+        h.update(b"exclusive-data-authority-v1\0");
         h.finalize().into()
     }
     /// Check shape and exact role/scope joins to an independently selected original FI policy.
@@ -671,6 +832,7 @@ impl KagemushaOrdinaryLineageIssuerPolicyV1 {
         issuer: &super::KagemushaRetailEnrollmentIssuerPolicyV1,
     ) -> Result<(), String> {
         issuer.validate().map_err(|error| error.to_string())?;
+        self.data_authority.validate_for_runtime(&self.runtime)?;
         if self.version != 1
             || !self.enabled
             || self.issuer_public_key.algorithm() != Algorithm::Ed25519
@@ -691,6 +853,7 @@ impl KagemushaOrdinaryLineageIssuerPolicyV1 {
         if self.version != 1 || self.purpose_domain_digest != Self::purpose_domain_digest() {
             return Err("ordinary lineage purpose identity differs".into());
         }
+        self.data_authority.validate_for_runtime(&self.runtime)?;
         nonzero(&[self.issuer_policy_digest])?;
         bounded(self)
     }
@@ -701,7 +864,7 @@ impl KagemushaOrdinaryLineageIssuerPolicyV1 {
         Ok(Sha256::digest(message(
             b"iroha:kagemusha:v1:ordinary-lineage-cas-policy\0",
             &self.canonical_bytes()?,
-        )?)
+        ))
         .into())
     }
 }
@@ -803,7 +966,8 @@ mod tests {
     fn actual_account_consent_and_explicit_issuer_purpose_bind_all_original_data() {
         let (f, line) = fixture();
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
+        assert_eq!(issuer.public_key(), &f.issuer_policy.issuer_public_key);
         let policy = KagemushaOrdinaryLineageIssuerPolicyV1 {
             version: 1,
             issuer_policy_digest: super::super::kagemusha_ordinary_retail_issuer_policy_digest_v1(
@@ -812,6 +976,21 @@ mod tests {
             .unwrap(),
             issuer_public_key: issuer.public_key().clone(),
             runtime: f.issuer_policy.runtime.clone(),
+            data_authority: KagemushaOrdinaryLineageDataAuthorityV1 {
+                version: 1,
+                liability_pool_id: super::super::kagemusha_liability_pool_id_v1(
+                    &f.issuer_policy.runtime.network_id,
+                    &f.issuer_policy.runtime.asset,
+                    f.issuer_policy.runtime.asset_incarnation,
+                )
+                .unwrap(),
+                service_identity_digest: [90; 32],
+                data_incarnation_digest: [33; 32],
+                dataspace: "mibank.bpng".into(),
+                tenant: "mibank-core".into(),
+                principal: "core-mibank".into(),
+                collection: "retail_enrollments".into(),
+            },
             purpose_domain_digest: KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
             enabled: true,
         };
@@ -854,6 +1033,21 @@ mod tests {
         signed
             .verify_for_request(&request, issuer.public_key())
             .unwrap();
+        let app_authority = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        assert_eq!(app_authority.public_key(), &f.app_authority.authority_key);
+        let mut wrong_role = signed.clone();
+        wrong_role.signature = Signature::new(
+            app_authority.private_key(),
+            &wrong_role.subject.issuer_signing_message().unwrap(),
+        );
+        assert!(
+            wrong_role
+                .verify_for_request(&request, &f.issuer_policy.issuer_public_key)
+                .is_err()
+        );
+        let mut wrong_policy = policy.clone();
+        wrong_policy.issuer_public_key = app_authority.public_key().clone();
+        assert!(wrong_policy.validate_for_issuer(&f.issuer_policy).is_err());
         request.request_nonce[0] ^= 1;
         assert!(request.verify_account_signature(&signature).is_err());
         assert!(
@@ -898,6 +1092,203 @@ mod tests {
                     &request.account_signing_message().unwrap()
                 ))
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod incoming_purpose_tests {
+    use super::*;
+    use crate::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
+    #[test]
+    fn ordinary_lineage_signing_purpose_requires_all_five_exact_first_release_operations() {
+        let calculate = |tags: &[u8]| {
+            let mut h = Sha256::new();
+            h.update(b"iroha:kagemusha:v1:ordinary-lineage-cas-admitted-purposes\0");
+            for domain in [
+                KAGEMUSHA_ORDINARY_LINEAGE_REQUEST_DOMAIN_V1,
+                KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1,
+            ] {
+                h.update((domain.len() as u64).to_le_bytes());
+                h.update(domain);
+            }
+            h.update(tags);
+            h.update(b"exclusive-data-authority-v1\0");
+            <[u8; 32]>::from(h.finalize())
+        };
+        assert_eq!(
+            KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            calculate(&[0, 1, 2, 3, 4])
+        );
+        assert_ne!(
+            KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            calculate(&[0, 1, 2])
+        );
+        assert_ne!(
+            KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            calculate(&[0, 1, 2, 4, 3])
+        );
+        // The former complete five-purpose fingerprint still lacks the new independently
+        // governed exclusive DATA domain and must not admit the current signing policy.
+        let mut previous = Sha256::new();
+        previous.update(b"iroha:kagemusha:v1:ordinary-lineage-cas-admitted-purposes\0");
+        for domain in [
+            KAGEMUSHA_ORDINARY_LINEAGE_REQUEST_DOMAIN_V1,
+            KAGEMUSHA_ORDINARY_LINEAGE_RESULT_DOMAIN_V1,
+        ] {
+            previous.update((domain.len() as u64).to_le_bytes());
+            previous.update(domain);
+        }
+        previous.update([0, 1, 2, 3, 4]);
+        assert_ne!(
+            KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            <[u8; 32]>::from(previous.finalize())
+        );
+    }
+    #[test]
+    fn exclusive_data_authority_full_original_roundtrips_and_every_coordinate_changes_policy() {
+        let f = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        let data = KagemushaOrdinaryLineageDataAuthorityV1 {
+            version: 1,
+            liability_pool_id: super::super::kagemusha_liability_pool_id_v1(
+                &f.issuer_policy.runtime.network_id,
+                &f.issuer_policy.runtime.asset,
+                f.issuer_policy.runtime.asset_incarnation,
+            )
+            .unwrap(),
+            service_identity_digest: [90; 32],
+            data_incarnation_digest: [91; 32],
+            dataspace: "mibank.bpng".into(),
+            tenant: "mibank-core".into(),
+            principal: "core-mibank".into(),
+            collection: "retail_enrollments".into(),
+        };
+        let raw = data.canonical_bytes().unwrap();
+        let decoded: KagemushaOrdinaryLineageDataAuthorityV1 =
+            norito::decode_canonical_with_limits(&raw, norito::canonical_decode_limits(raw.len()))
+                .unwrap();
+        assert_eq!(decoded, data);
+        let policy = KagemushaOrdinaryLineageIssuerPolicyV1 {
+            version: 1,
+            issuer_policy_digest: super::super::kagemusha_ordinary_retail_issuer_policy_digest_v1(
+                &f.issuer_policy,
+            )
+            .unwrap(),
+            issuer_public_key: f.issuer_policy.issuer_public_key.clone(),
+            runtime: f.issuer_policy.runtime.clone(),
+            purpose_domain_digest: KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
+            data_authority: data.clone(),
+            enabled: true,
+        };
+        policy.validate_for_issuer(&f.issuer_policy).unwrap();
+        let original_digest = policy.digest().unwrap();
+        for coordinate in 0..7 {
+            let mut changed = policy.clone();
+            let changed_data = &mut changed.data_authority;
+            match coordinate {
+                0 => changed_data.service_identity_digest[0] ^= 1,
+                1 => changed_data.data_incarnation_digest[0] ^= 1,
+                2 => changed_data.dataspace.push('x'),
+                3 => changed_data.tenant.push('x'),
+                4 => changed_data.principal.push('x'),
+                5 => changed_data.collection.push('x'),
+                _ => changed_data.liability_pool_id[0] ^= 1,
+            }
+            if coordinate == 6 {
+                assert!(changed.validate_for_issuer(&f.issuer_policy).is_err());
+            } else {
+                assert_ne!(changed.digest().unwrap(), original_digest);
+            }
+        }
+        let service =
+            KagemushaOrdinaryLineageDataAuthorityV1::service_identity_digest_for_originals(
+                [1; 32], [2; 32], [3; 32],
+            )
+            .unwrap();
+        assert_ne!(
+            service,
+            KagemushaOrdinaryLineageDataAuthorityV1::service_identity_digest_for_originals(
+                [2; 32], [1; 32], [3; 32]
+            )
+            .unwrap()
+        );
+        assert!(
+            KagemushaOrdinaryLineageDataAuthorityV1::service_identity_digest_for_originals(
+                [0; 32], [2; 32], [3; 32]
+            )
+            .is_err()
+        );
+        for invalid in [
+            "",
+            "../elsewhere",
+            "tenant/name",
+            "tenant%2ename",
+            "tenant\n",
+        ] {
+            let mut changed = data.clone();
+            changed.tenant = invalid.into();
+            assert!(changed.canonical_bytes().is_err());
+        }
+    }
+    #[test]
+    fn exclusive_data_authority_requires_the_exact_typed_network_asset_and_incarnation() {
+        let f = Fixture::with_single_member_wallet(false, false, [19; 32]);
+        let runtime = &f.issuer_policy.runtime;
+        let data = KagemushaOrdinaryLineageDataAuthorityV1 {
+            version: 1,
+            liability_pool_id: super::super::kagemusha_liability_pool_id_v1(
+                &runtime.network_id,
+                &runtime.asset,
+                runtime.asset_incarnation,
+            )
+            .unwrap(),
+            service_identity_digest: [90; 32],
+            data_incarnation_digest: [91; 32],
+            dataspace: "mibank.bpng".into(),
+            tenant: "mibank-core".into(),
+            principal: "core-mibank".into(),
+            collection: "retail_enrollments".into(),
+        };
+        data.validate_for_runtime(runtime).unwrap();
+        data.validate_for_pool(
+            &runtime.network_id,
+            &runtime.asset,
+            runtime.asset_incarnation,
+        )
+        .unwrap();
+        let other_network =
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"different-lineage-authority-genesis"),
+            ));
+        let other_asset = crate::asset::AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x30,
+        ])
+        .unwrap();
+        let other_incarnation = crate::nexus::AxtAssetIncarnationV1::try_from_bytes(
+            *iroha_crypto::Hash::new(b"different-lineage-authority-incarnation").as_ref(),
+        )
+        .unwrap();
+        for (network, asset, incarnation) in [
+            (&other_network, &runtime.asset, runtime.asset_incarnation),
+            (&runtime.network_id, &other_asset, runtime.asset_incarnation),
+            (&runtime.network_id, &runtime.asset, other_incarnation),
+        ] {
+            assert_ne!(
+                super::super::kagemusha_liability_pool_id_v1(network, asset, incarnation).unwrap(),
+                data.liability_pool_id,
+            );
+            assert_eq!(
+                data.validate_for_pool(network, asset, incarnation)
+                    .unwrap_err(),
+                "ordinary lineage authoritative DATA pool differs",
+            );
+        }
+        let mut malformed = data;
+        malformed.service_identity_digest = [0; 32];
+        assert_eq!(
+            malformed.validate_for_runtime(runtime).unwrap_err(),
+            "ordinary lineage original selector absent",
         );
     }
 }

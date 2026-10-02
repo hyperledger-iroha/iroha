@@ -42,15 +42,17 @@ impl State {
         let source = CanonicalHistorySource::new(&self.kura, &hashes, tip);
         let mut work_left = max_work;
         let mut bytes_left = max_bytes;
-        let receipt = source.executed_receipt(height, |work, bytes| {
-            work_left = work_left
-                .checked_sub(work)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            bytes_left = bytes_left
-                .checked_sub(bytes)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            Ok(())
-        })?;
+        let receipt = source
+            .executed_receipt(height, |work, bytes| {
+                work_left = work_left
+                    .checked_sub(work)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                bytes_left = bytes_left
+                    .checked_sub(bytes)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                Ok(())
+            })
+            .map_err(crate::smartcontracts::isi::query::query_transport_error)?;
         let target_work = u64::try_from(
             receipt
                 .block()

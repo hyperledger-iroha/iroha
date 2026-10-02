@@ -1435,6 +1435,14 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             executable = tools / name
             executable.write_text('#!/bin/sh\nif [ "${RUSTC_BOOTSTRAP+x}" = x ]; then exit 77; fi\nexit 0\n', encoding="utf-8")
             executable.chmod(0o755)
+        public_input_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(public_input_directory.cleanup)
+        binding = Path(public_input_directory.name).resolve() / "hardware-compiled-binding.norito"
+        binding.write_bytes(b"TEST ONLY public compiled binding original; no runtime authority")
+        binding.chmod(0o600)
+        ordinary = Path(public_input_directory.name).resolve() / "common-sdk-compiled-root.bin"
+        ordinary.write_bytes(b"KGMROOT1" + bytes([3]) * 32 + bytes([4]) * 32 + (25).to_bytes(4, "little"))
+        ordinary.chmod(0o600)
         environment = {
             "ANDROID_NDK_HOME": str(ndk),
             "ANDROID_NDK_ROOT": str(ndk),
@@ -1447,6 +1455,8 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "HOME": str(self.root),
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
+            "MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE": str(binding),
+            "MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE": str(ordinary),
             "NORITO_SKIP_BINDINGS_SYNC": "1",
             "PATH": f"{tools}:/usr/bin:/bin",
             "RUSTC": str(tools / "rustc"),
@@ -1490,8 +1500,94 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             )
 
         with mock.patch.dict(os.environ, {"RUSTC_BOOTSTRAP": "1"}):
+            (tools / "cargo").write_text(
+            '#!/bin/sh\n/bin/echo "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"\n/bin/echo "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE"\n'
+            'if [ "${AMBIENT_HARDWARE_POLICY+x}" = x ]; then exit 91; fi\nexit 0\n',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"AMBIENT_HARDWARE_POLICY": "TEST ONLY injected"}):
             accepted = run(environment, cargo_arguments)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(accepted.stdout.strip().splitlines(), [str(binding), str(ordinary)])
+
+        for offered in ("", "hardware-compiled-binding.norito", str(self.root / "different.norito")):
+            with self.subTest(binding_path=offered):
+                changed = dict(environment)
+                changed["MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"] = offered
+                refused = run(changed, cargo_arguments)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertEqual(refused.stdout, "")
+        # The new original is mandatory independently of valid hardware input.
+        absent_ordinary = dict(environment)
+        del absent_ordinary["MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE"]
+        self.assertNotEqual(run(absent_ordinary, cargo_arguments).returncode, 0)
+        original_ordinary = ordinary.read_bytes()
+        for contents in (b"", original_ordinary[:75], original_ordinary + b"x",
+                         b"INVALID1" + original_ordinary[8:],
+                         original_ordinary[:8] + bytes(32) + original_ordinary[40:],
+                         original_ordinary[:40] + bytes(32) + original_ordinary[72:],
+                         original_ordinary[:72] + bytes(4)):
+            ordinary.write_bytes(contents)
+            refused = run(environment, cargo_arguments)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(refused.stdout, "")
+        ordinary.write_bytes(original_ordinary)
+        ordinary_alias = Path(public_input_directory.name).resolve() / "alias"
+        ordinary_alias.mkdir()
+        (ordinary_alias / ordinary.name).symlink_to(ordinary)
+        changed = dict(environment, MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE=str(ordinary_alias / ordinary.name))
+        self.assertNotEqual(run(changed, cargo_arguments).returncode, 0)
+        # Successful child output cannot hide modified bytes or replaced inode.
+        for command in (
+            'printf "different original" > "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE"',
+            '/bin/cp "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE" "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE.next"; /bin/mv "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE.next" "$MOBILE_SDK_ORDINARY_CONTEXT_COMPILED_BINDING_FILE"',
+        ):
+            (tools / "cargo").write_text("#!/bin/sh\n" + command + "\nexit 0\n", encoding="utf-8")
+            refused = run(environment, cargo_arguments)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("ordinary compiled binding original changed during", refused.stderr)
+            ordinary.write_bytes(original_ordinary)
+        (tools / "cargo").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+        absent_binding = dict(environment)
+        del absent_binding["MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"]
+        self.assertNotEqual(run(absent_binding, cargo_arguments).returncode, 0)
+        linked = self.root / "linked-binding"
+        linked.mkdir()
+        alias = linked / "hardware-compiled-binding.norito"
+        alias.symlink_to(binding)
+        changed = dict(environment)
+        changed["MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"] = str(alias)
+        self.assertNotEqual(run(changed, cargo_arguments).returncode, 0)
+        binding.chmod(0o666)
+        self.assertNotEqual(run(environment, cargo_arguments).returncode, 0)
+        binding.chmod(0o600)
+        original = binding.read_bytes()
+        for contents in (b"", b"x" * (192 * 1024 + 1)):
+            binding.write_bytes(contents)
+            self.assertNotEqual(run(environment, cargo_arguments).returncode, 0)
+        binding.write_bytes(original)
+
+        # Actual child mutation must fail even after the child reports success.
+        (tools / "cargo").write_text(
+            '#!/bin/sh\nprintf "different public original" > "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"\nexit 0\n',
+            encoding="utf-8",
+        )
+        changed = run(environment, cargo_arguments)
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn("hardware compiled binding original changed during", changed.stderr)
+        binding.write_bytes(original)
+        # Same bytes on a replacement inode must also refuse.
+        (tools / "cargo").write_text(
+            '#!/bin/sh\n/bin/cp "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE" "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE.next"\n/bin/mv "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE.next" "$MOBILE_SDK_HARDWARE_BOOTSTRAP_COMPILED_BINDING_FILE"\nexit 0\n',
+            encoding="utf-8",
+        )
+        replaced = run(environment, cargo_arguments)
+        self.assertNotEqual(replaced.returncode, 0)
+        self.assertIn("hardware compiled binding original changed during", replaced.stderr)
+        binding.chmod(0o600)
+
+        (tools / "cargo").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
         for bootstrap in ("", "0", "1"):
             with self.subTest(bootstrap=bootstrap):

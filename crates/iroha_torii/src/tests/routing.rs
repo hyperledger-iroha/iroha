@@ -427,16 +427,37 @@ mod tests {
     }
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {
-        let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+            .expect("original signed genesis");
+        let proposal = chain.proposal(Some(2_000), vec![]);
+        let mut block = chain.state().block(proposal.header());
+        let zero_seed = SumeragiNposParameters {
             epoch_seed: [0; 32],
             ..Default::default()
         };
-        assert!(super::sumeragi_npos_diagnostics(&zero_seed).is_err());
-        let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
+        let invalid_windows = SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(10).expect("non-zero epoch length"),
             ..Default::default()
         };
-        assert!(super::sumeragi_npos_diagnostics(&invalid_windows).is_err());
+        for invalid in [zero_seed, invalid_windows] {
+            let mut tx = block.transaction();
+            tx.world
+                .parameters_mut_for_testing()
+                .get_mut()
+                .set_parameter(Parameter::Custom(invalid.into_custom_parameter()));
+            let error = super::sumeragi_npos_diagnostics(&tx.world)
+                .expect_err("malformed original NPoS policy must remain terminal");
+            assert!(
+                matches!(
+                    error,
+                    Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+                ),
+                "{error:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {

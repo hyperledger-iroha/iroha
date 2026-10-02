@@ -27,17 +27,12 @@ extern "C" {
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 #define CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN -505
-#define CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE -506
+#define CONNECT_NORITO_ERR_RETAIL_FEE_ASSESSMENT -506
 #define CONNECT_NORITO_ERR_PRIVATE_SETTLEMENT_RESPONSE -507
 #define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_INCLUSION -508
 #define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_QUERY -509
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
-
-#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1 1
-#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS_V1 100000
-#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 4096
-#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65536
 
 #define CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1 1048576
 #define CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1 33554432
@@ -286,32 +281,23 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     uint8_t** out_promoted_checkpoint,
     unsigned long* out_promoted_checkpoint_len);
 
-// Encodes the exact canonical Norito V1 request body for
-// POST /v1/validation-fee/hijiri/quote. The account id must be a canonical
-// I105 literal and qualifying_transfer_count must be in 1..100000. The output
-// is cleared on failure and must be released with connect_norito_free on
-// success.
-int32_t connect_norito_validation_fee_hijiri_quote_request_v1(
-    const uint8_t* account_id_utf8,
-    unsigned long account_id_len,
-    uint32_t qualifying_transfer_count,
-    uint8_t** out_request,
-    unsigned long* out_request_len);
+// Native retail fee codec. Output is cleared on failure; release successful
+// output with connect_norito_free. Invalid input returns -506. These codecs do
+// not replace policy finality verification or ledger assessment admission.
+// Typed request JSON -> 32 raw intent hash bytes (at most 262144 input bytes).
+int32_t connect_norito_retail_fee_intent_hash_v1(
+    const uint8_t* input, unsigned long input_len,
+    uint8_t** output, unsigned long* output_len);
 
-// Canonically decodes and re-encodes both native-Norito archives, validates
-// the response's full Hijiri arithmetic/coherence, and binds its echoed
-// account, transfer count, and checked successor height to the exact request.
-// The response is bounded to 64 KiB and the request to 4 KiB. On success this
-// returns typed canonical Norito JSON using schema
-// iroha.torii.v1.validation_fee.hijiri_quote.response. The output is cleared
-// on failure and must be released with connect_norito_free on success.
-int32_t connect_norito_validation_fee_hijiri_quote_response_verify_v1(
-    const uint8_t* response_norito,
-    unsigned long response_norito_len,
-    const uint8_t* request_norito,
-    unsigned long request_norito_len,
-    uint8_t** out_projection_json,
-    unsigned long* out_projection_json_len);
+// Typed assessment JSON -> canonical TRACE marker UTF-8 (4096-byte input/output bounds).
+int32_t connect_norito_retail_fee_assessment_marker_v1(
+    const uint8_t* input, unsigned long input_len,
+    uint8_t** output, unsigned long* output_len);
+
+// Canonical marker UTF-8 -> typed assessment JSON (4096-byte input/output bounds).
+int32_t connect_norito_retail_fee_assessment_decode_v1(
+    const uint8_t* input, unsigned long input_len,
+    uint8_t** output, unsigned long* output_len);
 
 // Verifies the complete typed committee proof view, including all manifest,
 // statement, delta, approval, availability, roster-PoP, and network bindings.
@@ -751,6 +737,13 @@ int32_t connect_norito_kagemusha_ordinary_current_control_v1(
     const uint8_t *signed_ptr, size_t signed_len,
     const uint8_t *authority_ptr, size_t authority_len,
     uint8_t **output_ptr, size_t *output_len);
+
+/* Ordinary outgoing cash: canonical Native frame; actual enrolled owner, current FI,
+ * proofs, durable StateAdvance and distinct fresh-FI acknowledgement are mandatory.
+ * Output is bridge-owned and released with connect_norito_free. */
+int32_t connect_norito_kagemusha_ordinary_outgoing_v1(
+    const uint8_t *input, size_t input_len,
+    uint8_t **output, size_t *output_len);
 #endif
 
 int32_t connect_norito_kagemusha_core_coordinator_install_v1(

@@ -71,8 +71,10 @@ then exposes a production capacity failure: 282 SHA blocks require 133,448 rows
 per Table8 lane, exceeding 65,527 usable rows at K=16. Limits remain unchanged.
 The original-State Musubi source capture and all three remaining semantic table
 readers are applied; their first compile exposed 14 missing read-trait
-implementations and one obsolete test callback. The reviewed API repair is applied
-and the five-crate native rerun is pending. Full-State capture still rejects the
+implementations and one obsolete test callback. The reviewed API repair clears
+those compiler errors; a subsequent catalog enum-size lint is also repaired.
+The next five-crate native run waits for the separately owned merge to finish.
+Full-State capture still rejects the
 unresolved runtime-verifier schema. All nine cryptographic admission controls
 pass, including 44 actual fresh-process valid/malformed checks across all 11
 enabled algorithms with zero Rust allocation requests. This does not measure
@@ -99,8 +101,11 @@ all 72 relative cost comparisons; large-domain gains remain modest and do not
 establish the complete proof's five-minute target. Four private multiply variants
 now reuse the exact original arithmetic bank. Their first native run exposes two
 obsolete fixture copy extents before arithmetic assertions; the correction is
-applied and all 50 private-dispatch controls now pass. All ten original public
-multiplication controls pass, including the genuine maximum-segment proof.
+applied and all 54 private-dispatch controls now pass, including four bit-count
+controls. All ten original public multiplication controls and all eight public
+bit-count controls pass, including their genuine maximum-segment proofs. The
+last run's merge-state guard fails after native completion; its overall failure
+is retained. Conditional moves are applied and await native validation.
 
 Unrelated working-tree changes prevent one fixed-source qualification. These
 fresh runs are artifact diagnostics with actual Cargo output and immutable native
@@ -280,12 +285,13 @@ gas/cycle, degree and shared-bank controls await native execution on the combine
 source. The same original ports constrain all seven native shift/rotate
 operations, low-six-bit amounts, operand tags and native gas costs, plus NOT,
 NEG and signed MIN/MAX. The comparison relation charges the native two gas.
-All 50 private-dispatch controls pass in the fresh optimized Linux artifact,
-including coherent wrong-gas forgeries, seven unary/select controls and four
-private multiplication controls. POPCNT, CLZ and CTZ now reuse the original
-zero-prefix equations over canonical private source bits with native six-gas,
-one-cycle behavior; independent source/integer review passes and native tests
-are pending. The original 21 packet ports remain unchanged. Complete
+All 54 private-dispatch controls pass in the retained optimized Linux artifact,
+including coherent wrong-gas forgeries, seven unary/select controls, four
+multiplication controls and four bit-count controls. POPCNT, CLZ and CTZ reuse
+the original zero-prefix equations over canonical source bits with native
+six-gas, one-cycle behavior. CMOV/CMOVI now bind the full public condition and
+only the native conditionally read source and written destination; source review
+passes and native controls are pending. The original 21 packet ports remain unchanged. Complete
 instruction/region semantics and finalized State binding remain open; these
 components do not enable IVM proof admission.
 

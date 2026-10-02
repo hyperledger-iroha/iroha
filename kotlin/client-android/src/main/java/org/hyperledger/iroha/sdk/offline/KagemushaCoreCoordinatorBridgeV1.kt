@@ -88,6 +88,32 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
         }
     }
 
+    /** Dedicated Cash transport shares this sole descriptor monitor with every close/action. */
+    @Synchronized
+    internal fun invokeOrdinaryOutgoing(endpoint: KagemushaOrdinaryNativeOutgoingEndpointV1,
+        phase: Int, originals: List<ByteArray>): List<ByteArray> {
+        requireOrdinaryRuntimeJniOwnerClassV1(endpoint.javaClass)
+        KagemushaOrdinaryOutgoingFrameV1.requireRequest(phase, originals)
+        requireOrdinaryDescriptorOpen()
+        val selected = handle
+        return try {
+            val response = endpoint.outgoing(phase, selected, originals.map(ByteArray::copyOf).toTypedArray())
+                ?: error("Actual Native outgoing Cash owner is unavailable")
+            require(response.size >= 3 && response[0].contentEquals(byteArrayOf(1, 0)) &&
+                response[1].contentEquals(byteArrayOf(phase.toByte())) &&
+                response[2].contentEquals(ByteArray(8) { (selected ushr (it * 8)).toByte() }))
+            val fields = response.drop(3)
+            KagemushaOrdinaryOutgoingFrameV1.requireResponse(phase, fields)
+            check(handle == selected)
+            fields.map(ByteArray::copyOf)
+        } catch (failure: Throwable) {
+            val closing = handle; handle = 0L
+            try { this.endpoint.close(closing) } catch (_: Throwable) { }
+            if (failure is LinkageError) throw IllegalStateException("Actual Native outgoing Cash owner is unavailable", failure)
+            throw failure
+        }
+    }
+
     private fun invokeOriginal(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>, ordinaryBootstrap: Boolean): List<ByteArray> {
         check(handle != 0L) { "KAGEMUSHA native coordinator handle is closed" }
         val request = if (ordinaryBootstrap) KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalRequest(fields)
@@ -139,6 +165,12 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
         private val expectedContract = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         // Process-local ordering only. Native OnceLock/source custody cannot be replaced here.
         private val productionEntry = KagemushaInitialOrdinaryStartupGateV1()
+
+        /** Probe only the exact linked JNI contract, without selecting or opening an account. */
+        @JvmStatic
+        fun loadOrdinaryRuntimeNativeContract() {
+            loadOriginalEndpoint()
+        }
 
         /** Open the exact native ABI. Missing JNI/backend or a mismatched contract fails closed. */
         @JvmStatic

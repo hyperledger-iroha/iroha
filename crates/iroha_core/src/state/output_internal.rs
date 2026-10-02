@@ -232,6 +232,9 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     .map_err(|reason| (reason, Some(step)))
             }
         };
+        // Native fee settlement shares the internal invocation's disposable overlay.
+        execution = execution
+            .and_then(|()| crate::retail_fee::finalize(tx).map_err(|reason| (reason, None)));
         if tx.fastpq_source_quota.intrinsic_rejected()? {
             execution = Err((
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(

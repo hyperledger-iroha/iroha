@@ -494,7 +494,6 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/soracloud/ciphertext/query"
                     | "/v1/pipeline/transactions/status"
                     | "/v1/pipeline/transactions/details"
-                    | "/v1/validation-fee/hijiri/quote"
                     | "/v1/zk/merkle-path"
                     | "/v1/zk/roots"
                     | "/v1/zk/verify-batch"
@@ -2915,7 +2914,7 @@ include!("tests/sorafs_publication_contracts.rs");
 include!("tests/diagnostics_schemas.rs");
 include!("tests/fee_quote_contract.rs");
 include!("tests/finality_app_contracts.rs");
-include!("tests/hijiri_quote_contract.rs");
+include!("tests/retail_fee_contract.rs");
 include!("tests/iso20022_auth.rs");
 include!("tests/json_value_contract.rs");
 include!("tests/prepared_account_contracts.rs");

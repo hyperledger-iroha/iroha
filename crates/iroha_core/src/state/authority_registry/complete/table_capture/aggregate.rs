@@ -184,8 +184,8 @@ pub(super) fn capture_tables_once(
                     .max_rows
                     .checked_sub(total_rows)
                     .ok_or(TableCaptureError::AggregateRowLimit)?;
-                source.admit_table_rows(table, limits.tables, remaining_rows)?;
-                let node = source.capture_table(table, limits.tables)?;
+                source.admit_table_rows(*table, limits.tables, remaining_rows)?;
+                let node = source.capture_table(*table, limits.tables)?;
                 retain_node(
                     &mut nodes,
                     &mut total_rows,

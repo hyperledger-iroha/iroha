@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1527 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1560 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1532 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1565 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -1233,7 +1233,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_generation_reset_and_beacon_root_controls_are_exact_and_platform_required(self):
         assert_native_coverage(self, ["native publication custody", "native durable archive recovery"])
-        required = {'cli': ('taira_public_reset::executor_model::tests::reset_execution_preserves_beacon_and_service_order_without_epoch_writer', 'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected', 'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected', 'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields', 'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_restart'), 'kagami': ('kura::beacon_history::tests::beacon_history_separates_external_and_time_execution_roots_without_weakening_results',)}
+        required = {'cli': ('taira_public_reset::executor_model::tests::reset_execution_preserves_beacon_and_service_order_without_epoch_writer', 'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected', 'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected', 'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields', 'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_cutover'), 'kagami': ('kura::beacon_history::tests::beacon_history_separates_external_and_time_execution_roots_without_weakening_results',)}
         for scope in gate.QUALIFICATION_SCOPES:
             for harness, cases in required.items():
                 stages = gate.qualification_stages(scope)[harness]
@@ -2331,7 +2331,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             network.assert_not_called()
             evidence.assert_not_called()
             self.assertIn("353 focused regressions", output.getvalue())
-            self.assertIn("NOT release qualification", output.getvalue())
+            self.assertIn("Development diagnostic only; prepare builds without regression checks.", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_portable_phase_finishes_custody_before_remaining_graph_and_exact_tests_run_once(self):
@@ -2405,7 +2405,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             checkpoint.assert_not_called()
             self.assertIn("portable diagnostic Cargo graph: mv-admitted-map, concread", output.getvalue())
             self.assertIn("remaining diagnostic Cargo graph: config, data-model, core, network, cli", output.getvalue())
-            self.assertIn("NOT release qualification", output.getvalue())
+            self.assertIn("Development diagnostic only; prepare builds without regression checks.", output.getvalue())
             self.assertFalse(active)
         self.metadata.side_effect = None
 
@@ -2568,7 +2568,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertEqual(run.call_args_list[0].args[3], gate.CONFIG_STAGES)
             self.assertEqual([name for _, names in run.call_args_list[1].args[3] for name in names], [self.core])
             network.assert_not_called()
-            self.assertIn("NOT release qualification", output.getvalue())
+            self.assertIn("Development diagnostic only; prepare builds without regression checks.", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_configuration_failure_stops_focused_execution_and_network(self):

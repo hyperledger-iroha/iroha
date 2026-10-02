@@ -7,13 +7,11 @@ use super::{
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::HashOf;
-use iroha_data_model::validation_fee::{
-    VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-    VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-    VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
-    ValidationFeeMultisigMarkerV1,
+use iroha_data_model::{
+    Level, NetworkId,
+    isi::{InstructionBox, Log},
+    transaction::TransactionBuilder,
 };
-use iroha_data_model::{NetworkId, isi::InstructionBox, transaction::TransactionBuilder};
 use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
@@ -24,167 +22,22 @@ pub(super) struct ProposalIntent {
     pub(super) hash: HashOf<Vec<InstructionBox>>,
 }
 
-/// Parsed validation-fee metadata; raw bytes own the canonical hash values.
-struct FeeMetadata {
-    policy_version: u64,
-    policy_hash_bytes: [u8; 32],
-    hijiri_hash_bytes: Option<[u8; 32]>,
-    instruction_index: Option<u64>,
-    transfer_entry_index: Option<u64>,
-}
+const RETAIL_ASSESSMENT_MARKER_PREFIX: &str = "iroha:retail_fee:assessment:v1:";
 
 fn normalized_multisig_request_string(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
-}
-impl FeeMetadata {
-    fn from_request(request: &MultisigProposeRequest) -> Result<Option<Self>> {
-        let version =
-            normalized_multisig_request_string(request.validation_fee_policy_version.as_deref());
-        let policy_hash =
-            normalized_multisig_request_string(request.validation_fee_policy_hash.as_deref());
-        let hijiri_hash = normalized_multisig_request_string(
-            request.validation_fee_hijiri_fee_quote_hash.as_deref(),
-        );
-        let instruction_index =
-            normalized_multisig_request_string(request.validation_fee_instruction_index.as_deref());
-        let transfer_entry_index = normalized_multisig_request_string(
-            request.validation_fee_transfer_entry_index.as_deref(),
-        );
-        if version.is_some()
-            || policy_hash.is_some()
-            || hijiri_hash.is_some()
-            || instruction_index.is_some()
-            || transfer_entry_index.is_some()
-        {
-            let (Some(version), Some(policy_hash)) = (version, policy_hash) else {
-                return Err(eyre!(
-                    "multisig validation-fee metadata requires both policy version and hash"
-                ));
-            };
-            let policy_version = version
-                .parse::<u64>()
-                .wrap_err("multisig validation-fee policy version is not a canonical u64")?;
-            let policy_hash =
-                canonicalize_hex32_literal(policy_hash, "multisig validation-fee policy hash")?;
-            let policy_hash_bytes: [u8; 32] = hex::decode(&policy_hash)
-                .wrap_err("decode multisig validation-fee policy hash")?
-                .try_into()
-                .map_err(|_| eyre!("multisig validation-fee policy hash is not 32 bytes"))?;
-            let hijiri_hash = hijiri_hash
-                .map(|hash| {
-                    canonicalize_hex32_literal(hash, "multisig validation-fee Hijiri quote hash")
-                })
-                .transpose()?;
-            let hijiri_hash_bytes = hijiri_hash
-                .as_deref()
-                .map(|hash| {
-                    hex::decode(hash)
-                        .wrap_err("decode multisig validation-fee Hijiri quote hash")?
-                        .try_into()
-                        .map_err(|_| {
-                            eyre!("multisig validation-fee Hijiri quote hash is not 32 bytes")
-                        })
-                })
-                .transpose()?;
-            let instruction_index = instruction_index
-                .map(|index| {
-                    index.parse::<u64>().wrap_err(
-                        "multisig validation-fee instruction index is not a canonical u64",
-                    )
-                })
-                .transpose()?;
-            let transfer_entry_index = transfer_entry_index
-                .map(|index| {
-                    index.parse::<u64>().wrap_err(
-                        "multisig validation-fee transfer entry index is not a canonical u64",
-                    )
-                })
-                .transpose()?;
-            if transfer_entry_index.is_some() && instruction_index.is_none() {
-                return Err(eyre!(
-                    "multisig validation-fee transfer entry index requires an instruction index"
-                ));
-            }
-
-            Ok(Some(Self {
-                policy_version,
-                policy_hash_bytes,
-                hijiri_hash_bytes,
-                instruction_index,
-                transfer_entry_index,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn append(self, proposal_instructions: &mut Vec<InstructionBox>, metadata: &mut Metadata) {
-        let Self {
-            policy_version,
-            policy_hash_bytes,
-            hijiri_hash_bytes,
-            instruction_index,
-            transfer_entry_index,
-        } = self;
-        metadata.insert(
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
-                .parse()
-                .expect("static validation-fee policy-version metadata key"),
-            iroha_primitives::json::Json::new(policy_version),
-        );
-        metadata.insert(
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY
-                .parse()
-                .expect("static validation-fee policy-hash metadata key"),
-            iroha_primitives::json::Json::new(hex::encode(policy_hash_bytes)),
-        );
-        if let Some(hijiri_hash) = hijiri_hash_bytes {
-            metadata.insert(
-                VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY
-                    .parse()
-                    .expect("static Hijiri quote-hash metadata key"),
-                iroha_primitives::json::Json::new(hex::encode(hijiri_hash)),
-            );
-        }
-        if let Some(instruction_index) = instruction_index {
-            metadata.insert(
-                VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
-                    .parse()
-                    .expect("static validation-fee instruction-index metadata key"),
-                iroha_primitives::json::Json::new(instruction_index),
-            );
-            proposal_instructions.push(
-                ValidationFeeMultisigMarkerV1::new(
-                    policy_version,
-                    policy_hash_bytes,
-                    hijiri_hash_bytes,
-                    instruction_index,
-                    transfer_entry_index,
-                )
-                .into_instruction(),
-            );
-        }
-        if let Some(transfer_entry_index) = transfer_entry_index {
-            metadata.insert(
-                VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY
-                    .parse()
-                    .expect("static validation-fee transfer-entry-index metadata key"),
-                iroha_primitives::json::Json::new(transfer_entry_index),
-            );
-        }
-    }
 }
 
 pub(super) fn canonical_propose_intent(request: &MultisigProposeRequest) -> Result<ProposalIntent> {
     let mut proposal_instructions = request.instructions.clone();
     if proposal_instructions.iter().any(|instruction| {
-        !matches!(
-            ValidationFeeMultisigMarkerV1::parse_instruction(instruction),
-            Ok(None)
-        )
+        instruction
+            .as_any()
+            .downcast_ref::<Log>()
+            .is_some_and(|log| log.msg.starts_with(RETAIL_ASSESSMENT_MARKER_PREFIX))
     }) {
         return Err(eyre!(
-            "multisig propose request instructions must not contain a validation-fee marker"
+            "multisig instructions must not contain a caller-supplied fee assessment marker"
         ));
     }
 
@@ -195,9 +48,15 @@ pub(super) fn canonical_propose_intent(request: &MultisigProposeRequest) -> Resu
             iroha_primitives::json::Json::new(memo.to_owned()),
         );
     }
-
-    if let Some(fee) = FeeMetadata::from_request(request)? {
-        fee.append(&mut proposal_instructions, &mut metadata);
+    if let Some(assessment) = &request.validation_fee_assessment {
+        let bytes = norito::encode_canonical(assessment).wrap_err("encode fee assessment")?;
+        proposal_instructions.push(
+            Log::new(
+                Level::TRACE,
+                format!("{RETAIL_ASSESSMENT_MARKER_PREFIX}{}", hex::encode(bytes)),
+            )
+            .into(),
+        );
     }
 
     let proposal_hash = HashOf::new(&proposal_instructions);
@@ -207,6 +66,7 @@ pub(super) fn canonical_propose_intent(request: &MultisigProposeRequest) -> Resu
         hash: proposal_hash,
     })
 }
+
 fn decode_unsigned_payload(
     response: &MultisigResponse,
     request: &MultisigProposeRequest,
@@ -327,6 +187,15 @@ pub(super) fn validate_response(
             "multisig response resolved account does not match the requested account"
         ));
     }
+    if request
+        .validation_fee_assessment
+        .as_ref()
+        .is_some_and(|assessment| assessment.account_id != response.resolved_multisig_account_id)
+    {
+        return Err(eyre!(
+            "retail fee assessment account does not match the resolved multisig execution account"
+        ));
+    }
     if !request
         .fee_payment
         .has_same_payer_and_gas_bound(&response.fee_payment)
@@ -409,8 +278,25 @@ pub(super) fn validate_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{prelude::*, transaction::FeePaymentIntent};
+    use iroha_data_model::{
+        prelude::*, transaction::FeePaymentIntent, validation_fee::RetailFeeAssessmentV1,
+    };
     use iroha_primitives::json::Json;
+
+    fn assessment() -> RetailFeeAssessmentV1 {
+        RetailFeeAssessmentV1 {
+            account_id: iroha_test_samples::ALICE_ID.clone(),
+            retail_enrolled: true,
+            billing_month_start_ms: 1_700_000_000_000,
+            policy_revision: 1,
+            payments_used_before: 0,
+            qualifying_payments: 1,
+            fee_minor: 0,
+            state_commitment: [1; 32],
+            intent_hash: [2; 32],
+            expires_at_ms: 1_700_000_060_000,
+        }
+    }
 
     fn request() -> MultisigProposeRequest {
         MultisigProposeRequest {
@@ -422,55 +308,38 @@ mod tests {
             creation_time_ms: Some(123),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             memo: Some("  approved intent  ".to_owned()),
-            validation_fee_policy_version: Some(" 42 ".to_owned()),
-            validation_fee_policy_hash: Some("AB".repeat(32)),
-            validation_fee_hijiri_fee_quote_hash: Some("CE".repeat(32)),
+            validation_fee_assessment: Some(assessment()),
             instructions: vec![Log::new(Level::INFO, "exact proposal".to_owned()).into()],
-            validation_fee_instruction_index: Some("3".to_owned()),
-            validation_fee_transfer_entry_index: Some("2".to_owned()),
         }
     }
 
     #[test]
-    fn fee_metadata_preserves_exact_marker_hashes_and_projection() {
+    fn typed_assessment_uses_one_signed_marker_and_memo_only_outer_metadata() {
         let request = request();
         let intent = canonical_propose_intent(&request).unwrap();
-        let mut expected_instructions = request.instructions.clone();
-        expected_instructions.push(
-            ValidationFeeMultisigMarkerV1::new(42, [0xab; 32], Some([0xce; 32]), 3, Some(2))
-                .into_instruction(),
-        );
-        let mut metadata = Metadata::default();
-        for (key, value) in [
-            ("memo", Json::new("approved intent")),
-            (
-                VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-                Json::new(42_u64),
+        let assessment_bytes = norito::encode_canonical(&assessment()).unwrap();
+        let expected_marker: InstructionBox = Log::new(
+            Level::TRACE,
+            format!(
+                "{RETAIL_ASSESSMENT_MARKER_PREFIX}{}",
+                hex::encode(assessment_bytes)
             ),
-            (
-                VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-                Json::new("ab".repeat(32)),
-            ),
-            (
-                VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-                Json::new("ce".repeat(32)),
-            ),
-            (
-                VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-                Json::new(3_u64),
-            ),
-            (
-                VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
-                Json::new(2_u64),
-            ),
-        ] {
-            metadata.insert(key.parse().unwrap(), value);
-        }
-        assert_eq!(intent.instructions, expected_instructions);
-        assert_eq!(intent.metadata, metadata);
-        assert_eq!(intent.hash, HashOf::new(&expected_instructions));
+        )
+        .into();
+        assert_eq!(intent.instructions.len(), 2);
+        assert_eq!(intent.instructions[0], request.instructions[0]);
+        assert_eq!(intent.instructions[1], expected_marker);
+        let mut expected_metadata = Metadata::default();
+        expected_metadata.insert("memo".parse().unwrap(), Json::new("approved intent"));
+        assert_eq!(intent.metadata, expected_metadata);
+        assert_eq!(intent.hash, HashOf::new(&intent.instructions));
+
         let mut altered = request;
-        altered.validation_fee_instruction_index = Some("4".to_owned());
+        altered
+            .validation_fee_assessment
+            .as_mut()
+            .unwrap()
+            .fee_minor = 1;
         assert_ne!(
             canonical_propose_intent(&altered).unwrap().hash,
             intent.hash
@@ -478,32 +347,34 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_fee_binding_and_embedded_markers_reject() {
-        for mutation in [
-            "version",
-            "policy_hash",
-            "instruction_index",
-            "malformed_hash",
-        ] {
+    fn caller_supplied_assessment_markers_reject_before_hashing() {
+        for level in [Level::TRACE, Level::WARN] {
             let mut request = request();
-            match mutation {
-                "version" => request.validation_fee_policy_version = None,
-                "policy_hash" => request.validation_fee_policy_hash = None,
-                "instruction_index" => request.validation_fee_instruction_index = None,
-                "malformed_hash" => {
-                    request.validation_fee_hijiri_fee_quote_hash = Some("ab".to_owned())
-                }
-                _ => unreachable!(),
-            }
+            request
+                .instructions
+                .push(Log::new(level, format!("{RETAIL_ASSESSMENT_MARKER_PREFIX}00")).into());
+            assert!(canonical_propose_intent(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn retired_positional_fee_fields_reject_at_request_decode() {
+        for retired in [
+            "validation_fee_policy_version",
+            "validation_fee_policy_hash",
+            "validation_fee_hijiri_fee_quote_hash",
+            "validation_fee_instruction_index",
+            "validation_fee_transfer_entry_index",
+        ] {
+            let mut encoded = norito::json::to_value(&request()).unwrap();
+            encoded
+                .as_object_mut()
+                .unwrap()
+                .insert(retired.to_owned(), norito::json::Value::from("retired"));
             assert!(
-                canonical_propose_intent(&request).is_err(),
-                "accepted {mutation}"
+                norito::json::from_value::<MultisigProposeRequest>(encoded).is_err(),
+                "retired field {retired} must reject"
             );
         }
-        let mut request = request();
-        request.instructions.push(
-            ValidationFeeMultisigMarkerV1::new(42, [0xab; 32], None, 3, None).into_instruction(),
-        );
-        assert!(canonical_propose_intent(&request).is_err());
     }
 }

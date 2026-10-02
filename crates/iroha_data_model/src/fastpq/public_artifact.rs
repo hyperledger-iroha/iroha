@@ -1149,10 +1149,11 @@ mod tests {
     #[test]
     fn commitment_descriptions_reject_noncanonical_words_without_truncating_roots() {
         let canonical = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).unwrap();
-        for (commitment, expected_roots) in [(
-            FastpqCommitmentDescriptionV1::LegacyPreprocessing(canonical),
-            1,
-        )] {
+        {
+            let (commitment, expected_roots) = (
+                FastpqCommitmentDescriptionV1::LegacyPreprocessing(canonical),
+                1,
+            );
             let raw = norito::encode_canonical(&commitment).unwrap();
             assert_eq!(
                 norito::decode_canonical::<FastpqCommitmentDescriptionV1>(&raw).unwrap(),

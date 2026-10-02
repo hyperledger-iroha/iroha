@@ -206,111 +206,81 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
         trusted_checkpoint,
     )
 }
-pub(super) fn java_validation_fee_hijiri_quote_result(
+fn java_retail_fee_assessment_operation(
     env: &mut jni::JNIEnv<'_>,
-    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Result<Vec<u8>, String>,
+    input: jni::objects::JByteArray<'_>,
+    maximum_input_bytes: usize,
+    operation: fn(&[u8]) -> BridgeResult<Vec<u8>>,
 ) -> jni::sys::jbyteArray {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        body(env).and_then(|bytes| {
-            env.byte_array_from_slice(&bytes)
-                .map(jni::objects::JByteArray::into_raw)
-                .map_err(|error| error.to_string())
-        })
+        let bytes = read_java_byte_array_bounded(env, &input, "input", maximum_input_bytes)
+            .ok_or_else(|| "input must contain one bounded nonempty payload".to_owned())?;
+        let output =
+            operation(&bytes).map_err(|_| "invalid retail fee assessment or intent".to_owned())?;
+        env.byte_array_from_slice(&output)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
     }));
     match result {
         Ok(Ok(array)) => array,
         Ok(Err(message)) => {
-            throw_java_illegal_argument(env, format!("Hijiri validation-fee quote: {message}"));
+            throw_java_illegal_argument(env, message);
             std::ptr::null_mut()
         }
         Err(_) => {
-            throw_java_illegal_state(env, "Hijiri validation-fee quote panicked".to_owned());
+            throw_java_illegal_state(env, "retail fee codec panicked".to_owned());
             std::ptr::null_mut()
         }
     }
 }
-pub(super) fn java_native_validation_fee_hijiri_quote_request_v1(
-    env: &mut jni::JNIEnv<'_>,
-    account_id_utf8: jni::objects::JByteArray<'_>,
-    qualifying_transfer_count: jni::sys::jint,
-) -> jni::sys::jbyteArray {
-    java_validation_fee_hijiri_quote_result(env, |env| {
-        let account_id_bytes = read_java_byte_array_bounded(
-            env,
-            &account_id_utf8,
-            "accountIdUtf8",
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
-        )
-        .ok_or_else(|| {
-            "accountIdUtf8 must contain one bounded canonical I105 literal".to_owned()
-        })?;
-        let account_id = std::str::from_utf8(&account_id_bytes)
-            .map_err(|_| "accountIdUtf8 must be valid UTF-8".to_owned())?;
-        let qualifying_transfer_count = u32::try_from(qualifying_transfer_count)
-            .map_err(|_| "qualifyingTransferCount must be in 1..100000".to_owned())?;
-        validation_fee_hijiri_quote_request_v1(account_id, qualifying_transfer_count)
-            .map_err(|_| "request account or transfer count was rejected".to_owned())
-    })
-}
-pub(super) fn java_native_validation_fee_hijiri_quote_response_verify_v1(
-    env: &mut jni::JNIEnv<'_>,
-    response_norito: jni::objects::JByteArray<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_validation_fee_hijiri_quote_result(env, |env| {
-        let response = read_java_byte_array_bounded(
-            env,
-            &response_norito,
-            "responseNorito",
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1,
-        )
-        .ok_or_else(|| "responseNorito must be one bounded nonempty archive".to_owned())?;
-        let request = read_java_byte_array_bounded(
-            env,
-            &request_norito,
-            "requestNorito",
-            VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
-        )
-        .ok_or_else(|| "requestNorito must be one bounded nonempty archive".to_owned())?;
-        validation_fee_hijiri_quote_response_verify_v1(&response, &request).map_err(|_| {
-            "response archive, request archive, or exact request binding was rejected".to_owned()
-        })
-    })
-}
-/// Report the exact native ABI required by the Kotlin Hijiri quote bridge.
+/// Reports the exact bridge ABI required by the retail assessment codec.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-/// JNI projection of [`connect_norito_validation_fee_hijiri_quote_request_v1`].
+/// Native canonical retail fee codec.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    account_id_utf8: jni::objects::JByteArray<'_>,
-    qualifying_transfer_count: jni::sys::jint,
+    input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_validation_fee_hijiri_quote_request_v1(
+    java_retail_fee_assessment_operation(
         &mut env,
-        account_id_utf8,
-        qualifying_transfer_count,
+        input,
+        RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
+        retail_fee_intent_hash_v1,
     )
 }
-/// JNI projection of [`connect_norito_validation_fee_hijiri_quote_response_verify_v1`].
+/// Native canonical retail fee codec.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    response_norito: jni::objects::JByteArray<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
+    input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_validation_fee_hijiri_quote_response_verify_v1(
+    java_retail_fee_assessment_operation(
         &mut env,
-        response_norito,
-        request_norito,
+        input,
+        RETAIL_FEE_ASSESSMENT_MAX_BYTES,
+        retail_fee_assessment_marker_v1,
+    )
+}
+/// Native canonical retail fee codec.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeDecodeAssessmentV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    input: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_retail_fee_assessment_operation(
+        &mut env,
+        input,
+        RETAIL_FEE_MARKER_MAX_BYTES,
+        retail_fee_assessment_decode_v1,
     )
 }
 pub(super) fn java_sorafs_reference_generated_at(

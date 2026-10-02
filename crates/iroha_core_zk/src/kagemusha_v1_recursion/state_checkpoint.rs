@@ -184,6 +184,15 @@ impl ProofLengths {
 }
 
 impl KagemushaRecursiveStateCheckpointV1 {
+    /// Maximum private canonical original under these actual authenticated inner/outer protocols.
+    /// This is a resource bound, never a decoded checkpoint or ownership grant.
+    pub(crate) fn maximum_encoded_bytes(
+        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    ) -> Result<usize> {
+        let material = verifier.state_checkpoint_material();
+        Ok(ProofLengths::authenticated(&material)?.limits()?.0)
+    }
+
     /// Verify generated output and retain only the data needed for exact native restoration.
     ///
     /// Current opening claims and transport columns are rederived and compared, then omitted
@@ -439,6 +448,15 @@ fn validate_expected_release(
                 || state.suite_id != binding.suite_id
                 || state.vk_digest != binding.vk_set_digest
         })
+    {
+        return Err(KagemushaStateCheckpointErrorV1::Binding);
+    }
+    let ordinary = verifier.ordinary_guard_verifier_material();
+    let material = verifier.state_checkpoint_material();
+    if material.artifacts.guard_bundle_eq_protocol_digest == ordinary.eq_protocol_digest
+        && material.artifacts.guard_bundle_ep_protocol_digest == ordinary.ep_protocol_digest
+        && (expected.guard_eq_credential_audit != binding.outer_eq_protocol_digest
+            || expected.guard_ep_credential_audit != binding.outer_ep_protocol_digest)
     {
         return Err(KagemushaStateCheckpointErrorV1::Binding);
     }

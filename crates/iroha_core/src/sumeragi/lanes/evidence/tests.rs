@@ -1,6 +1,7 @@
 //! Original LaneExecutor results and real BLS quorum controls for historical lane evidence.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use crate::execution_attempt::ExecutionAttemptError as Attempt;
+use std::{collections::BTreeSet, io, sync::Arc, time::Duration};
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -75,23 +76,23 @@ impl BodyReader for EmptyStore {
     }
 }
 impl BlockStore for EmptyStore {
-    fn committed_body(&self, _: u64) -> std::io::Result<Option<(AvailableBody, Qc)>> {
+    fn committed_body(&self, _: u64) -> Result<Option<(AvailableBody, Qc)>, Attempt<io::Error>> {
         Ok(None)
     }
     fn height(&self) -> u64 {
         0
     }
-    fn entry(&self, _: u64) -> std::io::Result<Option<SyncEntry>> {
+    fn entry(&self, _: u64) -> Result<Option<SyncEntry>, Attempt<io::Error>> {
         Ok(None)
     }
     fn availability_source(
         &self,
         _: u64,
         _: Hash32,
-    ) -> std::io::Result<Option<AvailabilitySource>> {
+    ) -> Result<Option<AvailabilitySource>, Attempt<io::Error>> {
         Ok(None)
     }
-    fn append(&self, _: &AvailableBody, _: &Qc) -> std::io::Result<()> {
+    fn append(&self, _: &AvailableBody, _: &Qc) -> Result<(), Attempt<io::Error>> {
         panic!("the executor fixture must not publish while constructing evidence")
     }
 }

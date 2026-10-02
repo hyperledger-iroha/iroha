@@ -3,76 +3,26 @@
 //! Every body byte comes from assigned state/Guard cells. The one typed asset UUID is
 //! SHA-bound to the assigned normalized asset identity through its exact canonical frame.
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use core::ops::Range;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use halo2_base::{
     AssignedValue, Context,
     gates::{RangeChip, RangeInstructions as _, circuit::builder::BaseCircuitBuilder},
 };
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use iroha_data_model::kagemusha::kagemusha_canonical_mint_frame_prefix_v1;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::KagemushaAssignedStateRelationV1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::KagemushaStateRelationWitnessV1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use crate::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     kagemusha_v1_state::KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1,
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-statement\0";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const ASSET_DOMAIN: &[u8] = b"iroha:kagemusha:v1:asset-identity";
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 const ASSET_FRAME_BYTES: usize = 72;
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// State-cell source of the canonical transition digest and exact journal revision.
 ///
 /// Only `constrain_transition_statement_source_v1` constructs this from the SHA transcript.
@@ -107,11 +57,6 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaDerivedTransitionStatementSourceV1<F>
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn uint_le<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -125,11 +70,6 @@ fn uint_le<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 fn digest_le<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -141,11 +81,6 @@ fn digest_le<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(super) fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -200,11 +135,6 @@ pub(super) fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     Ok(uuid)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Compute the exact native flat transition digest from constrained state cells.
 ///
 /// The witness supplies only a typed asset UUID for a canonical-frame hash preimage;
@@ -221,11 +151,6 @@ pub(in super::super) fn constrain_transition_statement_digest_v1<F: KagemushaPos
     Ok(constrain_transition_statement_source_v1(builder, jobs, state, witness)?.digest)
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Export the canonical transition SHA result without reassigning host digest bytes.
 #[allow(clippy::too_many_lines)]
 pub(in super::super) fn constrain_transition_statement_source_v1<F: KagemushaPoseidonFieldV1>(

@@ -23,6 +23,29 @@ internal class KagemushaFirstDeviceHardwareEvidenceServiceOwnerV1(
     private var retained: KagemushaFirstDeviceHardwareEvidenceSessionV1? = null
     @Synchronized override fun recoverOriginalOrReserve(): KagemushaFirstDeviceHardwareEvidenceSessionV1 =
         retained ?: KagemushaFirstDeviceHardwareEvidenceSessionV1.fromNativeEndpoint(installedNativeOwner()).also { retained = it }
+
+    companion object {
+        /** Authenticate before publication, releasing only the acquired view if startup fails.
+         * Native keeps the original operation, WAL and any unknown platform outcome.
+         */
+        fun fromOwnedNativeView(
+            native: KagemushaHardwareBootstrapNativeEndpointV1,
+            releaseView: () -> Unit,
+        ): KagemushaFirstDeviceHardwareEvidenceServiceOwnerV1 {
+            try {
+                return KagemushaFirstDeviceHardwareEvidenceServiceOwnerV1 { native }.also {
+                    it.recoverOriginalOrReserve()
+                }
+            } catch (failure: Throwable) {
+                try {
+                    releaseView()
+                } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                }
+                throw failure
+            }
+        }
+    }
 }
 
 /** Native-selected public original carrier. The protected Core transport owns authentication.
@@ -128,13 +151,17 @@ class KagemushaFirstDeviceHardwareEvidenceSessionV1 private constructor(
     fun operationId(): ByteArray { requireCurrent(); return operation.copyOf() }
     /** Data for display only. No local deadline timer changes the Native attempt. */
     fun authoritativeDeadlineMs(): ULong { requireCurrent(); return native.authoritativeDeadlineMs() }
-    /** Data-only recovery selection checked before any new Google OAuth UI request. Unknown
-     * platform/network work refuses; a retained C prefix needs no second ID-token invocation.
+    /** Data-only recovery selection checked before any new Google OAuth UI request. A pending
+     * key fence resumes by loading its exact existing key; all other unknown work refuses.
+     * A retained C prefix never invokes Google identity again.
      */
     fun originalNeedsGoogleIdentity(): Boolean {
         requireCurrent()
-        check(native.pendingStep() == null) { "Original hardware invocation needs Native recovery" }
-        return (native.completedStep() == 0).also { requireCurrent() }
+        val pending = native.pendingStep()
+        check(pending == null || pending == 2) { "Original hardware invocation needs Native recovery" }
+        val completed = native.completedStep()
+        check(pending != 2 || completed == 1) { "Original pending key prefix differs" }
+        return (pending == null && completed == 0).also { requireCurrent() }
     }
     fun googleOAuthClientId(): String { requireCurrent(); return native.googleOAuthClientId().also { requireCurrent() } }
     private fun requireCurrent() {
@@ -152,16 +179,23 @@ class KagemushaFirstDeviceHardwareEvidenceSessionV1 private constructor(
         requireCurrent()
         originalWorkflow?.let { return@synchronized detachedOriginalView(it) { it.copyOf() } }
         recoverOriginalReceipt()?.let { return@synchronized CompletableFuture.completedFuture(it) }
-        // A process-recovered pending effect must not invoke hardware, HTTP or Google again.
-        check(native.pendingStep() == null) { "Original first-device invocation needs Native recovery" }
-        val completed = native.completedStep()
-        check(completed in 0..5) { "Original first-device recovery stage differs" }
+        // Only a pending key fence has a load-only original recovery path. Unknown HTTP,
+        // possession and Google effects cannot be invoked again.
+        val pending = native.pendingStep()
+        check(pending == null || pending == 2) { "Original first-device invocation needs Native recovery" }
         val auth = googleIdTokenOriginal.copyOf()
         val future = CompletableFuture<ByteArray>()
-        originalWorkflow = future // Retain before any asynchronous/platform/network effect.
+        originalWorkflow = future // Retain before recovery or asynchronous/platform/network work.
         try {
-            // Recovery resumes only the exact next uninvoked effect after a retained original.
-            // An invocation fence without its original was rejected above and cannot re-enter.
+            if (pending == 2) {
+                check(native.completedStep() == 1) { "Original pending key prefix differs" }
+                recoverOriginalKey(keyStore)
+            }
+            check(native.pendingStep() == null) { "Original first-device invocation needs Native recovery" }
+            val completed = native.completedStep()
+            check(completed in 0..5) { "Original first-device recovery stage differs" }
+            // Continue from the captured key without fencing or generating a replacement.
+            // Other stages resume only their exact next uninvoked effect.
             var flow = CompletableFuture.completedFuture(Unit)
             if (completed == 0) flow = flow.thenCompose {
                 val prepare = native.fencePrepare(auth)

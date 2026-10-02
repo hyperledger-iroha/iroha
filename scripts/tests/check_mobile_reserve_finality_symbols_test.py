@@ -40,6 +40,13 @@ class ReserveFinalitySymbolTests(unittest.TestCase):
         self.assertEqual(len(expected), 1)
         self.assertEqual(emitted, expected[0])
         self.assertEqual(len(emitted), len(set(emitted)))
+        for symbol in (
+            "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+            "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
+        ):
+            self.assertIn(symbol, emitted)
+            self.assertIn(symbol, expected[0])
 
     def check(self, mode: str, missing: str | None = None,
               extra: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -73,6 +80,38 @@ check_binary_symbols test-only-library test-only-inventory "$2"
         self.assertEqual(set(expected), set(declared))
         self.assertIn("connect_norito_kagemusha_core_coordinator_install_v1", expected)
 
+    def test_ordinary_startup_control_and_outgoing_are_required_on_both_platforms(self) -> None:
+        for missing in (
+            "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+            "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
+        ):
+            for mode in ("apple", "elf"):
+                with self.subTest(mode=mode, missing=missing):
+                    result = self.check(mode, missing=missing)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("is missing " + missing, result.stderr)
+
+    def test_ordinary_jni_exports_match_the_shipping_kotlin_consumer(self) -> None:
+        consumer = (ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaOrdinaryCurrentControlV1.kt").read_text()
+        entries = (
+            ("nativeBindApplicationV1", "ordinary_android_installed_context.rs"),
+            ("nativeRetireOriginalV1", "ordinary_android_installed_context.rs"),
+            ("nativeStartupV1", "ordinary_native_startup.rs"),
+            ("nativeCurrentControlV1", "ordinary_current_control.rs"),
+            ("nativeOutgoingV1", "ordinary_outgoing_driver.rs"),
+        )
+        expected = symbols("ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS")
+        for method, source_name in entries:
+            symbol = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_" + method
+            source = (ROOT / "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1" / source_name).read_text()
+            self.assertIn("@JvmStatic private external fun " + method + "(", consumer)
+            self.assertIn("pub extern \"system\" fn " + symbol, source)
+            self.assertIn(symbol, expected)
+            result = self.check("elf", missing=symbol)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("is missing " + symbol, result.stderr)
+
     def test_coordinator_install_is_required_on_both_platforms(self) -> None:
         for mode in ("apple", "elf"):
             with self.subTest(mode=mode):
@@ -86,6 +125,7 @@ check_binary_symbols test-only-library test-only-inventory "$2"
             for missing in (
                 "connect_norito_kagemusha_ordinary_runtime_startup_v1",
                 "connect_norito_kagemusha_ordinary_current_control_v1",
+                "connect_norito_kagemusha_ordinary_outgoing_v1",
             ):
                 with self.subTest(mode=mode, missing=missing):
                     result = self.check(mode, missing=missing)

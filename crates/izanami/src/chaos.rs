@@ -1899,7 +1899,7 @@ fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
     params.max_validators = u32::try_from(peer_count.max(1)).unwrap_or(u32::MAX);
     params
 }
-fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
+fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Result<Quantity> {
     let mut params = Parameters::default();
     for tx in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = tx.instructions() else {
@@ -1912,13 +1912,15 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> Quantity {
             params.set_parameter(set_param.inner().clone());
         }
     }
-    params
+    Ok(params
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .unwrap_or_default()
         .min_self_bond()
-        .clone()
+        .clone())
 }
 fn instruction_registers_peer_with_pop(instruction: &InstructionBox) -> bool {
     if instruction
@@ -2050,7 +2052,7 @@ fn audit_npos_genesis_preflight(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
 ) -> Result<NposGenesisPreflightSummary> {
-    let min_self_bond = npos_min_self_bond_from_genesis(genesis);
+    let min_self_bond = npos_min_self_bond_from_genesis(genesis)?;
     let mut instructions = Vec::<InstructionBox>::new();
     for tx in genesis.0.external_transactions() {
         let Executable::Instructions(tx_instructions) = tx.instructions() else {
@@ -10738,7 +10740,9 @@ mod tests {
         let injected_npos_params = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()?
+            .flatten()
             .expect("nexus runs should inject sumeragi_npos custom parameter");
         assert_eq!(
             injected_npos_params.max_validators(),

@@ -148,63 +148,6 @@ impl KagemushaExperimentalReleaseFixtureV1 {
     }
 }
 
-#[cfg(test)]
-mod evidence_binding_tests {
-    use super::*;
-
-    #[test]
-    fn rebound_evidence_is_authenticated_with_its_new_hardware_profile() {
-        let fixture = KagemushaExperimentalReleaseFixtureV1::new_with_evidence(
-            artifacts(),
-            release_network(0x73),
-            KagemushaTestnetExperimentScopeV1 {
-                asset_identity_digest: [0x31; 32],
-                asset_incarnation: [0x32; 32],
-                asset_scale: 2,
-                liability_pool_id: [0x33; 32],
-            },
-            |original| KagemushaEvidenceFileV1 {
-                sha256: iroha_crypto::sha256(original.sha256),
-                byte_len: 32,
-            },
-        );
-        assert_eq!(
-            fixture.receipt.circuit_shape_report.sha256,
-            iroha_crypto::sha256([5; 32])
-        );
-        for row in &fixture.receipt.profile_qualifications {
-            assert_eq!(
-                row.profile.qualification_report.sha256,
-                row.profile.hardware_profile.qualification_report_digest
-            );
-            row.profile.hardware_profile.validate().unwrap();
-        }
-        fixture
-            .manifest
-            .authenticate_experimental(
-                &fixture.receipt,
-                &fixture.authority_policy,
-                &fixture.attestation,
-            )
-            .unwrap();
-        let mut substituted = fixture.receipt.clone();
-        substituted.profile_qualifications[0]
-            .profile
-            .qualification_report
-            .sha256 = [0x91; 32];
-        assert!(
-            fixture
-                .manifest
-                .authenticate_experimental(
-                    &substituted,
-                    &fixture.authority_policy,
-                    &fixture.attestation,
-                )
-                .is_err()
-        );
-    }
-}
-
 pub const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
 pub const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
 pub const TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
@@ -805,5 +748,62 @@ pub fn release_attestation(
                     .expect("release approval signature"),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod evidence_binding_tests {
+    use super::*;
+
+    #[test]
+    fn rebound_evidence_is_authenticated_with_its_new_hardware_profile() {
+        let fixture = KagemushaExperimentalReleaseFixtureV1::new_with_evidence(
+            artifacts(),
+            release_network(0x73),
+            KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [0x31; 32],
+                asset_incarnation: [0x32; 32],
+                asset_scale: 2,
+                liability_pool_id: [0x33; 32],
+            },
+            |original| KagemushaEvidenceFileV1 {
+                sha256: iroha_crypto::sha256(original.sha256),
+                byte_len: 32,
+            },
+        );
+        assert_eq!(
+            fixture.receipt.circuit_shape_report.sha256,
+            iroha_crypto::sha256([5; 32])
+        );
+        for row in &fixture.receipt.profile_qualifications {
+            assert_eq!(
+                row.profile.qualification_report.sha256,
+                row.profile.hardware_profile.qualification_report_digest
+            );
+            row.profile.hardware_profile.validate().unwrap();
+        }
+        fixture
+            .manifest
+            .authenticate_experimental(
+                &fixture.receipt,
+                &fixture.authority_policy,
+                &fixture.attestation,
+            )
+            .unwrap();
+        let mut substituted = fixture.receipt.clone();
+        substituted.profile_qualifications[0]
+            .profile
+            .qualification_report
+            .sha256 = [0x91; 32];
+        assert!(
+            fixture
+                .manifest
+                .authenticate_experimental(
+                    &substituted,
+                    &fixture.authority_policy,
+                    &fixture.attestation,
+                )
+                .is_err()
+        );
     }
 }

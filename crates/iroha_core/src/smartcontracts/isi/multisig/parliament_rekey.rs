@@ -22,10 +22,11 @@ fn payout_binding_references_account(
 ) -> bool {
     &binding.treasury_account_id == account
         || &binding.pool_vault_account_id == account
+        || &binding.reward_pool_account_id == account
         || binding
-            .recipients
+            .reference_provider_accounts
             .iter()
-            .any(|recipient| &recipient.account_id == account)
+            .any(|provider| provider == account)
 }
 
 fn operator_bound_proposal_references_account(
@@ -41,11 +42,7 @@ fn operator_bound_proposal_references_account(
     match proposal {
         ProposalKind::ValidationFeePolicy(payload) => {
             &payload.policy.treasury_account_id == account
-                || payload
-                    .policy
-                    .treasury_payout_binding
-                    .as_ref()
-                    .is_some_and(|binding| payout_binding_references_account(binding, account))
+                || &payload.policy.reward_custody.reward_pool_account_id == account
         }
         ProposalKind::ValidationFeePayoutLifecycle(payload) => {
             payout_binding_references_account(&payload.payout_binding, account)

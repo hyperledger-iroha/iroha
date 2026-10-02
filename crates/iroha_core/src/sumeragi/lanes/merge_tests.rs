@@ -52,7 +52,11 @@ const GENESIS_MS: u64 = 10_000;
 struct Deferred(OnceLock<Arc<super::super::registry::LaneStores>>);
 
 impl LaneBlockSource for Deferred {
-    fn tip(&self, lane: LaneId, incarnation: &[u8; 32]) -> std::io::Result<Option<u64>> {
+    fn tip(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
         self.0
             .get()
             .map_or(Ok(None), |stores| stores.tip(lane, incarnation))
@@ -62,7 +66,10 @@ impl LaneBlockSource for Deferred {
         lane: LaneId,
         incarnation: &[u8; 32],
         height: u64,
-    ) -> std::io::Result<Option<CommittedLaneBlock>> {
+    ) -> Result<
+        Option<CommittedLaneBlock>,
+        crate::execution_attempt::ExecutionAttemptError<std::io::Error>,
+    > {
         self.0
             .get()
             .map_or(Ok(None), |stores| stores.block(lane, incarnation, height))
@@ -73,7 +80,7 @@ impl LaneBlockSource for Deferred {
         incarnation: &[u8; 32],
         height: u64,
         timeout: Duration,
-    ) -> std::io::Result<bool> {
+    ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
         self.0.get().map_or(Ok(false), |stores| {
             stores.wait_for(lane, incarnation, height, timeout)
         })
@@ -786,21 +793,36 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
 fn leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work() {
     struct FailedStore;
     impl LaneBlockSource for FailedStore {
-        fn tip(&self, _: LaneId, _: &[u8; 32]) -> std::io::Result<Option<u64>> {
+        fn tip(
+            &self,
+            _: LaneId,
+            _: &[u8; 32],
+        ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>>
+        {
             Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "exact fixture custody failure",
-            ))
+            )
+            .into())
         }
         fn block(
             &self,
             _: LaneId,
             _: &[u8; 32],
             _: u64,
-        ) -> std::io::Result<Option<CommittedLaneBlock>> {
+        ) -> Result<
+            Option<CommittedLaneBlock>,
+            crate::execution_attempt::ExecutionAttemptError<std::io::Error>,
+        > {
             panic!("tip failure must stop proposal before reading a block")
         }
-        fn wait_for(&self, _: LaneId, _: &[u8; 32], _: u64, _: Duration) -> std::io::Result<bool> {
+        fn wait_for(
+            &self,
+            _: LaneId,
+            _: &[u8; 32],
+            _: u64,
+            _: Duration,
+        ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
             panic!("proposal does not wait through a storage error")
         }
     }
@@ -813,6 +835,6 @@ fn leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work()
         fixture.chain.height() + 1,
     )
     .expect_err("a leader must not silently omit lane work after a storage failure");
-    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(error.io_kind(), std::io::ErrorKind::PermissionDenied);
     assert_eq!(error.to_string(), "exact fixture custody failure");
 }

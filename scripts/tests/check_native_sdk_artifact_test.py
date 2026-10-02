@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import re
@@ -43,6 +44,7 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -62,7 +64,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 38
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 39
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -78,9 +80,53 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
                 "connect_norito_kagemusha_testnet_native_startup_activate_v1",
                 "connect_norito_kagemusha_ordinary_runtime_startup_v1",
                 "connect_norito_kagemusha_ordinary_current_control_v1",
+                "connect_norito_kagemusha_ordinary_outgoing_v1",
             }
         assert len(required) == len(expected)
         assert set(required) == expected
+
+
+def test_windows_csharp_inventory_omits_unix_only_ordinary_exports() -> None:
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    declaration = next(
+        node for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "REQUIRED_SYMBOLS"
+    )
+    expression = compile(ast.Expression(declaration.value), str(MODULE_PATH), "eval")
+    inventories = {}
+    for host in ("posix", "nt"):
+        namespace = {
+            **vars(MODULE),
+            "os": types.SimpleNamespace(name=host),
+        }
+        inventories[host] = eval(expression, namespace)["csharp"]
+    unix_only = {
+        "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+        "connect_norito_kagemusha_testnet_value_admit_v1",
+        "connect_norito_kagemusha_testnet_value_credit_v1",
+        "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+        "connect_norito_kagemusha_testnet_native_startup_activate_v1",
+        "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+        "connect_norito_kagemusha_ordinary_current_control_v1",
+        "connect_norito_kagemusha_ordinary_outgoing_v1",
+    }
+    assert unix_only <= set(inventories["posix"])
+    assert inventories["nt"] == tuple(
+        symbol for symbol in inventories["posix"] if symbol not in unix_only
+    )
+    header = (
+        REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+    ).read_text(encoding="utf-8")
+    guarded = next(
+        block for block in re.findall(
+            r"#if !defined\(_WIN32\)\n(.*?)\n#endif", header, re.DOTALL
+        ) if "connect_norito_kagemusha_ordinary_runtime_startup_v1" in block
+    )
+    for symbol in unix_only:
+        if symbol.startswith("connect_norito_kagemusha_ordinary_"):
+            assert re.search(rf"\b{re.escape(symbol)}\s*\(", guarded), symbol
 
 
 def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
@@ -127,6 +173,27 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     assert not any(symbol.startswith("Java_pg_") for symbol in required)
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)
+
+
+def test_ordinary_host_jni_rejects_each_missing_shipping_endpoint() -> None:
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    owner = "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_"
+    for method in ("nativeStartupV1", "nativeCurrentControlV1", "nativeOutgoingV1"):
+        missing = owner + method
+        assert required.count(missing) == 1
+        library = types.SimpleNamespace(**{
+            symbol: object() for symbol in required if symbol != missing
+        })
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+            else:
+                raise AssertionError("native probe accepted missing ordinary JNI endpoint: " + missing)
+    # These wrappers ship only on Android; requiring them rejects genuine host builds.
+    for method in ("nativeBindApplicationV1", "nativeRetireOriginalV1"):
+        assert owner + method not in required
 
 
 def test_native_c_probe_rejects_an_artifact_without_the_trusted_provisioning_intake() -> None:
@@ -241,6 +308,7 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_close_v1",
             "connect_norito_kagemusha_ordinary_runtime_startup_v1",
             "connect_norito_kagemusha_ordinary_current_control_v1",
+            "connect_norito_kagemusha_ordinary_outgoing_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -285,6 +353,8 @@ def test_current_kagemusha_symbols_are_not_blanket_retired() -> None:
 def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
     retired = {
         "c-jni": {
+            "connect_norito_validation_fee_hijiri_quote_request_v1",
+            "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
             "connect_norito_kagemusha_device_response_authenticator_v1_verify",
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
@@ -292,11 +362,13 @@ def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
             "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
         },
         "csharp": {
+            "connect_norito_validation_fee_hijiri_quote_request_v1",
+            "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
             "connect_norito_kagemusha_device_response_authenticator_v1_verify",
             "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         },
-        "node": {"privateSettlementVerifyAuditorCapsuleResponseV1"},
-        "python": {"private_settlement_verify_auditor_capsule_response_v1"},
+        "node": {"privateSettlementVerifyAuditorCapsuleResponseV1", "validationFeeHijiriQuoteRequestV1", "validationFeeVerifyHijiriQuoteResponseV1"},
+        "python": {"private_settlement_verify_auditor_capsule_response_v1", "validation_fee_hijiri_quote_request_v1", "validation_fee_verify_hijiri_quote_response_v1"},
     }
     for sdk, forbidden in retired.items():
         assert forbidden == set(MODULE.RETIRED_PROTOCOL_SYMBOLS[sdk])
@@ -506,3 +578,37 @@ def test_native_domain_admission_is_required_for_both_c_deliverables() -> None:
                 assert str(error) == "native C ABI artifact is missing required symbols: " + missing
             else:
                 raise AssertionError("native probe accepted missing canonical domain admission")
+
+
+def test_current_fee_artifact_contract_requires_real_native_owners_and_rejects_retired_quote() -> None:
+    current = (
+        "connect_norito_retail_fee_intent_hash_v1",
+        "connect_norito_retail_fee_assessment_marker_v1",
+        "connect_norito_retail_fee_assessment_decode_v1",
+        "connect_norito_validation_fee_current_policy_proof_request_v1",
+        "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    )
+    for sdk in ("c-jni", "csharp"):
+        required = MODULE.REQUIRED_SYMBOLS[sdk]
+        for name in current:
+            assert required.count(name) == 1
+            library = types.SimpleNamespace(**{symbol: object() for symbol in required if symbol != name})
+            with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+                try:
+                    MODULE.probe_c_abi(Path("DATA-only-missing-export-negative"), required)
+                except MODULE.ArtifactContractError as error:
+                    assert str(error) == "native C ABI artifact is missing required symbols: " + name
+                else:
+                    raise AssertionError("missing current fee owner was accepted")
+    for method in ("nativeBridgeAbiVersion", "nativeIntentHashV1", "nativeAssessmentMarkerV1", "nativeDecodeAssessmentV1"):
+        assert "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_" + method in MODULE.REQUIRED_SYMBOLS["c-jni"]
+    assert "validationFeeCurrentPolicyProofRequestV1" in MODULE.REQUIRED_SYMBOLS["node"]
+    assert "validationFeeVerifyCurrentPolicyProofV1" in MODULE.REQUIRED_SYMBOLS["node"]
+    for sdk in ("c-jni", "csharp", "node", "python"):
+        for symbol in MODULE.RETIRED_PROTOCOL_SYMBOLS[sdk]:
+            try:
+                MODULE.validate_retired_protocol_symbols([*MODULE.REQUIRED_SYMBOLS[sdk], symbol], sdk=sdk)
+            except MODULE.ArtifactContractError:
+                pass
+            else:
+                raise AssertionError("retired native quote symbol was accepted: " + symbol)

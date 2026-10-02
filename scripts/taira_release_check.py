@@ -174,7 +174,7 @@ STAGES = (
         "taira_public_reset::executor_model::tests::qualification_scope_is_immutable_in_recovery_and_reported_explicitly",
         "taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan",
         "taira_public_reset::host::tests::restart_recovery_reconstructs_only_the_final_frontier_receipt",
-        "taira_public_reset::host::tests::cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace",
+        "taira_public_reset::host::tests::cohost_mutation_boundaries_share_the_bootstrap_plan_and_lock_namespace",
     )),
     ("public doctor producer and deployment contract", (
         "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
@@ -185,7 +185,7 @@ STAGES = (
         "taira::tests::time_snapshot_requires_network_time_and_every_health_axis",
         "taira::tests::doctor_rejects_unknown_namespaces_or_malformed_mcp_tools",
         "taira::tests::doctor_mock_required_tool_missing_reports_failure",
-        "taira_public_reset::host::tests::doctor_report_requires_the_exact_first_release_check_surface",
+        "taira::tests::doctor_readiness_requires_exact_plain_text_ready_in_both_scopes",
     )),
     ("complete effective account permission reads", (
         "tests::account_permission_list_reads_complete_effective_fanout_before_global_pagination",
@@ -335,7 +335,7 @@ STAGES = (
         "taira_public_reset::host::tests::validator_http_readiness_retries_cold_backends_before_strict_checks",
         "taira_public_reset::host::tests::validator_http_readiness_rejects_permanent_http_errors",
         "taira_public_reset::host::tests::validator_http_readiness_keeps_deadline_and_authorization",
-        "taira_public_reset::host::tests::doctor_failure_reports_bounded_public_check_diagnostics",
+        "taira::tests::doctor_readiness_unavailable_fails_both_scopes_with_only_bounded_error_codes",
         "taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job",
         "taira_public_reset::host::tests::manager_recovery_uses_immutable_mutation_deadline_but_observes_terminal_state",
         "taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity",
@@ -359,7 +359,7 @@ STAGES = (
         "taira_public_reset::host::tests::public_reset_convergence_rejects_changed_execution_or_subject_at_same_height",
         "taira_public_reset::host::tests::public_reset_convergence_rejects_omitted_nullable_status_fields",
         "taira_public_reset::host::tests::convergence_wave_receipt_rejects_unknown_first_release_fields",
-        "taira_public_reset::executor_model::tests::candidate_qualification_completes_before_public_cutover",
+        "taira_public_reset::executor_model::tests::required_bootstrap_and_readiness_complete_before_public_cutover",
         "taira_public_reset::executor_model::tests::candidate_failure_never_exposes_the_public_edge",
         "taira_public_reset::executor_model::tests::candidate_probe_origins_reject_cross_host_or_substituted_sockets",
         "taira_public_reset::executor_model::tests::validator_public_origins_require_distinct_canonical_https_roots",
@@ -1417,7 +1417,7 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'runtime_provider_broker::protocol::platform::tests::correlated_truncated_beacon_capability_is_rejected_by_typed_proxy',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_request_rejects_foreign_network_transcript_and_invalid_seat',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_server_rejects_a_qualified_backend_claiming_the_wrong_seat',
-    'runtime_provider_broker::protocol::primitives::operation_ordinal_tests::post_soracloud_operation_ids_are_exact_and_contiguous',
+    'runtime_provider_broker::protocol::primitives::operation_ordinal_tests::post_soracloud_operation_ids_are_exact_and_ordered',
     'taira_runtime_signer::tests::beacon_loader_consumes_exact_credential_and_verifies_native_signature',
     'taira_runtime_signer::tests::beacon_loader_rejects_wrong_network_qualification_and_corruption',
     'taira_runtime_signer::tests::beacon_loader_rejects_untrusted_descriptor_and_size',
@@ -1625,7 +1625,7 @@ STAGES += (('native reset schema and ordered service barriers', (
     'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected',
     'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected',
     'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields',
-    'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_restart',
+    'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_cutover',
 )), )
 
 

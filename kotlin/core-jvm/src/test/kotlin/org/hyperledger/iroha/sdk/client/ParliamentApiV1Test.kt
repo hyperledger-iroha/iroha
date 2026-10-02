@@ -237,8 +237,7 @@ class ParliamentApiV1Test {
         val fullU64PolicyValue =
             (fullU64Policy["payload"] as MutableMap<String, Any?>)["policy"] as MutableMap<String, Any?>
         fullU64PolicyValue["policy_version"] = "18446744073709551615"
-        fullU64PolicyValue["previous_policy_hash"] = List(32) { 1 }
-        fullU64PolicyValue["effective_from_height"] = "18446744073709551615"
+        fullU64PolicyValue["previous_policy_hash"] = "01".repeat(32)
         ParliamentApiV1.Proposal.fromJson(encode(fullU64Policy))
 
         listOf(
@@ -1765,8 +1764,7 @@ class ParliamentApiV1Test {
             )
             "ValidationFeePolicy" -> linkedMapOf(
                 "proposal_operator" to account(1),
-                "policy" to disabledFeePolicy(),
-                "payout_lifecycle_proposal_id" to null,
+                "policy" to monthlyFeePolicy(),
             )
             "ValidationFeePayoutLifecycle" -> linkedMapOf(
                 "proposal_operator" to account(1),
@@ -1848,36 +1846,39 @@ class ParliamentApiV1Test {
         return linkedMapOf("kind" to kind, "payload" to payload)
     }
 
-    private fun disabledFeePolicy(): MutableMap<String, Any?> = linkedMapOf(
+    private fun monthlyFeePolicy(): MutableMap<String, Any?> = linkedMapOf(
         "schema_version" to 1,
         "network_id" to networkId(),
         "policy_version" to "1",
         "previous_policy_hash" to null,
         "ds_asset_id" to asset(1),
         "ds_scale" to 2,
-        "fee" to "0",
+        "retail_schedule" to linkedMapOf(
+            "included_payments" to 50, "overage_minor" to 10,
+            "maintenance_tiers" to listOf(0 to 100,50000 to 200,250000 to 300,1000000 to 500,5000000 to 1000).map {
+                linkedMapOf("minimum_average_balance_minor" to it.first,"monthly_fee_minor" to it.second)
+            },
+        ),
+        "effective_from_ms" to 1788181200000L,
+        "notice_published_at_ms" to 1785502800000L,
+        "fee" to "0.1",
         "treasury_account_id" to account(2),
-        "charging_mode" to linkedMapOf("charging_mode" to "DISABLED", "value" to null),
-        "effective_from_height" to "10",
-        "expires_after_height" to null,
-        "exemption_classes" to emptyList<Any?>(),
-        "treasury_payout_binding" to null,
+        "charging_mode" to linkedMapOf("charging_mode" to "RETAIL_MONTHLY_ALLOWANCE", "value" to null),
+        "exemption_classes" to listOf("TREASURY_PAYOUT"),
+        "reward_custody" to payoutBinding().filterKeys { it in setOf("contract_address","treasury_account_id","ds_asset_id","xor_asset_id","reward_pool_account_id","validator_lane_id") },
     )
 
     private fun payoutBinding(): MutableMap<String, Any?> = linkedMapOf(
-        "contract_address" to CONTRACT_ADDRESS,
-        "code_hash" to List(32) { 0x31 },
-        "entrypoint" to "autonomous_validation_fee_tick",
-        "treasury_account_id" to account(2),
-        "ds_asset_id" to asset(1),
-        "xor_asset_id" to asset(2),
-        "pool_vault_account_id" to account(3),
-        "batch_ds" to "10",
-        "min_xor_out" to "4",
-        "max_xor_out" to "100",
-        "recipients" to (4..7).map { seed ->
-            linkedMapOf("account_id" to account(seed), "share" to "0.25")
-        },
+        "contract_address" to CONTRACT_ADDRESS, "code_hash" to "31".repeat(32),
+        "entrypoint" to "autonomous_validation_fee_tick", "treasury_account_id" to account(2),
+        "ds_asset_id" to asset(1), "xor_asset_id" to asset(2),
+        "pool_contract_address" to CONTRACT_ADDRESS, "pool_code_hash" to "33".repeat(32),
+        "pool_vault_account_id" to account(3), "reward_pool_account_id" to account(4),
+        "reference_feed_id" to listOf("sbd_xor"), "reference_feed_config_version" to 1,
+        "reference_provider_accounts" to (5..9).map { account(it) },
+        "max_sbd_per_attempt_minor" to 1000, "max_sbd_per_day_minor" to 100000,
+        "min_interval_ms" to 60000, "max_source_age_ms" to 300000, "max_slippage_bps" to 100,
+        "validator_lane_id" to 1, "min_reward_claim_xor_minor" to 1,
     )
 
     private fun bscMainnet(): MutableMap<String, Any?> =

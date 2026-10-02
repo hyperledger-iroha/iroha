@@ -156,3 +156,53 @@ fn compact_export_rejects_global_roots_and_oversized_native_quorums() {
         Err(ExportError::Custody(_))
     ));
 }
+
+#[test]
+fn original_private_export_refusal_preserves_read_owner_and_exact_custody_retry() {
+    let mut chain = private_chain();
+    chain.commit_at(1_100, vec![]);
+    let view = chain.state().view();
+    let registered = registration(&view).unwrap();
+    let anchored = anchor(&view, 2).unwrap();
+    let genesis_wire = chain.committed(1).block().encode_wire().unwrap();
+    let successor_wire = chain.committed(2).block().encode_wire().unwrap();
+    norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+        || {
+            let original = CertifiedChain::new(&view).err().unwrap();
+            let ExecutionAttemptError::Deferred(original) = original else {
+                panic!("the original certified source read must refuse locally");
+            };
+            for error in [
+                registration(&view).unwrap_err(),
+                anchor(&view, 2).unwrap_err(),
+            ] {
+                let ExportError::Deferred(reason) = error else {
+                    panic!("an unfinished export read cannot reject custody: {error:?}");
+                };
+                assert_eq!(reason, original);
+                assert!(
+                    reason.allocation_refusal().is_none(),
+                    "the decode counter has no release owner"
+                );
+            }
+            assert_eq!(view.height(), 2);
+        },
+    );
+    assert_eq!(registration(&view).unwrap(), registered);
+    assert_eq!(anchor(&view, 2).unwrap(), anchored);
+    assert_eq!(
+        chain.committed(1).block().encode_wire().unwrap(),
+        genesis_wire
+    );
+    assert_eq!(
+        chain.committed(2).block().encode_wire().unwrap(),
+        successor_wire
+    );
+    assert!(matches!(
+        anchor(&view, 3),
+        Err(ExportError::Custody(ChainReadError::NotCommitted {
+            height: 3
+        }))
+    ));
+}

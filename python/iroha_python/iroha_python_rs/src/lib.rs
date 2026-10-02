@@ -179,11 +179,6 @@ use iroha_torii_shared::{
         validate_private_settlement_auditor_identity_v1,
         validate_private_settlement_committee_proof_response_v1,
     },
-    validation_fee_api::{
-        VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
-        VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-        ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
-    },
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::{
@@ -5383,30 +5378,6 @@ mod tests {
     #[test]
     fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
         assert_eq!(connect_norito_bridge_abi_version_py(), 25);
-    }
-    #[test]
-    fn hijiri_quote_pyo3_codec_encodes_and_rejects_malformed_response() {
-        ensure_python();
-        let account_literal = canonical_i105_from_seed(0x37);
-        Python::attach(|py| {
-            let archive = validation_fee_hijiri_quote_request_v1_py(py, &account_literal, 2)
-                .expect("encode Hijiri quote request");
-            let archive_bytes = archive.bind(py).as_bytes();
-            let decoded: ValidationFeeHijiriQuoteRequestV1 =
-                decode_from_bytes(archive_bytes).expect("decode encoded request");
-            assert_eq!(decoded.account_id.to_string(), account_literal);
-            assert_eq!(decoded.qualifying_transfer_count, 2);
-            assert!(validation_fee_hijiri_quote_request_v1_py(py, &account_literal, 0).is_err());
-
-            let error =
-                validation_fee_verify_hijiri_quote_response_v1_py(b"not norito", archive_bytes)
-                    .expect_err("malformed response must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("not a Hijiri validation-fee quote response")
-            );
-        });
     }
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
@@ -14909,110 +14880,6 @@ fn private_settlement_verify_audit_approval_response_v1_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "validation_fee_hijiri_quote_request_v1")]
-fn validation_fee_hijiri_quote_request_v1_py(
-    py: Python<'_>,
-    account_id: &str,
-    qualifying_transfer_count: u32,
-) -> PyResult<Py<PyBytes>> {
-    let account_id = parse_exact_i105_account_id(
-        account_id,
-        "validation_fee_hijiri_quote_request_v1.account_id",
-    )?;
-    let request = ValidationFeeHijiriQuoteRequestV1 {
-        version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-        account_id,
-        qualifying_transfer_count,
-    };
-    request.validate().map_err(|error| {
-        PyValueError::new_err(format!(
-            "invalid Hijiri validation-fee quote request: {error}"
-        ))
-    })?;
-    let archive = norito::to_bytes(&request).map_err(|error| {
-        PyRuntimeError::new_err(format!(
-            "failed to encode Hijiri validation-fee quote request: {error}"
-        ))
-    })?;
-    if archive.is_empty() || archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 {
-        return Err(PyRuntimeError::new_err(
-            "encoded Hijiri validation-fee quote request exceeds its wire bound",
-        ));
-    }
-    Ok(Py::from(PyBytes::new(py, &archive)))
-}
-#[pyfunction]
-#[pyo3(name = "validation_fee_verify_hijiri_quote_response_v1")]
-fn validation_fee_verify_hijiri_quote_response_v1_py(
-    response_norito: &[u8],
-    request_norito: &[u8],
-) -> PyResult<String> {
-    if request_norito.is_empty()
-        || request_norito.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
-    {
-        return Err(PyValueError::new_err(format!(
-            "request_norito must contain 1..{VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1} bytes"
-        )));
-    }
-    if response_norito.is_empty()
-        || response_norito.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-    {
-        return Err(PyValueError::new_err(format!(
-            "response_norito must contain 1..{VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1} bytes"
-        )));
-    }
-    let request: ValidationFeeHijiriQuoteRequestV1 =
-        decode_from_bytes(request_norito).map_err(|error| {
-            PyValueError::new_err(format!(
-                "request_norito is not a Hijiri validation-fee quote request: {error}"
-            ))
-        })?;
-    let canonical_request = norito::to_bytes(&request).map_err(|error| {
-        PyRuntimeError::new_err(format!(
-            "failed to re-encode Hijiri validation-fee quote request: {error}"
-        ))
-    })?;
-    if canonical_request != request_norito {
-        return Err(PyValueError::new_err("request_norito is not canonical"));
-    }
-    request.validate().map_err(|error| {
-        PyValueError::new_err(format!(
-            "invalid Hijiri validation-fee quote request: {error}"
-        ))
-    })?;
-    let response: ValidationFeeHijiriQuoteResponseV1 =
-        decode_from_bytes(response_norito).map_err(|error| {
-            PyValueError::new_err(format!(
-                "response_norito is not a Hijiri validation-fee quote response: {error}"
-            ))
-        })?;
-    let canonical_response = norito::to_bytes(&response).map_err(|error| {
-        PyRuntimeError::new_err(format!(
-            "failed to re-encode Hijiri validation-fee quote response: {error}"
-        ))
-    })?;
-    if canonical_response != response_norito {
-        return Err(PyValueError::new_err("response_norito is not canonical"));
-    }
-    response.validate_for_request(&request).map_err(|error| {
-        PyValueError::new_err(format!(
-            "Hijiri validation-fee quote response validation failed: {error}"
-        ))
-    })?;
-    let projection = json::to_json(&response).map_err(|error| {
-        PyRuntimeError::new_err(format!(
-            "failed to project Hijiri validation-fee quote response: {error}"
-        ))
-    })?;
-    if projection.is_empty() || projection.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-    {
-        return Err(PyRuntimeError::new_err(
-            "verified Hijiri quote projection exceeds its response bound",
-        ));
-    }
-    Ok(projection)
-}
-#[pyfunction]
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
@@ -15364,14 +15231,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         private_settlement_verify_audit_approval_response_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        validation_fee_hijiri_quote_request_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        validation_fee_verify_hijiri_quote_response_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(cuda_available_py, module)?)?;

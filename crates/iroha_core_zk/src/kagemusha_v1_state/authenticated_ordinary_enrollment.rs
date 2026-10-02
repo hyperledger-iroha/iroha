@@ -6,7 +6,6 @@
 //! and a descriptor-held native logical journal; an OEM response cannot substitute for either.
 
 use super::*;
-#[cfg(feature = "kagemusha-production-prover")]
 pub(crate) use crate::kagemusha_v1_recursion::verify_ordinary_bootstrap_guard_v1;
 use iroha_data_model::kagemusha::{
     KagemushaVerifiedOrdinaryAppCredentialV1,
@@ -24,6 +23,7 @@ pub(crate) use cash_owner::{
     KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1,
+    KagemushaAuthenticatedOrdinaryIncomingTerminalApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryMintApprovalSelectionV1,
     KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1,
@@ -403,6 +403,52 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
             .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
         self.recheck_original_selection()?;
         Ok(original)
+    }
+
+    pub(crate) fn capture_private_state_checkpoint(
+        &self,
+        generated: &crate::kagemusha_v1_recursion::KagemushaGeneratedRecursiveStateProofV1,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.verify_state_proof(&generated.proof)?;
+        let expected = bootstrap_state_public_inputs(
+            self.proof_release.artifacts,
+            &self.preview,
+            &generated.proof,
+        )?;
+        let checkpoint =
+            crate::kagemusha_v1_recursion::KagemushaRecursiveStateCheckpointV1::capture(
+                generated,
+                self.recursive_verifier.as_ref(),
+                &expected,
+            )
+            .map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
+        let original = checkpoint
+            .encode_canonical(self.recursive_verifier.as_ref())
+            .map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
+        self.recheck_original_selection()?;
+        Ok(original)
+    }
+    pub(crate) fn restore_private_state_checkpoint(
+        &self,
+        original: &[u8],
+        proof: &KagemushaPairedProofV1,
+    ) -> Result<
+        crate::kagemusha_v1_recursion::KagemushaGeneratedRecursiveStateProofV1,
+        KagemushaStateErrorV1,
+    > {
+        self.verify_state_proof(proof)?;
+        let expected =
+            bootstrap_state_public_inputs(self.proof_release.artifacts, &self.preview, proof)?;
+        let checkpoint = crate::kagemusha_v1_recursion::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
+            original, self.recursive_verifier.as_ref()).map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
+        let restored = checkpoint
+            .restore(self.recursive_verifier.as_ref(), &expected)
+            .map_err(|e| KagemushaStateErrorV1::ProofRejected(e.to_string()))?;
+        if restored.proof != *proof {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        self.recheck_original_selection()?;
+        Ok(restored)
     }
 
     pub(crate) fn verify_state_proof(

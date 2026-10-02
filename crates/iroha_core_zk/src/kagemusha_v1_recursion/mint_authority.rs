@@ -156,32 +156,12 @@ impl KagemushaMintAuthorityCheckpointV1 {
 pub(super) mod public_instance {
     /// Explicit branch selector: bootstrap, rotation, or finalized mint.
     pub const STEP: usize = 0;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Low `u128` limb of the final mint statement digest.
     pub const SEMANTIC_LO: usize = 1;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// High `u128` limb of the final mint statement digest.
     pub const SEMANTIC_HI: usize = 2;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Exact range-constrained mint amount.
     pub const AMOUNT: usize = 3;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Low limb of the exact paired finality-certificate binding.
     pub const CERTIFICATE_LO: usize = 4;
     /// High limb of the exact paired finality-certificate binding.
@@ -192,11 +172,6 @@ pub(super) mod public_instance {
     pub const AUTHORITY_HI: usize = 7;
     /// Low limb of the authenticated Kagemusha release identifier.
     pub const RELEASE_LO: usize = AUTHORITY_HI + 1;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// High limb of the authenticated Kagemusha release identifier.
     pub const RELEASE_HI: usize = 9;
     /// Low limb of the release-pinned genesis authorization identifier.
@@ -205,11 +180,6 @@ pub(super) mod public_instance {
     pub const GENESIS_HI: usize = 11;
     /// Low limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_LO: usize = GENESIS_HI + 1;
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// High limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_HI: usize = 13;
     /// Low limb of the Ep compact outer checkpoint protocol identity.

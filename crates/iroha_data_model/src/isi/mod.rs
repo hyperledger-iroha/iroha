@@ -484,6 +484,7 @@ impl_musubi_instruction_box!(
     AssertMusubiReleaseDigestV1,
 );
 impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
+impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1);
 impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);

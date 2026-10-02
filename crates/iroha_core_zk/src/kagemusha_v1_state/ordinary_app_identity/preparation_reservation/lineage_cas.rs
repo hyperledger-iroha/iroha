@@ -21,6 +21,10 @@ use std::collections::{BTreeMap, BTreeSet};
 mod account_signing;
 #[path = "lineage_cas/effect_capture.rs"]
 mod effect_capture;
+#[path = "lineage_cas/incoming.rs"]
+mod incoming;
+#[path = "lineage_cas/outgoing.rs"]
+mod outgoing;
 pub use account_signing::KagemushaAuthenticatedOrdinaryLineageAccountSigningV1;
 
 const MAX_RECORD: usize = 20 * 1024 * 1024;
@@ -75,6 +79,8 @@ struct Pending {
 }
 struct Acknowledged {
     request: KagemushaOrdinaryLineageRequestV1,
+    // Exact already-authenticated AccountSigned WAL original, retained through Ack/recovery.
+    account_signature: [u8; 64],
     originals: ResultOriginals,
     acknowledgement: Acknowledgement,
     result: KagemushaSignedOrdinaryLineageResultV1,
@@ -120,6 +126,18 @@ pub(crate) struct KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1<'a> {
     owner: &'a KagemushaOrdinaryLineageCasOwnerV1,
     request_sha256: [u8; 32],
 }
+
+/// Actual dedicated incoming source/head reservation, never an outgoing or pre-debit alias.
+pub(crate) struct KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1<'a> {
+    owner: &'a KagemushaOrdinaryLineageCasOwnerV1,
+    request_sha256: [u8; 32],
+}
+/// Actual global incoming head advance and one-use credit consumption acknowledged in this WAL.
+pub(crate) struct KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1<'a> {
+    owner: &'a KagemushaOrdinaryLineageCasOwnerV1,
+    request_sha256: [u8; 32],
+}
+
 impl KagemushaOrdinaryLineageCasOwnerV1 {
     /// Create actual custody using the exact policy original retained by the independently signed
     /// installed inventory. No mobile ABI accepts that original as authority.
@@ -491,7 +509,8 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             .verify_for_request(&pending.request, &self.policy.issuer_public_key)
             .map_err(|_| Rejected)?;
         let s = &signed.subject;
-        if s.cas_policy_digest != self.policy.digest().map_err(|_| Rejected)?
+        if s.data_incarnation_digest != self.policy.data_authority.data_incarnation_digest
+            || s.cas_policy_digest != self.policy.digest().map_err(|_| Rejected)?
             || s.release_id != self.selected.governed.release().release_id()
             || s.data_record_original_sha256
                 != <[u8; 32]>::from(Sha256::digest(&originals.data_record))
@@ -528,11 +547,16 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             return Err(Rejected);
         }
         let request = pending.request.clone();
+        let account_signature = pending.signature.ok_or(Rejected)?;
+        request
+            .verify_account_signature(&Signature::from_bytes(&account_signature))
+            .map_err(|_| Rejected)?;
         self.advance_floor(&result.subject)?;
         self.acknowledged.insert(
             key,
             Acknowledged {
                 request,
+                account_signature,
                 originals,
                 acknowledgement,
                 result,
@@ -594,7 +618,9 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             current.original()?,
             KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1,
         )?;
-        if control.subject.request.owner != self.initialize.lineage.owner
+        if control.subject.data_incarnation_digest
+            != self.policy.data_authority.data_incarnation_digest
+            || control.subject.request.owner != self.initialize.lineage.owner
             || control.subject.request.enrollment_original_sha256
                 != self.initialize.enrollment_original_sha256
             || control.subject.request.credential_original_sha256
@@ -615,10 +641,12 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
             current.original()?,
             KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1,
         )?;
-        if self
-            .floor
-            .incarnation
-            .is_some_and(|incarnation| incarnation != control.subject.data_incarnation_digest)
+        if control.subject.data_incarnation_digest
+            != self.policy.data_authority.data_incarnation_digest
+            || self
+                .floor
+                .incarnation
+                .is_some_and(|incarnation| incarnation != control.subject.data_incarnation_digest)
             || control.subject.data_revision < self.floor.revision
             || control.subject.data_policy_epoch < self.floor.policy_epoch
             || control.subject.data_schema_epoch < self.floor.schema_epoch
@@ -706,6 +734,10 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         world
             .verify_cell_value("world.kagemusha_verifier_registry", &a.verifier_registry)
             .map_err(|_| Rejected)?;
+        self.policy
+            .data_authority
+            .require_asset_definition_metadata(&a.asset_definition)
+            .map_err(|_| Rejected)?;
         let release = self.selected.governed.release();
         a.verifier_registry.validate().map_err(|_| Rejected)?;
         if a.verifier_registry.active_release_id != Some(release.release_id())
@@ -730,10 +762,11 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         Ok(())
     }
     fn require_floor(&self, s: &KagemushaOrdinaryLineageResultSubjectV1) -> Result<()> {
-        if self
-            .floor
-            .incarnation
-            .is_some_and(|i| i != s.data_incarnation_digest)
+        if s.data_incarnation_digest != self.policy.data_authority.data_incarnation_digest
+            || self
+                .floor
+                .incarnation
+                .is_some_and(|i| i != s.data_incarnation_digest)
             || s.data_revision < self.floor.revision
             || s.data_policy_epoch < self.floor.policy_epoch
             || s.data_schema_epoch < self.floor.schema_epoch
@@ -820,6 +853,10 @@ impl KagemushaOrdinaryLineageCasOwnerV1 {
         {
             return Err(Rejected);
         }
+        value
+            .request
+            .verify_account_signature(&Signature::from_bytes(&value.account_signature))
+            .map_err(|_| Rejected)?;
         value
             .result
             .verify_for_request(&value.request, &self.policy.issuer_public_key)
@@ -956,6 +993,20 @@ receipt!(
     KagemushaOrdinaryLineageCommitV1,
     commit
 );
+
+receipt!(
+    KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
+    ReserveIncoming,
+    KagemushaOrdinaryIncomingReservationV1,
+    reservation
+);
+receipt!(
+    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
+    CommitIncoming,
+    KagemushaOrdinaryIncomingCommitV1,
+    commit
+);
+
 fn encode(r: &Record) -> Result<Vec<u8>> {
     let raw = norito::encode_canonical(r).map_err(|_| Rejected)?;
     if raw.is_empty() || raw.len() > MAX_RECORD {
@@ -1024,6 +1075,21 @@ mod tests {
                 .unwrap(),
             issuer_public_key: issuer.issuer_public_key.clone(),
             runtime: issuer.runtime.clone(),
+            data_authority: KagemushaOrdinaryLineageDataAuthorityV1 {
+                version: 1,
+                liability_pool_id: kagemusha_liability_pool_id_v1(
+                    &issuer.runtime.network_id,
+                    &issuer.runtime.asset,
+                    issuer.runtime.asset_incarnation,
+                )
+                .unwrap(),
+                service_identity_digest: [90; 32],
+                data_incarnation_digest: [33; 32],
+                dataspace: "mibank.bpng".into(),
+                tenant: "mibank-core".into(),
+                principal: "core-mibank".into(),
+                collection: "retail_enrollments".into(),
+            },
             purpose_domain_digest: KagemushaOrdinaryLineageIssuerPolicyV1::purpose_domain_digest(),
             enabled: true,
         }
@@ -1259,5 +1325,65 @@ mod tests {
         trailing.push(0);
         assert!(decode::<Record>(&trailing, MAX_RECORD).is_err());
         assert!(decode::<Record>(&encoded[..encoded.len() - 1], MAX_RECORD).is_err());
+    }
+    #[test]
+    fn incoming_decoded_selector_cannot_lend_unacknowledged_cas_receipts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let financial = financial(&root);
+        let original = policy(&financial);
+        let owner =
+            KagemushaOrdinaryLineageCasOwnerV1::create(&root, &financial, &original).unwrap();
+        let before = KagemushaOrdinaryFinancialHeadV1 {
+            state_commitment: [32; 32],
+            logical_sequence: 4,
+            state_original_sha256: [33; 32],
+        };
+        let reservation = KagemushaOrdinaryIncomingReservationV1 {
+            selection: KagemushaOrdinaryIncomingSelectionV1 {
+                version: 1,
+                lineage: owner.initialize.lineage.clone(),
+                predecessor: before,
+                operation_id: [41; 32],
+                amount: 1,
+                scale: owner.initialize.lineage.owner.runtime.scale,
+                credit_id: [42; 32],
+                recipient_app_credential_digest: [43; 32],
+                financial_control_original_sha256: [44; 32],
+                clock_context_digest: [45; 32],
+                source: KagemushaOrdinaryIncomingSourceSelectionV1::Mint {
+                    topup_request_original_sha256: [46; 32],
+                },
+            },
+            finalized_source_original_sha256: [47; 32],
+            source_proof_original_sha256: [58; 32],
+            source_semantic_digest: [48; 32],
+        };
+        reservation.validate_shape().unwrap();
+        assert!(
+            owner
+                .incoming_reservation_receipt([49; 32], &financial, &reservation)
+                .is_err()
+        );
+        let commit = KagemushaOrdinaryIncomingCommitV1 {
+            reservation,
+            successor: KagemushaOrdinaryFinancialHeadV1 {
+                state_commitment: [50; 32],
+                logical_sequence: 5,
+                state_original_sha256: [51; 32],
+            },
+            state_proof_bundle_original_sha256: [52; 32],
+            transition_statement_original_sha256: [53; 32],
+            purpose1_approval_original_sha256: [54; 32],
+            financial_control_original_sha256: [55; 32],
+            admission_clock_context_original_sha256: [56; 32],
+        };
+        commit.validate_shape().unwrap();
+        assert!(
+            owner
+                .incoming_commit_receipt([57; 32], &financial, &commit)
+                .is_err()
+        );
+        assert!(owner.acknowledged.is_empty());
     }
 }

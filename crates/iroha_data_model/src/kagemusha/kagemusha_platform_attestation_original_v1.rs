@@ -1,7 +1,7 @@
 //! Sole bounded original platform-attestation container for ordinary identity.
 //!
 //! This data codec preserves ordered Android DERs and original Apple enrollment CBOR.
-//! It performs no PKIX, KeyDescription, App Attest, Play, challenge/key or issuer verification.
+//! It performs no PKIX, `KeyDescription`, App Attest, Play, challenge/key or issuer verification.
 //! Those original checks must run under independently held policy before raw314 admission.
 
 use super::KagemushaHardwarePlatformClassV1;
@@ -202,15 +202,12 @@ mod tests {
         let original = value.canonical_bytes().unwrap();
         println!(
             "PLATFORM_ANDROID_ORIGINAL_GOLDEN={}",
-            original
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
+            hex::encode(&original)
         );
         let decoded =
             KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(&original).unwrap();
         assert_eq!(decoded, value);
-        assert_eq!(original.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        assert_eq!(hex::encode(&original),
             include_str!("../../../../fixtures/kagemusha/platform-original-container-v1/android-mock-osp-unit.hex").trim());
         assert_eq!(
             decoded.android_certificate_chain_der().unwrap()[0],
@@ -234,13 +231,7 @@ mod tests {
     fn apple_original_enrollment_cbor_roundtrips_unchanged_and_is_distinct_role() {
         let value = platform_original_fixture(true);
         let original = value.canonical_bytes().unwrap();
-        println!(
-            "PLATFORM_APPLE_ORIGINAL_GOLDEN={}",
-            original
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
+        println!("PLATFORM_APPLE_ORIGINAL_GOLDEN={}", hex::encode(&original));
         let decoded =
             KagemushaPlatformAttestationOriginalV1::decode_canonical_exact(&original).unwrap();
         assert_eq!(
@@ -255,10 +246,7 @@ mod tests {
         );
         assert!(decoded.android_certificate_chain_der().is_none());
         assert_eq!(
-            original
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>(),
+            hex::encode(&original),
             include_str!(
                 "../../../../fixtures/kagemusha/platform-original-container-v1/apple-guide-unit.hex"
             )

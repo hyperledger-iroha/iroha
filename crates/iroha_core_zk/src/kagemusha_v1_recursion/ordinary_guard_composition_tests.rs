@@ -256,6 +256,7 @@ fn witness(f: &OriginalFixture) -> OrdinaryGuardWitnessV1<'_> {
         previous_app_attest_counter: f.floor,
         // This fixture's genuinely signed trust original has no Integrity requirement.
         integrity_lease: None,
+        incoming_terminal_body: None,
     }
 }
 

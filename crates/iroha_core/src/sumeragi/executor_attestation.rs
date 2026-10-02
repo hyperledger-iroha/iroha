@@ -213,14 +213,14 @@ impl Worker<'_> {
         &self,
         block: &AvailableBody,
         qc: &Qc,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         let view = self
             .state
             .try_view_once()
             .map_err(|error| error.to_string())?
             .ok_or("committed publication is busy")?;
         let genesis = crate::sumeragi::certified_chain::committed_block(&view, 1)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?;
         let instance =
             crate::sumeragi::node::root_instance(genesis.block(), &view.chain_id().to_string())?;
         let scheduled = view
@@ -255,7 +255,11 @@ impl Worker<'_> {
             &config.committee,
         )
         .verify_qc(&verifier, qc)
-        .map_err(|error| format!("native quorum verification failed: {error:?}"))
+        .map_err(|error| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(format!(
+                "native quorum verification failed: {error:?}"
+            ))
+        })
     }
 }
 

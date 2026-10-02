@@ -37,14 +37,14 @@ impl FileIdentity {
         }
     }
 }
-pub(super) struct HeldPackage {
+pub(crate) struct HeldPackage {
     path: PathBuf,
     file: File,
     identity: FileIdentity,
     process: u32,
 }
 impl HeldPackage {
-    pub(super) fn open(path: PathBuf) -> Result<Self> {
+    pub(crate) fn open(path: PathBuf) -> Result<Self> {
         validate_path(&path)?;
         let file = OpenOptions::new()
             .read(true)
@@ -64,7 +64,7 @@ impl HeldPackage {
         this.recheck()?;
         Ok(this)
     }
-    pub(super) fn recheck(&self) -> Result<()> {
+    pub(crate) fn recheck(&self) -> Result<()> {
         let named = std::fs::symlink_metadata(&self.path).map_err(|_| Error::Custody)?;
         let held = self.file.metadata().map_err(|_| Error::Custody)?;
         if self.process != std::process::id()
@@ -78,7 +78,7 @@ impl HeldPackage {
         Ok(())
     }
 }
-pub(super) fn object<'a>(
+pub(crate) fn object<'a>(
     env: &mut JNIEnv<'a>,
     o: &JObject<'a>,
     name: &str,
@@ -90,7 +90,7 @@ pub(super) fn object<'a>(
         .l()
         .map_err(|_| Error::Rejected)
 }
-pub(super) fn string<'a>(env: &mut JNIEnv<'a>, o: JObject<'a>) -> Result<String> {
+pub(crate) fn string<'a>(env: &mut JNIEnv<'a>, o: JObject<'a>) -> Result<String> {
     let value = env.auto_local(JString::from(o));
     let value = env.get_string(&value).map_err(|_| Error::Rejected)?;
     value
@@ -98,7 +98,7 @@ pub(super) fn string<'a>(env: &mut JNIEnv<'a>, o: JObject<'a>) -> Result<String>
         .map(str::to_owned)
         .map_err(|_| Error::Rejected)
 }
-pub(super) fn string_method<'a>(
+pub(crate) fn string_method<'a>(
     env: &mut JNIEnv<'a>,
     o: &JObject<'a>,
     method: &str,
@@ -106,7 +106,7 @@ pub(super) fn string_method<'a>(
     let raw = object(env, o, method, "()Ljava/lang/String;", &[])?;
     string(env, raw)
 }
-pub(super) fn asset<'a>(
+pub(crate) fn asset<'a>(
     env: &mut JNIEnv<'a>,
     assets: &JObject<'a>,
     name: &str,
@@ -162,7 +162,7 @@ fn read_stream<'a>(env: &mut JNIEnv<'a>, stream: &JObject<'a>, maximum: usize) -
     close?;
     Ok(bytes)
 }
-pub(super) fn zip_file<'a>(env: &mut JNIEnv<'a>, path: &str) -> Result<JObject<'a>> {
+pub(crate) fn zip_file<'a>(env: &mut JNIEnv<'a>, path: &str) -> Result<JObject<'a>> {
     let path = env.new_string(path).map_err(|_| Error::Custody)?;
     let path = env.auto_local(path);
     env.new_object(
@@ -237,7 +237,7 @@ fn zip_dex_names<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<Vec<Stri
     }
     Ok(names)
 }
-pub(super) fn require_resource_split<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<()> {
+pub(crate) fn require_resource_split<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<()> {
     // The signed first-release BPNG application has no code-bearing dynamic feature modules.
     // ABI/resource config splits are supported; they may not add code outside its measured DEX.
     if !zip_dex_names(env, zip)?.is_empty() {
@@ -245,7 +245,7 @@ pub(super) fn require_resource_split<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>
     }
     Ok(())
 }
-pub(super) fn installed_split_paths<'a>(
+pub(crate) fn installed_split_paths<'a>(
     env: &mut JNIEnv<'a>,
     info: &JObject<'a>,
 ) -> Result<Vec<String>> {
@@ -278,7 +278,7 @@ pub(super) fn installed_split_paths<'a>(
     }
     Ok(paths)
 }
-pub(super) fn dex_digest<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<[u8; 32]> {
+pub(crate) fn dex_digest<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<[u8; 32]> {
     let names = canonical_dex_names(zip_dex_names(env, zip)?)?;
     let mut hash = Sha256::new();
     hash.update(b"iroha:kagemusha:v1:android-application-dex\0");
@@ -297,31 +297,14 @@ pub(super) fn dex_digest<'a>(env: &mut JNIEnv<'a>, zip: &JObject<'a>) -> Result<
     }
     Ok(hash.finalize().into())
 }
-pub(super) fn loaded_library_digest<'a>(
+pub(crate) fn loaded_library_digest<'a>(
     env: &mut JNIEnv<'a>,
     zip: &JObject<'a>,
     apk: &str,
     splits: &[String],
 ) -> Result<[u8; 32]> {
-    let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();
-    // SAFETY: dladdr receives this loaded function's address and a valid output structure.
-    if unsafe {
-        libc::dladdr(
-            loaded_library_digest as *const () as *const libc::c_void,
-            info.as_mut_ptr(),
-        )
-    } == 0
-    {
-        return Err(Error::Custody);
-    }
-    // SAFETY: successful dladdr initializes its output; the pathname is library-owned C text.
-    let info = unsafe { info.assume_init() };
-    if info.dli_fname.is_null() {
-        return Err(Error::Custody);
-    }
-    let loaded = unsafe { CStr::from_ptr(info.dli_fname) }
-        .to_str()
-        .map_err(|_| Error::Rejected)?;
+    let loaded_path = loaded_library_path()?;
+    let loaded = loaded_path.as_str();
     let bytes = if let Some((container, entry)) = loaded.split_once("!/") {
         let abi = android_abi()?;
         if (container != apk && !splits.iter().any(|s| s == container))
@@ -360,7 +343,29 @@ pub(super) fn loaded_library_digest<'a>(
     };
     Ok(Sha256::digest(bytes).into())
 }
-pub(super) fn android_abi() -> Result<&'static str> {
+pub(crate) fn loaded_library_path() -> Result<String> {
+    let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();
+    // SAFETY: dladdr receives this loaded function's address and a valid output structure.
+    if unsafe {
+        libc::dladdr(
+            loaded_library_digest as *const () as *const libc::c_void,
+            info.as_mut_ptr(),
+        )
+    } == 0
+    {
+        return Err(Error::Custody);
+    }
+    // SAFETY: successful dladdr initializes its output; the pathname is library-owned C text.
+    let info = unsafe { info.assume_init() };
+    if info.dli_fname.is_null() {
+        return Err(Error::Custody);
+    }
+    let loaded = unsafe { CStr::from_ptr(info.dli_fname) }
+        .to_str()
+        .map_err(|_| Error::Rejected)?;
+    Ok(loaded.to_owned())
+}
+pub(crate) fn android_abi() -> Result<&'static str> {
     match std::env::consts::ARCH {
         "aarch64" => Ok("arm64-v8a"),
         "x86_64" => Ok("x86_64"),
@@ -369,7 +374,7 @@ pub(super) fn android_abi() -> Result<&'static str> {
         _ => Err(Error::Rejected),
     }
 }
-pub(super) fn package_identity<'a>(
+pub(crate) fn package_identity<'a>(
     env: &mut JNIEnv<'a>,
     application: &JObject<'a>,
     package: &str,

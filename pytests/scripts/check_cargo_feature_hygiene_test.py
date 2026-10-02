@@ -82,60 +82,85 @@ def test_model_json_feature_cannot_return_as_an_empty_alias() -> None:
     )
 
 
-def test_production_prover_keeps_exact_shipping_context_and_rejects_test_forwarders() -> None:
-    """The bridge prover uses IPA without inheriting fixture or key-generation features."""
-
-    package = "iroha_core_zk"
-    feature = "kagemusha-production-prover"
-    document = _guarded_document(package)
-    assert _guarded_errors(package, document) == []
-    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package][feature] == ("zk-halo2-ipa",)
-    assert feature in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
-    assert feature not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
-    for forwarders in (["kagemusha-real-proof-harness"], ["zk-halo2-ipa", "test-utils"], []):
+def test_mandatory_native_dependency_rejects_removal_optional_or_test_profiles() -> None:
+    document = _guarded_document("iroha")
+    assert _guarded_errors("iroha", document) == []
+    assert document["dependencies"]["iroha_core_zk"]["features"] == []
+    for mutation in ("remove", "optional", "retired-proof-selector", "test-utils", "harness", "default-features", "nonworkspace"):
         changed = copy.deepcopy(document)
-        changed["features"][feature] = forwarders
-        errors = _guarded_errors(package, changed)
-        assert errors and any(feature in error for error in errors), forwarders
-    changed = copy.deepcopy(document)
-    changed["features"]["default"].append(feature)
-    assert any(
-        f"contextual shipping feature `{feature}` is reachable from local" in error
-        for error in _guarded_errors(package, changed)
-    )
+        dependency = changed["dependencies"]["iroha_core_zk"]
+        if mutation == "remove":
+            del changed["dependencies"]["iroha_core_zk"]
+        elif mutation == "optional":
+            dependency["optional"] = True
+        elif mutation == "retired-proof-selector":
+            dependency["features"] = ["proofs-halo2"]
+        elif mutation in ("test-utils", "harness"):
+            dependency["features"].append("test-utils" if mutation == "test-utils" else "kagemusha-real-proof-harness")
+        elif mutation == "default-features":
+            dependency["default-features"] = True
+        else:
+            dependency["workspace"] = False
+        assert changed != document
+        assert any("mandatory Native dependency" in error for error in _guarded_errors("iroha", changed)), mutation
 
 
-def test_ordinary_native_keeps_exact_shipping_prover_features() -> None:
-    """Native custody is contextual shipping, with no inherited fixture defaults."""
-
-    package = "iroha"
-    feature = "kagemusha-ordinary-native"
-    expected = (
-        "dep:iroha_core_zk",
-        "iroha_core_zk/proofs-halo2",
-        "iroha_core_zk/kagemusha-production-prover",
-    )
-    document = _guarded_document(package)
-    assert _guarded_errors(package, document) == []
-    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package][feature] == expected
-    assert feature in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
-    assert feature not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
-    assert document["dependencies"]["iroha_core_zk"]["default-features"] is False
-    for forwarders in (
-        [],
-        list(expected[:-1]),
-        [*expected, "iroha_core_zk/test-utils"],
-        [*expected, "iroha_core_zk/kagemusha-real-proof-harness"],
-    ):
+def test_retired_kagemusha_switches_cannot_return_as_empty_aliases() -> None:
+    for package, retired in (("iroha", "kagemusha-ordinary-native"), ("iroha_core_zk", "kagemusha-production-prover")):
+        document = _guarded_document(package)
+        assert retired not in document["features"]
         changed = copy.deepcopy(document)
-        changed["features"][feature] = forwarders
-        assert any(feature in error for error in _guarded_errors(package, changed))
-    changed = copy.deepcopy(document)
-    changed["features"]["default"].append(feature)
-    assert any(
-        f"contextual shipping feature `{feature}` is reachable from local" in error
-        for error in _guarded_errors(package, changed)
-    )
+        changed["features"][retired] = []
+        assert any(f"Cargo feature `{retired}` is unclassified" in error for error in _guarded_errors(package, changed))
+
+
+def test_production_and_unix_native_exports_have_no_feature_opt_out() -> None:
+    core = ROOT / "crates/iroha_core_zk/src"
+    for source in core.rglob("*.rs"):
+        assert 'feature = "kagemusha-production-prover"' not in source.read_text(), source
+    client = (ROOT / "crates/iroha/src/client.rs").read_text()
+    assert '#[cfg(unix)]\nmod ordinary_native;' in client
+    assert '#[cfg(unix)]\npub use ordinary_native::' in client
+    assert 'feature = "kagemusha-ordinary-native"' not in client
+    core_entry = (core / "lib.rs").read_text()
+    assert 'pub mod kagemusha_v1_recursion;' in core_entry
+    assert 'pub mod kagemusha_v1_state;' in core_entry
+
+
+def test_core_backends_reject_optional_owners_and_missing_circuit_params() -> None:
+    document = _guarded_document("iroha_core_zk")
+    assert _guarded_errors("iroha_core_zk", document) == []
+    for owner, mutation in (("kaigi_zk", "remove"), ("kaigi_zk", "optional"),
+                            ("halo2_proofs", "remove"), ("halo2_proofs", "optional"),
+                            ("halo2_proofs", "missing-circuit-params")):
+        changed = copy.deepcopy(document)
+        if mutation == "remove":
+            del changed["dependencies"][owner]
+        elif mutation == "optional":
+            changed["dependencies"][owner]["optional"] = True
+        else:
+            changed["dependencies"][owner]["features"].remove("circuit-params")
+        assert any("mandatory Core backend" in error for error in _guarded_errors("iroha_core_zk", changed)), (owner, mutation)
+
+
+def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> None:
+    document = _guarded_document("iroha_core_zk")
+    retired = ("proofs-halo2", "zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params")
+    for name in retired:
+        assert name not in document["features"]
+        changed = copy.deepcopy(document)
+        changed["features"][name] = []
+        assert any(f"Cargo feature `{name}` is unclassified" in error for error in _guarded_errors("iroha_core_zk", changed)), name
+    core = ROOT / "crates/iroha_core_zk/src"
+    for source in core.rglob("*.rs"):
+        for name in retired:
+            assert f'feature = "{name}"' not in source.read_text(), (source, name)
+    recursion = (core / "kagemusha_v1_recursion/mod.rs").read_text()
+    assert 'KagemushaProductionProverV1' in recursion
+    assert 'register_kagemusha_native_outgoing_witness_source_v1' in recursion
+    state = (core / "kagemusha_v1_state/mod.rs").read_text()
+    assert 'KagemushaNativeOrdinaryBootstrapOwnerV1' in state
+    assert 'KagemushaNativeOrdinaryCashOwnerV1' in state
 
 
 def test_ordinary_native_inventory_tool_is_explicit_and_keeps_required_custody() -> None:
@@ -143,7 +168,7 @@ def test_ordinary_native_inventory_tool_is_explicit_and_keeps_required_custody()
 
     document = _guarded_document("iroha")
     assert _guarded_errors("iroha", document) == []
-    assert document["features"]["dev-tools"] == ["kagemusha-ordinary-native"]
+    assert document["features"]["dev-tools"] == []
     assert "dev-tools" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["iroha"]
     assert "dev-tools" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["iroha"]
     assert "dev-tools" not in FEATURE_HYGIENE.local_default_feature_closure(
@@ -154,7 +179,7 @@ def test_ordinary_native_inventory_tool_is_explicit_and_keeps_required_custody()
         if row["name"] == "iroha_ordinary_native_inventory_assemble"
     )
     assert target["required-features"] == ["dev-tools"]
-    for forwarders in ([], ["kagemusha-ordinary-native", "iroha_core_zk/test-utils"]):
+    for forwarders in (["iroha_core_zk/test-utils"], ["iroha_core_zk/kagemusha-real-proof-harness"]):
         changed = copy.deepcopy(document)
         changed["features"]["dev-tools"] = forwarders
         assert any("feature `dev-tools` must be" in error for error in _guarded_errors("iroha", changed))

@@ -193,15 +193,17 @@ fn check_deposit(
 /// checks scope, expiry, exact monetary legs, permissions, maturity and lifecycle.
 ///
 /// # Errors
-/// Rejects unavailable committed state, malformed bounds, noncanonical custody,
-/// unavailable records, insufficient unreserved deposit funds and stale inputs.
+/// Defers when the original local read cannot complete. Rejects absent committed
+/// state, malformed bounds, noncanonical custody, unavailable records, insufficient
+/// unreserved deposit funds and stale inputs.
 pub fn prepare_public_lane_plan(
     state: &impl StateReadOnly,
     request: PublicLanePreparationRequestV1,
-) -> Result<PublicLanePreparationV1, Error> {
+) -> Result<PublicLanePreparationV1, Attempt<Error>> {
     let world = state.world();
     let parameters = world
         .sumeragi_npos_parameters()
+        .map_err(|error| error.map_rejection(|message| invalid(&message)))?
         .ok_or_else(|| invalid("staking preparation requires committed NPoS parameters"))?;
     parameters
         .validate()
@@ -210,7 +212,8 @@ pub fn prepare_public_lane_plan(
     if request.valid_for_blocks == 0 || request.valid_for_blocks > epoch_length {
         return Err(invalid(
             "staking preparation validity must be one through one committed epoch of blocks",
-        ));
+        )
+        .into());
     }
     let observed_height = u64::try_from(state.height())
         .map_err(|_| invalid("staking observation height overflow"))?;
@@ -334,9 +337,9 @@ pub fn prepare_public_lane_plan(
     match &plan {
         PublicLanePreparedPlanV1::Monetary(plan) => {
             if !plan.has_canonical_shape() {
-                return Err(invalid(
-                    "staking preparation produced a non-canonical monetary plan",
-                ));
+                return Err(
+                    invalid("staking preparation produced a non-canonical monetary plan").into(),
+                );
             }
             assets.insert(plan.source_asset.clone());
             assets.insert(plan.destination_asset.clone());

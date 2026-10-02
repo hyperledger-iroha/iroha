@@ -3819,7 +3819,8 @@ mod tests {
         .build_raw()
         .expect("complete resultless prepared-bundle fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
         let genesis_key = KeyPair::random();
         let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_context(
             manifest,

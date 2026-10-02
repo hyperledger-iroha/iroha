@@ -89,10 +89,7 @@ impl StreamTokenReputationDeliveryTemplateV1 {
         if norito::canonical_frame_len(self).map_err(|_| invalid)?
             > STREAM_TOKEN_REPUTATION_MAX_TEMPLATE_BYTES_V1
             || self.allowed_gateways.len() > STREAM_TOKEN_REPUTATION_MAX_GATEWAYS_V1
-            || self
-                .allowed_gateways
-                .iter()
-                .any(|gateway| *gateway == [0; 32])
+            || self.allowed_gateways.contains(&[0; 32])
             || !self
                 .allowed_gateways
                 .windows(2)

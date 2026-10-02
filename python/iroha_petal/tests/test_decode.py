@@ -19,8 +19,10 @@ from petal_test_support import (
 )
 
 from iroha_petal import (
+    D_DATA,
     D_WORD,
     FINDER_CENTERS,
+    K_DATA,
     P_DATA,
     P_WORD,
     Beacon,
@@ -32,6 +34,8 @@ from iroha_petal import (
     Lane,
     Luma,
     RenderOptions,
+    RsError,
+    RsErrorKind,
     StreamAssembler,
     Xorshift32,
     decode_frame,
@@ -59,6 +63,14 @@ from iroha_petal.decode import (
 )
 
 KIND = 2
+
+#: The words the reference accepts in its scan of 40 000 random words per lane (trial number:
+#: erasures, rewritten bytes, data): three of lane D, none of lane P.
+SCAN_ACCEPTED_D = {
+    9827: (5, 8, "c0300c3dfecddbccf0a64620e94c3fd1828690"),
+    12427: (5, 8, "1e2795eb69f8b6bf6dd8da502f87aec4998df8"),
+    33444: (5, 8, "a7f57ed4c0da100977229890cfb77829a7a9bc"),
+}
 
 
 def setup(frame: int) -> Luma:
@@ -186,6 +198,11 @@ class DecodeTest(unittest.TestCase):
         broken = Luma(100, 100)
         broken.data = bytes(5)
         self.assert_error(broken, unsupported)
+        # a buffer that does not match the stated size must not reach the sampler
+        self.assertIsNone(decode_frame_at(broken, Homography.IDENTITY))
+        decoded = decode_frame(setup(5))
+        self.assertIsNone(observed_cells(broken, decoded))
+        self.assertIsNone(tile_match_error(broken, decoded))
         huge = Luma(5_000, 3_000)
         self.assert_error(huge, unsupported)
         self.assertIsNone(decode_frame_at(Luma(8, 8), Homography.IDENTITY))
@@ -298,6 +315,113 @@ class DecodeTest(unittest.TestCase):
         error = tile_match_error(image, decoded)
         self.assertGreaterEqual(error, 0.0)
         self.assertLess(error, 0.5)
+
+
+class ErasureScheduleTest(unittest.TestCase):
+    """How many erasures each lane's Reed-Solomon decoding is allowed to try."""
+
+    def test_random_words_are_almost_never_accepted(self) -> None:
+        # Reed-Solomon with erasures can accept a word that is not a transmission. Lane D has only
+        # 11 parity bytes, so its schedule stops at five erasures (at seven it let through about
+        # one random word in 250) and lane P stops at six. The reference scans 40 000 xorshift32
+        # words per lane (lane D, then lane P from the same generator), each followed by one
+        # byte-valued confidence per position, and accepts exactly SCAN_ACCEPTED_D and no word of
+        # lane P. Both full scans take about 40 s here and the port reproduces them exactly; this
+        # runs the first 12 500 words of lane D and the first 2 000 of lane P.
+        scan = 40_000
+        rng = Xorshift32(0x5EED)
+        for lane, run in ((Lane.D, 12_500), (Lane.P, 2_000)):
+            length = lane.word_len
+            accepted = {}
+            for trial in range(run):
+                word = bytes(rng.next_byte() for _ in range(length))
+                confidence = [float(rng.next_byte()) for _ in range(length)]
+                result = _decode_with_erasures(lane, word, confidence)
+                if result is not None:
+                    accepted[trial] = (result.erasures, result.corrected, result.data.hex())
+            if lane is Lane.D:
+                expected = {t: v for t, v in SCAN_ACCEPTED_D.items() if t < run}
+                # leave the generator where the reference's scan of lane P starts
+                for _ in range((scan - run) * 2 * length):
+                    rng.next_u32()
+            else:
+                expected = {}
+            self.assertEqual(accepted, expected, f"lane {lane.name} of {run} random words")
+
+    def test_only_lane_k_uses_two_thirds_of_its_parity_as_erasures(self) -> None:
+        # damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+        # erasure step of the old schedule the decoder would repair them (2*2 + flagged parity
+        # bytes); the capped schedule must refuse instead of risking a wrong codeword.
+        for lane, flagged in ((Lane.D, 7), (Lane.P, 8)):
+            data = bytes(range(lane.data_len))
+            word = encode_lane(lane, data)
+            damaged = bytearray(word)
+            confidence = [1.0] * len(word)
+            for position in range(flagged):
+                damaged[position] ^= 0xA5
+                confidence[position] = 0.0
+            damaged[20] ^= 0x3C
+            damaged[21] ^= 0x3C
+            result = _decode_with_erasures(lane, bytes(damaged), confidence)
+            self.assertIsNone(result, f"lane {lane.name}")
+            # half the parity flagged plus one hidden error stays comfortably repairable
+            damaged = bytearray(word)
+            confidence = [1.0] * len(damaged)
+            for position in range(lane.parity_len // 2):
+                damaged[position] ^= 0xA5
+                confidence[position] = 0.0
+            damaged[20] ^= 0x3C
+            result = _decode_with_erasures(lane, bytes(damaged), confidence)
+            self.assertIsNotNone(result, f"lane {lane.name} repairable")
+            self.assertEqual(result.data, data, f"lane {lane.name}")
+            self.assertLessEqual(result.erasures, lane.parity_len // 2, f"lane {lane.name}")
+        # lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+        # (2*7 + 30 = 44 of 45 parity bytes)
+        data = bytes(range(K_DATA))
+        damaged = bytearray(encode_lane(Lane.K, data))
+        confidence = [1.0] * len(damaged)
+        for position in range(30):
+            damaged[position] ^= 0xA5
+            confidence[position] = 0.0
+        for position in range(60, 67):
+            damaged[position] ^= 0x3C
+        result = _decode_with_erasures(Lane.K, bytes(damaged), confidence)
+        self.assertIsNotNone(result, "30 erasures")
+        self.assertEqual((result.data, result.erasures), (data, 30))
+
+    def test_each_lane_tries_its_own_erasure_counts(self) -> None:
+        # integer eighths, quarters, thirds and halves of the parity; two thirds only for K
+        expected = {
+            Lane.D: [0, 1, 2, 3, 5],
+            Lane.P: [0, 1, 3, 4, 6],
+            Lane.K: [0, 5, 11, 15, 22, 30],
+        }
+        for lane, counts in expected.items():
+            tried = []
+
+            def refuse(lane_, transmitted, erasures, tried=tried):
+                tried.append(len(list(erasures)))
+                raise RsError(RsErrorKind.UNCORRECTABLE)
+
+            with mock.patch("iroha_petal.decode.decode_lane_counted", side_effect=refuse):
+                result = _decode_with_erasures(lane, bytes(lane.word_len), [0.0] * lane.word_len)
+            self.assertIsNone(result)
+            self.assertEqual(tried, counts, f"lane {lane.name}")
+
+    def test_equal_confidences_are_erased_in_position_order(self) -> None:
+        # Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
+        # the ranking must be stable or ports disagree about which bytes are erased. Three damaged
+        # bytes at the front plus four hidden ones fit lane D only if exactly the first three
+        # positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
+        # the last positions instead would see seven errors.
+        data = bytes(range(D_DATA))
+        word = bytearray(encode_lane(Lane.D, data))
+        for position in (0, 1, 2, 20, 21, 22, 23):
+            word[position] ^= 0x5A
+        confidence = [1.0] * len(word)
+        result = _decode_with_erasures(Lane.D, bytes(word), confidence)
+        self.assertIsNotNone(result, "ties in order")
+        self.assertEqual((result.data, result.erasures, result.corrected), (data, 3, 7))
 
 
 class TileReadTest(unittest.TestCase):

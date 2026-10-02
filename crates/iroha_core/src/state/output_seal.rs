@@ -36,6 +36,16 @@ impl<E> From<ExecutionAttemptError<String>> for ExecutionOutputSealError<E> {
     }
 }
 
+impl<E> From<ExecutionOutputAttemptError> for ExecutionOutputSealError<E> {
+    fn from(error: ExecutionOutputAttemptError) -> Self {
+        match error {
+            ExecutionOutputAttemptError::Owner(reason) => Self::Owner(reason),
+            ExecutionOutputAttemptError::Deferred(reason) => Self::Deferred(reason),
+            ExecutionOutputAttemptError::Storage(reason) => Self::Storage(reason),
+        }
+    }
+}
+
 impl<E> From<String> for ExecutionOutputSealError<E> {
     fn from(error: String) -> Self {
         Self::Owner(error)

@@ -1280,6 +1280,11 @@ mod tests {
             &c.canonical_signing_bytes().unwrap(),
         )
         .unwrap();
+        // Retain the actual reserved nonce/financial commitment and Core-signed C before
+        // deriving the checked model preparation. No stale fixture C selects expected scope.
+        reservation
+            .retain_preparation(&fixture.selection.preparation.to_transport_bytes().unwrap())
+            .unwrap();
         let message = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &c,
             &fixture.selection.issuance.credential.subject.app_public_key,
@@ -1328,13 +1333,20 @@ mod tests {
             &fixture.challenge.account_signing_payload().unwrap(),
         )
         .unwrap();
+        let retained = reservation.original_preparation().unwrap();
+        assert_eq!(retained, &fixture.selection.preparation);
+        let checked_preparation = fixture
+            .ordinary_policy
+            .identity_policy()
+            .authenticate_preparation(retained, &retained.challenge, 300)
+            .unwrap();
         let app = fixture
             .selection
             .issuance
             .credential
             .authenticate(
                 fixture.ordinary_policy.identity_policy(),
-                &fixture.checked_preparation().unwrap(),
+                &checked_preparation,
                 &fixture.selection.issuance.credential.subject.app_public_key,
                 300,
             )
@@ -1359,9 +1371,6 @@ mod tests {
             &fixture.certificate.subject.approval_payload().unwrap(),
         )
         .unwrap();
-        reservation
-            .retain_preparation(&fixture.selection.preparation.to_transport_bytes().unwrap())
-            .unwrap();
         let enrollment = Arc::new(fixture.verify(300).unwrap());
         let financial = reservation.complete_enrollment(enrollment).unwrap();
         financial.recheck().unwrap();
@@ -1622,7 +1631,6 @@ mod tests {
                 .is_err()
         );
     }
-    #[cfg(feature = "kagemusha-production-prover")]
     #[test]
     fn ordinary_bootstrap_platform_receipt_binds_credential_and_survives_replay() {
         for apple in [false, true] {

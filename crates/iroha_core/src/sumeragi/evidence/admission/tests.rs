@@ -97,7 +97,7 @@ fn admission_owner_cannot_capture_an_identical_foreign_state_view_or_odd_generat
     let state = chain.state();
     let generation = state.state_view_generation();
     assert!(
-        matches!(AdmissionRead::capture(state, &other.state().view(), generation, 3, std::slice::from_ref(&proof)), Err(EvidenceAdmissionError::Source(error)) if error.kind() == std::io::ErrorKind::InvalidInput)
+        matches!(AdmissionRead::capture(state, &other.state().view(), generation, 3, std::slice::from_ref(&proof)), Err(EvidenceAdmissionError::Source(error)) if error.io_kind() == std::io::ErrorKind::InvalidInput)
     );
     assert!(matches!(
         AdmissionRead::capture(state, &state.view(), generation | 1, 3, &[proof]),
@@ -190,7 +190,9 @@ fn retained_admission_classifies_only_typed_local_refusal_as_retryable() {
     use iroha_data_model::query::error::QueryExecutionFail;
     use std::io::ErrorKind;
     for kind in [ErrorKind::WouldBlock, ErrorKind::Interrupted] {
-        assert!(retryable(&EvidenceAdmissionError::Source(kind.into())));
+        assert!(retryable(&EvidenceAdmissionError::Source(
+            std::io::Error::from(kind).into()
+        )));
     }
     for kind in [
         ErrorKind::NotFound,
@@ -198,15 +200,21 @@ fn retained_admission_classifies_only_typed_local_refusal_as_retryable() {
         ErrorKind::PermissionDenied,
     ] {
         assert!(
-            !retryable(&EvidenceAdmissionError::Source(kind.into())),
+            !retryable(&EvidenceAdmissionError::Source(
+                std::io::Error::from(kind).into()
+            )),
             "{kind:?}"
         );
     }
     assert!(retryable(&EvidenceAdmissionError::History(
-        QueryExecutionFail::GasBudgetExceeded
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            QueryExecutionFail::GasBudgetExceeded
+        )
     )));
     assert!(!retryable(&EvidenceAdmissionError::History(
-        QueryExecutionFail::Conversion("bad source".into())
+        crate::execution_attempt::ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(
+            "bad source".into()
+        ))
     )));
     assert!(retryable(
         &EvidencePreparationError::OriginalHistoryPending.into()

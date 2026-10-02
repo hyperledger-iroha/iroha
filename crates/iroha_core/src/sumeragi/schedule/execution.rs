@@ -2,6 +2,7 @@
 
 use super::{ChainParamsRecord, NativeExecutionInputs, ScheduleError};
 use crate::{
+    execution_attempt::ExecutionAttemptError,
     state::{
         BlockHashRead, GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly,
         WorldReadOnly,
@@ -115,7 +116,7 @@ pub(crate) fn authenticate_successor_context(
     state: &(impl StateReadOnly + ?Sized),
     header: &iroha_data_model::block::BlockHeader,
     expected: &GlobalThresholdBeaconPulseContextV1,
-) -> Result<(), ScheduleError> {
+) -> Result<(), ExecutionAttemptError<ScheduleError>> {
     let height = header.height().get();
     if height <= 1
         || u64::try_from(state.block_hashes().hash_count())
@@ -132,14 +133,17 @@ pub(crate) fn authenticate_successor_context(
     {
         return Err(ScheduleError::Epoch(
             "native successor differs from its original committed header/parent cut".into(),
-        ));
+        )
+        .into());
     }
     // Canonical committed reads exclude differences in local QC signer subsets.
-    let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)?;
-    let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)?;
+    let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)
+        .map_err(|error| error.map_rejection(ScheduleError::from))?;
+    let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)
+        .map_err(|error| error.map_rejection(ScheduleError::from))?;
     let instance =
         crate::sumeragi::node::root_instance(genesis.block(), &state.chain_id().to_string())
-            .map_err(ScheduleError::Epoch)?;
+            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?;
     let current = &state.world().consensus_schedule().ready(height)?.epoch;
     expected
         .validate()
@@ -153,7 +157,8 @@ pub(crate) fn authenticate_successor_context(
         return Err(ScheduleError::Epoch(
             "native control differs from the pristine committed instance/parent/result/epoch"
                 .into(),
-        ));
+        )
+        .into());
     }
     Ok(())
 }
@@ -168,11 +173,11 @@ impl StateBlock<'_> {
         source: &SignedBlock,
         supplied_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
         expected_context: Option<GlobalThresholdBeaconPulseContextV1>,
-    ) -> Result<(), ScheduleError> {
+    ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
         if !matches!(self.sumeragi_schedule, ScheduleStep::Off) {
-            return Err(ScheduleError::Epoch(
-                "native schedule capture already exists".into(),
-            ));
+            return Err(
+                ScheduleError::Epoch("native schedule capture already exists".into()).into(),
+            );
         }
         let height = self._curr_block.height().get();
         if genesis_height != 1
@@ -192,13 +197,15 @@ impl StateBlock<'_> {
             return Err(ScheduleError::Epoch(
                 "native schedule request differs from its pristine original header/parent cut"
                     .into(),
-            ));
+            )
+            .into());
         }
         if height == genesis_height {
             if expected_context.is_some() || supplied_pulse.is_some() {
                 return Err(ScheduleError::Epoch(
                     "signed genesis cannot carry native successor control".into(),
-                ));
+                )
+                .into());
             }
         } else {
             let expected = expected_context.as_ref().ok_or_else(|| {
@@ -210,7 +217,11 @@ impl StateBlock<'_> {
         }
         let root_scope = if height == genesis_height {
             iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
-                .map_err(ScheduleError::Epoch)?
+                .map_err(|error| {
+                    crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                        ScheduleError::Epoch(error.to_string())
+                    })
+                })?
                 .sumeragi_context
                 .root_scope
         } else {
@@ -224,10 +235,14 @@ impl StateBlock<'_> {
             if !self.world.consensus_schedule().entries().is_empty() {
                 return Err(ScheduleError::Epoch(
                     "genesis cannot replace retained native authority".into(),
-                ));
+                )
+                .into());
             }
-            let epoch =
-                crate::sumeragi::epoch::genesis_epoch(source).map_err(ScheduleError::Epoch)?;
+            let epoch = crate::sumeragi::epoch::genesis_epoch(source).map_err(|error| {
+                crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                    ScheduleError::Epoch(error.to_string())
+                })
+            })?;
             let pulse = epoch_beacon::capture(
                 root_scope,
                 &self.world,
@@ -238,13 +253,13 @@ impl StateBlock<'_> {
                 expected_context,
             )
             .map_err(ScheduleError::Epoch)?;
-            let inputs =
-                epoch_election::capture_continuation(&epoch, height, None, params, budget)?;
+            let inputs = epoch_election::capture_continuation(&epoch, height, None, params, budget)
+                .map_err(ScheduleError::from)?;
             (CapturedExecution::Ordinary(inputs), pulse)
         } else {
             let schedule = self.world.consensus_schedule();
             if schedule.tip().and_then(|tip| tip.checked_add(1)) != Some(height) {
-                return Err(ScheduleError::Malformed);
+                return Err(ScheduleError::Malformed.into());
             }
             let current = &schedule.ready(height)?.epoch;
             let pulse = epoch_beacon::capture(
@@ -261,9 +276,13 @@ impl StateBlock<'_> {
                 == iroha_data_model::parameter::system::ConsensusMode::Npos
                 && height == current.authorization.last_height
             {
-                let parameters = self.world.sumeragi_npos_parameters().ok_or_else(|| {
-                    ScheduleError::Epoch("boundary lacks signed NPoS policy".into())
-                })?;
+                let parameters = self
+                    .world
+                    .sumeragi_npos_parameters()
+                    .map_err(|error| error.map_rejection(ScheduleError::Epoch))?
+                    .ok_or_else(|| {
+                        ScheduleError::Epoch("boundary lacks signed NPoS policy".into())
+                    })?;
                 let policy =
                     iroha_data_model::nexus::ValidatorElectionPolicyV1::from_npos_parameters(
                         &parameters,
@@ -276,19 +295,23 @@ impl StateBlock<'_> {
                     &policy,
                     height,
                     budget,
-                )?
+                )
+                .map_err(boundary_capture_attempt_error)?
                 .ok_or_else(|| {
                     ScheduleError::Epoch("required native boundary was not captured".into())
                 })?;
                 CapturedExecution::Boundary(frozen)
             } else {
-                CapturedExecution::Ordinary(epoch_election::capture_continuation(
-                    current,
-                    height,
-                    schedule.get(height.checked_add(1).ok_or(ScheduleError::HeightOverflow)?),
-                    params,
-                    budget,
-                )?)
+                CapturedExecution::Ordinary(
+                    epoch_election::capture_continuation(
+                        current,
+                        height,
+                        schedule.get(height.checked_add(1).ok_or(ScheduleError::HeightOverflow)?),
+                        params,
+                        budget,
+                    )
+                    .map_err(ScheduleError::from)?,
+                )
             };
             (captured, pulse)
         };
@@ -345,7 +368,7 @@ impl StateBlock<'_> {
             .map_err(boundary_capture_attempt_error)?;
             if let CapturedExecution::Boundary(boundary) = &captured {
                 self.finalize_validator_committee_boundary(boundary)
-                    .map_err(ScheduleError::Epoch)?;
+                    .map_err(|error| error.map_rejection(ScheduleError::Epoch))?;
             }
             Ok::<_, crate::execution_attempt::ExecutionAttemptError<ScheduleError>>((graph, params))
         })();
@@ -380,9 +403,15 @@ impl StateBlock<'_> {
 
 /// Retain local boundary refusal evidence before projecting deterministic schedule failures.
 fn boundary_capture_attempt_error(
-    error: epoch_election::BoundaryCaptureError,
+    error: impl Into<
+        crate::execution_attempt::ExecutionAttemptError<epoch_election::BoundaryCaptureError>,
+    >,
 ) -> crate::execution_attempt::ExecutionAttemptError<ScheduleError> {
     use crate::execution_attempt::ExecutionAttemptError;
+    let error = match error.into() {
+        ExecutionAttemptError::Deferred(reason) => return ExecutionAttemptError::Deferred(reason),
+        ExecutionAttemptError::Rejected(error) => error,
+    };
     match error {
         epoch_election::BoundaryCaptureError::Admission(refusal) => {
             ExecutionAttemptError::Deferred(refusal.into())
@@ -449,9 +478,12 @@ pub(crate) fn validate_executed_genesis(
         }
     }
     if context.mode == ConsensusMode::Npos {
-        let parameters = world.sumeragi_npos_parameters().ok_or_else(|| {
-            ScheduleError::Epoch("executed NPoS genesis omits signed parameters".into())
-        })?;
+        let parameters = world
+            .sumeragi_npos_parameters()
+            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?
+            .ok_or_else(|| {
+                ScheduleError::Epoch("executed NPoS genesis omits signed parameters".into())
+            })?;
         if parameters.epoch_length_blocks.get() != context.authorization.last_height
             || parameters.epoch_seed != context.leader_seed
         {

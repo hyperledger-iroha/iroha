@@ -33,11 +33,23 @@ pub(crate) struct GeneratedOrdinaryCashCommitOriginalsV1 {
     proof: KagemushaVerifiedOrdinaryLineageCommitProofV1,
     selected_successor_state: crate::kagemusha_v1_state::KagemushaStateV1,
     successor_public_state_original: Vec<u8>,
+    successor_private_checkpoint_original: Vec<u8>,
+    successor_public_inputs: super::KagemushaStateRelationPublicInputsV1,
     private_service_original: Vec<u8>,
     pre_receipt_outgoing_original: Vec<u8>,
 }
 impl Drop for GeneratedOrdinaryCashCommitOriginalsV1 {
     fn drop(&mut self) {
+        if let Some(before) = self.successor_public_inputs.predecessor.as_mut() {
+            before.balance.zeroize();
+            before.state_nonce_commitment.zeroize();
+        }
+        self.successor_public_inputs.successor.balance.zeroize();
+        self.successor_public_inputs
+            .successor
+            .state_nonce_commitment
+            .zeroize();
+        self.successor_private_checkpoint_original.zeroize();
         self.selected_successor_state.balance.zeroize();
         self.selected_successor_state
             .state_nonce_commitment
@@ -70,6 +82,25 @@ impl GeneratedOrdinaryCashCommitOriginalsV1 {
     {
         KagemushaOrdinaryLineageCommitProofBundleV1::decode_original(&self.private_service_original)
             .map_err(proving_error)
+    }
+    pub(crate) fn successor_private_checkpoint_original(&self) -> &[u8] {
+        &self.successor_private_checkpoint_original
+    }
+    pub(crate) fn with_successor_checkpoint(
+        &self,
+        verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+        consume: &mut dyn for<'a> FnMut(
+            &'a super::KagemushaGeneratedRecursiveStateProofV1,
+        ) -> core::result::Result<(), KagemushaStateErrorV1>,
+    ) -> core::result::Result<(), KagemushaStateErrorV1> {
+        let restored = super::KagemushaRecursiveStateCheckpointV1::decode_canonical_exact(
+            &self.successor_private_checkpoint_original,
+            verifier,
+        )
+        .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?
+        .restore(verifier, &self.successor_public_inputs)
+        .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+        consume(&restored)
     }
     pub(crate) fn private_service_original(&self) -> &[u8] {
         &self.private_service_original
@@ -380,6 +411,11 @@ pub(super) fn assemble_ordinary_cash_commit_v1(
         proof,
         selected_successor_state: selected_successor_state.clone(),
         successor_public_state_original: candidate_original,
+        successor_private_checkpoint_original: selection
+            .candidate()
+            .private_checkpoint_original()
+            .to_vec(),
+        successor_public_inputs: selection.candidate().public_inputs().clone(),
         private_service_original: service_original,
         pre_receipt_outgoing_original: outgoing_original,
     })

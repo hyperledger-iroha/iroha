@@ -239,15 +239,16 @@ public enum PetalDecoder {
 
     /// Builds the cells a decoder believes it saw, for diagnostics.
     ///
-    /// The tiles are judged by the level read only, so for a lane that only
-    /// the normalised read could decode the cells show what the level read
-    /// made of the frame.
+    /// Tiles are taken from the level read (the one that judges against the
+    /// finder levels), even for a frame whose lanes were rescued by the
+    /// normalised read. Returns `nil` for an image ``decode(_:options:)``
+    /// refuses.
     public static func observedCells(
         _ image: PetalLuma,
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions()
     ) -> PetalFrameCells? {
-        guard image.width > 0, image.height > 0 else { return nil }
+        guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
             guard let reference = referenceLevels(view, frame.homography) else { return nil }
             let patches = samplePatches(view, frame.homography)
@@ -260,12 +261,16 @@ public enum PetalDecoder {
 
     /// Mean squared tile-match error of the level read, a quick image-quality
     /// indicator.
+    ///
+    /// It can be large for a frame whose lanes were rescued by the normalised
+    /// read, which is the point: the finder levels did not describe that
+    /// picture. Returns `nil` for an image ``decode(_:options:)`` refuses.
     public static func tileMatchError(
         _ image: PetalLuma,
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions()
     ) -> Double? {
-        guard image.width > 0, image.height > 0 else { return nil }
+        guard isSupported(image, options: options) else { return nil }
         return image.withView { view in
             guard let reference = referenceLevels(view, frame.homography) else { return nil }
             let patches = samplePatches(view, frame.homography)
@@ -457,6 +462,15 @@ public enum PetalDecoder {
 
     /// Tries Reed–Solomon with growing numbers of erasures, least confident
     /// first.
+    ///
+    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes, and for lane
+    /// `K` also ⅔. Lanes `D` and `P` stop at ½: their words have only 11 and
+    /// 13 parity bytes, and a further erasure step leaves so few spare ones
+    /// that it accepts wrong codewords (lane `D` at 7 erasures: about 0.4 % of
+    /// random words, and 5 wrong lanes in 2 900 simulated harsh frames; lane
+    /// `P` at 8: 2 wrong lanes in 600 banded 480p frames). Capping them costs
+    /// 0.65 % of the lane `D` reads and 0.15 % of the lane `P` reads in those
+    /// frames.
     static func decodeWithErasures(_ lane: PetalLane, _ word: [UInt8], _ confidence: [Double]) -> PetalLaneResult? {
         let nsym = lane.parityLength
         let keys = confidence.map(PetalNumeric.totalOrderKey)
@@ -464,9 +478,11 @@ public enum PetalDecoder {
         let order = word.indices.sorted { a, b in
             keys[a] != keys[b] ? keys[a] < keys[b] : a < b
         }
+        var steps = [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2]
+        if lane == .k { steps.append(nsym * 2 / 3) }
+        // Rust `Vec::dedup`: drop consecutive repeats.
         var schedule: [Int] = []
-        for erasures in [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3]
-        where schedule.last != erasures {
+        for erasures in steps where schedule.last != erasures {
             schedule.append(erasures)
         }
         for erasures in schedule {

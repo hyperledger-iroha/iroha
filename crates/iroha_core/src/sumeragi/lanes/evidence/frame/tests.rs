@@ -143,7 +143,7 @@ fn funded_lane_frame_retains_config_and_exact_source_through_original_pool_refus
     let mut read = FundedLaneFrameRead::new(path, source, context.budget.clone());
     let foreign = AllocationBudget::new(context.budget.limit_bytes());
     assert_eq!(
-        read.poll(&foreign, &crypto).err().unwrap().kind(),
+        read.poll(&foreign, &crypto).err().unwrap().io_kind(),
         io::ErrorKind::InvalidInput
     );
     assert_eq!(foreign.reserved_bytes(), 0);
@@ -152,8 +152,8 @@ fn funded_lane_frame_retains_config_and_exact_source_through_original_pool_refus
         .poll(&context.budget, &crypto)
         .err()
         .expect("raw backing denied");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.get_ref().is_none());
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+    assert!(matches!(error, Attempt::Deferred(_)));
     assert_eq!(context.budget.reserved_bytes(), charged);
     assert_eq!(
         std::ptr::from_ref(
@@ -178,7 +178,7 @@ fn funded_lane_frame_retains_config_and_exact_source_through_original_pool_refus
     assert_eq!(original.qc.block_hash, hash);
     assert!(original.body.admitted_to(&context.budget));
     assert_eq!(
-        read.poll(&context.budget, &crypto).err().unwrap().kind(),
+        read.poll(&context.budget, &crypto).err().unwrap().io_kind(),
         io::ErrorKind::InvalidInput
     );
     drop(original);
@@ -219,13 +219,13 @@ fn funded_lane_frame_retains_original_invalid_certificate_after_file_replacement
         .unwrap_or_else(|_| panic!("original independent source"));
     let mut read = FundedLaneFrameRead::new(path.clone(), source, context.budget.clone());
     assert_eq!(
-        read.poll(&context.budget, &crypto).err().unwrap().kind(),
+        read.poll(&context.budget, &crypto).err().unwrap().io_kind(),
         io::ErrorKind::InvalidData
     );
     let held = context.budget.reserved_bytes();
     assert_eq!(frame(&context, &path, false).0, hash);
     assert_eq!(
-        read.poll(&context.budget, &crypto).err().unwrap().kind(),
+        read.poll(&context.budget, &crypto).err().unwrap().io_kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(context.budget.reserved_bytes(), held);
@@ -264,8 +264,8 @@ fn funded_lane_frame_outer_decode_refusal_retries_the_same_original_bytes() {
     )
     .err()
     .expect("outer scope refuses the valid original frame");
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.get_ref().is_none());
+    assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
+    assert!(matches!(error, Attempt::Deferred(_)));
     assert!(context.budget.reserved_bytes() > baseline);
     // Completion has already acquired the original raw file. A later replacement cannot
     // provide authority or make the retained decode depend on fresh source bytes.

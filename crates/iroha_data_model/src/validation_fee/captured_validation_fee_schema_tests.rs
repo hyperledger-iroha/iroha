@@ -7,9 +7,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<
         super::ValidationFeeParliamentAuthorizationV1,
     >("iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1"),
-    crate::captured_schema_tests::Case::bidirectional::<
-        super::ValidationFeePayoutLifecycleReferenceV1,
-    >("iroha_data_model::validation_fee::ValidationFeePayoutLifecycleReferenceV1"),
     crate::captured_schema_tests::Case::bidirectional::<super::ValidationFeePolicyRegistryEntryV1>(
         "iroha_data_model::validation_fee::ValidationFeePolicyRegistryEntryV1",
     ),
@@ -42,9 +39,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::serialize::<
         super::ValidationFeePayoutLifecycleFingerprintPayloadV1,
     >("iroha_data_model::validation_fee::ValidationFeePayoutLifecycleFingerprintPayloadV1"),
-    crate::captured_schema_tests::Case::bidirectional::<
-        super::ValidationFeeTreasuryPayoutRecipientV1,
-    >("iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutRecipientV1"),
     crate::captured_schema_tests::Case::bidirectional::<super::ValidationFeeTreasuryPayoutBindingV1>(
         "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1",
     ),

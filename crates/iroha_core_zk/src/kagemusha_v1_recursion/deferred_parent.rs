@@ -37,11 +37,6 @@ use snark_verifier::{
     },
 };
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use super::state_relation::public_instance;
 use super::{
     KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1,
@@ -97,11 +92,6 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 pub(in crate::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
 
@@ -804,11 +794,6 @@ where
     }))
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Complete same-parity material needed to verify one predecessor and fold its opening claim.
 ///
 /// `protocol` must be witness-loaded and identity-constrained by the enclosing circuit before it
@@ -913,11 +898,6 @@ where
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Verify/fold one parent into an existing shared loader without finalizing its audit.
 ///
 /// When `enabled` is zero (the bootstrap base case), the parser and scalar verifier keep their
@@ -1030,6 +1010,135 @@ where
         witness.fold_proof_bytes,
     )?;
     select_accumulator_v1(loader, &folded, &predecessor_history, enabled)
+}
+
+/// The actual recursively verified parent column/current proof and its complete history fold.
+/// Bytes and cells come from the same loaded proof; this is a circuit result, never a Native cap.
+pub(super) struct KagemushaAssignedParentOriginalV1<'chip, C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    pub(super) history: DeferredAccumulator<'chip, C>,
+    pub(super) column: Vec<AssignedValue<C::ScalarExt>>,
+    pub(super) canonical_current_original:
+        Vec<crate::pasta_sha256::PastaSha256ByteV1<C::ScalarExt>>,
+}
+
+/// Verify/fold the same parent with exact proof bytes for complete canonical original binding.
+/// It retains every existing State/protocol/history equality and reciprocal equation selector.
+pub(super) fn constrain_parent_and_history_with_original_into_loader_v1<'chip, C>(
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
+    witness: KagemushaDeferredParentWitnessV1<'_, C>,
+    expected_predecessor_state: AssignedValue<C::ScalarExt>,
+    expected_predecessor_outer: [AssignedValue<C::ScalarExt>; 2],
+    expected_acceptance_protocols: [[AssignedValue<C::ScalarExt>; 2]; 2],
+    enabled: AssignedValue<C::ScalarExt>,
+    loader: &DeferredLoader<'chip, C>,
+) -> Result<KagemushaAssignedParentOriginalV1<'chip, C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    if witness.instances.len() != protocol.num_instance.len()
+        || witness
+            .instances
+            .iter()
+            .zip(&protocol.num_instance)
+            .any(|(column, expected)| column.len() != *expected)
+    {
+        return Err(Error::InvalidInstances);
+    }
+    let instances = witness
+        .instances
+        .iter()
+        .map(|column| {
+            column
+                .iter()
+                .map(|value| loader.assign_scalar(*value))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let current = verify_ordinary_proof_with_canonical_bytes_v1(
+        loader,
+        succinct_vk,
+        protocol,
+        &instances,
+        witness.proof_bytes,
+    )?;
+    let predecessor_history = load_native_accumulator(loader, witness.predecessor_history)?;
+    let parent_column = instances.first().ok_or(Error::InvalidInstances)?;
+    let parent_successor = parent_column
+        .get(public_instance::SUCCESSOR_STATE)
+        .ok_or(Error::InvalidInstances)?;
+    loader
+        .ctx_mut()
+        .main()
+        .constrain_equal(&parent_successor.assigned(), &expected_predecessor_state);
+    for (parent, expected) in parent_column
+        .get(public_instance::SUCCESSOR_OUTER_LO..public_instance::SUCCESSOR_OUTER_HI + 1)
+        .ok_or(Error::InvalidInstances)?
+        .iter()
+        .zip(expected_predecessor_outer)
+    {
+        loader
+            .ctx_mut()
+            .main()
+            .constrain_equal(&parent.assigned(), &expected);
+    }
+    for (offset, expected) in [
+        (
+            public_instance::COMMIT_WRAPPER_EQ_PROTOCOL_LO,
+            expected_acceptance_protocols[0],
+        ),
+        (
+            public_instance::COMMIT_WRAPPER_EP_PROTOCOL_LO,
+            expected_acceptance_protocols[1],
+        ),
+    ] {
+        for (parent, expected) in parent_column
+            .get(offset..offset + 2)
+            .ok_or(Error::InvalidInstances)?
+            .iter()
+            .zip(expected)
+        {
+            let chip = loader.ecc_chip();
+            let mut ctx = loader.ctx_mut();
+            let difference = chip
+                .range()
+                .gate()
+                .sub(ctx.main(), *parent.assigned(), expected);
+            let selected = chip.range().gate().mul(ctx.main(), difference, enabled);
+            chip.range()
+                .gate()
+                .assert_is_const(ctx.main(), &selected, &C::ScalarExt::ZERO);
+        }
+    }
+    let parent_history_limbs = parent_column
+        .get(super::state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..)
+        .ok_or(Error::InvalidInstances)?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    if parent_history_limbs.len() != accumulator_limb_count() {
+        return Err(Error::InvalidInstances);
+    }
+    bind_accumulator_limbs(loader, &predecessor_history, &parent_history_limbs)?;
+    let folded = verify_fold(
+        loader,
+        succinct_vk,
+        &[current.accumulator, predecessor_history.clone()],
+        witness.fold_proof_bytes,
+    )?;
+    let history = select_accumulator_v1(loader, &folded, &predecessor_history, enabled)?;
+    Ok(KagemushaAssignedParentOriginalV1 {
+        history,
+        column: parent_column.iter().map(|v| *v.assigned()).collect(),
+        canonical_current_original: current.canonical_bytes,
+    })
 }
 
 /// Select one complete IPA accumulator without dropping a challenge or curve coordinate.

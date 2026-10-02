@@ -1,4 +1,6 @@
 import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
+import { normalizeValidationFeePolicy as parseGovernanceValidationFeePolicy, normalizeValidationFeePayoutLifecycle as parseGovernanceValidationFeePayoutLifecycle } from "./governanceProposalV1.js";
+import { normalizeRetailFeeAssessment, rejectUnknownRetailFeeFields } from "./retailFeeAssessment.js";
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
@@ -712,38 +714,7 @@ function responseRedirectedWithoutUserGetter(response) {
   return redirected;
 }
 
-function splitCacheControlDirectives(value) {
-  const directives = [];
-  let directiveStart = 0;
-  let inQuotedString = false;
-  let escaped = false;
 
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (inQuotedString && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      inQuotedString = !inQuotedString;
-      continue;
-    }
-    if (!inQuotedString && character === ",") {
-      directives.push(value.slice(directiveStart, index));
-      directiveStart = index + 1;
-    }
-  }
-
-  if (inQuotedString || escaped) {
-    return null;
-  }
-  directives.push(value.slice(directiveStart));
-  return directives;
-}
 
 function ignoreCancellationResult(result) {
   if (result && typeof result.then === JS_TYPE_FUNCTION) {
@@ -3213,147 +3184,6 @@ export class ToriiClient {
       { signal, plainObjects: true },
     );
     return validateFeeQuoteForDraft(payload, body, "fee quote response");
-  }
-
-  /**
-   * Request one same-snapshot, next-height Hijiri validation-fee quote.
-   * Request and response bytes remain native Norito; the native verifier binds
-   * the returned account, transfer count, arithmetic, hashes, and successor
-   * height to the exact request archive before this method returns.
-   */
-  async quoteValidationFeeHijiri(
-    accountId,
-    qualifyingTransferCount,
-    options,
-  ) {
-    const signingContext = requireLocalDraftSigningContext(this._localSigningContext, "quoteValidationFeeHijiri");
-    const {
-      VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
-      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
-      createValidationFeeHijiriQuoteApi,
-    } = await loadToriiOptionalModule();
-    const {
-      encodeValidationFeeHijiriQuoteRequestV1,
-      verifyValidationFeeHijiriQuoteResponseV1,
-    } = createValidationFeeHijiriQuoteApi(this._nativeRuntime);
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "quoteValidationFeeHijiri",
-    );
-    if (new URL(this._baseUrl).protocol.toLowerCase() !== "https:") {
-      rejectError("Hijiri validation-fee quote requests require an HTTPS Torii base URL");
-    }
-    const requestNorito = encodeValidationFeeHijiriQuoteRequestV1(
-      accountId,
-      qualifyingTransferCount,
-    );
-    const response = await this._request(
-      "POST",
-      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
-      {
-        headers: {
-          "Content-Type": APPLICATION_NORITO,
-          "Content-Encoding": "identity",
-          Accept: APPLICATION_NORITO,
-          "Accept-Encoding": "identity",
-          "Cache-Control": "no-store",
-        },
-        body: requestNorito,
-        signal,
-        canonicalAuth,
-      },
-    );
-    const expectedResponseUrl = new URL(
-      VALIDATION_FEE_HIJIRI_QUOTE_PATH,
-      `${this._baseUrl}/`,
-    ).toString();
-    let responseUrl;
-    let responseRedirected;
-    try {
-      responseUrl = responseUrlWithoutUserGetter(response);
-      responseRedirected = responseRedirectedWithoutUserGetter(response);
-    } catch (error) {
-      cancelResponseBodyBestEffort(
-        response,
-        "Hijiri validation-fee quote rejected unreadable redirect metadata",
-      );
-      throw error;
-    }
-    if (responseRedirected || responseUrl !== expectedResponseUrl) {
-      const error = new TypeError(
-        "Hijiri validation-fee quote response must come from the exact signed URL without redirects",
-      );
-      cancelResponseBodyBestEffort(response, error);
-      throw error;
-    }
-    const responseStatus = responseStatusWithoutUserGetter(response);
-    if (
-      responseStatus === 200 &&
-      this._getHeader(response, "x-iroha-reject-code") !== null
-    ) {
-      const error = new TypeError(
-        "successful Hijiri validation-fee quote carried a rejection code",
-      );
-      await cancelResponseBody(response, error);
-      throw error;
-    }
-    const contentType = this._getHeader(response, "content-type") ?? "";
-    if (contentType.trim().toLowerCase() !== APPLICATION_NORITO) {
-      const error = new TypeError(
-        "Hijiri validation-fee quote response must use exact application/x-norito",
-      );
-      await cancelResponseBody(response, error);
-      throw error;
-    }
-    const contentEncoding = this._getHeader(response, "content-encoding");
-    if (
-      contentEncoding !== null &&
-      contentEncoding.trim().toLowerCase() !== "identity"
-    ) {
-      const error = new TypeError(
-        "Hijiri validation-fee quote response Content-Encoding must be identity",
-      );
-      await cancelResponseBody(response, error);
-      throw error;
-    }
-    const cacheControlDirectives = splitCacheControlDirectives(
-      this._getHeader(response, "cache-control") ?? "",
-    );
-    const cacheControl = new Set(
-      (cacheControlDirectives ?? [])
-        .map((directive) => directive.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    const cacheControlNames = new Set(
-      [...cacheControl].map((token) => token.split("=", 1)[0].trim()),
-    );
-    if (
-      cacheControlDirectives === null ||
-      !cacheControl.has("private") ||
-      !cacheControl.has("no-store") ||
-      cacheControlNames.has("public")
-    ) {
-      const error = new TypeError(
-        "Hijiri validation-fee quote response must remain private and no-store and must not be public",
-      );
-      await cancelResponseBody(response, error);
-      throw error;
-    }
-    const { bytes: responseBytes } = await this._readBoundedResponseBytes(
-      response,
-      VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
-      "Hijiri validation-fee quote",
-      { signal },
-    );
-    const responseNorito = Buffer.from(responseBytes);
-    if (responseStatus !== 200) {
-      rejectError(`Hijiri validation-fee quote returned unexpected status ${responseStatus}; expected 200`);
-    }
-    return verifyValidationFeeHijiriQuoteResponseV1(
-      responseNorito,
-      requestNorito,
-      signingContext.chainDiscriminant,
-    );
   }
 
   /**
@@ -14874,289 +14704,15 @@ function parseGovernanceSccpRouteGovernance(payload, context) {
   };
 }
 
-function parseGovernanceValidationFeePolicy(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    ["proposal_operator", "policy", "payout_lifecycle_proposal_id"],
-    context,
-  );
-  const policy = parseGovernanceValidationFeePolicyV1(
-    record.policy,
-    `${context}.policy`,
-  );
-  const lifecycleId = record.payout_lifecycle_proposal_id === null
-    ? null
-    : requireExactGovernanceByteArray(
-      record.payout_lifecycle_proposal_id,
-      32,
-      `${context}.payout_lifecycle_proposal_id`,
-      { nonZero: true },
-    );
-  if ((policy.treasury_payout_binding === null) !== (lifecycleId === null)) {
-    rejectType(`${context}.payout_lifecycle_proposal_id must be present exactly when the policy has a payout binding`);
-  }
-  return {
-    proposal_operator: requireCanonicalGovernanceAccountId(
-      record.proposal_operator,
-      `${context}.proposal_operator`,
-    ),
-    policy,
-    payout_lifecycle_proposal_id: lifecycleId,
-  };
-}
 
-function parseGovernanceValidationFeePolicyV1(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    [
-      "schema_version",
-      "network_id",
-      "policy_version",
-      "previous_policy_hash",
-      "ds_asset_id",
-      "ds_scale",
-      "fee",
-      "treasury_account_id",
-      "charging_mode",
-      "effective_from_height",
-      "expires_after_height",
-      "exemption_classes",
-      "treasury_payout_binding",
-    ],
-    context,
-  );
-  if (record.schema_version !== 1) {
-    rejectType(`${context}.schema_version must be the number 1`);
-  }
-  if (record.ds_scale !== 2) {
-    rejectType(`${context}.ds_scale must be the number 2`);
-  }
-  const networkId = requireExactNonEmptyString(record.network_id, `${context}.network_id`);
-  NetworkId.parse(networkId);
-  const policyVersion = requireExactGovernanceUint64String(
-    record.policy_version,
-    `${context}.policy_version`,
-    { allowZero: false },
-  );
-  const previousPolicyHash = record.previous_policy_hash === null
-    ? null
-    : requireExactGovernanceByteArray(
-      record.previous_policy_hash,
-      32,
-      `${context}.previous_policy_hash`,
-    );
-  if ((policyVersion === "1") !== (previousPolicyHash === null)) {
-    rejectType(`${context}.previous_policy_hash does not match policy_version`);
-  }
-  const chargingMode = parseGovernanceValidationFeeChargingMode(
-    record.charging_mode,
-    `${context}.charging_mode`,
-  );
-  const fee = requireExactCanonicalGovernanceQuantity(record.fee, `${context}.fee`);
-  const exemptions = requireGovernanceArray(
-    record.exemption_classes,
-    `${context}.exemption_classes`,
-  ).map((item, index) => requireExactNonEmptyString(
-    item,
-    `${context}.exemption_classes[${index}]`,
-  ));
-  if (
-    exemptions.some((item) => item !== "TREASURY_PAYOUT") ||
-    new Set(exemptions).size !== exemptions.length
-  ) {
-    rejectType(`${context}.exemption_classes contains an unsupported or duplicate class`);
-  }
-  const payoutBinding = record.treasury_payout_binding === null
-    ? null
-    : parseGovernanceValidationFeePayoutBinding(
-      record.treasury_payout_binding,
-      `${context}.treasury_payout_binding`,
-    );
-  if ((payoutBinding === null) !== !exemptions.includes("TREASURY_PAYOUT")) {
-    rejectType(`${context}.treasury_payout_binding does not match exemption_classes`);
-  }
-  if (chargingMode.charging_mode === "DISABLED") {
-    if (fee !== "0" || exemptions.length !== 0 || payoutBinding !== null) {
-      rejectType(`${context} disabled charging mode requires zero fee and no exemptions`);
-    }
-  } else if (fee !== "0.1") {
-    rejectType(`${context}.fee must be exactly 0.1 for enabled V1 charging`);
-  }
-  const effectiveHeight = requireExactGovernanceUint64String(
-    record.effective_from_height,
-    `${context}.effective_from_height`,
-  );
-  const expiresHeight = record.expires_after_height === null
-    ? null
-    : requireExactGovernanceUint64String(
-      record.expires_after_height,
-      `${context}.expires_after_height`,
-    );
-  if (expiresHeight !== null && BigInt(expiresHeight) <= BigInt(effectiveHeight)) {
-    rejectType(`${context}.expires_after_height must exceed effective_from_height`);
-  }
-  return {
-    schema_version: 1,
-    network_id: networkId,
-    policy_version: policyVersion,
-    previous_policy_hash: previousPolicyHash,
-    ds_asset_id: requireCanonicalGovernanceAssetDefinitionId(
-      record.ds_asset_id,
-      `${context}.ds_asset_id`,
-    ),
-    ds_scale: 2,
-    fee,
-    treasury_account_id: requireCanonicalGovernanceAccountId(
-      record.treasury_account_id,
-      `${context}.treasury_account_id`,
-    ),
-    charging_mode: chargingMode,
-    effective_from_height: effectiveHeight,
-    expires_after_height: expiresHeight,
-    exemption_classes: exemptions,
-    treasury_payout_binding: payoutBinding,
-  };
-}
 
-function parseGovernanceValidationFeeChargingMode(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    ["charging_mode", "value"],
-    context,
-  );
-  if (
-    record.charging_mode !== "DISABLED" &&
-    record.charging_mode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
-  ) {
-    rejectType(`${context}.charging_mode contains an unsupported variant`);
-  }
-  if (record.value !== null) {
-    rejectType(`${context}.value must be null`);
-  }
-  return { charging_mode: record.charging_mode, value: null };
-}
 
-function parseGovernanceValidationFeePayoutLifecycle(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    ["proposal_operator", "payout_binding"],
-    context,
-  );
-  return {
-    proposal_operator: requireCanonicalGovernanceAccountId(
-      record.proposal_operator,
-      `${context}.proposal_operator`,
-    ),
-    payout_binding: parseGovernanceValidationFeePayoutBinding(
-      record.payout_binding,
-      `${context}.payout_binding`,
-    ),
-  };
-}
 
-function parseGovernanceValidationFeePayoutBinding(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    [
-      "contract_address",
-      "code_hash",
-      "entrypoint",
-      "treasury_account_id",
-      "ds_asset_id",
-      "xor_asset_id",
-      "pool_vault_account_id",
-      "batch_ds",
-      "min_xor_out",
-      "max_xor_out",
-      "recipients",
-    ],
-    context,
-  );
-  const contractAddress = requireExactNonEmptyString(
-    record.contract_address,
-    `${context}.contract_address`,
-  );
-  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
-  if (record.entrypoint !== "autonomous_validation_fee_tick") {
-    rejectType(`${context}.entrypoint must be autonomous_validation_fee_tick`);
-  }
-  const treasury = requireCanonicalGovernanceAccountId(
-    record.treasury_account_id,
-    `${context}.treasury_account_id`,
-  );
-  const vault = requireCanonicalGovernanceAccountId(
-    record.pool_vault_account_id,
-    `${context}.pool_vault_account_id`,
-  );
-  if (treasury === vault) {
-    rejectType(`${context} treasury and pool vault accounts must differ`);
-  }
-  const dsAsset = requireCanonicalGovernanceAssetDefinitionId(
-    record.ds_asset_id,
-    `${context}.ds_asset_id`,
-  );
-  const xorAsset = requireCanonicalGovernanceAssetDefinitionId(
-    record.xor_asset_id,
-    `${context}.xor_asset_id`,
-  );
-  if (dsAsset === xorAsset) {
-    rejectType(`${context} DS and XOR assets must differ`);
-  }
-  if (
-    requireExactCanonicalGovernanceQuantity(record.batch_ds, `${context}.batch_ds`) !== "10" ||
-    requireExactCanonicalGovernanceQuantity(record.min_xor_out, `${context}.min_xor_out`) !== "4" ||
-    requireExactCanonicalGovernanceQuantity(record.max_xor_out, `${context}.max_xor_out`) !== "100"
-  ) {
-    rejectType(`${context} must use the exact V1 payout quantities`);
-  }
-  const recipients = requireGovernanceArray(record.recipients, `${context}.recipients`)
-    .map((item, index) => {
-      const itemContext = `${context}.recipients[${index}]`;
-      const recipient = requireExactGovernanceProposalRecord(
-        item,
-        ["account_id", "share"],
-        itemContext,
-      );
-      const accountId = requireCanonicalGovernanceAccountId(
-        recipient.account_id,
-        `${itemContext}.account_id`,
-      );
-      if (requireExactCanonicalGovernanceQuantity(
-        recipient.share,
-        `${itemContext}.share`,
-      ) !== "0.25") {
-        rejectType(`${itemContext}.share must be exactly 0.25`);
-      }
-      return { account_id: accountId, share: "0.25" };
-    });
-  const recipientIds = recipients.map((recipient) => recipient.account_id);
-  if (
-    recipients.length !== 4 ||
-    new Set(recipientIds).size !== 4 ||
-    recipientIds.includes(treasury) ||
-    recipientIds.includes(vault)
-  ) {
-    rejectType(`${context}.recipients must contain four unique non-pool accounts`);
-  }
-  return {
-    contract_address: contractAddress,
-    code_hash: requireExactGovernanceByteArray(
-      record.code_hash,
-      32,
-      `${context}.code_hash`,
-      { nonZero: true },
-    ),
-    entrypoint: "autonomous_validation_fee_tick",
-    treasury_account_id: treasury,
-    ds_asset_id: dsAsset,
-    xor_asset_id: xorAsset,
-    pool_vault_account_id: vault,
-    batch_ds: "10",
-    min_xor_out: "4",
-    max_xor_out: "100",
-    recipients,
-  };
-}
+
+
+
+
+
 
 function parseGovernanceMusubiAction(payload, context) {
   const record = requireExactGovernanceProposalRecord(payload, ["kind", "value"], context);
@@ -15552,16 +15108,7 @@ function parseGovernanceUint16Array(value, context) {
   });
 }
 
-function requireExactGovernanceUint64String(value, context, options = {}) {
-  if (typeof value !== JS_TYPE_STRING || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    rejectType(`${context} must be a canonical unsigned 64-bit decimal string`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > MAX_UINT64_BIGINT || (options.allowZero === false && parsed === 0n)) {
-    rejectType(`${context} is outside the supported unsigned 64-bit range`);
-  }
-  return value;
-}
+
 
 function requireCanonicalGovernanceAccountId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
@@ -15572,14 +15119,7 @@ function requireCanonicalGovernanceAccountId(value, context) {
   return literal;
 }
 
-function requireCanonicalGovernanceAssetDefinitionId(value, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  const canonical = normalizeAssetDefinitionId(literal, context);
-  if (canonical !== literal) {
-    rejectType(`${context} must use the canonical asset-definition literal`);
-  }
-  return literal;
-}
+
 
 function requireCanonicalGovernanceBase64(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
@@ -15597,13 +15137,7 @@ function requireCanonicalGovernanceBase64(value, context) {
   return value;
 }
 
-function requireExactCanonicalGovernanceQuantity(value, context) {
-  const normalized = requireCanonicalQuantity(value, context);
-  if (normalized !== value) {
-    rejectType(`${context} must use the canonical quantity spelling`);
-  }
-  return normalized;
-}
+
 
 function requireExactString(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
@@ -19108,23 +18642,7 @@ function pickOverride(source, snakeName, camelName) {
   return undefined;
 }
 
-function rejectValidationFeeSnakeCaseInputs(source, context) {
-  for (const [snakeName, camelName] of [
-    ["validation_fee_policy_version", "validationFeePolicyVersion"],
-    ["validation_fee_policy_hash", "validationFeePolicyHash"],
-    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
-    ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
-    ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
-        `${context}.${snakeName}`,
-      );
-    }
-  }
-}
+
 
 function rejectPrivateKeyFields(record, context) {
   rejectVerifyingKeyPrivateKeyFields(record, context);
@@ -21551,7 +21069,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 function normalizeMultisigProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisig request");
   rejectPrivateKeyFields(record, "proposeMultisig request");
-  rejectValidationFeeSnakeCaseInputs(record, "proposeMultisig request");
+  rejectUnknownRetailFeeFields(record, "proposeMultisig request");
   rejectRetiredFeeSelectionFields(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
   const instructionsValue = pickOverride(record, "instructions", "instructions");
@@ -21601,93 +21119,15 @@ function normalizeMultisigProposeRequest(input) {
     record.fee_payment ?? record.feePayment,
     "proposeMultisig request.fee_payment",
   );
-  const validationFeePolicyVersion = record.validationFeePolicyVersion;
-  const validationFeePolicyHash = record.validationFeePolicyHash;
-  const validationFeeHijiriFeeQuoteHash = record.validationFeeHijiriFeeQuoteHash;
-  const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
-  const validationFeeTransferEntryIndex = record.validationFeeTransferEntryIndex;
-  const hasPolicyVersion =
-    validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
-  const hasPolicyHash =
-    validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
-  const hasHijiriFeeQuoteHash =
-    validationFeeHijiriFeeQuoteHash !== undefined &&
-    validationFeeHijiriFeeQuoteHash !== null;
-  const hasInstructionIndex =
-    validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
-  const hasTransferEntryIndex =
-    validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
-  if (hasPolicyVersion !== hasPolicyHash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "proposeMultisig request validation fee policy version and hash must be provided together",
-      "proposeMultisig.request.validation_fee_policy",
-    );
-  }
-  if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "proposeMultisig request Hijiri fee quote hash requires policy metadata",
-      "proposeMultisig.request.validation_fee_hijiri_fee_quote_hash",
-    );
-  }
-  if (!hasPolicyVersion && hasInstructionIndex) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "proposeMultisig request validation fee instruction index requires policy metadata",
-      "proposeMultisig.request.validation_fee_instruction_index",
-    );
-  }
-  if (!hasPolicyVersion && hasTransferEntryIndex) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "proposeMultisig request validation fee transfer entry index requires policy metadata",
-      "proposeMultisig.request.validation_fee_transfer_entry_index",
-    );
-  }
-  if (hasTransferEntryIndex && !hasInstructionIndex) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "proposeMultisig request validation fee transfer entry index requires instruction index",
-      "proposeMultisig.request.validation_fee_transfer_entry_index",
-    );
-  }
-  if (hasPolicyVersion) {
-    payload.validation_fee_policy_version = String(
-      ToriiClient._normalizeUnsignedInteger(
-        validationFeePolicyVersion,
-        "proposeMultisig request.validation_fee_policy_version",
-        { allowZero: true },
-      ),
-    );
-    payload.validation_fee_policy_hash = normalizeHex32String(
-      validationFeePolicyHash,
-      "proposeMultisig request.validation_fee_policy_hash",
-    );
-    if (hasHijiriFeeQuoteHash) {
-      payload.validation_fee_hijiri_fee_quote_hash = normalizeHex32String(
-        validationFeeHijiriFeeQuoteHash,
-        "proposeMultisig request.validation_fee_hijiri_fee_quote_hash",
-      );
+  if (Object.hasOwn(record, "validation_fee_assessment")) {
+    if (record.validation_fee_assessment === null || record.validation_fee_assessment === undefined) {
+      rejectType("proposeMultisig request.validation_fee_assessment requires a typed assessment");
     }
-    if (hasInstructionIndex) {
-      payload.validation_fee_instruction_index = String(
-        ToriiClient._normalizeUnsignedInteger(
-          validationFeeInstructionIndex,
-          "proposeMultisig request.validation_fee_instruction_index",
-          { allowZero: true },
-        ),
-      );
-    }
-    if (hasTransferEntryIndex) {
-      payload.validation_fee_transfer_entry_index = String(
-        ToriiClient._normalizeUnsignedInteger(
-          validationFeeTransferEntryIndex,
-          "proposeMultisig request.validation_fee_transfer_entry_index",
-          { allowZero: true },
-        ),
-      );
-    }
+    payload.validation_fee_assessment = normalizeRetailFeeAssessment(record.validation_fee_assessment);
+  }
+  if (record.memo !== undefined && record.memo !== null) {
+    if (typeof record.memo !== "string") throw new TypeError("multisig memo must be a string");
+    payload.memo = record.memo;
   }
   return payload;
 }

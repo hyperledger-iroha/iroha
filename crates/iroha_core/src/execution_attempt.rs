@@ -113,6 +113,17 @@ impl<E> ExecutionAttemptError<E> {
     }
 }
 
+impl ExecutionAttemptError<std::io::Error> {
+    /// Operational I/O category for storage scheduling; matching this does not consume the
+    /// original local refusal. Callers must retain `Deferred` with the unfinished job.
+    pub fn io_kind(&self) -> std::io::ErrorKind {
+        match self {
+            Self::Rejected(error) => error.kind(),
+            Self::Deferred(_) => std::io::ErrorKind::WouldBlock,
+        }
+    }
+}
+
 impl<E> From<E> for ExecutionAttemptError<E> {
     fn from(error: E) -> Self {
         Self::Rejected(error)
@@ -143,13 +154,16 @@ impl<E: core::fmt::Display + core::fmt::Debug + 'static> std::error::Error
 ///
 /// Matching surviving field, element and allocation ceilings belong to the current attempt. An
 /// allocator failure is local even without an enclosing scope. Global archive and inner format limits,
-/// malformed input and recursive-depth rejection remain deterministic. Norito's cumulative
+/// malformed input and canonical-depth rejection remain deterministic. A matching surviving
+/// narrower caller depth is local, like its field and allocation ceilings. Norito's cumulative
 /// scope has no allocation-pool release owner, so this must not invent one.
 pub(crate) fn norito_decode_attempt_error<E>(
     error: norito::Error,
     rejected: impl FnOnce(norito::Error) -> E,
 ) -> ExecutionAttemptError<E> {
-    let local_limit = norito::core::decode_error_matches_active_limits(&error)
+    let local_limit = (norito::core::decode_error_matches_active_limits(&error)
+        && !(cfg!(all(test, sumeragi_core_mutation = "HC46"))
+            && matches!(&error, norito::Error::NestingDepthExceeded { .. })))
         || (cfg!(all(test, sumeragi_core_mutation = "HC33"))
             && norito::core::decode_limits_active()
             && matches!(
@@ -173,6 +187,21 @@ pub(crate) fn norito_decode_attempt_error<E>(
     ExecutionAttemptError::Rejected(rejected(error))
 }
 
+/// Preserve original versioned decoder fields before classifying the surviving caller scope.
+pub(crate) fn versioned_decode_attempt_error<E>(
+    error: iroha_version::error::Error,
+    rejected: impl FnOnce(iroha_version::error::Error) -> E,
+) -> ExecutionAttemptError<E> {
+    match error {
+        iroha_version::error::Error::NoritoResourceLimit(resource) => {
+            norito_decode_attempt_error(resource.into(), |_| {
+                rejected(iroha_version::error::Error::NoritoResourceLimit(resource))
+            })
+        }
+        completed => ExecutionAttemptError::Rejected(rejected(completed)),
+    }
+}
+
 /// Classify original JSON decoding before a diagnostic can discard local retry identity.
 ///
 /// JSON's resource-limit error is emitted by the active decoder budget. Malformed input,
@@ -192,6 +221,20 @@ pub(crate) fn json_decode_attempt_error<E>(
     }
 }
 
+/// Preserve the original signed-genesis decoder before projecting completed authentication errors.
+pub(crate) fn genesis_read_attempt_error<E>(
+    error: iroha_data_model::sumeragi_finality::GenesisReadError,
+    rejected: impl FnOnce(iroha_data_model::sumeragi_finality::GenesisReadError) -> E,
+) -> ExecutionAttemptError<E> {
+    use iroha_data_model::sumeragi_finality::GenesisReadError;
+    match error {
+        GenesisReadError::Json(error) => {
+            json_decode_attempt_error(error, |error| rejected(GenesisReadError::Json(error)))
+        }
+        error => ExecutionAttemptError::Rejected(rejected(error)),
+    }
+}
+
 /// Classify VM failure before any diagnostic conversion can discard local retry identity.
 pub(crate) fn vm_attempt_error(
     error: VMError,
@@ -203,6 +246,33 @@ pub(crate) fn vm_attempt_error(
     }
 }
 
+impl crate::state::WorldTransaction<'_, '_> {
+    /// Retain the first original local retry owner at the common mutation boundary.
+    /// This journal field has no serialization or monetary authority.
+    pub(crate) fn defer_execution(&self, reason: impl Into<ExecutionDeferred>) -> ValidationFail {
+        self.execution_deferral
+            .borrow_mut()
+            .get_or_insert_with(|| reason.into());
+        ValidationFail::InternalError("local execution attempt did not complete".into())
+    }
+
+    /// Bridge an ISI-owned signature while keeping its original local refusal.
+    pub(crate) fn attempt_error_to_instruction_error(
+        &self,
+        error: ExecutionAttemptError<iroha_data_model::isi::error::InstructionExecutionError>,
+    ) -> iroha_data_model::isi::error::InstructionExecutionError {
+        match error {
+            ExecutionAttemptError::Rejected(error) => error,
+            ExecutionAttemptError::Deferred(reason) => {
+                let _ = self.defer_execution(reason);
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    "local execution attempt did not complete".into(),
+                )
+            }
+        }
+    }
+}
+
 impl crate::state::StateTransaction<'_, '_> {
     /// Record the first local refusal before bridging a model-owned ISI signature.
     /// The enclosing attempt must extract this owner before settling any output.
@@ -210,13 +280,12 @@ impl crate::state::StateTransaction<'_, '_> {
         &mut self,
         reason: impl Into<ExecutionDeferred>,
     ) -> ValidationFail {
-        self.execution_deferral.get_or_insert_with(|| reason.into());
-        ValidationFail::InternalError("local execution attempt did not complete".into())
+        self.world.defer_execution(reason)
     }
 
     /// Borrow the sticky local retry reason without clearing its publication guard.
     pub(crate) fn execution_deferral(&self) -> Option<ExecutionDeferred> {
-        self.execution_deferral.clone()
+        self.world.execution_deferral.borrow().clone()
     }
 
     /// Bridge a model-owned instruction result while retaining the retry owner.
@@ -227,6 +296,22 @@ impl crate::state::StateTransaction<'_, '_> {
         match error {
             ExecutionAttemptError::Rejected(error) => error,
             ExecutionAttemptError::Deferred(reason) => self.defer_execution(reason),
+        }
+    }
+
+    /// Preserve a local read owner before bridging a model-owned instruction result.
+    pub(crate) fn attempt_error_to_instruction_error(
+        &mut self,
+        error: ExecutionAttemptError<iroha_data_model::isi::error::InstructionExecutionError>,
+    ) -> iroha_data_model::isi::error::InstructionExecutionError {
+        match error {
+            ExecutionAttemptError::Rejected(error) => error,
+            ExecutionAttemptError::Deferred(reason) => {
+                let _ = self.defer_execution(reason);
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    "local instruction read did not complete".into(),
+                )
+            }
         }
     }
 
@@ -396,9 +481,13 @@ mod tests {
         }
         let bytes = norito::to_bytes(&vec![vec![7_u64]]).unwrap();
         norito::with_decode_limits_scope(
-            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64),
             || {
-                let error = norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap_err();
+                let error = norito::with_decode_limits_scope(
+                    norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+                    || norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes),
+                )
+                .unwrap_err();
                 assert!(matches!(error, norito::Error::NestingDepthExceeded { .. }));
                 assert!(matches!(
                     super::norito_decode_attempt_error(error, std::convert::identity),
@@ -412,6 +501,71 @@ mod tests {
                 ));
             },
         );
+    }
+
+    #[test]
+    fn original_surviving_narrow_decode_depth_refusal_retries_identical_bytes() {
+        let expected = vec![vec![7_u64]];
+        let bytes = norito::to_bytes(&expected).unwrap();
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+            || {
+                let error = norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap_err();
+                assert!(matches!(
+                    error,
+                    norito::Error::NestingDepthExceeded {
+                        depth: 1,
+                        limit: 0,
+                        context: "decode budget"
+                    }
+                ));
+                let refused = super::norito_decode_attempt_error::<()>(error, |_| {
+                    panic!("a surviving narrower caller depth cannot reject original valid bytes")
+                });
+                let ExecutionAttemptError::Deferred(reason) = refused else {
+                    panic!("original local depth must remain retryable")
+                };
+                assert_eq!(reason.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+                assert!(reason.allocation_refusal().is_none());
+            },
+        );
+        let retried = norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap();
+        assert_eq!(retried, expected);
+        norito::verify_exact_frame(&retried, &bytes).unwrap();
+    }
+
+    #[test]
+    fn original_inner_decode_depth_limit_is_terminal_after_scope_unwinds() {
+        let expected = vec![vec![7_u64]];
+        let bytes = norito::to_bytes(&expected).unwrap();
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64),
+            || {
+                let error = norito::with_decode_limits_scope(
+                    norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+                    || norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes),
+                )
+                .unwrap_err();
+                let resource = error.decode_resource_error().unwrap();
+                assert!(matches!(
+                    resource,
+                    norito::core::DecodeResourceError::NestingDepthExceeded {
+                        depth: 1,
+                        limit: 0,
+                        context: "decode budget"
+                    }
+                ));
+                let ExecutionAttemptError::Rejected(error) =
+                    super::norito_decode_attempt_error(error, std::convert::identity)
+                else {
+                    panic!("a wider surviving scope cannot borrow a retired inner depth")
+                };
+                assert_eq!(error.decode_resource_error(), Some(resource));
+            },
+        );
+        let retried = norito::decode_from_bytes::<Vec<Vec<u64>>>(&bytes).unwrap();
+        assert_eq!(retried, expected);
+        norito::verify_exact_frame(&retried, &bytes).unwrap();
     }
 
     #[test]
@@ -582,6 +736,68 @@ mod tests {
             block.world.domains.get(&domain_id).is_none(),
             "a bare local deferral must abandon staged semantic writes"
         );
+    }
+
+    #[test]
+    fn world_and_state_share_the_first_original_capacity_owner() {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        let budget = iroha_allocation::AllocationBudget::new(8);
+        let occupied = budget.try_reserve_bytes(8).unwrap();
+        let original = budget.try_reserve_bytes(1).unwrap_err();
+        let refusal = ExecutionAttemptError::<
+            iroha_data_model::isi::error::InstructionExecutionError,
+        >::Deferred(original.clone().into());
+        stx.world.attempt_error_to_instruction_error(refusal);
+        stx.defer_execution(ExecutionDeferral::AllocationUnavailable);
+        let retained = stx.execution_deferral().unwrap();
+        assert_eq!(retained.reason(), ExecutionDeferral::ActiveMemoryCapacity);
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        assert_eq!(*stx.world.execution_deferral.borrow(), Some(retained));
+        drop(occupied);
+        assert!(budget.try_reserve_bytes(1).is_ok());
+    }
+
+    #[test]
+    fn poisoned_raw_world_apply_rolls_back_original_fields() {
+        use iroha_data_model::{Registrable, prelude::Domain};
+        use mv::storage::StorageReadOnly as _;
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let domain =
+            iroha_model_base::domain::DomainId::try_new("world_retry", "universal").unwrap();
+        let mut world = block.world.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        world.domains.insert(
+            domain.clone(),
+            Domain::new(domain.clone()).build(&iroha_test_samples::ALICE_ID),
+        );
+        world.defer_execution(ExecutionDeferral::ActiveMemoryCapacity);
+        world.apply();
+        assert!(block.world.domains.get(&domain).is_none());
     }
 
     #[test]

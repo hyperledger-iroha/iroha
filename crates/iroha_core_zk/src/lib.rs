@@ -68,20 +68,8 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-#[cfg(not(feature = "zk-halo2"))]
-compile_error!(
-    "Halo2 backends are mandatory; enable `zk-halo2` (default) when building iroha_core_zk"
-);
-#[cfg(not(feature = "zk-halo2-ipa"))]
-compile_error!(
-    "Halo2 IPA backends are mandatory; enable `zk-halo2-ipa` (default) when building iroha_core_zk"
-);
-#[cfg(not(feature = "zk-ipa-native"))]
-compile_error!(
-    "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"
-);
 /// Maintained typed credit encryption used by the actual Native ordinary cash owner.
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 mod kagemusha_v1_crypto;
 /// Deterministic Kagemusha V1 fixtures shared by Core and Sumeragi tests.
 #[cfg(any(test, feature = "test-utils", feature = "kagemusha-real-proof-harness"))]
@@ -91,50 +79,32 @@ pub mod kagemusha_v1_test_fixtures;
 #[cfg(feature = "zk-stark")]
 pub mod stark;
 //
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::collections::BTreeMap;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::collections::btree_map::Entry;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::sync::Arc;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::sync::Mutex;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::sync::MutexGuard;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::sync::OnceLock;
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
 };
 /// Wallet-facing confidential proving with canonical relation and key selection.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential;
 /// Shared confidential note, tree, and verifier-key primitives.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
 mod verification;
 pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, verify_for_relation};
 /// Frame-identity path mapping for the relocated nominal schema names.
 #[cfg(test)]
 pub(crate) mod frame_test_support;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
 /// P-256-specific nonnative curve primitives for original platform approval equations.
 ///
 /// Production proving consumes only the signature-verification algorithms. Key generation
 /// and synthetic circuit fixtures remain confined to the module's test-only helpers.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    any(
-        test,
-        feature = "kagemusha-production-prover",
-        feature = "kagemusha-real-proof-harness"
-    )
-))]
 pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.
-#[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_polynomial_store_v1;
 pub mod kagemusha_sender_wire;
 /// Shared paired field-native Poseidon relations for Kagemusha V1.
@@ -144,51 +114,41 @@ pub mod kagemusha_v1_recursion;
 /// Aggregate, hardware-guarded Kagemusha V1 host state machine.
 pub mod kagemusha_v1_state;
 /// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_cycle_loader;
 /// Dense normalized-GLV MSM used by paired Pasta recursion.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_dense_msm;
 /// Test accounting for direct-instance Pasta IPA recursive proofs.
 #[cfg(test)]
 pub(crate) mod pasta_ipa_recursion;
 /// Dedicated exact native Poseidon permutations for the paired Claim fold.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_native_poseidon;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_sha256;
 /// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
 pub(crate) mod pasta_sha256_table8;
 // TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
 // These internal experiments have no production verifier entry point.
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 mod ram_lfe_byte;
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 mod ram_lfe_poseidon;
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 mod ram_lfe_word;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-stark")]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) use halo2_backend::{
     PastaParams, assign_advice_vendored, params_fingerprint, params_new as pasta_params_new,
     read_verifying_key,
 };
-#[cfg(all(
-    test,
-    feature = "zk-halo2-ipa",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
+#[cfg(test)]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
 #[cfg(feature = "zk-stark")]
 use iroha_data_model::zk::StarkFriOpenProofV1;
-#[cfg(all(test, feature = "zk-halo2"))]
+#[cfg(test)]
 use kaigi_zk::usage_v1::KAIGI_USAGE_CIRCUIT_ID_V1;
-#[cfg(feature = "zk-halo2")]
 use kaigi_zk::{
     authorization_v1::{
         KAIGI_AUTHORIZATION_BACKEND_V1, KAIGI_AUTHORIZATION_CIRCUIT_ID_V1,
@@ -218,11 +178,9 @@ pub const HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES: usize =
 /// scalar parameters, so 4 KiB leaves ample format headroom without allowing
 /// registry input to inherit a caller-sized decode budget.
 pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns, covering admitted proof
 /// layouts while keeping malformed envelopes bounded.
 const MAX_INST_COLS: usize = 65;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 const MAX_INST_ROWS: usize = 8192;
 /// Canonical backend identifier for Halo2 IPA verification.
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
@@ -251,14 +209,11 @@ const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
     "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
 ];
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 const HALO2_IPA_MAX_K_V1: u32 = confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
     match canonical_halo2_ipa_circuit_id(circuit_id)?.as_str() {
-        #[cfg(feature = "zk-halo2")]
         KAIGI_AUTHORIZATION_CIRCUIT_ID_V1 => Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1),
-        #[cfg(feature = "zk-halo2")]
         "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_CIRCUIT_K_V1),
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
@@ -293,7 +248,7 @@ pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
 pub fn hash_vk(vk: &VerifyingKeyBox) -> [u8; 32] {
     hash_vk_bytes(&vk.backend, &vk.bytes)
 }
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 fn relabel_halo2_ipa_open_verify_fixture(
     proof: &ProofBox,
     vk: &VerifyingKeyBox,
@@ -629,23 +584,18 @@ fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
 fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> {
     let canonical = canonical_halo2_ipa_circuit_id(circuit_id)?;
     match canonical.as_str() {
-        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
         }
-        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
         confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1)
         }
-        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
         confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1)
         }
-        #[cfg(feature = "zk-halo2")]
         "halo2/pasta/ipa/kaigi-authorization-v1" => {
             Some(KAIGI_AUTHORIZATION_PUBLIC_INPUTS_SCHEMA_V1)
         }
-        #[cfg(feature = "zk-halo2")]
         "halo2/pasta/ipa/kaigi-usage-v1" => Some(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1),
         _ => None,
     }
@@ -718,28 +668,20 @@ pub(crate) fn validate_and_prepare_verifying_key_material_v1(
     }
     match backend_tag {
         iroha_data_model::zk::BackendTag::Halo2IpaPasta => {
-            #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-            {
-                let _ = (circuit_id, vk);
-                Err("verifying-key backend Halo2 IPA is not enabled".to_owned())
+            if vk.bytes.len() > HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES {
+                return Err(format!(
+                    "Halo2 IPA verifying-key container exceeds the {}-byte limit",
+                    HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
+                ));
             }
-            #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-            {
-                if vk.bytes.len() > HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES {
-                    return Err(format!(
-                        "Halo2 IPA verifying-key container exceeds the {}-byte limit",
-                        HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES
-                    ));
-                }
-                validate_builtin_halo2_ipa_verifying_key_v1(backend, circuit_id, vk)?;
-                let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
-                    .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
-                let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
-                    vk.bytes.as_slice(),
-                    &canonical_circuit_id,
-                )?;
-                Ok(PreparedVerifyingKeyMaterialV1::Halo2IpaPasta { ipa_k })
-            }
+            validate_builtin_halo2_ipa_verifying_key_v1(backend, circuit_id, vk)?;
+            let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
+                .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
+            let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
+                vk.bytes.as_slice(),
+                &canonical_circuit_id,
+            )?;
+            Ok(PreparedVerifyingKeyMaterialV1::Halo2IpaPasta { ipa_k })
         }
         iroha_data_model::zk::BackendTag::Stark => {
             #[cfg(not(feature = "zk-stark"))]
@@ -935,7 +877,7 @@ fn verifying_key_content_uri_is_portable_v1(uri: &str) -> bool {
     })
 }
 include!("strict_verifying_key_preparation_tests.rs");
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 mod vk_cache_observer_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -979,7 +921,7 @@ mod vk_cache_observer_tests {
         assert!(HITS.load(Ordering::SeqCst) > hits);
     }
 }
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 fn verify_halo2_ipa_payload_no_instances(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -987,7 +929,6 @@ fn verify_halo2_ipa_payload_no_instances(
 ) -> bool {
     halo2_backend::verify_ipa_proof_no_instances(params, vk, proof_payload).is_ok()
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn verify_halo2_ipa_payload_columns_result(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -996,7 +937,6 @@ fn verify_halo2_ipa_payload_columns_result(
 ) -> Result<(), halo2_backend::Error> {
     halo2_backend::verify_ipa_proof_with_columns(params, vk, proof_payload, col_refs)
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn verify_halo2_ipa_payload_columns(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -1005,7 +945,7 @@ fn verify_halo2_ipa_payload_columns(
 ) -> bool {
     verify_halo2_ipa_payload_columns_result(params, vk, proof_payload, col_refs).is_ok()
 }
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 fn verify_halo2_ipa_payload_optional_columns(
     params: &PastaParams,
     vk: &halo2_backend::VerifyingKey,
@@ -1573,7 +1513,6 @@ pub mod test_utils {
         zk::{BackendTag, OpenVerifyEnvelope},
     };
     const HALO2_PROOF_BYTES_LEN: usize = 64;
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     use rand_core_06::{CryptoRng, Error as RandError, RngCore};
     /// Deterministic proof envelope fixture used across unit and integration tests.
     #[derive(Clone, Debug)]
@@ -1696,7 +1635,6 @@ pub mod test_utils {
         }
     }
     type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn fixture_circuit_from_id(circuit_id: &str) -> Option<FixtureBundle> {
         let name = circuit_id
             .strip_prefix("halo2/pasta/ipa/")
@@ -1709,13 +1647,7 @@ pub mod test_utils {
             _ => None,
         }
     }
-    #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-    fn fixture_circuit_from_id(_circuit_id: &str) -> Option<FixtureBundle> {
-        None
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     struct FixtureRng(u64);
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     impl FixtureRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
@@ -1729,7 +1661,6 @@ pub mod test_utils {
             self.0
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     impl RngCore for FixtureRng {
         fn next_u32(&mut self) -> u32 {
             let word = self.next_word();
@@ -1753,13 +1684,10 @@ pub mod test_utils {
             Ok(())
         }
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     impl CryptoRng for FixtureRng {}
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn fixture_rng(seed: u64) -> FixtureRng {
         FixtureRng::new(seed)
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use halo2_proofs::{
             halo2curves::pasta::EqAffine as Curve,
@@ -1805,7 +1733,6 @@ pub mod test_utils {
             })
             .clone()
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use ff::PrimeField as _;
         use halo2_proofs::{
@@ -1859,7 +1786,6 @@ pub mod test_utils {
             })
             .clone()
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add2inst_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use ff::PrimeField as _;
         use halo2_proofs::{
@@ -1913,7 +1839,6 @@ pub mod test_utils {
             })
             .clone()
     }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_2rows_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use halo2_proofs::{
             halo2curves::pasta::EqAffine as Curve,
@@ -1959,7 +1884,7 @@ pub mod test_utils {
             })
             .clone()
     }
-    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add() {
         let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
@@ -1969,7 +1894,7 @@ pub mod test_utils {
         assert!(!first.proof_bytes.is_empty());
         assert!(first.vk_bytes.is_some());
     }
-    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_public() {
         let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
@@ -1980,7 +1905,7 @@ pub mod test_utils {
         assert!(first.vk_bytes.is_some());
         assert!(!first.public_inputs.is_empty());
     }
-    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
         let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
@@ -1991,7 +1916,7 @@ pub mod test_utils {
         assert!(first.vk_bytes.is_some());
         assert_eq!(first.public_inputs.len(), 64);
     }
-    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[cfg(test)]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_2rows() {
         let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
@@ -2016,7 +1941,6 @@ pub mod test_utils {
         vec![0xAB; HALO2_PROOF_BYTES_LEN]
     }
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct VkCacheKey {
     backend: String,
@@ -2024,14 +1948,11 @@ struct VkCacheKey {
     params_fingerprint: [u8; 32],
     vk_hash: [u8; 32],
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 type CachedVk = Arc<halo2_backend::VerifyingKey>;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
 /// Process-wide observer for verifier-key cache events (`cache`, `event` labels).
 static VK_CACHE_EVENT_OBSERVER: std::sync::OnceLock<fn(&'static str, &'static str)> =
     std::sync::OnceLock::new();
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[inline]
 fn record_vk_cache_event(cache: &'static str, event: &'static str) {
     if let Some(observer) = VK_CACHE_EVENT_OBSERVER.get() {
@@ -2049,13 +1970,11 @@ fn record_vk_cache_event(cache: &'static str, event: &'static str) {
 pub fn install_vk_cache_event_observer(observer: fn(&'static str, &'static str)) -> bool {
     VK_CACHE_EVENT_OBSERVER.set(observer).is_ok()
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_backend::Error> {
     cache
         .lock()
         .map_err(|_| halo2_backend::constraint_system_failure())
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn resolve_vk_cached_for_type<C, F>(
     backend: &str,
     params: &PastaParams,
@@ -2103,7 +2022,6 @@ where
     };
     Ok(entry)
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn resolve_vk_cached<C, F>(
     backend: &str,
     params: &PastaParams,
@@ -2117,12 +2035,7 @@ where
 {
     resolve_vk_cached_for_type::<C, F>(backend, params, vk_box, builder)
 }
-#[cfg(all(
-    test,
-    feature = "halo2-dev-tests",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa"
-))]
+#[cfg(all(test, feature = "halo2-dev-tests"))]
 /// Resolve a packaged verifier key without falling back to runtime keygen.
 fn resolve_packaged_vk_cached<C>(
     backend: &str,
@@ -2161,7 +2074,6 @@ where
     };
     Ok(entry)
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 macro_rules! cached_vk_for {
     ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
         let params_ref = $params;
@@ -2178,7 +2090,6 @@ macro_rules! cached_vk_for {
         }
     }};
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn validate_canonical_halo2_ipa_circuit_key<C>(
     backend: &str,
     params: &PastaParams,
@@ -2202,7 +2113,6 @@ where
 /// construction. The processed `H2VK` bytes are then compared with the key
 /// generated from the same concrete circuit type used by proof verification,
 /// before attacker-controlled key bytes reach the Halo2 reader.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
     backend: &str,
     circuit_id: &str,
@@ -2255,7 +2165,6 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
         );
     }
     let verifier_backend = canonical_circuit_id.replace("/ipa/", "/");
-    #[cfg(feature = "zk-halo2")]
     {
         if verifier_backend == KAIGI_AUTHORIZATION_BACKEND_V1 {
             return validate_canonical_halo2_ipa_circuit_key(
@@ -2275,24 +2184,6 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
         }
     }
     Err("Halo2 IPA circuit has no compiled V1 verifier-key validator".to_owned())
-}
-/// Reject built-in Halo2 IPA verifier-key registration when the verifier
-/// backend is not compiled into this binary.
-#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
-    _backend: &str,
-    _circuit_id: &str,
-    _vk_box: &VerifyingKeyBox,
-) -> Result<(), String> {
-    Err("Halo2 IPA verifier-key validation requires the Halo2 backend".to_owned())
-}
-#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-#[allow(unused_macros)]
-macro_rules! cached_vk_for {
-    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
-        let _ = ($params, $backend, $vk_box, $circuit);
-        false
-    }};
 }
 // Parsed verifying keys are cached above and keyed by backend, parameter fingerprint, and
 // verifying-key hash so repeated proofs avoid repeated strict parsing.
@@ -2504,7 +2395,6 @@ mod zk1 {
         Ok((k, compress_selectors, fixed_columns))
     }
     /// Append a Halo2 verifying key (`H2VK`) for Pasta/IPA circuits.
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[allow(dead_code)]
     pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &super::halo2_backend::VerifyingKey) {
         let bytes = super::halo2_backend::verifying_key_to_processed_bytes(vk);
@@ -2512,7 +2402,6 @@ mod zk1 {
     }
     #[cfg(any(test, feature = "test-utils"))]
     /// Append an `I10P` TLV (Pasta Fp instances) to an envelope buffer.
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     pub fn wrap_append_instances_pasta_fp(
         instances: &[halo2_proofs::halo2curves::pasta::Fp],
         buf: &mut Vec<u8>,
@@ -2535,7 +2424,6 @@ mod zk1 {
     /// `zkparse::strict_proof_and_instances`:
     ///  - `u32 cols`, `u32 rows`, followed by `rows * cols` canonical 32-byte scalars in
     ///    row-major order (i.e., all column 0 row 0..rows-1, then column 1, etc.).
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[allow(dead_code)]
     pub fn wrap_append_instances_pasta_fp_cols(
         columns: &[&[halo2_proofs::halo2curves::pasta::Fp]],
@@ -2573,7 +2461,6 @@ mod zk1 {
 /// Test-only helpers for constructing canonical and retired proof carriers.
 #[doc(hidden)]
 pub mod zk1_test_helpers;
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 macro_rules! advice {
     (@call $region:ident, $annotation:expr, $column:expr, $offset:expr, $value:expr) => {
         crate::assign_advice_vendored(
@@ -2605,7 +2492,6 @@ macro_rules! advice {
 }
 // Generic, fixed-depth variants consolidated here to enable easy parameterization
 // of the canonical constrained test relations.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Depth-parameterized example circuits over Halo2 (Pasta).
 ///
 /// These tiny circuits exist solely for internal tests and pre-verifier smoke
@@ -2980,7 +2866,7 @@ pub mod depth {
     }
 }
 // Constrained Pow5 depth-parameterized test circuits.
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 /// Constrained Pow5 depth-parameterized circuits (Pow5 S-box) for internal tests.
 ///
 /// These circuits exercise one explicit quintic compression relation with small, fixed
@@ -3355,11 +3241,10 @@ impl DedupCache {
         }
     }
 }
-#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[cfg(test)]
 use halo2_proofs::transcript::TranscriptWriterBuffer;
-#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
+#[cfg(test)]
 use rand_core_06::OsRng;
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn halo2_verify_with_instance_noncanonical_ipa() {
     // Generate a valid proof, then wrap a non-canonical instance scalar in ZK1.
@@ -3463,7 +3348,6 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_vote_bool_commit_zk1() {
     use halo2_proofs::{
@@ -3533,7 +3417,6 @@ fn ipa_vote_bool_commit_zk1() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn halo2_verify_rejects_vk_without_bytes() {
     use halo2_proofs::{
@@ -3612,7 +3495,6 @@ fn halo2_verify_rejects_vk_without_bytes() {
     let vk_box_tampered = VerifyingKeyBox::new(backend.into(), vk_tampered);
     assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box_tampered)));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_anon_transfer_commit_zk1() {
     use halo2_proofs::{
@@ -3701,7 +3583,6 @@ fn ipa_anon_transfer_commit_zk1() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_vote_bool_commit_merkle2_zk1() {
     use halo2_proofs::{
@@ -4024,7 +3905,6 @@ fn halo2_ipa_circuit_for_backend_v1(backend: &str) -> Option<String> {
         .contains(&circuit_id.as_str())
         .then_some(circuit_id)
 }
-#[cfg(feature = "zk-halo2-ipa")]
 fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
     let Some(vk_box) = vk else {
@@ -4289,13 +4169,8 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if production_verify_backend_tag(backend)
         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
-        #[cfg(feature = "zk-halo2-ipa")]
         {
             return verify_halo2_ipa_envelope(proof, vk);
-        }
-        #[cfg(not(feature = "zk-halo2-ipa"))]
-        {
-            return false;
         }
     }
     // STARK/FRI family: native multi-fold verifier
@@ -7352,7 +7227,6 @@ mod halo2_ipa_alias_tests {
             }
         }
     }
-    #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn every_production_halo2_circuit_has_one_canonical_outer_schema() {
         for circuit_id in HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
@@ -7423,7 +7297,6 @@ mod halo2_ipa_alias_tests {
         let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
         assert!(!verify_backend("halo2/ipa", &proof, Some(&vk)));
     }
-    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn halo2_ipa_rejects_noncanonical_outer_shape_before_backend_verify() {
         let vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![0xCC, 0xDD]);
@@ -7475,7 +7348,7 @@ mod halo2_ipa_alias_tests {
         );
     }
 }
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[cfg(test)]
 mod halo2_ipa_parameter_source_tests {
     use super::*;
     use halo2_proofs::poly::commitment::Params as _;
@@ -7568,7 +7441,6 @@ mod halo2_ipa_parameter_source_tests {
             .is_none()
         );
     }
-    #[cfg(feature = "zk-halo2")]
     #[test]
     fn production_parameter_map_matches_kaigi_circuit_constants() {
         assert_eq!(
@@ -7587,16 +7459,15 @@ mod halo2_ipa_parameter_source_tests {
         );
     }
 }
-#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 mod kaigi_authorization_v1_tests;
-#[cfg(all(test, feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 mod kaigi_usage_v1_tests;
 
 /// Halo2 envelope parsing helpers.
 ///
 /// These routines keep proof/VK payload handling deterministic and bounded while
 /// delegating cryptographic verification to the concrete Halo2 backends.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod zkparse {
     use super::{PastaParams, pasta_params_new};
     use halo2_proofs::poly::commitment::Params as _;
@@ -7887,7 +7758,6 @@ mod zkparse {
         Ok((payload, inst_cols))
     }
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn halo2_params_for_verifier_v1(vk_bytes: &[u8], circuit_id: &str) -> Option<PastaParams> {
     if halo2_ipa_canonical_k_v1(circuit_id).is_some() {
         return zkparse::params_for_circuit_v1(vk_bytes, circuit_id);
@@ -7911,7 +7781,6 @@ pub fn extract_pasta_fp_instances(
 /// Extract instance columns as raw 32-byte little-endian field elements.
 #[doc(hidden)]
 pub fn extract_pasta_instance_columns_bytes(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
         if let Ok((_, cols)) = zkparse::strict_proof_and_instances(proof_bytes) {
@@ -7930,7 +7799,6 @@ pub fn extract_pasta_instance_columns_bytes(proof_bytes: &[u8]) -> Option<Vec<Ve
     }
     None
 }
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn extract_pasta_fp_instances_impl(
     proof_bytes: &[u8],
 ) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
@@ -7938,14 +7806,7 @@ fn extract_pasta_fp_instances_impl(
         .ok()
         .map(|(_, cols)| cols)
 }
-#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-fn extract_pasta_fp_instances_impl(
-    _proof_bytes: &[u8],
-) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
-    None
-}
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
     #[cfg(any(test, feature = "test-utils"))]
     use halo2_proofs::{
@@ -9211,12 +9072,7 @@ mod pasta_tiny {
         }
     }
 }
-#[cfg(all(
-    test,
-    feature = "zk-tests",
-    feature = "halo2-dev-tests",
-    feature = "zk-halo2"
-))]
+#[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     use halo2_backend::Scalar;
@@ -9381,7 +9237,6 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        #[cfg(feature = "zk-halo2")]
         KAIGI_AUTHORIZATION_BACKEND_V1 => {
             if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
                 return false;
@@ -9412,7 +9267,6 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        #[cfg(feature = "zk-halo2")]
         KAIGI_USAGE_BACKEND_V1 => {
             if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
                 return false;
@@ -9461,7 +9315,6 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
 /// Transparent Halo2 IPA over Pasta (no trusted setup).
 ///
 /// Accepts a ZK1 envelope containing an `IPAK` TLV to derive Params.
-#[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     let reject = |reason: &'static str| {
@@ -9775,7 +9628,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 )
             }
         }
-        #[cfg(feature = "zk-halo2")]
         KAIGI_AUTHORIZATION_BACKEND_V1 => {
             if col_refs.len() != 1 || col_refs[0].len() != KAIGI_AUTHORIZATION_INSTANCE_ROWS_V1 {
                 return false;
@@ -9806,7 +9658,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
-        #[cfg(feature = "zk-halo2")]
         KAIGI_USAGE_BACKEND_V1 => {
             if col_refs.len() != 1 || col_refs[0].len() != KAIGI_USAGE_INSTANCE_ROWS_V1 {
                 return false;
@@ -9839,16 +9690,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         _ => false,
     }
-}
-#[cfg(all(
-    test,
-    feature = "zk-tests",
-    feature = "halo2-dev-tests",
-    not(feature = "zk-halo2")
-))]
-fn verify_halo2(_backend: &str, _proof: &ProofBox, _vk: Option<&VerifyingKeyBox>) -> bool {
-    // Feature disabled: refuse Halo2 proofs to avoid silent acceptance of forged transcripts.
-    false
 }
 #[cfg(test)]
 mod preverify_tests {

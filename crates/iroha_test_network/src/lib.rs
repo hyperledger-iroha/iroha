@@ -6684,7 +6684,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
 fn npos_params_from_genesis(
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
-) -> Result<Option<SumeragiNposParameters>, String> {
+) -> Result<Option<SumeragiNposParameters>> {
     let target = SumeragiNposParameters::parameter_id();
     let mut snapshots = genesis_isi
         .iter()
@@ -6699,30 +6699,27 @@ fn npos_params_from_genesis(
         return Ok(None);
     };
     if snapshots.next().is_some() {
-        return Err(
-            "genesis must contain exactly one `sumeragi_npos_parameters` snapshot".to_owned(),
-        );
+        return Err(eyre!(
+            "genesis must contain exactly one `sumeragi_npos_parameters` snapshot"
+        ));
     }
-    SumeragiNposParameters::from_custom_parameter(snapshot)
-        .map(Some)
-        .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
+    Ok(SumeragiNposParameters::from_custom_parameter(snapshot)?)
 }
 fn authenticated_validator_capacity(
     declared_capacity: usize,
     consensus_mode: ConsensusMode,
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
-) -> Result<usize, String> {
+) -> Result<usize> {
     if consensus_mode == ConsensusMode::Permissioned {
         return Ok(declared_capacity);
     }
     let npos =
         npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)?.unwrap_or_default();
     npos.validate()
-        .map_err(|error| format!("invalid signed NPoS validator ceiling: {error}"))?;
-    let signed_capacity = usize::try_from(npos.max_validators()).map_err(|_| {
-        "signed NPoS maximum validator roster does not fit this platform".to_owned()
-    })?;
+        .map_err(|error| eyre!("invalid signed NPoS validator ceiling: {error}"))?;
+    let signed_capacity = usize::try_from(npos.max_validators())
+        .map_err(|_| eyre!("signed NPoS maximum validator roster does not fit this platform"))?;
     Ok(declared_capacity.max(signed_capacity))
 }
 fn resolve_npos_bootstrap_stake(
@@ -14327,6 +14324,54 @@ mod tests {
         );
     }
     #[test]
+    fn original_npos_genesis_capacity_reader_preserves_refusal_and_same_input_retry() {
+        let expected = SumeragiNposParameters::default();
+        let parameter = expected.clone().into_custom_parameter();
+        let original = parameter.payload().get().to_owned();
+        let genesis = vec![vec![InstructionBox::from(SetParameter::new(
+            Parameter::Custom(parameter.clone()),
+        ))]];
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let producer = norito::with_decode_limits_scope(limits, || {
+            SumeragiNposParameters::from_custom_parameter(&parameter)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(producer, norito::json::Error::DecodeResourceLimit),
+            "{producer:?}"
+        );
+        let parser =
+            norito::with_decode_limits_scope(limits, || npos_params_from_genesis(&genesis, &[]))
+                .unwrap_err();
+        assert!(
+            matches!(
+                parser.downcast_ref::<norito::json::Error>(),
+                Some(norito::json::Error::DecodeResourceLimit)
+            ),
+            "{parser:?}"
+        );
+        let capacity = norito::with_decode_limits_scope(limits, || {
+            authenticated_validator_capacity(4, ConsensusMode::Npos, &genesis, &[])
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                capacity.downcast_ref::<norito::json::Error>(),
+                Some(norito::json::Error::DecodeResourceLimit)
+            ),
+            "{capacity:?}"
+        );
+        assert_eq!(parameter.payload().get(), &original);
+        assert_eq!(
+            npos_params_from_genesis(&genesis, &[]).unwrap(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            authenticated_validator_capacity(4, ConsensusMode::Npos, &genesis, &[]).unwrap(),
+            usize::try_from(expected.max_validators()).unwrap().max(4)
+        );
+    }
+    #[test]
     fn npos_genesis_snapshot_parser_rejects_invalid_payload() {
         let mut invalid = SumeragiNposParameters::default();
         invalid.epoch_seed = [0; 32];
@@ -14335,7 +14380,13 @@ mod tests {
         ))]];
         let error = npos_params_from_genesis(&genesis, &[])
             .expect_err("an all-zero NPoS seed must be rejected");
-        assert_eq!(error, "genesis contains invalid `sumeragi_npos_parameters`");
+        assert!(
+            matches!(error.downcast_ref::<norito::json::Error>(),
+                Some(norito::json::Error::InvalidField { field, message })
+                    if field == "SumeragiNposParameters" && message == "epoch_seed must not be all zero"
+            ),
+            "{error:?}"
+        );
     }
     #[test]
     fn npos_genesis_snapshot_parser_rejects_duplicates_across_sections() {
@@ -14347,7 +14398,7 @@ mod tests {
         let error = npos_params_from_genesis(&genesis, &post_topology)
             .expect_err("multiple NPoS snapshots must be rejected");
         assert_eq!(
-            error,
+            error.to_string(),
             "genesis must contain exactly one `sumeragi_npos_parameters` snapshot"
         );
     }

@@ -102,6 +102,88 @@ final class PetalDecoderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(erased.corrected, 3)
     }
 
+    func testRandomWordsAreAlmostNeverAccepted() {
+        // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
+        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about one
+        // random word in 250 (150 of these 40 000). Lane P stops at six for the same reason. The counts
+        // are exact: the same xorshift32 words and byte-valued confidences (many ties, so the ranking
+        // must be stable) reproduce the reference.
+        var rng = PetalXorshift32(seed: 0x5EED)
+        let trials = 40_000
+        for (lane, expected) in [(PetalLane.d, 3), (PetalLane.p, 0)] {
+            let length = lane.dataLength + lane.parityLength
+            var accepted = 0
+            for _ in 0..<trials {
+                let word = (0..<length).map { _ in rng.nextByte() }
+                let confidence = (0..<length).map { _ in Double(rng.nextByte()) }
+                if PetalDecoder.decodeWithErasures(lane, word, confidence) != nil { accepted += 1 }
+            }
+            XCTAssertEqual(accepted, expected, "lane \(lane.letter) of \(trials) random words")
+        }
+    }
+
+    func testOnlyLaneKUsesTwoThirdsOfItsParityAsErasures() throws {
+        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
+        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+        for (lane, flagged) in [(PetalLane.d, 7), (PetalLane.p, 8)] {
+            let data = (0..<lane.dataLength).map { UInt8($0) }
+            let word = try lane.encode(data)
+            var damaged = word
+            var confidence = [Double](repeating: 1, count: word.count)
+            for position in 0..<flagged {
+                damaged[position] ^= 0xA5
+                confidence[position] = 0
+            }
+            damaged[20] ^= 0x3C
+            damaged[21] ^= 0x3C
+            XCTAssertNil(PetalDecoder.decodeWithErasures(lane, damaged, confidence), "lane \(lane.letter)")
+            // half the parity flagged plus one hidden error stays comfortably repairable
+            damaged = word
+            confidence = [Double](repeating: 1, count: word.count)
+            for position in 0..<(lane.parityLength / 2) {
+                damaged[position] ^= 0xA5
+                confidence[position] = 0
+            }
+            damaged[20] ^= 0x3C
+            let result = try XCTUnwrap(
+                PetalDecoder.decodeWithErasures(lane, damaged, confidence),
+                "lane \(lane.letter)"
+            )
+            XCTAssertEqual(result.data, data, "lane \(lane.letter)")
+            XCTAssertLessThanOrEqual(result.erasures, lane.parityLength / 2, "lane \(lane.letter)")
+        }
+        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+        // (2·7 + 30 = 44 of 45 parity bytes)
+        let data = (0..<PetalLane.k.dataLength).map { UInt8(truncatingIfNeeded: $0) }
+        var damaged = try PetalLane.k.encode(data)
+        var confidence = [Double](repeating: 1, count: damaged.count)
+        for position in 0..<30 {
+            damaged[position] ^= 0xA5
+            confidence[position] = 0
+        }
+        for position in 60..<67 { damaged[position] ^= 0x3C }
+        let result = try XCTUnwrap(PetalDecoder.decodeWithErasures(.k, damaged, confidence), "30 erasures")
+        XCTAssertEqual(result.data, data)
+        XCTAssertEqual(result.erasures, 30)
+    }
+
+    func testEqualConfidencesAreErasedInPositionOrder() throws {
+        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
+        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
+        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
+        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
+        // the last positions instead would see seven errors.
+        let data = (0..<PetalLane.d.dataLength).map { UInt8($0) }
+        var word = try PetalLane.d.encode(data)
+        for position in Array(0..<3) + Array(20..<24) { word[position] ^= 0x5A }
+        let confidence = [Double](repeating: 1, count: word.count)
+        let result = try XCTUnwrap(PetalDecoder.decodeWithErasures(.d, word, confidence), "ties in order")
+        XCTAssertEqual(result.data, data)
+        XCTAssertEqual(result.erasures, 3)
+        XCTAssertEqual(result.corrected, 7)
+    }
+
     // MARK: - Level read and normalised read
 
     /// The exact canvas-to-pixel homography of the 768-pixel test renders.
@@ -310,6 +392,20 @@ final class PetalDecoderTests: XCTestCase {
             XCTAssertEqual($0 as? PetalDecodeError, .unsupportedImage)
         }
         XCTAssertNil(PetalDecoder.decode(try PetalLuma(width: 8, height: 8), homography: .identity))
+        // a buffer that does not match the stated size cannot be built, so it never reaches the sampler
+        XCTAssertThrowsError(try PetalLuma(width: 100, height: 100, pixels: [UInt8](repeating: 0, count: 5))) {
+            XCTAssertEqual($0 as? PetalImageError, .invalidDimensions)
+        }
+        // the diagnostics refuse the images `decode` refuses
+        let (_, rendered) = try setup(5)
+        let decoded = try PetalDecoder.decode(rendered)
+        let tiny = try PetalLuma(width: 8, height: 8)
+        XCTAssertNil(PetalDecoder.observedCells(tiny, frame: decoded))
+        XCTAssertNil(PetalDecoder.tileMatchError(tiny, frame: decoded))
+        XCTAssertNil(PetalDecoder.observedCells(rendered, frame: decoded, options: smallBudget))
+        XCTAssertNil(PetalDecoder.tileMatchError(rendered, frame: decoded, options: smallBudget))
+        XCTAssertNotNil(PetalDecoder.observedCells(rendered, frame: decoded))
+        XCTAssertNotNil(PetalDecoder.tileMatchError(rendered, frame: decoded))
     }
 
     func testGarbageImagesNeverPanicOrDecode() throws {

@@ -196,6 +196,21 @@ impl KagemushaHardwareTransitionSelectionV1 {
         self.validate_phase_shape(true)
     }
     fn validate_phase_shape(&self, prepare: bool) -> Result<(), KagemushaValidationErrorV1> {
+        self.validate_phase_shape_for_family(prepare, false)
+    }
+    fn validate_phase_shape_for_family(
+        &self,
+        prepare: bool,
+        ordinary_incoming: bool,
+    ) -> Result<(), KagemushaValidationErrorV1> {
+        if ordinary_incoming
+            && !matches!(
+                self.operation_kind,
+                KagemushaOperationKindV1::MintFold | KagemushaOperationKindV1::ReceiveFold
+            )
+        {
+            return Err(invalid("kagemusha.ordinary_incoming_selection.operation"));
+        }
         let outgoing = matches!(
             self.operation_kind,
             KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
@@ -215,8 +230,8 @@ impl KagemushaHardwareTransitionSelectionV1 {
                 self.candidate_envelope_digest != [0; 32]
                     || self.terminal_body_commitment != [0; 32]
             } else {
-                outgoing != (self.candidate_envelope_digest != [0; 32])
-                    || outgoing != (self.terminal_body_commitment != [0; 32])
+                (outgoing || ordinary_incoming) != (self.candidate_envelope_digest != [0; 32])
+                    || (outgoing || ordinary_incoming) != (self.terminal_body_commitment != [0; 32])
             }
             || [
                 self.release_id,
@@ -254,6 +269,17 @@ impl KagemushaHardwareTransitionSelectionV1 {
     /// Rejects invalid preparation scope or nonzero candidate/terminal commitments.
     pub fn canonical_prepare_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
         self.validate_prepare_shape()?;
+        self.encode_signing_bytes()
+    }
+    /// Exact ordinary incoming purpose1 subject. Both whole PUBLIC candidate and complete body
+    /// commitments are mandatory. Generic hardware/OEM terminal admission remains unchanged.
+    /// This formatter grants no State, replay, clock, FI or Native authority.
+    /// # Errors
+    /// Rejects any non-incoming operation, absent scope/body/candidate or non-exact financial edge.
+    pub fn canonical_ordinary_incoming_terminal_signing_bytes(
+        &self,
+    ) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
+        self.validate_phase_shape_for_family(false, true)?;
         self.encode_signing_bytes()
     }
     fn encode_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
@@ -761,6 +787,71 @@ mod tests {
         wrapper.subject = subject;
         wrapper.subject.secure_index_after += 1;
         assert!(wrapper.canonical_signing_bytes().is_err());
+    }
+
+    #[test]
+    fn ordinary_incoming_terminal_subject_is_explicit_and_full_original_bound() {
+        use crate::kagemusha::{
+            KagemushaAppOperationApprovalChallengeV1, KagemushaAppOperationApprovalPurposeV1,
+        };
+        let (_, _, _, _, signed) = fixture();
+        for kind in [
+            KagemushaOperationKindV1::MintFold,
+            KagemushaOperationKindV1::ReceiveFold,
+        ] {
+            let mut subject = signed.subject;
+            subject.operation_kind = kind;
+            subject.secure_index_before = (1_u128 << 100) + 5;
+            subject.secure_index_after = (1_u128 << 100) + 6;
+            assert!(subject.canonical_signing_bytes().is_err());
+            assert!(subject.canonical_prepare_signing_bytes().is_err());
+            let raw = subject
+                .canonical_ordinary_incoming_terminal_signing_bytes()
+                .unwrap();
+            assert_eq!(
+                raw.len(),
+                KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES
+            );
+            assert_eq!(
+                &raw[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE],
+                &subject.secure_index_before.to_le_bytes()
+            );
+            let wrapper = KagemushaAppOperationApprovalChallengeV1 {
+                version: 1,
+                purpose: KagemushaAppOperationApprovalPurposeV1::MonetaryTransition,
+                operation_id: [1; 32],
+                nonce: [2; 32],
+                account_binding: [3; 32],
+                authority_policy_digest: [4; 32],
+                attested_key_id: [5; 32],
+                enrollment_digest: [6; 32],
+                subject_signing_digest: Sha256::digest(&raw).into(),
+                normalized_guard_digest: [7; 32],
+                issued_at_ms: 100,
+                expires_at_ms: 200,
+                subject,
+            };
+            assert!(wrapper.canonical_signing_bytes().is_ok());
+            for n in 0..5 {
+                let mut changed = wrapper;
+                match n {
+                    0 => changed.subject.candidate_envelope_digest = [0; 32],
+                    1 => changed.subject.terminal_body_commitment = [0; 32],
+                    2 => changed.subject.secure_index_after += 1,
+                    3 => {
+                        changed.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition
+                    }
+                    _ => changed.subject.candidate_envelope_digest[0] ^= 1,
+                }
+                assert!(changed.canonical_signing_bytes().is_err());
+            }
+        }
+        assert!(
+            signed
+                .subject
+                .canonical_ordinary_incoming_terminal_signing_bytes()
+                .is_err()
+        );
     }
 
     #[test]

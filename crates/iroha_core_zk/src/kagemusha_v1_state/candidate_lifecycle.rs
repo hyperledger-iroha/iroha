@@ -6,15 +6,13 @@
 //! or redemption proof and canonical envelope are persisted before exposure. Recovery resumes the
 //! exact durable stage and every retry returns the originally persisted bytes.
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-#[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use std::ops::Range;
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use iroha_data_model::kagemusha::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
@@ -29,7 +27,7 @@ use iroha_data_model::kagemusha::{
 };
 use norito::codec::{Decode, Encode};
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 use super::KagemushaOutgoingOperationPrepareOutcomeV1;
 use super::{
     DigestV1, HardwareTransitionStatementV1, KAGEMUSHA_STATE_VERSION_V1,
@@ -162,7 +160,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(())
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Return a checked capacity successor after one durable inbound credit is staged.
     pub(super) fn receiver_snapshot_staged_successor(
         &self,
@@ -182,7 +180,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(next)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Return a checked capacity successor after one pending credit becomes consumed.
     pub(super) fn receiver_snapshot_folded_successor(
         &self,
@@ -307,7 +305,7 @@ pub enum SenderOutboxReservationOutcomeV1 {
     AlreadyReserved,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 /// Opaque authority to ask qualified hardware to commit one exact staged transition intent.
 ///
 /// The capability is neither cloneable nor serializable. Recovery reissues it only while the
@@ -319,7 +317,7 @@ pub struct KagemushaOutgoingCommitCapabilityV1 {
     _non_clone_seal: Cell<()>,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 impl KagemushaOutgoingCommitCapabilityV1 {
     pub(super) fn for_prepared(
         prepared: &PreparedOutgoingCandidateV1,
@@ -342,7 +340,7 @@ impl KagemushaOutgoingCommitCapabilityV1 {
     }
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 /// Core-derived sender inputs durably sealed before hardware consumes a payment predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -362,7 +360,7 @@ pub(super) struct PreparedSendMaterialV1 {
     pub(super) normalized_guard_statement_digest: DigestV1,
 }
 
-#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+#[cfg(any(test, unix))]
 /// Core-derived redeemer inputs sealed before hardware consumes a redemption predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -639,12 +637,10 @@ pub(crate) fn terminal_journal_commitment_v1(
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Canonical fixed-frame template and semantic offsets for the journal circuit opening.
 ///
 /// Only the five semantic fields and the derived Norito checksum are holes. The template comes
 /// from the same encoder and schema as the native commitment, so any framing drift fails closed.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) fn terminal_journal_canonical_layout_v1()
 -> Result<(Vec<Option<u8>>, [Range<usize>; 5]), KagemushaStateErrorV1> {
     let zero = TerminalJournalCommitmentPreimageV1 {
@@ -737,12 +733,10 @@ pub(crate) fn terminal_recovery_commitment_v1(
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// The encoder-owned fixed header for a bounded recursive opening of recovery material.
 ///
 /// Only the payload length and checksum are left open. Payload fields are assembled from
 /// constrained digest cells and exact compact-length byte streams by the circuit.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) fn terminal_recovery_canonical_frame_prefix_v1()
 -> Result<Vec<Option<u8>>, KagemushaStateErrorV1> {
     let zero = TerminalRecoveryCommitmentPreimageV1 {
@@ -791,7 +785,7 @@ pub(crate) fn terminal_recovery_canonical_frame_prefix_v1()
     Ok(prefix)
 }
 
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(test)]
 mod terminal_recovery_layout_tests {
     use super::*;
     use sha2::{Digest as _, Sha256};
@@ -911,7 +905,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Build one already-derived sender payment intent.
     pub(super) fn send(
         predecessor_state: KagemushaStateV1,
@@ -983,7 +977,7 @@ impl PreparedOutgoingCandidateV1 {
         )
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Build one already-derived partial or full redemption intent.
     pub(super) fn redemption(
         predecessor_state: KagemushaStateV1,
@@ -1122,7 +1116,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Borrow the derived compact payment output when this is a `SendSplit` candidate.
     #[must_use]
     pub fn send_output(&self) -> Option<&KagemushaPaymentOutputV1> {
@@ -1820,7 +1814,7 @@ impl CommittedOutgoingCandidateV1 {
         .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn canonical_storage_bytes(&self) -> Result<u64, KagemushaStateErrorV1> {
         canonical_len(self)
     }
@@ -2129,7 +2123,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         &mut self.operation_index
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Stage one caller-indexed operation and its exact Core preparation atomically.
     pub(super) fn prepare_indexed(
         &mut self,
@@ -2154,7 +2148,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         Ok(outcome)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Atomically stage an exact transition intent before hardware commit.
     fn prepare(
         &mut self,
@@ -2174,7 +2168,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Persist the sole verified operation proof authority before hardware may consume state.
     pub(super) fn persist_candidate(
         &mut self,
@@ -2204,7 +2198,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Install the sole hardware commit; a second successor cannot be attached to the candidate.
     pub(super) fn commit(
         &mut self,
@@ -2240,7 +2234,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     /// Persist a verified terminal envelope and clear only the active stage.
     pub(super) fn install_finalized(
         &mut self,
@@ -2600,7 +2594,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(SenderOutboxReservationOutcomeV1::Reserved)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     pub(super) fn require_reservation(
         &self,
         reservation: KagemushaOutboxReservationV1,
@@ -2620,7 +2614,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(commitment)
     }
 
-    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
+    #[cfg(any(test, unix))]
     fn bind_terminal_envelope(
         &mut self,
         reservation: KagemushaOutboxReservationV1,

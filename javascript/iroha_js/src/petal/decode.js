@@ -234,6 +234,16 @@ function readLaneD(image, m, reference) {
 /**
  * Tries Reed-Solomon with growing numbers of erasures, least confident first.
  *
+ * The schedule erases 0, 1/8, 1/4, 1/3 and 1/2 of the parity bytes (integer
+ * division), and for lane K also 2/3: lane D 0, 1, 2, 3, 5; lane P 0, 1, 3, 4,
+ * 6; lane K 0, 5, 11, 15, 22, 30. Lanes D and P stop at 1/2: their words have
+ * only 11 and 13 parity bytes, and a further erasure step leaves so few spare
+ * ones that it accepts wrong codewords (lane D at 7 erasures: about 0.4 % of
+ * random words, and 5 wrong lanes in 2 900 simulated harsh frames; lane P at 8:
+ * 2 wrong lanes in 600 banded 480p frames, in the reference's simulation).
+ * Capping them costs 0.65 % of the lane D reads and 0.15 % of the lane P reads
+ * in those frames.
+ *
  * Returns `{data, corrected, erasures}`: `corrected` is the number of byte
  * positions the decoder rewrote (the erased bytes plus any errors it found
  * among the others, a measure of how close the lane was to failing) and
@@ -242,19 +252,18 @@ function readLaneD(image, m, reference) {
 export function decodeWithErasures(lane, word, confidence) {
   const spec = laneSpec(lane);
   const nsym = spec.parityLen;
+  // The ranking must be stable: byte-valued confidences tie a lot, and the tie order decides
+  // which bytes are erased.
   const order = [];
   for (let index = 0; index < word.length; index += 1) order.push(index);
   order.sort((a, b) => totalCmp(confidence[a], confidence[b]));
+  const steps = [0, Math.floor(nsym / 8), Math.floor(nsym / 4), Math.floor(nsym / 3), Math.floor(nsym / 2)];
+  if (spec.name === "K") {
+    steps.push(Math.floor((nsym * 2) / 3));
+  }
   // consecutive duplicates are dropped, as with the reference's `dedup`
   const schedule = [];
-  for (const erasures of [
-    0,
-    Math.floor(nsym / 8),
-    Math.floor(nsym / 4),
-    Math.floor(nsym / 3),
-    Math.floor(nsym / 2),
-    Math.floor((nsym * 2) / 3),
-  ]) {
+  for (const erasures of steps) {
     if (schedule.length === 0 || schedule[schedule.length - 1] !== erasures) {
       schedule.push(erasures);
     }
@@ -686,8 +695,17 @@ function requireLumaShape(image) {
   }
 }
 
-function usableSize(image, options) {
-  return image.width >= 48 && image.height >= 48 && image.width * image.height <= options.maxPixels;
+/**
+ * Whether `image` is something the decoder may work on: at least 48 pixels on a side, within
+ * `maxPixels`, and with a buffer that matches its size.
+ */
+function isDecodable(image, options) {
+  return (
+    image.width >= 48 &&
+    image.height >= 48 &&
+    image.width * image.height <= options.maxPixels &&
+    image.data.length === image.width * image.height
+  );
 }
 
 /**
@@ -696,7 +714,7 @@ function usableSize(image, options) {
  */
 export function decodeFrameResult(image, options) {
   requireLumaShape(image);
-  if (!usableSize(image, options) || image.data.length !== image.width * image.height) {
+  if (!isDecodable(image, options)) {
     return { error: "unsupported_image" };
   }
   const finders = locateFinders(image);
@@ -784,21 +802,30 @@ export function decodePetalFrameAt(image, homography, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
   const m = homographyValues(homography);
-  if (!usableSize(image, resolved) || image.data.length !== image.width * image.height) {
+  if (!isDecodable(image, resolved)) {
     return null;
   }
   const reference = referenceLevels(image, m);
   if (reference === null) {
     return null;
   }
-  return finish(image, resolved, { m, rotation: 0, mirrored: false, reference }, null, null);
+  return finish(image, resolved, { m, rotation: 0, mirrored: false, reference }, null);
 }
 
-/** Builds the cells a decoder believes it saw, for diagnostics. */
+/**
+ * Builds the cells a decoder believes it saw, for diagnostics; `null` when the image is unusable
+ * or the finder reference levels are too weak.
+ *
+ * Tiles are taken from the level read (the one that judges against the finder levels), even for
+ * a frame whose lanes were rescued by the normalised read.
+ */
 export function observedCells(image, frame, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
   const m = homographyValues(frame.homography);
+  if (!isDecodable(image, resolved)) {
+    return null;
+  }
   const reference = referenceLevels(image, m);
   if (reference === null) {
     return null;
@@ -809,11 +836,20 @@ export function observedCells(image, frame, options) {
   return PetalFrameCells.fromWords(words.p, words.k, dots.word);
 }
 
-/** Mean squared tile-match error, a quick image-quality indicator. */
+/**
+ * Mean squared tile-match error of the level read, a quick image-quality indicator; `null` when
+ * the image is unusable or the finder reference levels are too weak.
+ *
+ * It can be large for a frame whose lanes were rescued by the normalised read, which is the
+ * point: the finder levels did not describe that picture.
+ */
 export function tileMatchError(image, frame, options) {
   const resolved = resolveDecodeOptions(options);
   requireLumaShape(image);
   const m = homographyValues(frame.homography);
+  if (!isDecodable(image, resolved)) {
+    return null;
+  }
   const reference = referenceLevels(image, m);
   if (reference === null) {
     return null;

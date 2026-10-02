@@ -26,8 +26,12 @@ const ABI_SYMBOLS = Object.freeze([
   "connectNoritoBridgeAbiVersion", "inspectSorafsOrderbookSubmissionForDiscriminantV1",
   "privateSettlementVerifyAuditApprovalResponseV1", "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
   "privateSettlementVerifyCommitteeProofResponseV1", "sorafsValidateAppealFinanceCancelAssetLockJson",
-  "validationFeeHijiriQuoteRequestV1", "validationFeeVerifyHijiriQuoteResponseV1",
+  "validationFeeCurrentPolicyProofRequestV1", "validationFeeVerifyCurrentPolicyProofV1",
   "verifySorafsOrderbookSubmissionReceiptV1",
+]);
+const RETIRED_ABI_SYMBOLS = Object.freeze([
+  "privateSettlementVerifyAuditorCapsuleResponseV1",
+  "validationFeeHijiriQuoteRequestV1", "validationFeeVerifyHijiriQuoteResponseV1",
 ]);
 const SORAFS_SYMBOLS = Object.freeze(["sorafsValidateFixtureBundleJson", "sorafsMultiFetchLocal",
   "sorafsValidatePdpPayloadJson", "sorafsValidatePdpCommitmentChallengeJson",
@@ -98,7 +102,7 @@ function symbols(binding) {
   // Match the sole ABI owner's rejection-only prefix; this is not an export or decoder.
   const retiredPrefix = "connect_norito_" + ["cash", "offline"].reverse().join("_") + "_";
   demand(names.length <= 1024 && names.every((name) => typeof name === "string"), "native symbol inventory differs");
-  demand(names.every((name) => name !== "privateSettlementVerifyAuditorCapsuleResponseV1"
+  demand(names.every((name) => !RETIRED_ABI_SYMBOLS.includes(name)
     && !name.startsWith(retiredPrefix)), "retired native export present");
   for (const name of [...ABI_SYMBOLS, ...SORAFS_SYMBOLS])
     demand(typeof Object.getOwnPropertyDescriptor(binding, name)?.value === "function", `missing native capability ${name}`);

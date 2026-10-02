@@ -58,9 +58,12 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
     pub fn authenticated_execution(
         &self,
         height: u64,
-    ) -> Result<AuthenticatedExecutionBlock, ChainReadError> {
+    ) -> Result<AuthenticatedExecutionBlock, ExecutionAttemptError<ChainReadError>> {
         if height != GENESIS_HEIGHT {
-            return self.certified(height)?.into_authenticated_execution();
+            return self
+                .certified(height)?
+                .into_authenticated_execution()
+                .map_err(Into::into);
         }
         let mut prefix = CertifiedPrefix::new(
             self.source.chain_id(),
@@ -72,9 +75,12 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
             .into_parts();
         genesis
             .map(GenesisExecutionAnchor::into_authenticated_execution)
-            .ok_or_else(|| ChainReadError::Malformed {
-                height,
-                reason: "native successor did not authenticate genesis execution".into(),
+            .ok_or_else(|| {
+                ChainReadError::Malformed {
+                    height,
+                    reason: "native successor did not authenticate genesis execution".into(),
+                }
+                .into()
             })
     }
 }
@@ -131,6 +137,18 @@ pub enum NativeExecutionReadError {
     /// The actual native prefix, including the genesis successor anchor, did not authenticate.
     #[error(transparent)]
     Chain(#[from] ChainReadError),
+    /// The original decoder or allocator refused this local attempt.
+    #[error(transparent)]
+    Deferred(ExecutionDeferred),
+}
+
+impl From<ExecutionAttemptError<ChainReadError>> for NativeExecutionReadError {
+    fn from(error: ExecutionAttemptError<ChainReadError>) -> Self {
+        match error {
+            ExecutionAttemptError::Rejected(error) => Self::Chain(error),
+            ExecutionAttemptError::Deferred(local) => Self::Deferred(local),
+        }
+    }
 }
 
 /// Original authenticated graph and its exact canonical source bytes.
@@ -205,9 +223,28 @@ pub fn read_authenticated_execution(
                     .map_err(|_| ChainReadError::NotCommitted { height: current })?,
             )
             .ok_or(ChainReadError::NotCommitted { height: current })?;
-        let storage = |error: crate::kura::Error| NativeExecutionReadError::Storage {
-            height: current,
-            reason: error.to_string(),
+        let storage = |error: crate::kura::Error| {
+            let rejected = |error: crate::kura::Error| NativeExecutionReadError::Storage {
+                height: current,
+                reason: error.to_string(),
+            };
+            let attempt = match error {
+                crate::kura::Error::NoritoFrame(error) => {
+                    norito_decode_attempt_error(error, |error| {
+                        rejected(crate::kura::Error::NoritoFrame(error))
+                    })
+                }
+                crate::kura::Error::VersionedCodec(error) => {
+                    crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+                        rejected(crate::kura::Error::VersionedCodec(error))
+                    })
+                }
+                completed => ExecutionAttemptError::Rejected(rejected(completed)),
+            };
+            match attempt {
+                ExecutionAttemptError::Rejected(error) => error,
+                ExecutionAttemptError::Deferred(local) => NativeExecutionReadError::Deferred(local),
+            }
         };
         let source = kura
             .native_frame_read(current, expected)
@@ -245,9 +282,16 @@ pub fn read_authenticated_execution(
             .ok_or(ChainReadError::NotInView { height: current })?;
         let block =
             iroha_data_model::block::decode_framed_signed_block(&wire).map_err(|error| {
-                NativeExecutionReadError::Storage {
-                    height: current,
-                    reason: error.to_string(),
+                match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
+                    NativeExecutionReadError::Storage {
+                        height: current,
+                        reason: error.to_string(),
+                    }
+                }) {
+                    ExecutionAttemptError::Rejected(error) => error,
+                    ExecutionAttemptError::Deferred(local) => {
+                        NativeExecutionReadError::Deferred(local)
+                    }
                 }
             })?;
         if block.header().height().get() != current || block.hash() != expected {

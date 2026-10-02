@@ -209,8 +209,8 @@ fn native_cash_intent_frame_binds_complete_captured_financial_control_identity()
         },
     };
     let original_record = intent(control);
-    let original = encode(&original_record).unwrap();
-    assert_eq!(decode(&original).unwrap(), original_record);
+    let original = encode(&original_record, 16 * 1024).unwrap();
+    assert_eq!(decode(&original, 16 * 1024).unwrap(), original_record);
     for field in 0..3 {
         let mut changed = control;
         match field {
@@ -219,20 +219,215 @@ fn native_cash_intent_frame_binds_complete_captured_financial_control_identity()
             _ => changed.upper_ms -= 1,
         }
         let changed_record = intent(changed);
-        let changed_original = encode(&changed_record).unwrap();
+        let changed_original = encode(&changed_record, 16 * 1024).unwrap();
         assert_ne!(
             changed_original, original,
             "financial control field {field}"
         );
-        assert_eq!(decode(&changed_original).unwrap(), changed_record);
+        assert_eq!(
+            decode(&changed_original, 16 * 1024).unwrap(),
+            changed_record
+        );
     }
     for length in 0..original.len() {
-        assert!(decode(&original[..length]).is_err());
+        assert!(decode(&original[..length], 16 * 1024).is_err());
     }
     let mut suffix = original.clone();
     suffix.push(0);
-    assert!(decode(&suffix).is_err());
+    assert!(decode(&suffix, 16 * 1024).is_err());
     let mut foreign_schema = original;
     foreign_schema[6] ^= 1;
-    assert!(decode(&foreign_schema).is_err());
+    assert!(decode(&foreign_schema, 16 * 1024).is_err());
+}
+
+#[test]
+fn cash_proving_history_incoming_selection_requires_its_own_retained_identity() {
+    // Actual private operation selector with data-only identities. No Native cash owner,
+    // captured FI decision, incoming approval or monetary/proof capability is constructed.
+    let incoming = CapturedFinancialControlIdentity {
+        original_sha256: [71; 32],
+        lower_ms: 200,
+        upper_ms: 201,
+    };
+    let outgoing = None;
+    let terminal = None;
+    // The old outgoing-only selection rejects this exact legitimate slot arrangement.
+    assert_eq!(
+        ProvingHistoryOperation::OutgoingApproval.select_financial_control_identity(
+            outgoing,
+            terminal,
+            Some(incoming),
+            None,
+        ),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+    assert_eq!(
+        ProvingHistoryOperation::IncomingApproval.select_financial_control_identity(
+            outgoing,
+            terminal,
+            Some(incoming),
+            None,
+        ),
+        Ok(incoming)
+    );
+    let old_source = CapturedFinancialControlIdentity {
+        original_sha256: [72; 32],
+        lower_ms: 100,
+        upper_ms: 101,
+    };
+    let terminal = CapturedFinancialControlIdentity {
+        original_sha256: [73; 32],
+        lower_ms: 300,
+        upper_ms: 301,
+    };
+    // Even when other retained operations exist, the complete incoming FI/bounds are
+    // selected rather than an earlier source capture or another operation's identity.
+    assert_eq!(
+        ProvingHistoryOperation::IncomingApproval.select_financial_control_identity(
+            Some(old_source),
+            Some(terminal),
+            Some(incoming),
+            None,
+        ),
+        Ok(incoming)
+    );
+    assert_ne!(incoming, old_source);
+    assert_ne!(incoming, terminal);
+    assert_eq!(
+        ProvingHistoryOperation::OutgoingApproval.select_financial_control_identity(
+            Some(old_source),
+            Some(terminal),
+            Some(incoming),
+            None,
+        ),
+        Ok(old_source)
+    );
+    assert_eq!(
+        ProvingHistoryOperation::TerminalApproval.select_financial_control_identity(
+            Some(old_source),
+            Some(terminal),
+            Some(incoming),
+            None,
+        ),
+        Ok(terminal)
+    );
+}
+
+#[test]
+fn cash_proving_history_never_falls_back_to_another_operations_identity() {
+    // A missing required operation slot remains a refusal even with three foreign captures.
+    let identities = [
+        CapturedFinancialControlIdentity {
+            original_sha256: [74; 32],
+            lower_ms: 100,
+            upper_ms: 101,
+        },
+        CapturedFinancialControlIdentity {
+            original_sha256: [75; 32],
+            lower_ms: 200,
+            upper_ms: 201,
+        },
+        CapturedFinancialControlIdentity {
+            original_sha256: [76; 32],
+            lower_ms: 300,
+            upper_ms: 301,
+        },
+        CapturedFinancialControlIdentity {
+            original_sha256: [77; 32],
+            lower_ms: 400,
+            upper_ms: 401,
+        },
+    ];
+    for (missing, operation) in [
+        ProvingHistoryOperation::OutgoingApproval,
+        ProvingHistoryOperation::TerminalApproval,
+        ProvingHistoryOperation::IncomingApproval,
+        ProvingHistoryOperation::IncomingTerminal,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut slots = identities.map(Some);
+        slots[missing] = None;
+        assert_eq!(
+            operation.select_financial_control_identity(slots[0], slots[1], slots[2], slots[3]),
+            Err(KagemushaStateErrorV1::InvalidCandidateStage),
+            "missing operation slot {missing}"
+        );
+        assert_eq!(
+            operation.select_financial_control_identity(None, None, None, None),
+            Err(KagemushaStateErrorV1::InvalidCandidateStage)
+        );
+    }
+}
+
+#[test]
+fn cash_proving_history_incoming_terminal_uses_distinct_w1_identity() {
+    // Actual private selector over synthetic DATA; no FI/Native/approval authority is constructed.
+    let w2 = CapturedFinancialControlIdentity {
+        original_sha256: [81; 32],
+        lower_ms: 100,
+        upper_ms: 101,
+    };
+    let w1 = CapturedFinancialControlIdentity {
+        original_sha256: [82; 32],
+        lower_ms: 200,
+        upper_ms: 201,
+    };
+    assert_eq!(
+        ProvingHistoryOperation::IncomingTerminal.select_financial_control_identity(
+            Some(w2),
+            Some(w2),
+            Some(w2),
+            Some(w1),
+        ),
+        Ok(w1)
+    );
+    assert_eq!(
+        ProvingHistoryOperation::IncomingApproval.select_financial_control_identity(
+            None,
+            None,
+            Some(w2),
+            Some(w1),
+        ),
+        Ok(w2)
+    );
+    assert_eq!(
+        ProvingHistoryOperation::IncomingTerminal.select_financial_control_identity(
+            Some(w2),
+            Some(w2),
+            Some(w2),
+            None,
+        ),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+}
+
+#[test]
+fn native_cash_record_budget_counts_full_carriers_and_private_checkpoint() {
+    let mib = 1024 * 1024u64;
+    let selected = cash_record_payload_limit(9 * mib, 10 * mib, 118 * mib, 7 * mib).unwrap();
+    assert_eq!(selected, 144 * mib + 128 * 1024);
+    assert!(selected > 128 * mib);
+    assert!(cash_record_payload_limit(1, 1, 1, 0).is_err());
+    assert!(cash_record_payload_limit(u64::MAX, 1, 1, 1).is_err());
+    assert!(cash_record_payload_limit(1, u64::MAX, 1, 1).is_err());
+    assert!(cash_record_payload_limit(1, 1, u64::MAX, 1).is_err());
+    assert!(cash_record_payload_limit(1, 1, 1, u64::MAX).is_err());
+}
+#[test]
+fn native_cash_record_limit_rejects_complete_frame_before_encoding() {
+    // Plain codec DATA only, no owner or signer. Count the actual complete canonical schema frame.
+    let record = Record::Mint(MintRecord::ProvenRequest {
+        operation: [0; 32],
+        original: vec![0; 97],
+    });
+    let whole = u64::try_from(norito::canonical_frame_len(&record).unwrap()).unwrap();
+    assert!(whole > 97);
+    assert!(encode(&record, 97).is_err());
+    assert!(encode(&record, whole - 1).is_err());
+    let raw = encode(&record, whole).unwrap();
+    assert_eq!(raw.len() as u64, whole);
+    assert!(decode(&raw, whole - 1).is_err());
+    assert_eq!(decode(&raw, whole).unwrap(), record);
 }

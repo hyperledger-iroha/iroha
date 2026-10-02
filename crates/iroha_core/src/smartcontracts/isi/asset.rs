@@ -75,7 +75,7 @@ pub mod isi {
         }
         /// Retain the original debit calculation after every source and reserve check.
         fn precheck_numeric_asset_debit(
-            &self,
+            &mut self,
             network_id: &iroha_data_model::NetworkId,
             id: &AssetId,
             amount: &Quantity,
@@ -89,6 +89,7 @@ pub mod isi {
                     "governed privacy public reserve cannot be burned".into(),
                 ));
             }
+            crate::retail_fee::settle_balance(self, &resolved_id)?;
             if self
                 .game_custody_by_account
                 .get(resolved_id.account())
@@ -153,6 +154,7 @@ pub mod isi {
             } else {
                 self.assign_quantity_balance_exact(resolved_id, candidate)?;
             }
+            crate::retail_fee::observe_balance(self, &resolved_id)?;
             Ok(())
         }
         /// Validate an exact-id numeric transfer and compute its complete balance transcript.
@@ -285,6 +287,8 @@ pub mod isi {
             delta: &TransferDeltaTranscript,
             source_policy: NumericAssetTransferSourcePolicy,
         ) -> Result<(), Error> {
+            crate::retail_fee::settle_balance(self, source_id)?;
+            crate::retail_fee::settle_balance(self, destination_id)?;
             // Custody may change after preparation. Check the original typed purpose
             // again before either balance is mutated.
             let reserve_owner =
@@ -350,6 +354,7 @@ pub mod isi {
                 if !delta.to_balance_after.is_zero() {
                     self.track_nonzero_asset_holder(destination_id);
                 }
+                crate::retail_fee::observe_balance(self, source_id)?;
                 return Ok(());
             }
             // Repeat all fallible checks before the first write. The original exclusive
@@ -369,6 +374,8 @@ pub mod isi {
             if !delta.to_balance_after.is_zero() {
                 self.track_nonzero_asset_holder(destination_id);
             }
+            crate::retail_fee::observe_balance(self, source_id)?;
+            crate::retail_fee::observe_balance(self, destination_id)?;
             Ok(())
         }
         /// Validate a numeric credit after canonicalizing the balance id for the current scope.
@@ -400,11 +407,18 @@ pub mod isi {
             self.account(id.account())?;
             let spec = self.asset_definition(id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            let current = self
-                .assets
-                .get(id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
+            let current = crate::retail_fee::projected_balance(self, id, self.retail_fee_now_ms)
+                .map_err(|error| {
+                    self.attempt_error_to_instruction_error(
+                        error.map_rejection(InstructionExecutionError::Conversion),
+                    )
+                })?
+                .unwrap_or_else(|| {
+                    self.assets
+                        .get(id)
+                        .map(|value| value.as_ref().clone())
+                        .unwrap_or_else(Quantity::zero)
+                });
             assert_numeric_spec_with(current.as_numeric(), spec)?;
             let candidate = current
                 .checked_add(amount)
@@ -437,12 +451,14 @@ pub mod isi {
             id: &AssetId,
             candidate: Quantity,
         ) -> Result<(), Error> {
+            crate::retail_fee::settle_balance(self, id)?;
             self.quantity_mutation_observation.changed();
             let is_nonzero = !candidate.is_zero();
             self.assign_quantity_balance_exact(id, candidate)?;
             if is_nonzero {
                 self.track_nonzero_asset_holder(id);
             }
+            crate::retail_fee::observe_balance(self, id)?;
             Ok(())
         }
         /// Increase an already-canonicalized exact numeric balance, creating it if missing.
@@ -498,7 +514,7 @@ pub mod isi {
             }
             Ok(())
         }
-        fn ensure_numeric_asset_transfer_availability(
+        pub(crate) fn ensure_numeric_asset_transfer_availability(
             &self,
             asset_id: &AssetId,
             amount: Quantity,
@@ -656,7 +672,7 @@ pub mod isi {
         )
     }
     #[derive(Clone, Copy)]
-    enum AssetTransferDirection {
+    pub(crate) enum AssetTransferDirection {
         Incoming,
         Outgoing,
     }
@@ -1286,6 +1302,11 @@ pub mod isi {
         account_id: &AccountId,
         record: AssetTransferControlRecord,
     ) -> Result<(), Error> {
+        // Freeze/unfreeze must not change availability retroactively at an unmaterialized boundary.
+        crate::retail_fee::settle_balance(
+            &mut state_transaction.world,
+            &AssetId::new(record.asset_definition_id.clone(), account_id.clone()),
+        )?;
         let mut store = load_asset_transfer_control_store(state_transaction, account_id)?;
         if record.is_empty() {
             store.remove(&record.asset_definition_id);
@@ -3290,6 +3311,12 @@ pub mod isi {
             .world
             .resolve_asset_id_for_current_scope(&source_id)?;
         reject_uncovered_retail_asset_mutation(state_transaction, &source_id, "burn")?;
+        crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
+        crate::validation_fee_rewards::ensure_reward_custody_debit(
+            state_transaction,
+            &source_id,
+            &amount,
+        )?;
         match source_policy {
             NumericAssetBurnSourcePolicy::AccountAdmissionFee => {
                 let authority = authority.ok_or_else(|| {
@@ -4372,7 +4399,8 @@ pub mod isi {
                 &validator,
                 &source_id,
                 &destination_id,
-            )?
+            )
+            .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "staking slash capability does not match retained stake and configured custody"
@@ -5433,6 +5461,7 @@ pub mod isi {
         )
     }
     struct PreparedNumericTransferPlan {
+        retail_payment: bool,
         source_id: AssetId,
         destination_id: AssetId,
         source_policy: NumericAssetTransferSourcePolicy,
@@ -5602,6 +5631,13 @@ pub mod isi {
                 source_policy,
                 scope_policy,
             )?;
+            crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
+            crate::retail_fee::settle_balance(&mut state_transaction.world, &destination_id)?;
+            crate::validation_fee_rewards::ensure_reward_custody_debit(
+                state_transaction,
+                &source_id,
+                &amount,
+            )?;
             let retail_usage_update = prepare_retail_daily_usage_update(
                 state_transaction,
                 &source_id,
@@ -5659,6 +5695,7 @@ pub mod isi {
                 normalized_scale,
                 normalized_amount,
                 prechecked_delta,
+                retail_payment: source_policy == NumericAssetTransferSourcePolicy::User,
             })
         }
         fn apply(
@@ -5675,6 +5712,14 @@ pub mod isi {
                 normalized_numeric_to_u64(self.amount.as_numeric(), self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
+            if self.retail_payment {
+                crate::retail_fee::record_payment(
+                    state_transaction,
+                    &self.source_id,
+                    self.destination_id.account(),
+                    &self.amount,
+                )?;
+            }
             state_transaction
                 .world
                 .apply_prechecked_numeric_asset_transfer_delta_exact(
@@ -5719,6 +5764,14 @@ pub mod isi {
                 normalized_numeric_to_u64(self.amount.as_numeric(), self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
+            if self.retail_payment {
+                crate::retail_fee::record_payment(
+                    state_transaction,
+                    &self.source_id,
+                    self.destination_id.account(),
+                    &self.amount,
+                )?;
+            }
             state_transaction
                 .world
                 .apply_prechecked_numeric_asset_transfer_delta_exact(
@@ -7254,7 +7307,7 @@ pub mod isi {
 
     impl PreparedNumericSupplyChange {
         fn prepare(
-            state: &StateTransaction<'_, '_>,
+            state: &mut StateTransaction<'_, '_>,
             id: &AssetId,
             amount: &Quantity,
             mint: bool,
@@ -7483,6 +7536,11 @@ pub mod isi {
                 .resolve_asset_id_for_current_scope(&asset_id)?;
             reject_uncovered_retail_asset_mutation(state_transaction, &resolved_asset_id, "burn")?;
             let quantity = self.object().clone();
+            crate::validation_fee_rewards::ensure_reward_custody_debit(
+                state_transaction,
+                &resolved_asset_id,
+                &quantity,
+            )?;
             let spec = state_transaction
                 .numeric_spec_for(asset_id.definition())
                 .map_err(Error::from)?;
@@ -8214,6 +8272,19 @@ pub mod isi {
             if self.entries().is_empty() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "transfer asset batch requires at least one entry".into(),
+                ));
+            }
+            if self.mode() == &BatchMode::Independent
+                && crate::validation_fee::active_policy(state_transaction)
+                    .map_err(|e| Error::InvariantViolation(e.to_string().into()))?
+                    .is_some_and(|policy| {
+                        self.entries()
+                            .iter()
+                            .any(|entry| entry.asset_definition() == &policy.ds_asset_id)
+                    })
+            {
+                return Err(Error::InvariantViolation(
+                    "governed SBD payment batches require atomic settlement".into(),
                 ));
             }
             let mut leg_ids = BTreeSet::new();
@@ -9259,13 +9330,63 @@ pub mod query {
         Definitions(Vec<AssetDefinitionId>),
         Full,
     }
-    impl ValidQuery for FindAssets {
+    fn collect_projected_asset_balances(
+        iter: impl Iterator<Item = Asset>,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
+    ) -> Result<Vec<Asset>, crate::execution_attempt::ExecutionAttemptError<Error>> {
+        use crate::execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error};
+        let mut assets = Vec::new();
+        for mut asset in iter {
+            if let Some(value) = crate::retail_fee::projected_balance(world, &asset.id, now_ms)
+                .map_err(|error| error.map_rejection(Error::Conversion))?
+            {
+                asset.value = value;
+            }
+            if assets.len() == assets.capacity() {
+                let additional = assets.capacity().max(4);
+                let bytes = additional
+                    .checked_mul(std::mem::size_of::<Asset>())
+                    .ok_or_else(|| {
+                        ExecutionAttemptError::Deferred(
+                            iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                        )
+                    })?;
+                norito::core::reserve_decode_allocation(bytes).map_err(|error| {
+                    norito_decode_attempt_error(error, |error| Error::Conversion(error.to_string()))
+                })?;
+                assets.try_reserve_exact(additional).map_err(|_| {
+                    ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                    )
+                })?;
+            }
+            assets.push(asset);
+        }
+        Ok(assets)
+    }
+    fn project_asset_balances<'a>(
+        iter: Box<dyn Iterator<Item = Asset> + 'a>,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
+    ) -> Result<
+        Box<dyn Iterator<Item = Asset> + 'a>,
+        crate::execution_attempt::ExecutionAttemptError<Error>,
+    > {
+        Ok(Box::new(
+            collect_projected_asset_balances(iter, world, now_ms)?.into_iter(),
+        ))
+    }
+    impl ValidQuery<crate::execution_attempt::ExecutionAttemptError<Error>> for FindAssets {
         #[metrics(+"find_assets")]
         fn execute(
             self,
             filter: CompoundPredicate<Asset>,
             state_ro: &impl StateReadOnly,
-        ) -> Result<impl Iterator<Item = Asset>, Error> {
+        ) -> Result<
+            impl Iterator<Item = Asset>,
+            crate::execution_attempt::ExecutionAttemptError<Error>,
+        > {
             fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
                 Asset {
                     id: entry.id().clone(),
@@ -9277,7 +9398,7 @@ pub mod query {
             if filter_payload.is_none() {
                 let iter: Box<dyn Iterator<Item = Asset> + '_> =
                     Box::new(world.assets_iter().map(entry_to_asset));
-                return Ok(iter);
+                return project_asset_balances(iter, world, state_ro.query_ledger_time_ms());
             }
             let predicate_view = AssetPredicateView::from_predicate(&filter);
             let predicate_json = filter_payload.and_then(
@@ -9351,7 +9472,7 @@ pub mod query {
                             .map(entry_to_asset),
                     ),
                 };
-                return Ok(iter);
+                return project_asset_balances(iter, world, state_ro.query_ledger_time_ms());
             }
             let iter: Box<dyn Iterator<Item = Asset> + '_> = match plan {
                 AssetQueryPlan::Ids(asset_ids) => Box::new(
@@ -9465,25 +9586,31 @@ pub mod query {
                 }
                 AssetQueryPlan::Full => Box::new(world.assets_iter().map(entry_to_asset)),
             };
-            let iter: Box<dyn Iterator<Item = Asset> + '_> = Box::new(iter.filter(move |asset| {
-                if !predicate_view.matches(world, asset) {
-                    return false;
-                }
-                if let Some(predicate) = predicate_json.as_ref() {
-                    return predicate_matches_asset(world, predicate, asset);
-                }
-                filter.applies(asset)
-            }));
+            let assets =
+                collect_projected_asset_balances(iter, world, state_ro.query_ledger_time_ms())?;
+            let iter: Box<dyn Iterator<Item = Asset> + '_> =
+                Box::new(assets.into_iter().filter(move |asset| {
+                    if !predicate_view.matches(world, asset) {
+                        return false;
+                    }
+                    if let Some(predicate) = predicate_json.as_ref() {
+                        return predicate_matches_asset(world, predicate, asset);
+                    }
+                    filter.applies(asset)
+                }));
             Ok(iter)
         }
     }
-    impl ValidQuery for FindAssetsByAccountId {
+    impl ValidQuery<crate::execution_attempt::ExecutionAttemptError<Error>> for FindAssetsByAccountId {
         #[metrics(+"find_assets_by_account_id")]
         fn execute(
             self,
             filter: CompoundPredicate<Asset>,
             state_ro: &impl StateReadOnly,
-        ) -> Result<impl Iterator<Item = Asset>, Error> {
+        ) -> Result<
+            impl Iterator<Item = Asset>,
+            crate::execution_attempt::ExecutionAttemptError<Error>,
+        > {
             fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
                 Asset {
                     id: entry.id().clone(),
@@ -9492,27 +9619,44 @@ pub mod query {
             }
             let account_id = self.account_id().clone();
             let world = state_ro.world();
-            world.account(&account_id)?;
+            world.account(&account_id).map_err(Error::Find)?;
             let predicate_json = filter.json_payload().and_then(
                 iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
             );
-            Ok(world
-                .assets_in_account_iter(&account_id)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(entry_to_asset)
-                .filter(move |asset| {
-                    predicate_json.as_ref().map_or_else(
-                        || filter.applies(asset),
-                        |predicate| predicate_matches_asset(world, predicate, asset),
-                    )
-                }))
+            let assets = collect_projected_asset_balances(
+                world
+                    .assets_in_account_iter(&account_id)
+                    .map(entry_to_asset),
+                world,
+                state_ro.query_ledger_time_ms(),
+            )?;
+            Ok(assets.into_iter().filter(move |asset| {
+                predicate_json.as_ref().map_or_else(
+                    || filter.applies(asset),
+                    |predicate| predicate_matches_asset(world, predicate, asset),
+                )
+            }))
         }
     }
-    impl ValidSingularQuery for FindAssetById {
+    impl ValidSingularQuery<crate::execution_attempt::ExecutionAttemptError<Error>> for FindAssetById {
         #[metrics(+"find_asset_by_id")]
-        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Asset, Error> {
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<Asset, crate::execution_attempt::ExecutionAttemptError<Error>> {
             let entry = state_ro.world().asset(self.asset_id())?;
+            if let Some(value) = crate::retail_fee::projected_balance(
+                state_ro.world(),
+                entry.id(),
+                state_ro.query_ledger_time_ms(),
+            )
+            .map_err(|error| error.map_rejection(Error::Conversion))?
+            {
+                return Ok(Asset {
+                    id: entry.id().clone(),
+                    value,
+                });
+            }
             crate::smartcontracts::isi::query::own_singular_query_struct::<Asset, 2>(
                 [entry.id(), entry.value().as_ref()],
                 || Asset {
@@ -9520,6 +9664,7 @@ pub mod query {
                     value: entry.value().clone().into_inner(),
                 },
             )
+            .map_err(Into::into)
         }
     }
     impl ValidSingularQuery for FindAssetDefinitionById {
@@ -9710,6 +9855,30 @@ pub mod query {
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
         }
+        #[test]
+        fn fee_asset_projection_buffer_preserves_original_decode_refusal_and_retries_same_data() {
+            let state = asset_route_test_state(World::default());
+            let view = state.view();
+            let original = vec![Asset::new(
+                AssetId::new(wonderland_asset_definition_id("rose"), ALICE_ID.clone()),
+                "7".parse::<iroha_primitives::numeric::Quantity>().unwrap(),
+            )];
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+            let error = norito::with_decode_limits_scope(limits, || {
+                collect_projected_asset_balances(original.clone().into_iter(), view.world(), 0)
+            })
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+            ));
+            let retry =
+                collect_projected_asset_balances(original.clone().into_iter(), view.world(), 0)
+                    .unwrap();
+            assert_eq!(retry, original);
+        }
+
         #[test]
         fn genesis_transfer_control_rejects_missing_asset_definition() {
             let account = build_account_in_domain(&ALICE_ID, &wonderland_domain_id());

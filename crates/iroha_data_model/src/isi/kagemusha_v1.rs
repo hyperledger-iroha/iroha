@@ -2866,6 +2866,19 @@ isi! {
     }
 }
 
+isi! {
+    /// Ordinary Mint113 top-up, complete independent issuer and native clock proof inputs.
+    /// Construction only validates public data. Node must verify actual World purpose,
+    /// current FI, current governed release, full ordinary proofs and global predecessor hold.
+    #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1")]
+    pub struct TopUpKagemushaOrdinaryV1 {
+        /// Complete bounded ordinary public submission. No OEM authorization is accepted.
+        pub request: crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1,
+    }
+}
+impl crate::seal::Instruction for TopUpKagemushaOrdinaryV1 {}
+
 impl crate::seal::Instruction for TopUpKagemushaV1 {}
 impl crate::seal::Instruction for RedeemKagemushaV1 {}
 
@@ -2894,6 +2907,30 @@ macro_rules! impl_kagemusha_instruction_decode_from_slice {
 }
 
 impl_kagemusha_instruction_decode_from_slice!(TopUpKagemushaV1, KagemushaTopUpRequestV1);
+impl_kagemusha_instruction_decode_from_slice!(
+    TopUpKagemushaOrdinaryV1,
+    crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1
+);
+impl TopUpKagemushaOrdinaryV1 {
+    /// Distinct first-release ordinary top-up instruction identity, without a legacy alias.
+    pub const WIRE_ID: &'static str = "iroha.kagemusha.v1.ordinary_top_up";
+    /// Construct only shape-checked submission data; this grants no debit or funding authority.
+    /// # Errors
+    /// Refuses oversized, unsupported or internally substituted complete public originals.
+    pub fn new(
+        request: crate::kagemusha::KagemushaOrdinaryNodeMintSubmissionV1,
+    ) -> Result<Self, String> {
+        request.validate_shape()?;
+        Ok(Self { request })
+    }
+    /// Recheck the sole complete public input shape, without authenticating any offered root.
+    /// # Errors
+    /// Refuses invalid or oversized submission data.
+    pub fn validate_shape(&self) -> Result<(), String> {
+        self.request.validate_shape()
+    }
+}
+
 impl_kagemusha_instruction_decode_from_slice!(RedeemKagemushaV1, KagemushaRedemptionRequestV1);
 
 impl TopUpKagemushaV1 {

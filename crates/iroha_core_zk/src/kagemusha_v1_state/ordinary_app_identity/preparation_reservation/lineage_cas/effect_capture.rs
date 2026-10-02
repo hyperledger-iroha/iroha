@@ -13,12 +13,52 @@ impl KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1<'_> {
         clock: &KagemushaOrdinaryCashClockContextV1,
     ) -> Result<()> {
         self.recheck_historical(financial)?;
+        self.owner.recheck_captured_effect_for_request(
+            self.request_sha256,
+            financial,
+            captured,
+            clock,
+        )?;
+        self.recheck_historical(financial)
+    }
+}
+impl KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1<'_> {
+    /// Recheck this actual incoming Commit against the same acknowledged Native FI decision and
+    /// complete retained signed clock. Historical replay does not renew a live DATA/FI grant.
+    pub(crate) fn recheck_captured_effect(
+        &self,
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        captured: &KagemushaCapturedOrdinaryFinancialControlDecisionV1<'_>,
+        clock: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<()> {
+        self.recheck_historical(financial)?;
+        self.commit()?;
+        self.owner.recheck_captured_effect_for_request(
+            self.request_sha256,
+            financial,
+            captured,
+            clock,
+        )?;
+        self.recheck_historical(financial)
+    }
+}
+impl KagemushaOrdinaryLineageCasOwnerV1 {
+    // Shared custody kernel; only actual outgoing/incoming acknowledged receipts may call it.
+    // Authentic older acknowledged floors remain valid historical evidence after later payments.
+    fn recheck_captured_effect_for_request(
+        &self,
+        request_sha256: [u8; 32],
+        financial: &KagemushaOrdinaryEnrolledFinancialOwnerV1,
+        captured: &KagemushaCapturedOrdinaryFinancialControlDecisionV1<'_>,
+        clock: &KagemushaOrdinaryCashClockContextV1,
+    ) -> Result<()> {
+        self.recheck_historical(financial)?;
         captured.recheck_financial_owner(financial)?;
         let control: KagemushaSignedOrdinaryCurrentControlV1 = decode(
             captured.original()?,
             KAGEMUSHA_ORDINARY_CURRENT_CONTROL_MAX_BYTES_V1,
         )?;
-        let actual = self.owner.acknowledged(self.request_sha256, financial)?;
+        let actual = self.acknowledged(request_sha256, financial)?;
         let result = &actual.result.subject;
         clock.validate_shape().map_err(|_| Rejected)?;
         clock
@@ -30,9 +70,9 @@ impl KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1<'_> {
         let signed_clock = financial.verified_retained_cash_clock_originals(clock)?;
         if control.subject.request.owner != result.request.operation.lineage().owner
             || control.subject.request.enrollment_original_sha256
-                != self.owner.initialize.enrollment_original_sha256
+                != self.initialize.enrollment_original_sha256
             || control.subject.request.credential_original_sha256
-                != self.owner.initialize.credential_original_sha256
+                != self.initialize.credential_original_sha256
             || control.subject.data_incarnation_digest != result.data_incarnation_digest
             || control.subject.data_revision < result.data_revision
             || control.subject.data_policy_epoch != result.data_policy_epoch

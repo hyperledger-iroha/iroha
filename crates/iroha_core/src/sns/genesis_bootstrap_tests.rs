@@ -58,7 +58,8 @@ fn genesis(scope: SumeragiRootScope, parameters: Vec<Parameter>) -> SignedBlock 
         .build_raw()
         .unwrap()
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
     let signer = KeyPair::from_seed(vec![75; 32], Algorithm::Ed25519);
     raw.build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
         &signer,

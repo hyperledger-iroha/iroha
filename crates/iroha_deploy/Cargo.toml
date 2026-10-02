@@ -23,7 +23,7 @@ iroha_contract_deploy = { workspace = true }
 iroha_wallet = { workspace = true }
 iroha_config = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
+iroha_core_zk = { workspace = true, default-features = false }
 iroha_genesis = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 color-eyre = { workspace = true }

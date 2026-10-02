@@ -187,7 +187,8 @@ impl MainCaPrivatePlanV1 {
         Ok(result)
     }
 
-    /// Both proof envelopes' ordered values enter each local transcript before mixes.
+    /// Bind ordered reference values in an isolated single-transcript component control.
+    #[cfg(test)]
     pub(super) fn absorb_openings_v1(
         main: &[E],
         ca: &[E],

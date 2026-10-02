@@ -1133,6 +1133,138 @@ test("corrected counts rewritten bytes, not just erasures", () => {
   assert.equal(erased.corrected, 8);
 });
 
+test("random words are almost never accepted", () => {
+  // Reed-Solomon with erasures can accept a word that is not a transmission. Lane D has only 11
+  // parity bytes, so its schedule stops at five erasures; at seven it let through about one random
+  // word in 250 (150 of these 40 000). The counts are exact so that every SDK port, fed the same
+  // xorshift32 words and byte-valued confidences (many ties, so the ranking must be stable),
+  // reproduces the decoder bit for bit.
+  const rng = new PetalXorshift32(0x5eed);
+  const trials = 40000;
+  for (const [lane, expected] of [
+    ["D", 3],
+    ["P", 0],
+  ]) {
+    const length = PETAL_LANES[lane].wordLen;
+    let accepted = 0;
+    for (let trial = 0; trial < trials; trial += 1) {
+      const word = new Uint8Array(length);
+      for (let index = 0; index < length; index += 1) word[index] = rng.nextByte();
+      const confidence = new Float64Array(length);
+      for (let index = 0; index < length; index += 1) confidence[index] = rng.nextByte();
+      if (decodeWithErasures(lane, word, confidence) !== null) accepted += 1;
+    }
+    assert.equal(accepted, expected, `lane ${lane} of ${trials} random words`);
+  }
+});
+
+test("only lane K uses two thirds of its parity as erasures", () => {
+  // Damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+  // erasure step of the old schedule the decoder would repair them (2 * 2 + flagged parity
+  // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+  for (const [lane, flagged] of [
+    ["D", 7],
+    ["P", 8],
+  ]) {
+    const { dataLen, parityLen, wordLen } = PETAL_LANES[lane];
+    const data = Uint8Array.from({ length: dataLen }, (_, index) => index);
+    const word = encodeLane(lane, data);
+    const damaged = word.slice();
+    const confidence = new Float64Array(wordLen).fill(1);
+    for (let position = 0; position < flagged; position += 1) {
+      damaged[position] ^= 0xa5;
+      confidence[position] = 0;
+    }
+    damaged[20] ^= 0x3c;
+    damaged[21] ^= 0x3c;
+    assert.equal(decodeWithErasures(lane, damaged, confidence), null, `lane ${lane}`);
+    // half the parity flagged plus one hidden error stays comfortably repairable
+    const half = Math.floor(parityLen / 2);
+    const repairable = word.slice();
+    const halfFlagged = new Float64Array(wordLen).fill(1);
+    for (let position = 0; position < half; position += 1) {
+      repairable[position] ^= 0xa5;
+      halfFlagged[position] = 0;
+    }
+    repairable[20] ^= 0x3c;
+    const result = decodeWithErasures(lane, repairable, halfFlagged);
+    assert.deepEqual(result.data, data, `lane ${lane}`);
+    assert.ok(result.erasures <= half, `lane ${lane}`);
+  }
+  // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+  // (2 * 7 + 30 = 44 of 45 parity bytes)
+  const data = Uint8Array.from({ length: PETAL_LANES.K.dataLen }, (_, index) => index);
+  const damaged = encodeLane("K", data);
+  const confidence = new Float64Array(damaged.length).fill(1);
+  for (let position = 0; position < 30; position += 1) {
+    damaged[position] ^= 0xa5;
+    confidence[position] = 0;
+  }
+  for (let position = 60; position < 67; position += 1) damaged[position] ^= 0x3c;
+  const result = decodeWithErasures("K", damaged, confidence);
+  assert.deepEqual([result.data, result.erasures], [data, 30]);
+});
+
+test("the erasure schedule has the reference's steps for every lane", () => {
+  // `flagged` damaged bytes are ranked least confident, `hidden` ones look fine; a lane decodes at
+  // the first step whose erasures plus twice the remaining errors fit the parity. The cases below
+  // fail at every earlier step, so the step that succeeds is the one that is pinned.
+  const cases = [
+    // lane, flagged, hidden, erasures used (null: no step of the schedule can repair it)
+    ["D", 5, 3, 5], // steps 0, 1, 2, 3, 5: the half step is the last one
+    ["D", 7, 2, null], // a seventh erasure would repair it, the capped schedule must not
+    ["P", 7, 2, 6], // steps 0, 1, 3, 4, 6: the half step is the last one for P too
+    ["P", 8, 2, null], // an eighth erasure would repair it
+    ["K", 30, 7, 30], // steps 0, 5, 11, 15, 22, 30: only K has the two-thirds step
+    ["K", 31, 7, null], // nothing beyond the two-thirds step
+  ];
+  for (const [lane, flagged, hidden, erasures] of cases) {
+    const { dataLen, wordLen } = PETAL_LANES[lane];
+    const data = Uint8Array.from({ length: dataLen }, (_, index) => (index * 7 + 3) & 0xff);
+    const damaged = encodeLane(lane, data);
+    const confidence = new Float64Array(wordLen).fill(1);
+    for (let position = 0; position < flagged; position += 1) {
+      damaged[position] ^= 0xa5;
+      confidence[position] = 0;
+    }
+    for (let position = wordLen - hidden; position < wordLen; position += 1) damaged[position] ^= 0x3c;
+    const result = decodeWithErasures(lane, damaged, confidence);
+    const label = `lane ${lane}, ${flagged} flagged and ${hidden} hidden`;
+    if (erasures === null) {
+      assert.equal(result, null, label);
+    } else {
+      assert.deepEqual(result.data, data, label);
+      assert.equal(result.erasures, erasures, label);
+      assert.equal(result.corrected, flagged + hidden, label);
+    }
+  }
+});
+
+test("equal confidences are erased in position order, so the ranking is stable", () => {
+  // The random-word counts above do not depend on the order of tied confidences (the same counts
+  // come out with the ties reversed), but real reads tie a lot: every tile the normalised read
+  // erases has confidence exactly 0. With all confidences equal the lowest positions are erased
+  // first, so damage at the lowest positions is repaired as soon as the schedule reaches enough
+  // erasures; a ranking that put the ties the other way round would erase good bytes instead.
+  for (const [lane, damagedPositions, mask, erasures] of [
+    // The reference's case: three damaged bytes at the front plus four hidden ones fit lane D only
+    // if exactly the first three positions are erased (3 erasures + 4 errors = all 11 parity bytes);
+    // a step that erased the last positions instead would see seven errors.
+    ["D", [0, 1, 2, 20, 21, 22, 23], 0x5a, 3],
+    ["P", [0, 1, 2, 3, 4, 5, 6, 7], 0xa5, 3], // 13 parity bytes: 8 errors fail, 3 erasures + 5 errors fit
+    ["D", [0, 1, 2, 3, 4, 5], 0xa5, 1], // 11 parity bytes: 6 errors fail, 1 erasure + 5 errors fit
+  ]) {
+    const { dataLen, wordLen } = PETAL_LANES[lane];
+    const data = Uint8Array.from({ length: dataLen }, (_, index) => index);
+    const word = encodeLane(lane, data);
+    for (const position of damagedPositions) word[position] ^= mask;
+    const result = decodeWithErasures(lane, word, new Float64Array(wordLen).fill(1));
+    const label = `lane ${lane}, damaged ${damagedPositions.join(",")}`;
+    assert.ok(result !== null, label);
+    assert.deepEqual([result.data, result.erasures, result.corrected], [data, erasures, damagedPositions.length], label);
+  }
+});
+
 test("blank frames report no finders", () => {
   assertPetalError(() => decodePetalFrame(new PetalLuma(320, 240)), "no_finders");
 });
@@ -1147,6 +1279,22 @@ test("unusable sizes are rejected without work", () => {
   assertPetalError(() => decodePetalFrame({ width: 100000, height: 100000, data: new Uint8Array(0) }), "unsupported_image");
   assertPetalError(() => decodePetalFrame({ width: 4001, height: 3000, data: new Uint8Array(0) }), "unsupported_image");
   assert.equal(decodePetalFrameAt(new PetalLuma(8, 8), PetalHomography.identity()), null);
+  // a buffer that does not match the stated size must not reach the sampler, in any entry point
+  const broken = { width: 100, height: 100, data: new Uint8Array(5) };
+  assert.equal(decodePetalFrameAt(broken, PetalHomography.identity()), null);
+  const { luma } = decodeSetup(5);
+  const decoded = decodePetalFrame(luma);
+  assert.equal(observedCells(broken, decoded), null);
+  assert.equal(tileMatchError(broken, decoded), null);
+  // ... and so must a frame that is too small or over the pixel budget
+  for (const [image, options] of [
+    [new PetalLuma(47, 400), undefined],
+    [luma, { maxPixels: 1000 }],
+  ]) {
+    assert.equal(observedCells(image, decoded, options), null);
+    assert.equal(tileMatchError(image, decoded, options), null);
+    assert.equal(decodePetalFrameAt(image, decoded.homography, options), null);
+  }
   assert.throws(() => decodePetalFrame({ width: 64, height: 64, data: [] }), TypeError);
   assert.throws(() => decodePetalFrame(new PetalLuma(64, 64), { templateSigmas: [] }), TypeError);
 });
@@ -1240,6 +1388,26 @@ function squeezeTile(patches, tile, gain) {
   }
 }
 
+/** Remaps one tile's patch linearly so that its robust darkest level is 0 and its span exactly `span`. */
+function setTileSpan(patches, tile, span) {
+  const base = tile * PATCH_CELLS;
+  const [low, high] = patchLevels(patches, base);
+  for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
+    patches[base + cell] = ((patches[base + cell] - low) / (high - low)) * span;
+  }
+}
+
+/**
+ * Flattens fourteen tiles that sit in fourteen different bytes of lane P (and of lane K): more
+ * damage than the 13 parity bytes of lane P repair, which lane K (45 parity bytes) shrugs off.
+ * Returns the tile numbers.
+ */
+function flattenFourteenTiles(patches) {
+  const tiles = Array.from({ length: 14 }, (_, j) => 8 * j);
+  for (const tile of tiles) patches.fill(100, tile * PATCH_CELLS, (tile + 1) * PATCH_CELLS);
+  return tiles;
+}
+
 const isErased = (reads, tile) => reads.polarityMargin[tile] === 0 && reads.glyphMargin[tile] === 0;
 
 test("level and normalised reads agree on a clean render", () => {
@@ -1302,23 +1470,38 @@ test("tiles under a quarter of the median contrast are erased, others are not", 
   const [weak, fine] = [ascending[10][1], ascending[20][1]];
   squeezeTile(patches, weak, (0.24 * median) / spans[weak]);
   squeezeTile(patches, fine, (0.26 * median) / spans[fine]);
+  // Exactly a quarter of the median is still read (the comparison is strict); a hair under is not.
+  const [exact, hairUnder] = [ascending[30][1], ascending[40][1]];
+  setTileSpan(patches, exact, 0.25 * median);
+  setTileSpan(patches, hairUnder, 0.25 * median * (1 - 2 ** -40));
   const reads = readTilesNormalised(patches, SIGMAS);
   assert.ok(isErased(reads, weak), "0.24 x median is erased");
   assert.ok(reads.polarityMargin[fine] > 0 && reads.glyphMargin[fine] > 0, "0.26 x median is read");
-  const others = Array.from({ length: PETAL_LAYOUT.tileCount }, (_, tile) => tile).filter((tile) => tile !== weak);
-  assert.equal(others.filter((tile) => isErased(reads, tile)).length, 0, "no other tile is erased");
+  assert.ok(reads.polarityMargin[exact] > 0 && reads.glyphMargin[exact] > 0, "exactly 0.25 x median is read");
+  assert.ok(isErased(reads, hairUnder), "just under 0.25 x median is erased");
+  const all = Array.from({ length: PETAL_LAYOUT.tileCount }, (_, tile) => tile);
+  const erased = all.filter((tile) => isErased(reads, tile));
+  assert.deepEqual(erased, [weak, hairUnder].sort((a, b) => a - b), "no other tile is erased");
 });
 
-test("the median contrast is the upper middle tile span", () => {
-  const { patches } = cleanPatches(5);
-  // Half of the tiles keep a tenth of their contrast. The upper middle span (element 128 of
-  // the ascending spans) belongs to a strong tile, so the squeezed half falls under a quarter
-  // of it; the lower middle span would not erase them.
+test("the median contrast is the upper middle of the sorted tile spans", () => {
+  // Half of the tiles keep a tenth of their contrast. Sorted, the upper middle span (element 128
+  // of the ascending spans) belongs to a strong tile, so the squeezed half falls under a quarter
+  // of it; the lower middle span would not erase them, and neither would the span of tile 128 when
+  // that tile is among the squeezed ones (the spans are not in tile order).
   const half = PETAL_LAYOUT.tileCount / 2;
-  for (let tile = 0; tile < half; tile += 1) squeezeTile(patches, tile, 0.1);
-  const reads = readTilesNormalised(patches, SIGMAS);
-  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
-    assert.equal(isErased(reads, tile), tile < half, `tile ${tile}`);
+  for (const [name, squeezed] of [
+    ["lower half", (tile) => tile < half],
+    ["upper half", (tile) => tile >= half],
+  ]) {
+    const { patches } = cleanPatches(5);
+    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+      if (squeezed(tile)) squeezeTile(patches, tile, 0.1);
+    }
+    const reads = readTilesNormalised(patches, SIGMAS);
+    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+      assert.equal(isErased(reads, tile), squeezed(tile), `${name}: tile ${tile}`);
+    }
   }
 });
 
@@ -1330,6 +1513,9 @@ test("patch levels ignore the extreme cells", () => {
   const [low, high] = patchLevels(values);
   assert.ok(Math.abs(low - 10) < 1e-12);
   assert.ok(high >= 200 && high <= 202);
+  // the cut is exactly six cells in from either end: indices 6 and 57 of the 64 sorted cells
+  const permuted = Float64Array.from({ length: PATCH_CELLS }, (_, cell) => (cell * 37) % PATCH_CELLS);
+  assert.deepEqual(patchLevels(permuted), [6, 57]);
   const scaled = new Float64Array(PATCH_CELLS);
   assert.equal(rescale(values, 0, 1, scaled), high - low, "rescale reports the span it used");
   assert.ok(scaled.every((value) => value >= -0.25 && value <= 1.25));
@@ -1353,6 +1539,180 @@ test("patch levels ignore the extreme cells", () => {
   const flatOut = new Float64Array(PATCH_CELLS);
   assert.equal(rescale(new Float64Array(PATCH_CELLS).fill(7), 0, 1, flatOut), 0);
   assert.ok(flatOut.every((value) => Math.abs(value) < 1e-12));
+});
+
+/**
+ * The expected patch of every hypothesis `polarity * 16 + glyph` for the sharp template (sigma 0):
+ * levels relative to the light fill, with the ink at 0.04 on a light tile and the pink glyph at
+ * 0.83 on a dark tile (spec section 7, step 5).
+ */
+function templatePatches() {
+  const hypotheses = [];
+  for (let polarity = 0; polarity < 2; polarity += 1) {
+    for (let glyph = 0; glyph < PETAL_GLYPHS.count; glyph += 1) {
+      hypotheses.push(
+        Float64Array.from(PETAL_GLYPHS.templates[glyph], (byte) => {
+          const coverage = byte / 255;
+          return polarity === 1 ? 1 - (1 - 0.04) * coverage : 0.83 * coverage;
+        }),
+      );
+    }
+  }
+  return hypotheses;
+}
+
+test("both reads recognise every template at any gain and offset", () => {
+  const hypotheses = templatePatches();
+  // Level read: one gain and offset for the whole frame, which the finder levels describe exactly.
+  const [gain, offset] = [200, 20];
+  const levelPatches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
+  // Normalised read: a different gain and offset for every tile.
+  const normalisedPatches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
+  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+    const pattern = hypotheses[tile % hypotheses.length];
+    const tileGain = 120 + ((tile * 7) % 90);
+    const tileOffset = 3 + ((tile * 11) % 40);
+    for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
+      levelPatches[tile * PATCH_CELLS + cell] = gain * pattern[cell] + offset;
+      normalisedPatches[tile * PATCH_CELLS + cell] = tileGain * pattern[cell] + tileOffset;
+    }
+  }
+  // finder levels that describe that gain and offset exactly
+  const reference = { lit: new Float64Array(4).fill(offset + gain), dark: new Float64Array(4).fill(offset) };
+  // Both reads in turn, twice: each keeps using its own set of templates.
+  const sigmas = [0.5, 0]; // the exactly matching blur wins on total error whatever the order
+  for (const [name, read] of [
+    ["level", () => readTiles(levelPatches, reference, sigmas)],
+    ["normalised", () => readTilesNormalised(normalisedPatches, sigmas)],
+    ["level again", () => readTiles(levelPatches, reference, sigmas)],
+    ["normalised again", () => readTilesNormalised(normalisedPatches, sigmas)],
+  ]) {
+    const reads = read();
+    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+      const hypothesis = tile % hypotheses.length;
+      assert.ok(reads.error[tile] < 1e-9, `${name}: tile ${tile} error ${reads.error[tile]}`);
+      const expected = [hypothesis >> 4, hypothesis & 15];
+      assert.deepEqual([reads.light[tile], reads.glyph[tile]], expected, `${name}: tile ${tile}`);
+    }
+  }
+});
+
+test("the level read follows the light across the frame", () => {
+  const hypotheses = templatePatches();
+  const full = 200;
+  // The light falls off to 40% towards the left (or the top) edge, linearly in canvas
+  // coordinates; the finder levels at the four corners describe that exactly, so the
+  // interpolated levels cancel it. Corners run top left, top right, bottom right, bottom left.
+  const fall = (position) => 0.4 + (0.6 * position) / PETAL_LAYOUT.canvas;
+  const cases = [
+    ["left to right", (x) => fall(x), [fall(0), fall(PETAL_LAYOUT.canvas), fall(PETAL_LAYOUT.canvas), fall(0)]],
+    ["top to bottom", (_x, y) => fall(y), [fall(0), fall(0), fall(PETAL_LAYOUT.canvas), fall(PETAL_LAYOUT.canvas)]],
+  ];
+  for (const [name, gainAt, corners] of cases) {
+    const patches = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
+    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+      const [cx, cy] = tileCenter(tile);
+      for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
+        patches[tile * PATCH_CELLS + cell] = gainAt(cx, cy) * full * hypotheses[tile % hypotheses.length][cell];
+      }
+    }
+    const reference = { lit: Float64Array.from(corners, (gain) => gain * full), dark: new Float64Array(4) };
+    const reads = readTiles(patches, reference, [0]);
+    for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+      const hypothesis = tile % hypotheses.length;
+      assert.ok(reads.error[tile] < 1e-9, `${name}: tile ${tile} error ${reads.error[tile]}`);
+      const expected = [hypothesis >> 4, hypothesis & 15];
+      assert.deepEqual([reads.light[tile], reads.glyph[tile]], expected, `${name}: tile ${tile}`);
+    }
+  }
+});
+
+test("a lane the level read decoded is kept when the normalised read decodes it too", () => {
+  const { luma, m, patches } = cleanPatches(5);
+  const flat = new Set(flattenFourteenTiles(patches)); // lane P is beyond repair in both reads
+  for (let tile = 0; tile < PETAL_LAYOUT.tileCount; tile += 1) {
+    if (flat.has(tile) || tile % 3 !== 1) continue;
+    for (let cell = 0; cell < PATCH_CELLS; cell += 1) {
+      patches[tile * PATCH_CELLS + cell] = 0.55 * patches[tile * PATCH_CELLS + cell] + 20; // dimmed
+    }
+  }
+  const reference = referenceLevels(luma, m);
+  const levelK = decodedLane("K", tileWords(readTiles(patches, reference, SIGMAS)));
+  const normalisedK = decodedLane("K", tileWords(readTilesNormalised(patches, SIGMAS)));
+  // the dimming costs the level read more repairs than the normalised read, which cancels it
+  assert.ok(levelK !== null && normalisedK !== null);
+  assert.ok(levelK.corrected > normalisedK.corrected, `${levelK.corrected} vs ${normalisedK.corrected}`);
+  const lanes = readTileLanes(patches, reference, SIGMAS);
+  assert.equal(lanes.p, null);
+  assert.deepEqual(lanes.k, levelK, "lane K keeps the level read");
+});
+
+test("sampled patches average four bilinear samples around each cell centre", () => {
+  const side = 300;
+  const rng = new Lcg(11);
+  const noise = new PetalLuma(side, side, Uint8Array.from({ length: side * side }, () => rng.byte()));
+  const canonical = PETAL_LAYOUT.finderCenters;
+  const pose = PetalHomography.fromPoints(canonical, [
+    [40, 30],
+    [260, 50],
+    [250, 270],
+    [30, 250],
+  ]);
+  const patches = samplePatches(noise, Float64Array.from(pose.values));
+  const half = PETAL_LAYOUT.glyphBox / 2;
+  const cell = PETAL_LAYOUT.glyphBox / PETAL_GLYPHS.templateN;
+  for (const tile of [0, 77, 255]) {
+    const [cx, cy] = tileCenter(tile);
+    for (let v = 0; v < PETAL_GLYPHS.templateN; v += 1) {
+      for (let u = 0; u < PETAL_GLYPHS.templateN; u += 1) {
+        let sum = 0;
+        for (const [ox, oy] of [
+          [-0.25, -0.25],
+          [0.25, -0.25],
+          [-0.25, 0.25],
+          [0.25, 0.25],
+        ]) {
+          const canvasX = cx - half + (u + 0.5) * cell + ox * cell;
+          const canvasY = cy - half + (v + 0.5) * cell + oy * cell;
+          const [px, py] = pose.apply(canvasX, canvasY);
+          sum += noise.sample(px, py);
+        }
+        const actual = patches[tile * PATCH_CELLS + v * PETAL_GLYPHS.templateN + u];
+        assert.ok(Math.abs(actual - sum / 4) < 1e-9, `tile ${tile} cell (${u}, ${v}): ${actual} vs ${sum / 4}`);
+      }
+    }
+  }
+});
+
+test("sampled patches are raw luma levels at the tile cells", () => {
+  const side = 256;
+  const scale = side / PETAL_LAYOUT.canvas;
+  const m = [scale, 0, 0, 0, scale, 0, 0, 0, 1];
+  const half = PETAL_LAYOUT.glyphBox / 2;
+  const cell = PETAL_LAYOUT.glyphBox / PETAL_GLYPHS.templateN;
+  // A ramp is reproduced exactly by bilinear sampling (pixel i has its centre at i + 0.5), so
+  // each cell holds the ramp at the cell's centre, whatever the offsets of its four samples.
+  for (const axis of ["x", "y"]) {
+    const ramp = new Uint8Array(side * side);
+    for (let y = 0; y < side; y += 1) for (let x = 0; x < side; x += 1) ramp[y * side + x] = axis === "x" ? x : y;
+    const out = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
+    assert.equal(samplePatches(new PetalLuma(side, side, ramp), m, out), out, "fills and returns the given buffer");
+    for (const tile of [0, 1, 17, 128, 255]) {
+      const [cx, cy] = tileCenter(tile);
+      for (let v = 0; v < PETAL_GLYPHS.templateN; v += 1) {
+        for (let u = 0; u < PETAL_GLYPHS.templateN; u += 1) {
+          const canvasX = cx - half + (u + 0.5) * cell;
+          const canvasY = cy - half + (v + 0.5) * cell;
+          const expected = (axis === "x" ? canvasX : canvasY) * scale - 0.5;
+          const actual = out[tile * PATCH_CELLS + v * PETAL_GLYPHS.templateN + u];
+          const where = `${axis} tile ${tile} cell (${u}, ${v})`;
+          assert.ok(Math.abs(actual - expected) < 1e-9, `${where}: ${actual} vs ${expected}`);
+        }
+      }
+    }
+  }
+  // without a buffer a fresh one is allocated: 256 patches of 64 cells
+  assert.equal(samplePatches(new PetalLuma(side, side), m).length, PETAL_LAYOUT.tileCount * PATCH_CELLS);
 });
 
 test("a shadowed part of a render decodes through the normalised read", () => {
@@ -1396,7 +1756,9 @@ test("lane K alone is enough to accept an orientation", () => {
   for (let j = 0; j < 14; j += 1) {
     const [cx, cy] = tileCenter(8 * j);
     for (let y = Math.floor((cy - 14) * scale); y <= Math.ceil((cy + 14) * scale); y += 1) {
-      for (let x = Math.floor((cx - 14) * scale); x <= Math.ceil((cx + 14) * scale); x += 1) luma.data[y * size + x] = 128;
+      for (let x = Math.floor((cx - 14) * scale); x <= Math.ceil((cx + 14) * scale); x += 1) {
+        luma.data[y * size + x] = 128;
+      }
     }
   }
   const decoded = decodePetalFrame(luma);
@@ -1404,36 +1766,6 @@ test("lane K alone is enough to accept an orientation", () => {
   assert.equal(decoded.d, null);
   assert.deepEqual(decoded.k.data, kData);
   assert.deepEqual([decoded.rotation, decoded.mirrored, decoded.lanesOk()], [0, false, 1]);
-});
-
-test("sampled patches are raw luma levels at the tile cells", () => {
-  const side = 256;
-  const scale = side / PETAL_LAYOUT.canvas;
-  const m = [scale, 0, 0, 0, scale, 0, 0, 0, 1];
-  const half = PETAL_LAYOUT.glyphBox / 2;
-  const cell = PETAL_LAYOUT.glyphBox / PETAL_GLYPHS.templateN;
-  // A ramp is reproduced exactly by bilinear sampling (pixel i has its centre at i + 0.5), so
-  // each cell holds the ramp at the cell's centre, whatever the offsets of its four samples.
-  for (const axis of ["x", "y"]) {
-    const ramp = new Uint8Array(side * side);
-    for (let y = 0; y < side; y += 1) for (let x = 0; x < side; x += 1) ramp[y * side + x] = axis === "x" ? x : y;
-    const out = new Float64Array(PETAL_LAYOUT.tileCount * PATCH_CELLS);
-    assert.equal(samplePatches(new PetalLuma(side, side, ramp), m, out), out, "fills and returns the given buffer");
-    for (const tile of [0, 1, 17, 128, 255]) {
-      const [cx, cy] = tileCenter(tile);
-      for (let v = 0; v < PETAL_GLYPHS.templateN; v += 1) {
-        for (let u = 0; u < PETAL_GLYPHS.templateN; u += 1) {
-          const canvasX = cx - half + (u + 0.5) * cell;
-          const canvasY = cy - half + (v + 0.5) * cell;
-          const expected = (axis === "x" ? canvasX : canvasY) * scale - 0.5;
-          const actual = out[tile * PATCH_CELLS + v * PETAL_GLYPHS.templateN + u];
-          assert.ok(Math.abs(actual - expected) < 1e-9, `${axis} tile ${tile} cell (${u}, ${v}): ${actual} vs ${expected}`);
-        }
-      }
-    }
-  }
-  // without a buffer a fresh one is allocated: 256 patches of 64 cells
-  assert.equal(samplePatches(new PetalLuma(side, side), m).length, PETAL_LAYOUT.tileCount * PATCH_CELLS);
 });
 
 // ---------------------------------------------------------------- scan session

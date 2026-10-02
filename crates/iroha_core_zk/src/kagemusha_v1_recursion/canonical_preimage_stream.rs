@@ -8,28 +8,13 @@
 //! TODO: integrate with the canonical variable-field context/statement/envelope assemblers;
 //! the byte-stream relation alone grants no MintFold or recipient authority.
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 use crate::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256ByteV1};
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// An exact active byte prefix with a circuit-constrained length and zero tail.
 ///
 /// Byte provenance and capacity must be identical during key generation and proving. In
@@ -42,17 +27,7 @@ pub(crate) struct KagemushaBoundedByteStreamV1<F: KagemushaPoseidonFieldV1> {
     actual_len: AssignedValue<F>,
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Constrain `actual_len` to the buffer capacity and every byte outside its prefix to zero.
     pub(crate) fn constrain(
         ctx: &mut Context<F>,
@@ -81,31 +56,16 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
         Ok(Self { bytes, actual_len })
     }
 
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Borrow the fixed-capacity buffer, including its proven zero tail.
     pub(crate) fn bytes(&self) -> &[PastaSha256ByteV1<F>] {
         &self.bytes
     }
 
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Return the exact constrained active length for framing, CRC or bounded hashing.
     pub(crate) fn actual_len(&self) -> AssignedValue<F> {
         self.actual_len
     }
 
-    #[cfg(any(
-        test,
-        feature = "kagemusha-real-proof-harness",
-        feature = "kagemusha-production-prover"
-    ))]
     /// Concatenate two active prefixes without using their witness lengths as host indices.
     ///
     /// A zero-fill barrel shifter moves `other` right by the proven length of `self`. Each
@@ -173,11 +133,6 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaBoundedByteStreamV1<F> {
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
 /// Prove an ordinary integer length in `0..=capacity` without a field-wraparound escape.
 fn constrain_stream_length_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,

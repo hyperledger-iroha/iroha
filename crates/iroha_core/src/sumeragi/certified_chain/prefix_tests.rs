@@ -58,7 +58,9 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     let mut prefix = CertifiedPrefix::new(&id, chain.network_id(), changed).unwrap();
     assert!(matches!(
         prefix.push(frame(&chain, 2)),
-        Err(ChainReadError::Discontinuous { height: 2 })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Discontinuous { height: 2 }
+        ))
     ));
     let mut foreign = CertifiedPrefix::new(
         &ChainId::from("foreign-instance"),
@@ -68,7 +70,9 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     .unwrap();
     assert!(matches!(
         foreign.push(frame(&chain, 2)),
-        Err(ChainReadError::WrongInstance { height: 2 })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::WrongInstance { height: 2 }
+        ))
     ));
 }
 
@@ -87,7 +91,9 @@ fn streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary() {
     });
     assert!(matches!(
         prefix.push(tampered),
-        Err(ChainReadError::Certificate { .. })
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { .. }
+        ))
     ));
     let (boundary, genesis) = prefix.push(original).unwrap().into_parts();
     assert!(genesis.is_none());
@@ -129,14 +135,19 @@ fn warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc() {
         });
         assert!(matches!(
             prefix.push(changed),
-            Err(ChainReadError::Malformed { height: 3, .. })
+            Err(ExecutionAttemptError::Rejected(ChainReadError::Malformed {
+                height: 3,
+                ..
+            }))
         ));
         assert_eq!(prefix.prefix.tip.height(), 2);
     }
     let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[5] ^= 1);
     assert!(matches!(
         prefix.push(forged),
-        Err(ChainReadError::Certificate { height: 3, .. })
+        Err(ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { height: 3, .. }
+        ))
     ));
     assert_eq!(prefix.prefix.tip.height(), 2);
     prefix
@@ -157,7 +168,9 @@ fn warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal() {
     let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[5] ^= 1);
     assert!(matches!(
         reader.check_certificate(forged, 3),
-        Err(ChainReadError::Certificate { height: 3, .. })
+        Err(ExecutionAttemptError::Rejected(
+            ChainReadError::Certificate { height: 3, .. }
+        ))
     ));
     reader.certified(3).unwrap();
     chain
@@ -191,6 +204,6 @@ fn standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks() {
     assert_eq!(fresh_error, reused_error);
     assert!(matches!(
         fresh_error,
-        ChainReadError::Malformed { height: 3, .. }
+        ExecutionAttemptError::Rejected(ChainReadError::Malformed { height: 3, .. })
     ));
 }

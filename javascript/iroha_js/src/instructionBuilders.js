@@ -1,3 +1,4 @@
+import { normalizeRetailFeeAssessment, rejectUnknownRetailFeeFields } from "./retailFeeAssessment.js";
 import { createContractManifestNormalizer } from "./contractManifestNormalizer.js";
 import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
@@ -53,13 +54,10 @@ import {
 } from "./instructionBuilderPrimitives.js";
 
 const TEXT_ASSET_DEFINITION_ID_2 = "assetDefinitionId";
-const TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX = "validationFeeTransferEntryIndex";
 const TEXT_MUST_BE = " must be ";
 const TEXT_NON_NEGATIVE_INTEGER = "non-negative integer";
 const TEXT_ACCOUNT_ID = "accountId";
-const TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH = "validationFeeHijiriFeeQuoteHash";
 const TEXT_SIGNER_ACCOUNT_ID = "signerAccountId";
-const TEXT_VALIDATION_FEE_INSTRUCTION_INDEX = "validationFeeInstructionIndex";
 const TEXT_VALID_BASE64_STRING = "valid base64 string";
 const TEXT_UNSIGNED_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING = "unsigned integer, bigint, or canonical decimal string";
 const TEXT_IS_REQUIRED = " is required";
@@ -77,7 +75,6 @@ const TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE = " exceeds JavaScript safe in
 const TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE = " must fit in JavaScript's safe integer range";
 const TEXT_SET_ASSET_TRANSFER_AVAILABILITY = "setAssetTransferAvailability.";
 const TEXT_LANE_PRIVACY_MERKLE = ".lanePrivacy.merkle.";
-const TEXT_MULTISIG_PROPOSE = "multisigPropose.";
 const TEXT_SET_ASSET_TRANSFER_CONTROL = "setAssetTransferControl.";
 const TEXT_MUST_BE_A = (TEXT_MUST_BE + "a ");
 const TEXT_MULTISIG_CONTRACT_CALL_PROPOSE = "multisigContractCallPropose.";
@@ -93,7 +90,6 @@ const TEXT_ISSUE_REPLICATION_ORDER = "issueReplicationOrder.";
 const TEXT_DESTINATION_ACCOUNT_ID = "destinationAccountId";
 const TEXT_MUST_BE_EXACT_STANDARD_BASE64 = (TEXT_MUST_BE + "exact standard-base64");
 const TEXT_MUST_BE_AN = (TEXT_MUST_BE + "an ");
-const TEXT_MULTISIG_PROPOSE_VALIDATION_FEE = "multisigPropose validation fee ";
 const TEXT_REPORT_KAIGI_RELAY_HEALTH = "reportKaigiRelayHealth.";
 const TEXT_REGISTER_SMART_CONTRACT_BYTES = "registerSmartContractBytes.";
 const TEXT_ASSET_DEFINITION_ID = TEXT_ASSET_DEFINITION_ID_2;
@@ -173,23 +169,7 @@ function fail(code, message, path) {
   throw createValidationError(code, message, path);
 }
 
-function rejectValidationFeeSnakeCaseInputs(source, context) {
-  for (const [snakeName, camelName] of [
-    ["validation_fee_policy_version", "validationFeePolicyVersion"],
-    ["validation_fee_policy_hash", "validationFeePolicyHash"],
-    ["validation_fee_hijiri_fee_quote_hash", TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH],
-    ["validation_fee_instruction_index", TEXT_VALIDATION_FEE_INSTRUCTION_INDEX],
-    ["validation_fee_transfer_entry_index", TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX],
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
-        `${context}.${snakeName}`,
-      );
-    }
-  }
-}
+
 
 function readSingleAlias(source, aliases, name, description) {
   const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
@@ -4199,132 +4179,57 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
 export function buildMultisigProposeRequest(options) {
   const source = assertPlainObject(options, TEXT_MULTISIG_PROPOSE_2);
   rejectInlinePrivateKeyForMultisigRequest(source, TEXT_MULTISIG_PROPOSE_2);
-  rejectValidationFeeSnakeCaseInputs(source, TEXT_MULTISIG_PROPOSE_2);
+  rejectUnknownRetailFeeFields(source, TEXT_MULTISIG_PROPOSE_2);
   rejectRetiredFeeRequestFields(source, TEXT_MULTISIG_PROPOSE_2);
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
       V_CODE_INVALID_OBJECT,
-      (TEXT_MULTISIG_PROPOSE + "instructions" + TEXT_MUST_BE + "a non-empty array"),
-      (TEXT_MULTISIG_PROPOSE + "instructions"),
+      "multisigPropose.instructions must be a non-empty array",
+      "multisigPropose.instructions",
     );
   }
   const payload = {
-    ...normalizeMultisigAccountSelectorInput(source, TEXT_MULTISIG_PROPOSE_2),
+    ...normalizeMultisigAccountSelectorInput(source, "multisigPropose"),
     signer_account_id: normalizeAccountId(
       source.signerAccountId ?? source.signer_account_id,
-      (TEXT_MULTISIG_PROPOSE + TEXT_SIGNER_ACCOUNT_ID),
+      "multisigPropose.signerAccountId",
     ),
     instructions: instructions.map((instruction, index) =>
       normalizeMultisigProposeInstructionInput(
         instruction,
-        `${TEXT_MULTISIG_PROPOSE}instructions[${index}]`,
+        `multisigPropose.instructions[${index}]`,
       ),
     ),
   };
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
-    (TEXT_MULTISIG_PROPOSE + "feePayment"),
+    "multisigPropose.feePayment",
   );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
-    payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, (TEXT_MULTISIG_PROPOSE + "publicKeyHex"));
+    payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, "multisigPropose.publicKeyHex");
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
     payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
-      (TEXT_MULTISIG_PROPOSE + "signatureB64"),
+      "multisigPropose.signatureB64",
     );
   }
   const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
-    payload.creation_time_ms = asNonNegativeInteger(creationTimeMs, (TEXT_MULTISIG_PROPOSE + "creationTimeMs"));
+    payload.creation_time_ms = asNonNegativeInteger(creationTimeMs, "multisigPropose.creationTimeMs");
   }
-  const validationFeePolicyVersion = source.validationFeePolicyVersion;
-  const validationFeePolicyHash = source.validationFeePolicyHash;
-  const validationFeeHijiriFeeQuoteHash = source.validationFeeHijiriFeeQuoteHash;
-  const validationFeeInstructionIndex = source.validationFeeInstructionIndex;
-  const validationFeeTransferEntryIndex = source.validationFeeTransferEntryIndex;
-  const hasValidationFeePolicyVersion =
-    validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
-  const hasValidationFeePolicyHash =
-    validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
-  const hasValidationFeeHijiriFeeQuoteHash =
-    validationFeeHijiriFeeQuoteHash !== undefined &&
-    validationFeeHijiriFeeQuoteHash !== null;
-  const hasValidationFeeInstructionIndex =
-    validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
-  const hasValidationFeeTransferEntryIndex =
-    validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
-  if (hasValidationFeePolicyVersion !== hasValidationFeePolicyHash) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "policy version and hash" + TEXT_MUST_BE + "provided together"),
-      (TEXT_MULTISIG_PROPOSE + "validationFeePolicy"),
-    );
-  }
-  if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      "multisigPropose Hijiri fee quote hash requires policy metadata",
-      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH),
-    );
-  }
-  if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "instruction index requires policy metadata"),
-      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_INSTRUCTION_INDEX),
-    );
-  }
-  if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "transfer entry index requires policy metadata"),
-      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
-    );
-  }
-  if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "transfer entry index requires instruction index"),
-      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
-    );
-  }
-  if (hasValidationFeePolicyVersion) {
-    payload.validation_fee_policy_version = String(
-      asNonNegativeInteger(
-        validationFeePolicyVersion,
-        (TEXT_MULTISIG_PROPOSE + "validationFeePolicyVersion"),
-      ),
-    );
-    payload.validation_fee_policy_hash = normalizeOptionalHexString(
-      validationFeePolicyHash,
-      (TEXT_MULTISIG_PROPOSE + "validationFeePolicyHash"),
-    );
-    if (hasValidationFeeHijiriFeeQuoteHash) {
-      payload.validation_fee_hijiri_fee_quote_hash = normalizeOptionalHexString(
-        validationFeeHijiriFeeQuoteHash,
-        (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH),
-      );
+  if (Object.hasOwn(source, "validation_fee_assessment")) {
+    if (source.validation_fee_assessment === null || source.validation_fee_assessment === undefined) {
+      fail(V_CODE_INVALID_OBJECT, "multisigPropose.validation_fee_assessment requires a typed assessment", "multisigPropose.validation_fee_assessment");
     }
-    if (hasValidationFeeInstructionIndex) {
-      payload.validation_fee_instruction_index = String(
-        asNonNegativeInteger(
-          validationFeeInstructionIndex,
-          (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_INSTRUCTION_INDEX),
-        ),
-      );
-    }
-    if (hasValidationFeeTransferEntryIndex) {
-      payload.validation_fee_transfer_entry_index = String(
-        asNonNegativeInteger(
-          validationFeeTransferEntryIndex,
-          (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
-        ),
-      );
-    }
+    payload.validation_fee_assessment = normalizeRetailFeeAssessment(source.validation_fee_assessment);
+  }
+  if (source.memo !== undefined && source.memo !== null) {
+    if (typeof source.memo !== "string") throw new TypeError("multisig memo must be a string");
+    payload.memo = source.memo;
   }
   return payload;
 }

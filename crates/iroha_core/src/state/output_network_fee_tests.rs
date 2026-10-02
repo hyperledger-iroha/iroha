@@ -542,7 +542,7 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
             let fragments = block.committed_fragment_count();
             assert_eq!(
                 execute(&mut block, &source),
-                Err(ExecutionAttemptError::Deferred(reason.into()))
+                Err(ExecutionOutputAttemptError::Deferred(reason.into()))
             );
             assert_eq!(block.gas_used_in_block, 0);
             assert_eq!(block.committed_fragment_count(), fragments);

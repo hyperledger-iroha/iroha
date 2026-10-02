@@ -912,7 +912,9 @@ pub struct KagemushaPairedProofV1 {
     /// Digest of the common semantic statement constrained by both proofs.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub semantic_digest: [u8; 32],
-    /// Fresh statement-scoped Fp Poseidon audit of credential proofs recursively accepted by Eq `GuardBundle`.
+    /// Eq/Fp credential audit for the experimental hardware family. In the first-release
+    /// ordinary State family this exact position instead carries the real release-admitted
+    /// OUTER Eq State protocol commitment, enabling full public parent-original verification.
     ///
     /// Both state parities expose these same two `u128` limbs so Eq and Ep cannot select
     /// independently valid but mutually unrelated platform credentials. The
@@ -920,7 +922,8 @@ pub struct KagemushaPairedProofV1 {
     /// not a reusable credential identifier.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub guard_eq_credential_audit: [u8; 32],
-    /// Fresh statement-scoped Fq Poseidon audit of credential proofs recursively accepted by Ep `GuardBundle`.
+    /// Ep/Fq credential audit for the experimental hardware family; ordinary State carries
+    /// its actual independently admitted OUTER Ep State protocol commitment here.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub guard_ep_credential_audit: [u8; 32],
     /// Canonical Fp Poseidon commitment to the Eq scalar-verifier equations.

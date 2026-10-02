@@ -2975,7 +2975,7 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
     ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],
     [
       "AssetDefinitionView",
-      ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+      ["id", "name", "description", "owned_by", "total_quantity", "numeric_scale", "metadata"],
       [
         leaf("AssetDefinitionId"),
         leaf("String"),
@@ -2983,6 +2983,8 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
         leaf("String"),
         leaf("AccountId"),
         leaf("Quantity"),
+        { kind: "Option", value: null },
+        leaf("Int"),
         leaf("Json"),
       ],
     ],

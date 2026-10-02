@@ -184,10 +184,8 @@ fn signed_current_custody_and_capability_are_bound_to_same_native_cut() {
     );
     let borrowed = ProviderDiscoveryProofRefV1::new(
         &proof.world,
-        &proof.council.head,
-        None,
-        &proof.provider.head,
-        None,
+        (&proof.council.head, None),
+        (&proof.provider.head, None),
         &proof.owner,
         &proof.advert,
         proof.stream_token.as_ref().map(|p| (&p.head, &p.record)),

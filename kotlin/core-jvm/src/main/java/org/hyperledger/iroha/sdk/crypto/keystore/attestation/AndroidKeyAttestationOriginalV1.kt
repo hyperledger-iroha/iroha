@@ -15,6 +15,9 @@ import org.bouncycastle.asn1.ASN1Set
 import org.bouncycastle.asn1.ASN1TaggedObject
 import org.bouncycastle.asn1.BERTags
 import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 
 /** Original-evidence parsing only. PKIX, governed roots/revocation and issuer policy are separate. */
 object AndroidKeyAttestationOriginalV1 {
@@ -40,7 +43,13 @@ object AndroidKeyAttestationOriginalV1 {
      * authenticate roots, revocation, package/Play policy or issuer admission. Legacy API28–30
      * combines this exact leaf/challenge correlation with actual KeyInfo hardware custody.
      */
-    @JvmStatic fun persistentAppHardwareSecurityLevel(chain: List<X509Certificate>, expectedChallenge: ByteArray): AttestationResult.SecurityLevel {
+    @JvmStatic fun persistentAppHardwareSecurityLevel(chain: List<X509Certificate>, expectedChallenge: ByteArray): AttestationResult.SecurityLevel =
+        parsePersistentAppDescriptionOriginal(chain, expectedChallenge).securityLevel
+
+    private fun parsePersistentAppDescriptionOriginal(
+        chain: List<X509Certificate>,
+        expectedChallenge: ByteArray,
+    ): PersistentAppDescriptionV1 {
         require(expectedChallenge.size == 32 && expectedChallenge.any { it != 0.toByte() })
         require(chain.size in 2..8 && chain.all { it.encoded.size in 1..16_384 })
         val extension = certificate(chain).getExtensionValue(KEY_DESCRIPTION_OID)
@@ -94,8 +103,93 @@ object AndroidKeyAttestationOriginalV1 {
         }
         exactSet(1, 2); exactInteger(2, 3); exactInteger(3, 256); exactSet(5, 4)
         exactInteger(10, 1); exactInteger(702, 0)
-        publicKeySec1(chain) // Enforce actual leaf-key equality and exact P-256 parameters.
-        return if (key == BigInteger.ONE) AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT else AttestationResult.SecurityLevel.STRONG_BOX
+        val actualPublicKey = publicKeySec1(chain) // Enforce actual leaf-key equality and exact P-256 parameters.
+        val level = if (key == BigInteger.ONE) AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT else AttestationResult.SecurityLevel.STRONG_BOX
+        return PersistentAppDescriptionV1(software, hardware, level, actualPublicKey)
+    }
+
+    /**
+     * Parse the exact single-app profile from original extension DATA. This method does not
+     * perform PKIX or authenticate policy; the public verifier must verify its own chain first.
+     * The older public persistent subset deliberately does not acquire this tag709 requirement.
+     */
+    internal fun persistentAppIdentityOriginals(
+        chain: List<X509Certificate>,
+        expectedChallenge: ByteArray,
+        expectedPackageName: String,
+        expectedVersionCode: BigInteger,
+        expectedSigningIdentitySha256: ByteArray,
+    ): PersistentAppIdentityOriginalV1 {
+        val persistent = parsePersistentAppDescriptionOriginal(chain, expectedChallenge)
+        val applicationIds = listOfNotNull(persistent.software[709], persistent.hardware[709])
+        require(applicationIds.size == 1) { "Original app identity authorization is missing or duplicated" }
+        val applicationId = applicationIds.single().getBaseUniversal(true, BERTags.OCTET_STRING) as? ASN1OctetString
+            ?: throw AttestationVerificationException("Malformed original app identity authorization")
+        val original = applicationId.octets
+        val identity = ASN1Primitive.fromByteArray(original) as? ASN1Sequence
+            ?: throw AttestationVerificationException("Malformed original app identity sequence")
+        require(original.contentEquals(identity.getEncoded("DER")) && identity.size() == 2) {
+            "Original app identity is not the exact canonical layout"
+        }
+        val packages = identity.getObjectAt(0) as? ASN1Set
+            ?: throw AttestationVerificationException("Malformed original app package set")
+        val signers = identity.getObjectAt(1) as? ASN1Set
+            ?: throw AttestationVerificationException("Malformed original app signing set")
+        require(packages.size() == 1 && signers.size() == 1) {
+            "Original app identity is not the closed single-package/signer profile"
+        }
+        val packageInfo = packages.getObjectAt(0) as? ASN1Sequence
+            ?: throw AttestationVerificationException("Malformed original app package info")
+        require(packageInfo.size() == 2) { "Original app package info has extra or missing fields" }
+        val packageOctets = (packageInfo.getObjectAt(0) as? ASN1OctetString)?.octets
+            ?: throw AttestationVerificationException("Malformed original app package name")
+        require(packageOctets.size in 1..128) { "Original app package is outside bounds" }
+        val packageName = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(packageOctets)).toString()
+        require(packageName.contains('.') && packageName.split('.').all { part ->
+            part.isNotEmpty() && part.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' }
+        } && packageName == expectedPackageName) { "Original app package differs from installed policy" }
+        val version = (packageInfo.getObjectAt(1) as? ASN1Integer)?.value
+            ?: throw AttestationVerificationException("Malformed original app version")
+        require(version.signum() > 0 && version.bitLength() <= 64 && version == expectedVersionCode) {
+            "Original app version differs from installed policy"
+        }
+        val signer = (signers.getObjectAt(0) as? ASN1OctetString)?.octets
+            ?: throw AttestationVerificationException("Malformed original app signing identity")
+        require(expectedSigningIdentitySha256.size == 32 && expectedSigningIdentitySha256.any { it != 0.toByte() } &&
+            signer.size == 32 && MessageDigest.isEqual(signer, expectedSigningIdentitySha256)) {
+            "Original app signing identity differs from installed policy"
+        }
+        return PersistentAppIdentityOriginalV1(
+            persistent.securityLevel, packageName, version, persistent.publicKeySec1(), signer,
+        )
+    }
+
+    private class PersistentAppDescriptionV1(
+        software: Map<Int, ASN1TaggedObject>,
+        hardware: Map<Int, ASN1TaggedObject>,
+        val securityLevel: AttestationResult.SecurityLevel,
+        publicKeySec1: ByteArray,
+    ) {
+        val software: Map<Int, ASN1TaggedObject> = software.toMap()
+        val hardware: Map<Int, ASN1TaggedObject> = hardware.toMap()
+        private val publicKey = publicKeySec1.copyOf()
+        fun publicKeySec1(): ByteArray = publicKey.copyOf()
+    }
+
+    /** Parsed DATA only; no chain, issuer or policy authority can be reconstructed from it. */
+    internal class PersistentAppIdentityOriginalV1 internal constructor(
+        val securityLevel: AttestationResult.SecurityLevel,
+        val packageName: String,
+        val versionCode: BigInteger,
+        publicKeySec1: ByteArray,
+        signingIdentitySha256: ByteArray,
+    ) {
+        private val publicKey = publicKeySec1.copyOf()
+        private val signingIdentity = signingIdentitySha256.copyOf()
+        fun publicKeySec1(): ByteArray = publicKey.copyOf()
+        fun signingIdentitySha256(): ByteArray = signingIdentity.copyOf()
     }
     @JvmStatic fun publicKeySec1(chain: List<X509Certificate>): ByteArray {
         val key = certificate(chain).publicKey as? ECPublicKey

@@ -91,7 +91,7 @@ class DurableOrdinaryIntegrityRefreshIssuer:
                 and original[:5]==b'KRPI\x01',"retained refresh signing input absent")
         body=original[5:407]
         issued=int.from_bytes(body[386:394],'little');expires=int.from_bytes(body[394:402],'little')
-        require(issued <= evidence.trusted_time_ms < expires,"retained refresh lease interval expired")
+        evidence.trusted_time_interval.require_window(issued,expires)
         credential_expires=int.from_bytes(signing[5+669:5+677],'little')
         expected=refresh_lease_signing_request(selected,request.signature_der,
             self._proof(request,selected,evidence,row),evidence.policy,verified_at_ms=row[4],
@@ -127,9 +127,10 @@ class DurableOrdinaryIntegrityRefreshIssuer:
                     evidence.policy.play_integrity_policy,selected.request_hash(),evidence.trusted_time_ms)
                 selected,latest,signing=self._select(request,fresh=True)
                 require(latest.trusted_time_ms >= evidence.trusted_time_ms,"refresh trusted clock regressed")
-                _verify_google_payload(decoded.google_response,latest.policy.play_integrity_policy,
-                    selected.request_hash(),latest.trusted_time_ms,
-                    hashlib.sha256(request.play_integrity_token.encode('ascii')).digest())
+                for now in latest.trusted_time_interval.endpoints():
+                    _verify_google_payload(decoded.google_response,latest.policy.play_integrity_policy,
+                        selected.request_hash(),now,
+                        hashlib.sha256(request.play_integrity_token.encode('ascii')).digest())
                 connection.execute('UPDATE ordinary_integrity_refresh_attempts SET google_original=?,'
                     'google_original_sha256=?,google_verified_at_ms=? WHERE operation_id=?',
                     (decoded.google_response,hashlib.sha256(decoded.google_response).digest(),

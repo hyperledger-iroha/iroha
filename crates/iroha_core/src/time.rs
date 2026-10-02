@@ -8,10 +8,15 @@
 //!   high-RTT outliers.
 //! - Aggregates offsets via trimmed median; exposes `now()` for Torii and
 //!   timers.
+//! The process anchors Unix time once and advances timestamps, RTT and retained
+//! deadlines with the native suspend-inclusive elapsed clock. Clock refusal or
+//! regression marks status as an unhealthy fallback and prevents time probes
+//! from authenticating samples until the original clock recovers.
 use crate::IrohaNetwork;
 use iroha_config::parameters::actual::NtsEnforcementMode;
 use iroha_data_model::peer::Peer;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_primitives::time::NativeContinuousReading;
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -267,7 +272,7 @@ impl Service {
             configured_peer_count: 1,
             smoothed_offset_ms: 0.0,
             aggregate_dirty: false,
-            last_smooth_update: Instant::now(),
+            last_smooth_update: local_clock_sample().observed_at,
             rtt_bounds_ms: RTT_BUCKET_BOUNDS_MS,
             rtt_bucket_counts: vec![0; RTT_BUCKET_BOUNDS_MS.len()],
             rtt_ms_sum: 0,
@@ -685,17 +690,30 @@ fn lock_service(mutex: &Mutex<Service>) -> MutexGuard<'_, Service> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-#[derive(Clone, Copy)]
 struct MonotonicSystemClock {
     monotonic_anchor: Instant,
     system_anchor: SystemTime,
+    continuous_anchor: Option<(NativeContinuousReading, Duration)>,
+    last_elapsed: Duration,
 }
 impl MonotonicSystemClock {
     fn new() -> Self {
         let monotonic_before = Instant::now();
+        let continuous_before = NativeContinuousReading::now().ok();
         let system_anchor = SystemTime::now();
+        let continuous_after = NativeContinuousReading::now().ok();
         let monotonic_after = Instant::now();
-        Self::from_bracket(monotonic_before, system_anchor, monotonic_after)
+        let mut clock = Self::from_bracket(monotonic_before, system_anchor, monotonic_after);
+        clock.continuous_anchor =
+            continuous_before
+                .zip(continuous_after)
+                .and_then(|(before, after)| {
+                    after
+                        .elapsed_since(&before)
+                        .ok()
+                        .map(|bracket| (before, bracket / 2))
+                });
+        clock
     }
     fn from_bracket(
         monotonic_before: Instant,
@@ -709,22 +727,82 @@ impl MonotonicSystemClock {
         Self {
             monotonic_anchor,
             system_anchor,
+            continuous_anchor: None,
+            last_elapsed: Duration::ZERO,
         }
     }
-    fn at(self, now: Instant) -> SystemTime {
-        self.system_anchor
-            .checked_add(now.saturating_duration_since(self.monotonic_anchor))
-            .unwrap_or(self.system_anchor)
+    fn sample(&mut self) -> LocalClockSample {
+        let continuous_elapsed = self.continuous_anchor.and_then(|(anchor, midpoint)| {
+            NativeContinuousReading::now()
+                .ok()?
+                .elapsed_since(&anchor)
+                .ok()?
+                .checked_sub(midpoint)
+        });
+        let monotonic_elapsed = Instant::now().saturating_duration_since(self.monotonic_anchor);
+        self.sample_elapsed(monotonic_elapsed, continuous_elapsed)
+    }
+    #[cfg(test)]
+    fn at(mut self, now: Instant) -> SystemTime {
+        self.sample_elapsed(now.saturating_duration_since(self.monotonic_anchor), None)
+            .local_now
+    }
+    fn sample_elapsed(
+        &mut self,
+        monotonic_elapsed: Duration,
+        continuous_elapsed: Option<Duration>,
+    ) -> LocalClockSample {
+        let continuous_elapsed = if cfg!(all(test, sumeragi_core_mutation = "HC53")) {
+            None
+        } else {
+            continuous_elapsed
+        };
+        // The native elapsed source includes host suspension without consulting
+        // mutable wall time again. Keep probe deadlines and Unix timestamps on
+        // this same timeline; Instant alone pauses on supported Apple hosts.
+        let continuous_elapsed = continuous_elapsed.filter(|elapsed| *elapsed >= self.last_elapsed);
+        let elapsed = continuous_elapsed.unwrap_or(monotonic_elapsed.max(self.last_elapsed));
+        let pair = self
+            .monotonic_anchor
+            .checked_add(elapsed)
+            .zip(self.system_anchor.checked_add(elapsed));
+        let (observed_at, local_now, suspend_inclusive) =
+            if let Some((observed_at, local_now)) = pair {
+                self.last_elapsed = elapsed;
+                (observed_at, local_now, continuous_elapsed.is_some())
+            } else {
+                // Retain the last representable point and mark the clock unhealthy.
+                // A clock read, regression or overflow must never authenticate NTS.
+                (
+                    self.monotonic_anchor
+                        .checked_add(self.last_elapsed)
+                        .unwrap_or(self.monotonic_anchor),
+                    self.system_anchor
+                        .checked_add(self.last_elapsed)
+                        .unwrap_or(self.system_anchor),
+                    false,
+                )
+            };
+        LocalClockSample {
+            observed_at,
+            local_now,
+            suspend_inclusive,
+        }
     }
 }
-static LOCAL_CLOCK: OnceLock<MonotonicSystemClock> = OnceLock::new();
+struct LocalClockSample {
+    observed_at: Instant,
+    local_now: SystemTime,
+    suspend_inclusive: bool,
+}
+static LOCAL_CLOCK: OnceLock<Mutex<MonotonicSystemClock>> = OnceLock::new();
 static LAST_NETWORK_TIME: OnceLock<Mutex<Option<SystemTime>>> = OnceLock::new();
-fn local_clock_sample() -> (Instant, SystemTime) {
-    // Initialize the anchor before capturing the sample Instant so both values
-    // describe the same point on the process-local monotonic timeline.
-    let clock = *LOCAL_CLOCK.get_or_init(MonotonicSystemClock::new);
-    let observed_at = Instant::now();
-    (observed_at, clock.at(observed_at))
+fn local_clock_sample() -> LocalClockSample {
+    let mut clock = LOCAL_CLOCK
+        .get_or_init(|| Mutex::new(MonotonicSystemClock::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    clock.sample()
 }
 fn epoch_ms(time: SystemTime) -> u64 {
     use std::time::UNIX_EPOCH;
@@ -857,7 +935,7 @@ pub fn start_reserved(
         params,
         ownership,
     } = reservation;
-    lock_service(guard).attach_network(network.clone(), Instant::now());
+    lock_service(guard).attach_network(network.clone(), local_clock_sample().observed_at);
     SAMPLER_STATE.store(SAMPLER_RUNNING, Ordering::Release);
     // Ownership was constructed before spawning. If the task is aborted before
     // its first poll (or spawning unwinds), dropping the captured guard still
@@ -876,7 +954,7 @@ pub fn start_reserved(
             // disconnected peers retain their identity and request record indefinitely.
             {
                 let mut svc = lock_service(guard);
-                let observed_at = Instant::now();
+                let observed_at = local_clock_sample().observed_at;
                 let _ = svc.reconcile_network_membership(observed_at);
                 svc.prune_expired(observed_at);
             }
@@ -891,14 +969,18 @@ pub fn start_reserved(
             for pid in batch.peer_ids {
                 let probe = {
                     let mut svc = lock_service(guard);
-                    let observed_at = Instant::now();
+                    let observed_at = local_clock_sample().observed_at;
                     svc.with_reconciled_network_membership(observed_at, |service| {
                         if service.configured_peer_generation != Some(batch_generation) {
                             return None;
                         }
-                        let (sent_at, sent_time) = local_clock_sample();
-                        let t1 = epoch_ms(sent_time);
+                        let sample = local_clock_sample();
+                        let sent_at = sample.observed_at;
                         service.prune_expired(sent_at);
+                        if !sample.suspend_inclusive {
+                            return Some(None);
+                        }
+                        let t1 = epoch_ms(sample.local_now);
                         let id = service.id_counter;
                         let expires_at = service.probe_deadline(sent_at);
                         if !service.insert_outstanding_probe(
@@ -956,13 +1038,16 @@ fn sample_measurement(
 pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
     match msg {
         crate::NetworkMessage::TimePing(p) => {
-            let (_, t2_time) = local_clock_sample();
-            let t2 = epoch_ms(t2_time);
-            let (_, t3_time) = local_clock_sample();
+            let arrival = local_clock_sample();
+            let reply = local_clock_sample();
+            if !arrival.suspend_inclusive || !reply.suspend_inclusive {
+                return;
+            }
+            let t2 = epoch_ms(arrival.local_now);
             let pong = TimePong {
                 id: p.id,
                 t2_ms: t2,
-                t3_ms: epoch_ms(t3_time),
+                t3_ms: epoch_ms(reply.local_now),
             };
             network.post(iroha_p2p::Post {
                 data: crate::NetworkMessage::TimePong(Box::new(pong)),
@@ -974,8 +1059,12 @@ pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &Ir
             if !is_running() {
                 return;
             }
-            let (received_at, received_time) = local_clock_sample();
-            let t4 = epoch_ms(received_time);
+            let sample = local_clock_sample();
+            if !sample.suspend_inclusive {
+                return;
+            }
+            let received_at = sample.observed_at;
+            let t4 = epoch_ms(sample.local_now);
             let pid = peer.id().clone();
             let Some(service) = SERVICE.get() else {
                 return;
@@ -1021,6 +1110,16 @@ fn status_from_service(
     svc.with_reconciled_network_membership(observed_at, |service| {
         status_from_reconciled_service(service, observed_at, local_now)
     })
+}
+fn status_from_clock(svc: &mut Service, sample: &LocalClockSample) -> NetworkTimeStatus {
+    if sample.suspend_inclusive {
+        status_from_service(svc, sample.observed_at, sample.local_now)
+    } else {
+        svc.with_reconciled_network_membership(sample.observed_at, |service| {
+            service.prune_expired(sample.observed_at);
+            fallback_status_with_policy(sample.local_now, service.params.health_policy)
+        })
+    }
 }
 fn status_from_reconciled_service(
     svc: &mut Service,
@@ -1078,7 +1177,7 @@ pub fn now() -> NetworkTimeStatus {
 pub fn admission_snapshot() -> NetworkTimeAdmissionSnapshot {
     if !is_running() {
         let params = params_snapshot();
-        let (_, local_now) = local_clock_sample();
+        let local_now = local_clock_sample().local_now;
         return NetworkTimeAdmissionSnapshot {
             status: finalize_status_time(
                 fallback_status_with_policy(local_now, params.health_policy),
@@ -1090,7 +1189,7 @@ pub fn admission_snapshot() -> NetworkTimeAdmissionSnapshot {
     }
     let Some(svc_lock) = SERVICE.get() else {
         let params = params_snapshot();
-        let (_, local_now) = local_clock_sample();
+        let local_now = local_clock_sample().local_now;
         return NetworkTimeAdmissionSnapshot {
             status: finalize_status_time(
                 fallback_status_with_policy(local_now, params.health_policy),
@@ -1106,7 +1205,7 @@ pub fn admission_snapshot() -> NetworkTimeAdmissionSnapshot {
         // Release the service first to preserve that global lock order.
         drop(service);
         let params = params_snapshot();
-        let (_, local_now) = local_clock_sample();
+        let local_now = local_clock_sample().local_now;
         return NetworkTimeAdmissionSnapshot {
             status: finalize_status_time(
                 fallback_status_with_policy(local_now, params.health_policy),
@@ -1118,10 +1217,11 @@ pub fn admission_snapshot() -> NetworkTimeAdmissionSnapshot {
     }
     let enforcement_mode = service.params.enforcement_mode;
     let health_policy = service.params.health_policy;
-    let (observed_at, local_now) = local_clock_sample();
+    let sample = local_clock_sample();
+    let local_now = sample.local_now;
     NetworkTimeAdmissionSnapshot {
         status: finalize_status_time(
-            status_from_service(&mut service, observed_at, local_now),
+            status_from_clock(&mut service, &sample),
             local_now,
             health_policy,
         ),
@@ -1174,7 +1274,11 @@ pub fn debug_snapshot() -> Vec<(String, i64, u64, usize)> {
     if !is_running() {
         return Vec::new();
     }
-    svc.debug_snapshot(Instant::now())
+    let sample = local_clock_sample();
+    if !sample.suspend_inclusive {
+        return Vec::new();
+    }
+    svc.debug_snapshot(sample.observed_at)
 }
 /// Atomic snapshot of NTS RTT histogram counters.
 #[derive(Clone, Debug)]
@@ -1239,10 +1343,11 @@ pub fn telemetry_snapshot() -> NetworkTimeTelemetrySnapshot {
     {
         let mut svc = lock_service(lock);
         if is_running() {
-            let (observed_at, local_now) = local_clock_sample();
+            let sample = local_clock_sample();
+            let local_now = sample.local_now;
             let health_policy = svc.params.health_policy;
             let status = finalize_status_time(
-                status_from_service(&mut svc, observed_at, local_now),
+                status_from_clock(&mut svc, &sample),
                 local_now,
                 health_policy,
             );
@@ -1258,7 +1363,7 @@ pub fn telemetry_snapshot() -> NetworkTimeTelemetrySnapshot {
         }
     }
     let params = params_snapshot();
-    let (_, local_now) = local_clock_sample();
+    let local_now = local_clock_sample().local_now;
     NetworkTimeTelemetrySnapshot {
         status: finalize_status_time(
             fallback_status_with_policy(local_now, params.health_policy),
@@ -1280,9 +1385,18 @@ pub fn diagnostics_snapshot() -> NetworkTimeDiagnostics {
     {
         let mut svc = lock_service(lock);
         if is_running() {
-            let (observed_at, local_now) = local_clock_sample();
+            let sample = local_clock_sample();
+            let local_now = sample.local_now;
+            let observed_at = sample.observed_at;
             let (status, samples) =
                 svc.with_reconciled_network_membership(observed_at, |service| {
+                    if !sample.suspend_inclusive {
+                        service.prune_expired(observed_at);
+                        return (
+                            fallback_status_with_policy(local_now, service.params.health_policy),
+                            Vec::new(),
+                        );
+                    }
                     let status = status_from_reconciled_service(service, observed_at, local_now);
                     let samples = service.debug_snapshot_reconciled(observed_at);
                     (status, samples)
@@ -1304,7 +1418,7 @@ pub fn diagnostics_snapshot() -> NetworkTimeDiagnostics {
         }
     }
     let params = params_snapshot();
-    let (_, local_now) = local_clock_sample();
+    let local_now = local_clock_sample().local_now;
     NetworkTimeDiagnostics {
         status: finalize_status_time(
             fallback_status_with_policy(local_now, params.health_policy),
@@ -1350,7 +1464,11 @@ pub fn enforcement_mode() -> NtsEnforcementMode {
 mod tests {
     use super::*;
     fn service_for_tests(params: Params) -> Service {
-        Service::new(params)
+        let mut service = Service::new(params);
+        // These pure fixtures supply their own Instant timeline. It must not
+        // inherit suspension accumulated by the process-wide native clock.
+        service.last_smooth_update = Instant::now();
+        service
     }
     fn test_peer_id() -> iroha_model_base::peer::PeerId {
         let key_pair =
@@ -1869,10 +1987,8 @@ mod tests {
     fn monotonic_clock_progress_does_not_reconsult_wall_time() {
         let monotonic_anchor = Instant::now();
         let system_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        let clock = MonotonicSystemClock {
-            monotonic_anchor,
-            system_anchor,
-        };
+        let clock =
+            MonotonicSystemClock::from_bracket(monotonic_anchor, system_anchor, monotonic_anchor);
         assert_eq!(
             clock.at(monotonic_anchor + Duration::from_secs(2)),
             system_anchor + Duration::from_secs(2)
@@ -1889,6 +2005,149 @@ mod tests {
             clock.at(monotonic_after),
             system_anchor + Duration::from_secs(5),
             "constructor delay must not be counted in full as forward clock bias"
+        );
+    }
+    #[test]
+    fn suspend_inclusive_clock_advances_admission_and_expires_retained_probes() {
+        let start = Instant::now();
+        let system_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut clock = MonotonicSystemClock::from_bracket(start, system_anchor, start);
+        let awake_elapsed = Duration::from_secs(2);
+        let suspended_elapsed = Duration::from_millis(171_665);
+        let sample = clock.sample_elapsed(awake_elapsed, Some(awake_elapsed + suspended_elapsed));
+        assert_eq!(
+            sample.local_now,
+            system_anchor + awake_elapsed + suspended_elapsed
+        );
+        assert_eq!(
+            sample.observed_at.duration_since(start),
+            awake_elapsed + suspended_elapsed
+        );
+
+        let mut service = Service::new(Params::default());
+        let peer = test_peer_id();
+        assert!(service.insert_outstanding_probe(
+            peer.clone(),
+            1,
+            OutstandingProbe {
+                t1_ms: epoch_ms(system_anchor),
+                sent_at: start,
+                expires_at: service.probe_deadline(start),
+            }
+        ));
+        insert_sample_with(&mut service, peer.clone(), start, 0, 1);
+        assert!(
+            service
+                .take_live_probe(&peer, 1, sample.observed_at)
+                .is_none()
+        );
+        let status = status_from_service(&mut service, sample.observed_at, sample.local_now);
+        assert_eq!(status.now, sample.local_now);
+        assert_eq!(status.sample_count, 0);
+        assert!(status.fallback);
+        assert!(!status.health.healthy);
+    }
+    #[test]
+    fn suspend_inclusive_clock_counts_entire_probe_round_trip() {
+        let start = Instant::now();
+        let system_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut clock = MonotonicSystemClock::from_bracket(start, system_anchor, start);
+        let first = clock.sample_elapsed(Duration::from_secs(1), Some(Duration::from_secs(1)));
+        let awake_rtt = Duration::from_millis(14);
+        let suspended = Duration::from_millis(171_665);
+        let received = clock.sample_elapsed(
+            Duration::from_secs(1) + awake_rtt,
+            Some(Duration::from_secs(1) + awake_rtt + suspended),
+        );
+        let elapsed = received.observed_at.duration_since(first.observed_at);
+        assert_eq!(elapsed, awake_rtt + suspended);
+        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap();
+        let (offset, rtt) = sample_measurement(
+            epoch_ms(first.local_now),
+            epoch_ms(first.local_now),
+            epoch_ms(first.local_now),
+            epoch_ms(received.local_now),
+            elapsed_ms,
+        )
+        .unwrap();
+        assert_eq!(rtt, 171_679);
+        let mut service = Service::new(Params::default());
+        assert!(!service.record_measurement(
+            test_peer_id(),
+            offset,
+            rtt,
+            first.observed_at,
+            received.observed_at
+        ));
+        assert!(service.per_peer.is_empty());
+    }
+    #[test]
+    fn suspend_clock_failure_preserves_floor_and_cannot_reuse_healthy_samples() {
+        let start = Instant::now();
+        let system_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut clock = MonotonicSystemClock::from_bracket(start, system_anchor, start);
+        let first = clock.sample_elapsed(Duration::from_secs(2), Some(Duration::from_secs(173)));
+        assert!(first.suspend_inclusive);
+        let failed = clock.sample_elapsed(Duration::from_secs(3), None);
+        assert!(!failed.suspend_inclusive);
+        assert_eq!(failed.observed_at, first.observed_at);
+        assert_eq!(failed.local_now, first.local_now);
+        let regressed =
+            clock.sample_elapsed(Duration::from_secs(4), Some(Duration::from_secs(172)));
+        assert!(!regressed.suspend_inclusive);
+        assert_eq!(regressed.local_now, first.local_now);
+        let mut service = Service::new(Params {
+            health_policy: NtsHealthPolicy {
+                min_samples: 1,
+                ..NtsHealthPolicy::default()
+            },
+            ..Params::default()
+        });
+        insert_sample_with(&mut service, test_peer_id(), first.observed_at, 0, 1);
+        assert!(status_from_clock(&mut service, &first).health.healthy);
+        let status = status_from_clock(&mut service, &failed);
+        assert!(status.fallback);
+        assert!(!status.health.healthy);
+        assert_eq!(status.sample_count, 0);
+        assert_eq!(status.now, first.local_now);
+        let recovered =
+            clock.sample_elapsed(Duration::from_secs(5), Some(Duration::from_secs(174)));
+        assert!(recovered.suspend_inclusive);
+        assert_eq!(
+            recovered.local_now,
+            system_anchor + Duration::from_secs(174)
+        );
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "android", target_os = "linux"))]
+    #[test]
+    fn native_continuous_clock_uses_actual_process_readings() {
+        let mut clock = MonotonicSystemClock::new();
+        assert!(clock.continuous_anchor.is_some());
+        let first = clock.sample();
+        let second = clock.sample();
+        assert!(first.suspend_inclusive);
+        assert!(second.suspend_inclusive);
+        assert_eq!(
+            second.local_now.duration_since(first.local_now).unwrap(),
+            second.observed_at.duration_since(first.observed_at)
+        );
+    }
+    #[test]
+    fn suspend_clock_overflow_retains_last_representable_unhealthy_point() {
+        let start = Instant::now();
+        let system_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut clock = MonotonicSystemClock::from_bracket(start, system_anchor, start);
+        let first = clock.sample_elapsed(Duration::from_secs(2), Some(Duration::from_secs(173)));
+        let overflow = clock.sample_elapsed(Duration::MAX, Some(Duration::MAX));
+        assert!(!overflow.suspend_inclusive);
+        assert_eq!(overflow.local_now, first.local_now);
+        assert_eq!(overflow.observed_at, first.observed_at);
+        let recovered =
+            clock.sample_elapsed(Duration::from_secs(3), Some(Duration::from_secs(174)));
+        assert!(recovered.suspend_inclusive);
+        assert_eq!(
+            recovered.local_now,
+            system_anchor + Duration::from_secs(174)
         );
     }
     #[test]

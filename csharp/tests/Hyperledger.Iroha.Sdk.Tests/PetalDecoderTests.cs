@@ -107,6 +107,159 @@ public sealed class PetalDecoderTests
         Assert.True(result.Corrected >= 3);
     }
 
+    [Fact]
+    public void RandomWordsAreAlmostNeverAccepted()
+    {
+        // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
+        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about
+        // one random word in 250 (150 of these 40 000). Lane P stops at six for the same reason.
+        // The counts are exact so that every port, fed the same xorshift32 words and byte-valued
+        // confidences, reproduces the decoder bit for bit. They do not prove the ranking is
+        // stable (a reversed tie-break gives the same counts): see the two tie tests below.
+        var rng = new PetalXorshift32(0x5EED);
+        const int trials = 40_000;
+        foreach (var (lane, expected) in new[] { (PetalLane.D, 3), (PetalLane.P, 0) })
+        {
+            var length = PetalLanes.DataLength(lane) + PetalLanes.ParityLength(lane);
+            var word = new byte[length];
+            var confidence = new double[length];
+            var accepted = 0;
+            for (var trial = 0; trial < trials; trial++)
+            {
+                for (var i = 0; i < length; i++)
+                    word[i] = rng.NextByte();
+                for (var i = 0; i < length; i++)
+                    confidence[i] = rng.NextByte();
+                if (PetalDecoder.DecodeWithErasures(lane, word, confidence) is not null)
+                    accepted++;
+            }
+
+            Assert.True(expected == accepted, $"lane {lane}: {accepted} of {trials} random words accepted, expected {expected}");
+        }
+    }
+
+    [Fact]
+    public void OnlyLaneKUsesTwoThirdsOfItsParityAsErasures()
+    {
+        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
+        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+        foreach (var (lane, flagged) in new[] { (PetalLane.D, 7), (PetalLane.P, 8) })
+        {
+            var data = Enumerable.Range(0, PetalLanes.DataLength(lane)).Select(static b => (byte)b).ToArray();
+            var word = PetalLanes.EncodeLane(lane, data);
+            var damaged = (byte[])word.Clone();
+            var confidence = Enumerable.Repeat(1.0, word.Length).ToArray();
+            for (var position = 0; position < flagged; position++)
+            {
+                damaged[position] ^= 0xA5;
+                confidence[position] = 0.0;
+            }
+
+            damaged[20] ^= 0x3C;
+            damaged[21] ^= 0x3C;
+            Assert.True(PetalDecoder.DecodeWithErasures(lane, damaged, confidence) is null, $"lane {lane}");
+
+            // half the parity flagged plus one hidden error stays comfortably repairable
+            damaged = (byte[])word.Clone();
+            confidence = Enumerable.Repeat(1.0, damaged.Length).ToArray();
+            for (var position = 0; position < PetalLanes.ParityLength(lane) / 2; position++)
+            {
+                damaged[position] ^= 0xA5;
+                confidence[position] = 0.0;
+            }
+
+            damaged[20] ^= 0x3C;
+            var result = PetalDecoder.DecodeWithErasures(lane, damaged, confidence);
+            Assert.True(result is not null, $"lane {lane}");
+            Assert.Equal(data, result.Data);
+            Assert.True(result.Erasures <= PetalLanes.ParityLength(lane) / 2, $"lane {lane}");
+        }
+
+        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+        // (2·7 + 30 = 44 of 45 parity bytes)
+        var kData = Enumerable.Range(0, PetalLanes.KDataLength).Select(static i => (byte)i).ToArray();
+        var kDamaged = PetalLanes.EncodeLane(PetalLane.K, kData);
+        var kConfidence = Enumerable.Repeat(1.0, kDamaged.Length).ToArray();
+        for (var position = 0; position < 30; position++)
+        {
+            kDamaged[position] ^= 0xA5;
+            kConfidence[position] = 0.0;
+        }
+
+        for (var position = 60; position < 67; position++)
+            kDamaged[position] ^= 0x3C;
+        var kResult = PetalDecoder.DecodeWithErasures(PetalLane.K, kDamaged, kConfidence);
+        Assert.NotNull(kResult);
+        Assert.Equal(kData, kResult.Data);
+        Assert.Equal(30, kResult.Erasures);
+    }
+
+    [Fact]
+    public void EqualConfidencesAreErasedInPositionOrder()
+    {
+        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
+        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
+        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
+        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
+        // the last positions instead would see seven errors.
+        var data = Enumerable.Range(0, PetalLanes.DDataLength).Select(static b => (byte)b).ToArray();
+        var word = PetalLanes.EncodeLane(PetalLane.D, data);
+        foreach (var position in Enumerable.Range(0, 3).Concat(Enumerable.Range(20, 4)))
+            word[position] ^= 0x5A;
+        var confidence = Enumerable.Repeat(1.0, word.Length).ToArray();
+        var result = PetalDecoder.DecodeWithErasures(PetalLane.D, word, confidence);
+        Assert.NotNull(result);
+        Assert.Equal(data, result.Data);
+        Assert.Equal(3, result.Erasures);
+        Assert.Equal(7, result.Corrected);
+    }
+
+    [Theory]
+    [InlineData(PetalLane.D, 6)]
+    [InlineData(PetalLane.P, 7)]
+    [InlineData(PetalLane.K, 23)]
+    public void FirstErasureStepFollowsByteOrderWhenConfidencesTie(PetalLane lane, int damagedBytes)
+    {
+        // One more damaged byte than the code corrects unaided, all at the front of the word and
+        // all equally confident. Only the first erasure step can repair it, and only if the tie is
+        // resolved in byte order: that step erases byte 0, one of the damaged ones. A ranking that
+        // reorders ties erases an intact byte instead and every later step is out of budget.
+        var nsym = PetalLanes.ParityLength(lane);
+        Assert.True(2 * damagedBytes > nsym && 2 * damagedBytes - nsym / 8 <= nsym);
+        var data = Enumerable.Range(0, PetalLanes.DataLength(lane)).Select(static b => (byte)(b * 7 + 1)).ToArray();
+        var word = PetalLanes.EncodeLane(lane, data);
+        for (var position = 0; position < damagedBytes; position++)
+            word[position] ^= 0x5A;
+        var confidence = Enumerable.Repeat(1.0, word.Length).ToArray();
+        var result = PetalDecoder.DecodeWithErasures(lane, word, confidence);
+        Assert.NotNull(result);
+        Assert.Equal(data, result.Data);
+        Assert.Equal(nsym / 8, result.Erasures);
+        Assert.Equal(damagedBytes, result.Corrected);
+    }
+
+    [Fact]
+    public void ConfidenceTiesKeepTheirByteOrderWhenRanking()
+    {
+        // byte-valued confidences tie everywhere, so the ranking must be a stable sort like
+        // Rust's sort_by: Array.Sort would reorder the ties and change which bytes get erased
+        var rng = new PetalXorshift32(0x71E5);
+        foreach (var length in new[] { PetalLanes.DWordLength, PetalLanes.PWordLength, PetalLanes.KWordLength })
+        {
+            for (var trial = 0; trial < 200; trial++)
+            {
+                var keys = new double[length];
+                for (var i = 0; i < length; i++)
+                    keys[i] = rng.NextByte() % 6;
+                var order = Enumerable.Range(0, length).ToArray();
+                PetalMath.StableSortByKey(order, keys);
+                // LINQ's OrderBy is documented as stable
+                Assert.Equal(Enumerable.Range(0, length).OrderBy(i => keys[i]).ToArray(), order);
+            }
+        }
+    }
+
     /// <summary>The exact canvas-to-pixel homography of the 768-pixel test renders.</summary>
     private static PetalHomography RenderHomography()
     {

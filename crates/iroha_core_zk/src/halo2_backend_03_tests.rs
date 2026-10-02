@@ -1,16 +1,13 @@
 // Lexically included by `zk::tests` to preserve the existing libtest paths.
 
-#[cfg(feature = "zk-halo2")]
 use halo2_proofs::{
     halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
     plonk::{VerifyingKey, keygen_pk, keygen_vk},
     poly::commitment::Params as _,
     transcript::{Blake2bWrite, Challenge255},
 };
-#[cfg(feature = "zk-halo2")]
 use rand_core_06::OsRng;
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 fn anon_transfer_pow5_fixture() -> (Vec<u8>, Vec<u8>) {
     let k = 7;
     let params: PastaParams = pasta_params_new(k);
@@ -49,14 +46,12 @@ fn anon_transfer_pow5_fixture() -> (Vec<u8>, Vec<u8>) {
     (vk_envelope, transcript.finalize())
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 struct TinyCommitOpenFixture {
     vk_envelope: Vec<u8>,
     proof: Vec<u8>,
     commit: halo2_proofs::halo2curves::pasta::Fp,
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 fn tiny_commit_open_fixture() -> TinyCommitOpenFixture {
     let k = 6;
     let params: PastaParams = pasta_params_new(k);
@@ -91,14 +86,12 @@ fn tiny_commit_open_fixture() -> TinyCommitOpenFixture {
     }
 }
 
-#[cfg(feature = "zk-halo2")]
 struct TinyAddPublicFixture {
     vk_envelope: Vec<u8>,
     proof: Vec<u8>,
     instance: halo2_proofs::halo2curves::pasta::Fp,
 }
 
-#[cfg(feature = "zk-halo2")]
 fn tiny_add_public_fixture() -> TinyAddPublicFixture {
     let k = 5;
     let params: PastaParams = pasta_params_new(k);
@@ -127,7 +120,6 @@ fn tiny_add_public_fixture() -> TinyAddPublicFixture {
     }
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical() {
     use ff::{Field as _, PrimeField as _};
@@ -149,7 +141,6 @@ fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical() {
     assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_invalid_header() {
     let (vk_envelope, proof) = anon_transfer_pow5_fixture();
@@ -168,7 +159,6 @@ fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_invalid_header() {
 
 // --- Tiny constrained Pow5 circuits (base) negative ZK1 tests ---
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
     let k = 6u32;
@@ -214,7 +204,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
     let k = 6u32;
@@ -275,7 +264,6 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_positive() {
     let fixture = tiny_commit_open_fixture();
@@ -289,7 +277,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_positive() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
     let k = 6u32;
@@ -334,7 +321,6 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
 }
 
 // ZK1 is canonical: duplicate proof payloads and unknown tags fail closed.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -358,7 +344,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -393,7 +378,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects() {
 }
 
 // ZK1 duplicate instance payloads fail closed regardless of ordering.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -412,7 +396,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects() {
 }
 
 // Reversed duplicate-instance ordering must fail identically.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -431,7 +414,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects() {
 }
 
 // Randomized deterministic unknown-TLV stress must fail closed.
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -467,7 +449,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects() {
     }
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
@@ -597,7 +578,6 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
         run_case(steps, *expect_ok);
     }
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_zk1_prof_length_exceeds_cap_rejected() {
     // Build minimal ZK1 with PROF len > MAX_PROOF_LEN. Parser must reject.
@@ -619,7 +599,6 @@ fn halo2_verify_zk1_prof_length_exceeds_cap_rejected() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add2inst_public_ipa() {
     let k = 6u32;
@@ -667,7 +646,6 @@ fn halo2_verify_add2inst_public_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_final_confidential_transfer_ipa() {
     use super::confidential_v2 as confidential;
@@ -734,7 +712,6 @@ fn halo2_verify_final_confidential_transfer_ipa() {
     ));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_ipa() {
     let k = 5u32;
@@ -775,7 +752,6 @@ fn halo2_verify_vote_bool_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_id_public_ipa_with_and_without_inst() {
     let k = 5u32;
@@ -825,7 +801,6 @@ fn halo2_verify_id_public_ipa_with_and_without_inst() {
     assert!(super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box2)));
 }
 
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_with_instance_add_ipa() {
     let fixture = tiny_add_public_fixture();
@@ -839,7 +814,6 @@ fn halo2_verify_with_instance_add_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_with_instance_mul_kzg() {
     // Params and keys
@@ -890,7 +864,6 @@ fn halo2_verify_with_instance_mul_kzg() {
     assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_with_instance_malformed_length_kzg() {
     let fixture = tiny_add_public_fixture();
@@ -908,7 +881,6 @@ fn halo2_verify_with_instance_malformed_length_kzg() {
     assert!(!super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
 #[test]
 fn halo2_verify_with_instance_noncanonical_kzg() {
     let fixture = tiny_add_public_fixture();

@@ -26,6 +26,40 @@ final class ContractManifestJavaConsumerTest {
   }
 
   @Test
+  void assetDefinitionPrecisionUsesTheKotlinOwnedSevenFieldSchema() {
+    String prefix = "{\"kind\":\"Struct\",\"value\":{\"name\":\"AssetDefinitionView\","
+        + "\"fields\":[\"id\",\"name\",\"description\",\"owned_by\",\"total_quantity\",\"numeric_scale\",\"metadata\"]}},";
+    String option = "{\"kind\":\"Option\",\"value\":null},";
+    String children = leaf("AssetDefinitionId") + "," + leaf("String") + ","
+        + option + leaf("String") + "," + leaf("AccountId") + "," + leaf("Quantity") + ",";
+    String nodes = prefix + children + option + leaf("Int") + "," + leaf("Json");
+    EntrypointValueTypeV1 schema = parseDefinitionSchema(nodes);
+    assertEquals("AssetDefinitionView", schema.canonicalTypeName);
+    assertEquals(10, schema.nodes.size());
+    assertEquals(7, schema.wordCount);
+    assertEquals(EntrypointValueTypeNodeKindV1.OPTION, schema.nodes.get(7).kind);
+    assertEquals(EntrypointValueKindV1.INT, schema.nodes.get(8).leafKind);
+    String retired = prefix.replace("\"numeric_scale\",", "") + children + leaf("Json");
+    assertThrows(IllegalStateException.class, () -> parseDefinitionSchema(retired));
+    assertThrows(IllegalStateException.class, () -> parseDefinitionSchema(
+        prefix + children + leaf("Int") + "," + leaf("Json")));
+    assertThrows(IllegalStateException.class, () -> parseDefinitionSchema(
+        prefix + children + option + leaf("Decimal") + "," + leaf("Json")));
+  }
+
+  private static String leaf(String kind) {
+    return "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"" + kind + "\",\"value\":null}}";
+  }
+
+  private static EntrypointValueTypeV1 parseDefinitionSchema(String nodes) {
+    String payload = "{\"manifest\":{\"entrypoints\":[{\"name\":\"inspect\","
+        + "\"kind\":{\"kind\":\"View\",\"value\":null},\"params\":[],"
+        + "\"return_type\":\"AssetDefinitionView\",\"return_schema\":{\"nodes\":[" + nodes + "]}}]}}";
+    return ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8))
+        .manifest.entrypoints.get(0).returnSchema;
+  }
+
+  @Test
   void sharedNominalErrorsPreserveJapaneseIdentityAndUnit() throws Exception {
     File directory = new File(".").getAbsoluteFile();
     File fixture = null;

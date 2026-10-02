@@ -1047,7 +1047,7 @@ class HttpClientTransportTest {
             byteArrayOf(1, 2, 3),
         )
         val metadata = mapOf(
-            "validation_fee_hijiri_fee_quote_hash" to JsonValue.string("cd".repeat(32)),
+            "validation_fee_assessment" to retailFeeAssessmentFixture(),
         )
         val assetBytes = ByteArray(16) { (it + 11).toByte() }.also {
             it[6] = 0x46
@@ -1205,7 +1205,7 @@ class HttpClientTransportTest {
         val codeHash = ByteArray(32) { 0x21 }.also { it[it.lastIndex] = 0x23 }
         val invocation = ContractInvocation(contractAddress, codeHash, "ping")
         val metadata = mapOf(
-            "validation_fee_hijiri_fee_quote_hash" to JsonValue.string("ab".repeat(32)),
+            "validation_fee_assessment" to retailFeeAssessmentFixture(),
         )
         val feePayment = testFeePayment(5_000L)
         val base = TransactionPayload(
@@ -1576,11 +1576,7 @@ class HttpClientTransportTest {
             publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
             creationTimeMs = creationTimeMs,
             memo = "QR invoice 42",
-            validationFeePolicyVersion = 7,
-            validationFeePolicyHash = "AB".repeat(32),
-            validationFeeHijiriFeeQuoteHash = "CD".repeat(32),
-            validationFeeInstructionIndex = 1,
-            validationFeeTransferEntryIndex = 2,
+            validationFeeAssessment = retailFeeAssessmentFixture(),
         )
         val proposalInstructions =
             NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(multisigRequest)
@@ -1603,6 +1599,11 @@ class HttpClientTransportTest {
             TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(proposeJson),
         )
         val requestPayload = HttpClientTransport.buildMultisigProposePayload(multisigRequest)
+        assertEquals(
+            mapOf("memo" to JsonValue.string("QR invoice 42")),
+            HttpClientTransport.canonicalMultisigMetadata(requestPayload),
+        )
+        assertEquals(2, proposalInstructions.size)
         val transactionPayload = NoritoJavaCodecAdapter(
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
         ).encodeTransaction(
@@ -1671,14 +1672,8 @@ class HttpClientTransportTest {
         assertEquals("authority", feePayment["payer"])
         assertEquals("QR invoice 42", payload["memo"])
         assertEquals(creationTimeMs, (payload["creation_time_ms"] as Number).toLong())
-        assertEquals("7", payload["validation_fee_policy_version"])
-        assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
-        assertEquals(
-            "cd".repeat(32),
-            payload["validation_fee_hijiri_fee_quote_hash"],
-        )
-        assertEquals("1", payload["validation_fee_instruction_index"])
-        assertEquals("2", payload["validation_fee_transfer_entry_index"])
+        assertEquals(JsonParser.parse(retailFeeAssessmentFixture().canonicalJson),
+            payload["validation_fee_assessment"])
         @Suppress("UNCHECKED_CAST")
         val instructions = payload["instructions"] as List<String>
         assertEquals(listOf(Base64.getEncoder().encodeToString(instructionBytes)), instructions)
@@ -1697,10 +1692,7 @@ class HttpClientTransportTest {
             creationTimeMs = 777_000L,
             feePayment = testFeePayment(),
             memo = "trusted proposal",
-            validationFeePolicyVersion = 3,
-            validationFeePolicyHash = "ab".repeat(32),
-            validationFeeHijiriFeeQuoteHash = "cd".repeat(32),
-            validationFeeInstructionIndex = 0,
+            validationFeeAssessment = retailFeeAssessmentFixture(),
         )
         val proposalInstructions =
             NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(request)
@@ -1736,6 +1728,7 @@ class HttpClientTransportTest {
                 ),
             ),
             base.copy(metadata = mapOf("attacker" to JsonValue.string("substituted"))),
+            base.copy(metadata = metadata + ("validation_fee_assessment" to retailFeeAssessmentFixture())),
             base.copy(timeToLiveMs = 99_999L),
             base.copy(nonce = 9L),
             base.copy(attachments = listOf(attachment)),
@@ -1894,105 +1887,16 @@ class HttpClientTransportTest {
                 )
             )
         }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeeInstructionIndex = 1,
-                )
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeeTransferEntryIndex = 2,
-                )
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeePolicyVersion = 7,
-                    validationFeePolicyHash = "ab".repeat(32),
-                    validationFeeTransferEntryIndex = 2,
-                )
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeePolicyVersion = 7,
-                )
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeeHijiriFeeQuoteHash = "cd".repeat(32),
-                )
-            )
-        }
-        for (invalidHijiriQuoteHash in listOf("cd".repeat(31), "gg".repeat(32))) {
+        for (invalid in listOf("null", "[]", "0", "\"assessment\"")) {
             assertFailsWith<IllegalArgumentException> {
-                HttpClientTransport.buildMultisigProposePayload(
-                    MultisigProposeRequest(
-                        feePayment = testFeePayment(),
-                        multisigAccountAlias = "cbdc@banka",
-                        signerAccountId = "alice",
-                        instructions = listOf(instruction),
-                        validationFeePolicyVersion = 7,
-                        validationFeePolicyHash = "ab".repeat(32),
-                        validationFeeHijiriFeeQuoteHash = invalidHijiriQuoteHash,
-                    )
+                MultisigProposeRequest(
+                    feePayment = testFeePayment(), multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice", instructions = listOf(instruction),
+                    validationFeeAssessment = JsonValue.parse(invalid),
                 )
             }
         }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeePolicyVersion = 7,
-                    validationFeePolicyHash = "ab".repeat(32),
-                    validationFeeInstructionIndex = -1,
-                )
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest(
-                    feePayment = testFeePayment(),
-                    multisigAccountAlias = "cbdc@banka",
-                    signerAccountId = "alice",
-                    instructions = listOf(instruction),
-                    validationFeePolicyVersion = 7,
-                    validationFeePolicyHash = "ab".repeat(32),
-                    validationFeeInstructionIndex = 1,
-                    validationFeeTransferEntryIndex = -2,
-                )
-            )
-        }
+
     }
 
     @Test
@@ -6327,4 +6231,8 @@ class HttpClientTransportTest {
                 )
                 .build()
     }
+    private fun retailFeeAssessmentFixture(): JsonValue = JsonValue.parse(
+        """{"account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","retail_enrolled":true,"billing_month_start_ms":1788181200000,"policy_revision":1,"payments_used_before":49,"qualifying_payments":0,"fee_minor":0,"state_commitment":"0101010101010101010101010101010101010101010101010101010101010101","intent_hash":"410701273FD5B99A11D37224A556E1446890C74794CF495857F88F3CFFBB193F","expires_at_ms":1788934500000}""",
+    )
+
 }

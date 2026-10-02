@@ -41,6 +41,7 @@ import {
 } from "./curveRegistry.js";
 import { MultisigSpec } from "./multisig.js";
 import { normalizeAccountId, normalizeAssetId } from "./normalizers.js";
+import { normalizeRetailFeeAssessment, rejectUnknownRetailFeeFields } from "./retailFeeAssessment.js";
 import {
   defaultNativeRuntime,
   resolveNativeRuntimeBinding,
@@ -82,7 +83,6 @@ const TEXT_ASSET_DEFINITION_ID = "asset_definition_id";
 const TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION = "ScheduleConfidentialPolicyTransition";
 const TEXT_MUST_CONTAIN = " must contain ";
 const TEXT_CANONICAL = " canonical ";
-const TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA = " requires validation fee policy metadata";
 const TEXT_EXPECTED_REMAINING_AMOUNT = "expected_remaining_amount";
 const TEXT_CARRIES_A_SUBSTITUTED = " carries a substituted ";
 
@@ -110,7 +110,6 @@ const TEXT_REGISTER_VERIFYING_KEY = "RegisterVerifyingKey";
 
 
 const TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET_2 = " must use a native hash with its marker bit set";
-const TEXT_VALIDATION_FEE = "validation_fee_";
 const TEXT_ACCOUNT_ID = "account_id";
 const TEXT_SET_ASSET_TRANSFER_BLACKLIST_2 = "SetAssetTransferBlacklist";
 const TEXT_REPORT_KAIGI_RELAY_HEALTH = "ReportKaigiRelayHealth";
@@ -131,7 +130,6 @@ const TEXT_CLAIM_TWITTER_FOLLOW_REWARD = "ClaimTwitterFollowReward";
 
 const TEXT_IROHA_DATA_MODEL_ISI = (TEXT_IROHA_DATA_MODEL + "isi::");
 const TEXT_IROHA_INSTRUCTION_V1 = "iroha.instruction.v1::";
-const TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE = ("MultisigProposeDto." + TEXT_VALIDATION_FEE);
 
 const TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 = "PrivacyExact12FixtureBundleV1.";
 
@@ -154,7 +152,7 @@ const TEXT_MUST_CONTAIN_EXACTLY = (TEXT_MUST_CONTAIN + "exactly ");
 const TEXT_MUST_BE_EXACT_STANDARD_BASE64 = (TEXT_MUST_BE + "exact standard-base64");
 const TEXT_ISSUE_REPLICATION_ORDER = "IssueReplicationOrder.";
 const TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST = ".payload.proof.audit_path must ";
-const TEXT_MULTISIG_PROPOSE_DTO = "MultisigProposeDto.";
+const TEXT_MULTISIG_PROPOSE_DTO = "MultisigProposeDtoV1.";
 
 const TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO = ".unsignedTransactionPayloadNorito.";
 const TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO = ".signedTransactionVersionedNorito ";
@@ -258,7 +256,7 @@ const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 
 const MULTISIG_PROPOSE_DTO_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
-  "iroha_torii::routing::MultisigProposeDto",
+  "iroha_torii::routing::MultisigProposeDtoV1",
 );
 const MULTISIG_CONTRACT_CALL_PROPOSE_DTO_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "iroha_torii::routing::MultisigContractCallProposeDto",
@@ -1164,7 +1162,7 @@ function rejectInlinePrivateKeyFields(request, context) {
 /**
  * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
  *
- * Torii's `NoritoJson<MultisigProposeDto>` extractor accepts this payload with
+ * Torii's `NoritoJson<MultisigProposeDtoV1>` extractor accepts this payload with
  * `Content-Type: application/x-norito`. The `instructions` entries are normal
  * InstructionBox values embedded in the DTO, not base64 strings inside JSON.
  *
@@ -1175,19 +1173,22 @@ function rejectInlinePrivateKeyFields(request, context) {
 function encodeMultisigProposeRequest(request, networkPrefix, nativeRuntime) {
   requireNetworkPrefix(networkPrefix);
   if (!isPlainObject(request)) {
-    rejectType(("MultisigProposeDto request" + TEXT_MUST_BE_AN_OBJECT_2));
+    rejectType(("MultisigProposeDtoV1 request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   if (!Array.isArray(request.instructions)) {
     rejectType((TEXT_MULTISIG_PROPOSE_DTO + "instructions" + TEXT_MUST_BE + "an array"));
   }
-  rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
+  rejectInlinePrivateKeyFields(request, "MultisigProposeDtoV1");
+  rejectUnknownRetailFeeFields(request, "MultisigProposeDtoV1");
+  if (Object.hasOwn(request, "validation_fee_assessment") && request.validation_fee_assessment === undefined) {
+    rejectType("MultisigProposeDtoV1.validation_fee_assessment must be a typed assessment or null");
+  }
   for (const [_field, value] of [
     ["signer_account_id", request.signer_account_id ?? request.signerAccountId],
     ["multisig_account_id", request.multisig_account_id ?? request.multisigAccountId],
   ]) {
     if (value !== undefined && value !== null) AccountAddress.parseEncoded(value, networkPrefix);
   }
-  const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
       ...encodeMultisigAccountSelectorFields(request, (TEXT_MULTISIG_PROPOSE_DTO + "selector")),
@@ -1233,41 +1234,13 @@ function encodeMultisigProposeRequest(request, networkPrefix, nativeRuntime) {
       ],
       [
         encodeOptionValue(
-          validationFeeMetadata.policyVersion,
-          encodeNoritoStringValue,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version`,
-        ),
-      ],
-      [
-        encodeOptionValue(
-          validationFeeMetadata.policyHash,
-          encodeNoritoStringValue,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_hash`,
-        ),
-      ],
-      [
-        encodeOptionValue(
-          validationFeeMetadata.hijiriFeeQuoteHash,
-          encodeNoritoStringValue,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash`,
+          request.validation_fee_assessment ?? null,
+          encodeRetailFeeAssessmentValue,
+          (TEXT_MULTISIG_PROPOSE_DTO + "validation_fee_assessment"),
         ),
       ],
       [
         encodeMultisigInstructions(request.instructions, networkPrefix, nativeRuntime),
-      ],
-      [
-        encodeOptionValue(
-          validationFeeMetadata.instructionIndex,
-          encodeNoritoStringValue,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index`,
-        ),
-      ],
-      [
-        encodeOptionValue(
-          validationFeeMetadata.transferEntryIndex,
-          encodeNoritoStringValue,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index`,
-        ),
       ],
     ]),
   );
@@ -1278,97 +1251,168 @@ export function noritoEncodeMultisigProposeRequest(request, networkPrefix) {
   return encodeMultisigProposeRequest(request, networkPrefix, defaultNativeRuntime);
 }
 
-function normalizeMultisigProposeValidationFeeMetadata(request) {
-  rejectValidationFeeCamelCaseDtoFields(request);
-  const policyVersion = request.validation_fee_policy_version ?? null;
-  const policyHash = request.validation_fee_policy_hash ?? null;
-  const hijiriFeeQuoteHash = request.validation_fee_hijiri_fee_quote_hash ?? null;
-  const instructionIndex = request.validation_fee_instruction_index ?? null;
-  const transferEntryIndex = request.validation_fee_transfer_entry_index ?? null;
-  const hasPolicyVersion = policyVersion !== null && policyVersion !== undefined;
-  const hasPolicyHash = policyHash !== null && policyHash !== undefined;
-  const hasHijiriFeeQuoteHash =
-    hijiriFeeQuoteHash !== null && hijiriFeeQuoteHash !== undefined;
-  const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
-  const hasTransferEntryIndex = transferEntryIndex !== null && transferEntryIndex !== undefined;
-  if (hasPolicyVersion !== hasPolicyHash) {
-    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version and validation_fee_policy_hash${TEXT_MUST_BE}provided together`);
+// Declared Norito frame identities of the native retail fee types.
+const RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH = Buffer.from("535a1db30ba036a8f35944ab5567877900", HEX_ENCODING);
+const RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH = Buffer.from("72ca99de9d49cae6dfc07a2a628eb91800", HEX_ENCODING);
+const RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1 = "iroha:retail_fee:assessment:v1:";
+const RETAIL_FEE_PAYMENT_INTENT_DOMAIN_V1 = "iroha.retail_fee.payment_intent.v1\0";
+const RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 = 4096;
+const RETAIL_FEE_MAX_PAYMENT_LEGS_V1 = 1000;
+const RETAIL_FEE_ASSESSMENT_FIELDS_V1 = Object.freeze([
+  "account_id",
+  "retail_enrolled",
+  "billing_month_start_ms",
+  "policy_revision",
+  "payments_used_before",
+  "qualifying_payments",
+  "fee_minor",
+  "state_commitment",
+  "intent_hash",
+  "expires_at_ms",
+]);
+
+function encodeExactRetailFeeAccountIdValue(value, context) {
+  if (typeof value !== JS_TYPE_STRING || value.trim() !== value) {
+    rejectType(`${context} must be an exact canonical I105 account id`);
   }
-  if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
+  const canonical = normalizeAccountId(value, context);
+  if (canonical !== value) {
+    rejectType(`${context} must be an exact canonical I105 account id`);
   }
-  if (!hasPolicyVersion && hasInstructionIndex) {
-    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
+  return encodeAccountIdValue(canonical, context);
+}
+
+function encodeRetailFeeQuoteRequestValue(request) {
+  const context = "RetailFeeQuoteRequestV1";
+  assertExactObjectKeys(request, ["account_id", "asset_definition_id", "transfers"], context);
+  if (
+    !Array.isArray(request.transfers) ||
+    request.transfers.length === 0 ||
+    request.transfers.length > RETAIL_FEE_MAX_PAYMENT_LEGS_V1
+  ) {
+    rejectType(`${context}.transfers requires between 1 and ${RETAIL_FEE_MAX_PAYMENT_LEGS_V1} ordered payment legs`);
   }
-  if (!hasPolicyVersion && hasTransferEntryIndex) {
-    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
+  return encodeStructValue([
+    [encodeExactRetailFeeAccountIdValue(request.account_id, `${context}.account_id`)],
+    [encodeAssetDefinitionIdValue(request.asset_definition_id, `${context}.asset_definition_id`)],
+    [encodeNoritoVec(request.transfers, (leg, index) => {
+      const label = `${context}.transfers[${index}]`;
+      assertExactObjectKeys(leg, ["destination_account_id", "amount_minor_units"], label);
+      if (normalizeU64Input(leg.amount_minor_units, `${label}.amount_minor_units`) === 0n) {
+        rejectType(`${label}.amount_minor_units must be positive`);
+      }
+      return encodeStructValue([
+        [encodeExactRetailFeeAccountIdValue(leg.destination_account_id, `${label}.destination_account_id`)],
+        [encodeU64NumberValue(leg.amount_minor_units, `${label}.amount_minor_units`)],
+      ]);
+    })],
+  ]);
+}
+
+function encodeRetailFeeAssessmentValue(value) {
+  const assessment = normalizeRetailFeeAssessment(value);
+  const context = "RetailFeeAssessmentV1";
+  assertExactObjectKeys(assessment, RETAIL_FEE_ASSESSMENT_FIELDS_V1, context);
+  const hash = (name) => encodeFixedByteArrayArchiveValue(
+    Buffer.from(assessment[name], HEX_ENCODING), 32, `${context}.${name}`);
+  return encodeStructValue([
+    [encodeExactRetailFeeAccountIdValue(assessment.account_id, `${context}.account_id`)],
+    [encodeBoolValue(assessment.retail_enrolled, `${context}.retail_enrolled`)],
+    ...[
+      "billing_month_start_ms",
+      "policy_revision",
+      "payments_used_before",
+      "qualifying_payments",
+      "fee_minor",
+    ].map((name) => [encodeU64NumberValue(assessment[name], `${context}.${name}`)]),
+    [hash("state_commitment")],
+    [hash("intent_hash")],
+    [encodeU64NumberValue(assessment.expires_at_ms, `${context}.expires_at_ms`)],
+  ]);
+}
+
+/** Encode the native, ordered wallet payment intent without local allowance state. */
+export function encodeRetailFeeQuoteRequestV1(request) {
+  const payload = withNoritoCompactLengths(() => encodeRetailFeeQuoteRequestValue(request));
+  return frameNoritoPayload(
+    payload,
+    RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/** Hash the exact native payment intent using Iroha's domain and hash marker. */
+export function retailFeePaymentIntentHash(request) {
+  const bytes = Buffer.concat([
+    Buffer.from(RETAIL_FEE_PAYMENT_INTENT_DOMAIN_V1, UTF8_ENCODING),
+    encodeRetailFeeQuoteRequestV1(request),
+  ]);
+  const digest = Uint8Array.from(blake2b256(bytes));
+  digest[31] |= 1;
+  return digest;
+}
+
+/** Encode the complete assessment reviewed by the sender, including an explicit zero fee. */
+export function encodeRetailFeeAssessmentV1(assessment) {
+  const payload = withNoritoCompactLengths(() => encodeRetailFeeAssessmentValue(assessment));
+  return frameNoritoPayload(
+    payload,
+    RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/** Proposal-bound TRACE marker; the ledger checks this assessment at execution time. */
+export function retailFeeAssessmentMarkerMessage(assessment) {
+  const encoded = encodeRetailFeeAssessmentV1(assessment);
+  if (encoded.length > Math.floor((RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 -
+      RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1.length) / 2)) {
+    rejectType("retail fee assessment marker exceeds size bound");
   }
-  if (hasTransferEntryIndex && !hasInstructionIndex) {
-    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index requires ${TEXT_VALIDATION_FEE}instruction_index`);
+  return `${RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1}${encoded.toString(HEX_ENCODING)}`;
+}
+
+/** Decode a proposal marker and require exact canonical re-encoding before review. */
+export function decodeRetailFeeAssessmentMarkerMessage(message) {
+  const prefix = RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1;
+  if (
+    typeof message !== JS_TYPE_STRING ||
+    message.length > RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 ||
+    !message.startsWith(prefix) ||
+    !/^(?:[0-9a-f]{2})+$/u.test(message.slice(prefix.length))
+  ) {
+    rejectType("retail fee assessment marker requires canonical lowercase hex");
   }
-  if (!hasPolicyVersion) {
-    return {
-      policyVersion: null,
-      policyHash: null,
-      hijiriFeeQuoteHash: null,
-      instructionIndex: null,
-      transferEntryIndex: null,
+  const bytes = Buffer.from(message.slice(prefix.length), HEX_ENCODING);
+  if (bytes.length > Math.floor((RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 - prefix.length) / 2)) {
+    rejectType("retail fee assessment marker exceeds size bound");
+  }
+  const frame = validateNoritoFrame(bytes, {
+    context: "retail fee assessment marker",
+    expectedSchemaHash: RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH,
+  });
+  const names = RETAIL_FEE_ASSESSMENT_FIELDS_V1;
+  const assessment = withNoritoCompactLengths(() => {
+    const fields = decodeStructFields(frame.payload, "RetailFeeAssessmentV1", names);
+    const hash = (name) => Buffer.from(
+      decodeFixedByteArrayArchiveValue(fields[name], 32, name),
+    ).toString(HEX_ENCODING).toUpperCase();
+    const result = {
+      account_id: decodeAccountIdValue(fields.account_id, "account_id"),
+      retail_enrolled: decodeBoolValue(fields.retail_enrolled, "retail_enrolled"),
+      state_commitment: hash("state_commitment"),
+      intent_hash: hash("intent_hash"),
     };
-  }
-  return {
-    policyVersion: normalizeU64Input(
-      policyVersion,
-      `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version`,
-    ).toString(),
-    policyHash: normalizeValidationFeePolicyHashString(
-      policyHash,
-      `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_hash`,
-    ),
-    hijiriFeeQuoteHash: hasHijiriFeeQuoteHash
-      ? normalizeValidationFeePolicyHashString(
-          hijiriFeeQuoteHash,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash`,
-        )
-      : null,
-    instructionIndex: hasInstructionIndex
-      ? normalizeU64Input(
-          instructionIndex,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index`,
-        ).toString()
-      : null,
-    transferEntryIndex: hasTransferEntryIndex
-      ? normalizeU64Input(
-          transferEntryIndex,
-          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index`,
-        ).toString()
-      : null,
-  };
-}
-
-function rejectValidationFeeCamelCaseDtoFields(request) {
-  for (const [camelName, snakeName] of [
-    ["validationFeePolicyVersion", (TEXT_VALIDATION_FEE + "policy_version")],
-    ["validationFeePolicyHash", (TEXT_VALIDATION_FEE + "policy_hash")],
-    ["validationFeeHijiriFeeQuoteHash", (TEXT_VALIDATION_FEE + "hijiri_fee_quote_hash")],
-    ["validationFeeInstructionIndex", (TEXT_VALIDATION_FEE + "instruction_index")],
-    ["validationFeeTransferEntryIndex", (TEXT_VALIDATION_FEE + "transfer_entry_index")],
-  ]) {
-    if (Object.prototype.hasOwnProperty.call(request, camelName)) {
-      rejectType(`MultisigProposeDto uses ${TEXT_UNSUPPORTED}camelCase validation fee field ${camelName}; use ${snakeName}`);
+    for (const name of names.filter((name) => !Object.hasOwn(result, name))) {
+      const value = BigInt(decodeU64Value(fields[name], name));
+      result[name] = value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value;
     }
+    return Object.fromEntries(names.map((name) => [name, result[name]]));
+  });
+  if (retailFeeAssessmentMarkerMessage(assessment) !== message) {
+    rejectType("retail fee marker is not canonical");
   }
-}
-
-function normalizeValidationFeePolicyHashString(value, context) {
-  if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context}${TEXT_MUST_BE_A}32-byte hex string`);
-  }
-  const trimmed = value.trim().toLowerCase();
-  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
-  if (!/^[0-9a-f]{64}$/.test(normalized)) {
-    rejectType(`${context}${TEXT_MUST_BE_A}32-byte hex string`);
-  }
-  return normalized;
+  return assessment;
 }
 
 /**

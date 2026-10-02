@@ -23,7 +23,6 @@ pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIONED_TAG;
 /// NPoS Sumeragi v1 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
-use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
 /// Compute the genesis-embedded consensus-parameters fingerprint.
 ///
@@ -48,13 +47,10 @@ pub fn consensus_genesis_params_from_parameters(
     mode: iroha_data_model::block::consensus::ConsensusMode,
     params: &iroha_data_model::parameter::Parameters,
     sumeragi_context: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
-) -> Result<ConsensusGenesisParams, &'static str> {
+) -> Result<ConsensusGenesisParams, crate::execution_attempt::ExecutionAttemptError<String>> {
     let sumeragi = params.sumeragi();
     let block = params.block();
-    let npos_payload = params
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter);
+    let npos_payload = crate::state::sumeragi_npos_parameters_from_parameters(params)?;
     let mode = match mode {
         iroha_data_model::block::consensus::ConsensusMode::Npos => {
             let npos = npos_payload.ok_or("NPoS genesis requires `sumeragi_npos_parameters`")?;
@@ -72,7 +68,7 @@ pub fn consensus_genesis_params_from_parameters(
         }
         iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
             if npos_payload.is_some() {
-                return Err("permissioned genesis must omit `sumeragi_npos_parameters`");
+                return Err("permissioned genesis must omit `sumeragi_npos_parameters`".into());
             }
             ConsensusGenesisModeParams::Permissioned
         }

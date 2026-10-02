@@ -230,7 +230,8 @@ fn prepared_proposal_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, 
     )
     .build_raw()
     .expect("complete prepared-verifier fixture genesis")
-    .with_consensus_meta();
+    .with_consensus_meta()
+    .expect("valid fixture consensus parameters");
     let genesis_key = checked_genesis_fixture_keypair();
     let proposal = manifest
         .clone()
@@ -483,7 +484,8 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
         )))
         .build_raw()
         .expect("preserve complete prepared-verifier genesis authority")
-        .with_consensus_meta();
+        .with_consensus_meta()
+        .expect("valid fixture consensus parameters");
     let error = validate_prepared_genesis_bundle(
         &wire,
         &drifted_manifest,
@@ -509,7 +511,8 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     )
     .build_raw()
     .expect("complete bad-PoP verifier fixture genesis")
-    .with_consensus_meta();
+    .with_consensus_meta()
+    .expect("valid fixture consensus parameters");
     let bad_proposal = bad_manifest
         .clone()
         .build_and_sign(&key_pair)

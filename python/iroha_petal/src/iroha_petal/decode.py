@@ -365,11 +365,22 @@ def _read_dots(project: Projector, reference: _Reference) -> Tuple[bytearray, Li
 def _decode_with_erasures(
     lane: Lane, word: bytes, confidence: Sequence[float]
 ) -> Optional[LaneResult]:
-    """Try Reed-Solomon with growing numbers of erasures, least confident first."""
+    """Try Reed-Solomon with growing numbers of erasures, least confident first.
+
+    The schedule erases 0, 1/8, 1/4, 1/3 and 1/2 of the parity bytes, and for lane ``K`` also
+    2/3. Lanes ``D`` and ``P`` stop at 1/2: their words have only 11 and 13 parity bytes, and a
+    further erasure step leaves so few spare ones that it accepts wrong codewords (lane ``D``
+    at 7 erasures: about 0.4 % of random words, and 5 wrong lanes in 2 900 simulated harsh
+    frames; lane ``P`` at 8: 2 wrong lanes in 600 banded 480p frames). Capping them costs
+    0.65 % of the lane ``D`` reads and 0.15 % of the lane ``P`` reads in those frames.
+    """
     nsym = lane.parity_len
     order = sorted(range(len(word)), key=lambda i: total_key(confidence[i]))
+    counts = [0, nsym // 8, nsym // 4, nsym // 3, nsym // 2]
+    if lane is Lane.K:
+        counts.append(nsym * 2 // 3)
     schedule = []
-    for count in (0, nsym // 8, nsym // 4, nsym // 3, nsym // 2, nsym * 2 // 3):
+    for count in counts:
         if not schedule or schedule[-1] != count:
             schedule.append(count)
     for erasures in schedule:

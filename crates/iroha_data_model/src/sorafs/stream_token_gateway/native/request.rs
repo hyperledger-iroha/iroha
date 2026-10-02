@@ -20,10 +20,6 @@ pub const STREAM_TOKEN_GATEWAY_MAX_REQUEST_BYTES_V1: usize = 32 * 1024;
 pub const STREAM_TOKEN_GATEWAY_MAX_EXPIRY_ITEMS_V1: u32 = 256;
 
 /// Sole native gateway action surface; a decoded action is not serving authorization.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "gateway actions retain their direct canonical V1 payloads without a second allocation envelope"
-)]
 #[derive(
     Clone,
     Debug,

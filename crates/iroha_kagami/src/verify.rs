@@ -88,7 +88,7 @@ fn verify_manifest(
     let defaults = profile_defaults(profile);
     ensure_chain_id(manifest, &defaults)?;
     crate::genesis::ensure_kagemusha_mint_finality_schedule_matches_consensus(manifest)?;
-    let normalized = manifest.clone().with_consensus_meta();
+    let normalized = manifest.clone().with_consensus_meta()?;
     let params = normalized.effective_parameters()?;
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
     let mode = enforce_mode(profile, &normalized)?;
@@ -246,7 +246,9 @@ fn enforce_public_xor_binding(
     let npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| eyre!("public XOR requires the signed NPoS asset pin"))?;
     if npos.xor_asset_definition_id != public_xor_asset_definition_id {
         return Err(eyre!(
@@ -322,7 +324,9 @@ fn resolve_npos_params(
     params
         .custom()
         .get(&npos_param_id)
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| eyre!("missing `sumeragi_npos_parameters` in manifest"))
 }
 fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
@@ -388,7 +392,10 @@ mod tests {
         let mut npos = parameters
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose()
+            .expect("valid fixture NPoS parameters")
+            .flatten()
             .expect("fixture NPoS snapshot");
         npos.xor_asset_definition_id = asset_definition_id.clone();
         manifest
@@ -708,9 +715,10 @@ mod tests {
             .unwrap()
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
-            .and_then(SumeragiNposParameters::from_custom_parameter);
+            .map(SumeragiNposParameters::from_custom_parameter)
+            .transpose();
         assert!(
-            malformed_npos.is_none(),
+            malformed_npos.is_err(),
             "synthetic currency must fail the typed NPoS parameter decoder"
         );
         assert!(

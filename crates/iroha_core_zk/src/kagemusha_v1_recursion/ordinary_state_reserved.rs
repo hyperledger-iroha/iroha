@@ -1,101 +1,105 @@
-//! Fixed ordinary-State reserved positions, never OEM credential-audit claims.
+//! First-release ordinary State OUTER protocol commitments in the four former audit positions.
+//! They name real release-selected State protocols and never claim OEM credential audits.
 
-use halo2_proofs::halo2curves::pasta::{Fp, Fq};
-
-use crate::kagemusha_v1_poseidon::{encode, hash};
-
-const DOMAIN: u64 = u64::from_le_bytes(*b"kgmorst1");
-
-/// Canonical Eq/Fp and Ep/Fq Poseidon constants for the two reserved ordinary-State positions.
-///
-/// The common State public shape retains these positions because payment and transport
-/// formulas share that shape. Ordinary Guard authenticates its exact five original SHA
-/// digests directly; these constants make the unused positions deterministic and supply
-/// no OEM credential audit, hardware guarantee or financial authority. The fixed preimages
-/// are domain `kgmorst1`, arity two, version one and parity-purpose tag one/two.
-pub fn kagemusha_ordinary_state_reserved_guard_positions_v1() -> ([u8; 32], [u8; 32]) {
+/// Return the actual admitted outer State Eq/Ep protocol commitments. This is a data projection
+/// of the independently authenticated native verifier, not a proof, clock or monetary grant.
+pub fn kagemusha_ordinary_state_outer_protocol_positions_v1(
+    verifier: &super::KagemushaAuthenticatedRecursiveVerifierV1,
+) -> ([u8; 32], [u8; 32]) {
+    let material = verifier.state_checkpoint_material();
     (
-        encode(hash::<Fp>(DOMAIN, &[Fp::from(1), Fp::from(1)])),
-        encode(hash::<Fq>(DOMAIN, &[Fq::from(1), Fq::from(2)])),
+        material.binding.outer_eq_protocol_digest,
+        material.binding.outer_ep_protocol_digest,
     )
 }
 
-#[cfg(any(
-    test,
-    feature = "kagemusha-real-proof-harness",
-    feature = "kagemusha-production-prover"
-))]
-pub(super) fn constrain_ordinary_state_reserved_guard_positions_v1<
+/// Validate the complete variable public commitments. Active parent acceptance must additionally
+/// use these same cells in load_and_constrain_parent_protocol and fold every actual outer opening;
+/// the Native current State verifier pins them to its genuine installed release protocols.
+/// Keeping them public avoids a fixed self-referential State-inner/State-outer key constant.
+pub(super) fn constrain_ordinary_state_outer_protocol_positions_v1<
     F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
 >(
     builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<F>,
     eq: [halo2_base::AssignedValue<F>; 2],
     ep: [halo2_base::AssignedValue<F>; 2],
 ) {
-    let (expected_eq, expected_ep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
+    use halo2_base::gates::{GateInstructions as _, RangeInstructions as _};
+    let range = builder.range_chip();
     let ctx = builder.main(0);
-    for (actual, bytes) in [(eq, expected_eq), (ep, expected_ep)] {
-        let expected = crate::kagemusha_v1_poseidon::digest_limbs::<F>(bytes);
-        for (actual, expected) in actual.into_iter().zip(expected) {
-            let constant = ctx.load_constant(expected);
-            ctx.constrain_equal(&actual, &constant);
+    for pair in [eq, ep] {
+        for limb in pair {
+            range.range_check(ctx, limb, 128);
         }
+        let sum = range.gate().sum(ctx, pair);
+        let zero = range.gate().is_zero(ctx, sum);
+        range.gate().assert_is_const(ctx, &zero, &F::ZERO);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, decode, digest_limbs};
+    use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, encode};
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
-    use halo2_proofs::dev::MockProver;
-
-    #[test]
-    fn reserved_positions_are_canonical_nonzero_role_distinct_native_poseidon() {
-        let (eq, ep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
-        assert_ne!(eq, [0; 32]);
-        assert_ne!(ep, [0; 32]);
-        assert_ne!(eq, ep);
-        assert!(decode::<Fp>(eq).is_some());
-        assert!(decode::<Fq>(ep).is_some());
-        assert_eq!(eq, encode(hash::<Fp>(DOMAIN, &[Fp::from(1), Fp::from(1)])));
-        assert_eq!(ep, encode(hash::<Fq>(DOMAIN, &[Fq::from(1), Fq::from(2)])));
-    }
-
+    use halo2_proofs::{
+        dev::MockProver,
+        halo2curves::pasta::{Fp, Fq},
+    };
     fn check<F: KagemushaPoseidonFieldV1>() {
-        let (eq, ep) = kagemusha_ordinary_state_reserved_guard_positions_v1();
-        let public: Vec<F> = digest_limbs::<F>(eq)
+        // Data-only stand-ins exercise copy/zero/range relations, never an installed verifier.
+        let expected: Vec<F> = digest_limbs::<F>(encode(Fp::from(101)))
             .into_iter()
-            .chain(digest_limbs::<F>(ep))
+            .chain(digest_limbs::<F>(encode(Fq::from(102))))
             .collect();
         for changed in [None, Some(0), Some(1), Some(2), Some(3)] {
-            let mut actual = public.clone();
-            if let Some(index) = changed {
-                actual[index] += F::ONE;
+            let mut actual = expected.clone();
+            if let Some(i) = changed {
+                actual[i] += F::ONE;
             }
-            let mut builder = BaseCircuitBuilder::<F>::new(false)
-                .use_k(9)
+            let mut b = BaseCircuitBuilder::<F>::new(false)
+                .use_k(10)
+                .use_lookup_bits(8)
                 .use_instance_columns(1);
-            let cells: Vec<_> = actual
+            let cells = actual
                 .iter()
-                .map(|value| builder.main(0).load_witness(*value))
-                .collect();
-            constrain_ordinary_state_reserved_guard_positions_v1(
-                &mut builder,
+                .map(|v| b.main(0).load_witness(*v))
+                .collect::<Vec<_>>();
+            constrain_ordinary_state_outer_protocol_positions_v1(
+                &mut b,
                 [cells[0], cells[1]],
                 [cells[2], cells[3]],
             );
-            builder.assigned_instances = vec![cells];
-            builder.calculate_params(Some(9));
-            let result = MockProver::run(9, &builder, vec![actual])
-                .expect("reserved-position circuit fits")
-                .verify();
-            assert_eq!(result.is_ok(), changed.is_none());
+            for (cell, value) in cells.iter().zip(&expected) {
+                let c = b.main(0).load_constant(*value);
+                b.main(0).constrain_equal(cell, &c);
+            }
+            b.assigned_instances = vec![cells];
+            b.calculate_params(Some(9));
+            assert_eq!(
+                MockProver::run(10, &b, vec![actual])
+                    .unwrap()
+                    .verify()
+                    .is_ok(),
+                changed.is_none()
+            );
         }
+        let mut b = BaseCircuitBuilder::<F>::new(false)
+            .use_k(10)
+            .use_lookup_bits(8)
+            .use_instance_columns(1);
+        let zero = b.main(0).load_zero();
+        constrain_ordinary_state_outer_protocol_positions_v1(&mut b, [zero, zero], [zero, zero]);
+        b.calculate_params(Some(9));
+        assert!(
+            MockProver::run(10, &b, vec![vec![]])
+                .unwrap()
+                .verify()
+                .is_err()
+        );
     }
-
     #[test]
-    fn both_state_parities_reject_each_substituted_reserved_limb() {
+    fn ordinary_outer_protocol_cells_require_real_exact_purpose_copies_both_fields() {
         check::<Fp>();
         check::<Fq>();
     }

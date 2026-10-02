@@ -105,9 +105,10 @@ finality verifier authenticates them.
 
 ## Caller-trusted unsigned drafts
 
-Contract-call and multisig bytes returned for local signing fail closed unless
-the client has the exact genesis-derived `local_signing_context` and the caller
-supplies an off-wire `ContractCallDraftIntent` or `MultisigDraftIntent`. Each
+Contract-call bytes returned for local signing fail closed unless the client
+has the exact genesis-derived `local_signing_context` and the caller supplies
+an off-wire `ContractCallDraftIntent`. The generic multisig instruction proposal
+API is retired from both the HTTP base client and the inheriting SDK. Each
 contract-call intent contains the exact Norito executable and final merged
 metadata archives plus the trusted resolved address, code hash, and request
 payload digest:

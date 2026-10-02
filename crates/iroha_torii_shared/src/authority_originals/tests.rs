@@ -8,13 +8,13 @@ use iroha_data_model::{
     asset::{Asset, AssetBalancePolicy, AssetBalanceScope},
     common::Owned,
     nexus::FeeSponsorEligibility,
-    sumeragi::SumeragiStatus,
+    sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
         SumeragiFinalityAttestationBody, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
         test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
     },
 };
-use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
+use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::DataSpaceId};
 use norito::codec::Encode as _;
 use std::sync::OnceLock;
 
@@ -38,7 +38,7 @@ fn account_fixture() -> &'static (
                 .clone(),
         );
         let account_value = Owned::new(AccountDetails::new(
-            Default::default(),
+            Metadata::default(),
             Some(alias.clone()),
             None,
             vec![],
@@ -100,7 +100,7 @@ fn account_fixture() -> &'static (
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: SumeragiFootprint::default(),
             },
             finality_proof: proof,
         };

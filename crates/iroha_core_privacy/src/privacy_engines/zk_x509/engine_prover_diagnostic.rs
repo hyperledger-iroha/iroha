@@ -541,6 +541,25 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         )
         .is_err()
     );
+    // X5S1 fixes the public instance nonce immediately after its eight-byte prefix.
+    // Reuse one completed proof and independently change each nonce byte; framing
+    // alone accepts these substitutions, so the complete verifier must reject them.
+    let mut nonce_tampered = proof.clone();
+    for nonce_byte in 0..32 {
+        let offset = 8 + nonce_byte;
+        nonce_tampered[offset] ^= 1;
+        assert!(
+            verify_zk_x509_credential_proof_v1(
+                &fixture.statement,
+                &fixture.authoritative_state,
+                genesis,
+                &nonce_tampered,
+            )
+            .is_err(),
+            "substituted proof-instance nonce byte {nonce_byte} must be rejected",
+        );
+        nonce_tampered[offset] ^= 1;
+    }
     let mut tampered = proof.clone();
     *tampered.last_mut().expect("nonempty credential proof") ^= 1;
     assert!(
@@ -553,7 +572,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         .is_err()
     );
     record(format!(
-        "wrong_genesis_rejected=true\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
+        "wrong_genesis_rejected=true\nnonce_byte_mutations_rejected=32\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
         prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
     ));
     observation.assert_complete_main_coverage_v1(

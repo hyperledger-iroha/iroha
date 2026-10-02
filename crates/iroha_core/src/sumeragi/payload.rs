@@ -41,16 +41,54 @@ pub enum PayloadError {
     /// Original parent-state staking preparation failed.
     #[error("staking effect preparation failed: {0}")]
     Staking(String),
-    /// The versioned decoder stopped at a local resource ceiling or allocation refusal.
-    /// Its public error preserves the category but does not carry the nested limit fields.
-    #[error("payload decoding was refused by local resources")]
-    DecodeResource,
-    /// Original committed routing could not be read with the local resources.
+    /// Original local evidence or stake-index preparation refusal, retaining its release owner.
+    #[error("staking effect preparation deferred: {0}")]
+    StakingPreparation(#[source] crate::state::EvidencePreparationError),
+    /// Original State acquisition refusal before preparing staking effects.
+    #[error("staking State acquisition deferred: {0}")]
+    StakingAdmission(#[source] crate::state::StateAdmissionError),
+    /// The original versioned decoder refused this unfinished local attempt.
+    #[error("payload decoding was refused by local resources: {0}")]
+    DecodeResource(crate::execution_attempt::ExecutionDeferred),
+    /// Original parent participation preparation failed; no local QC is execution input.
+    #[error("parent service preparation failed: {0}")]
+    ParentService(String),
+    /// Original committed routing or parent service could not be read with local resources.
     #[error("payload routing deferred: {0}")]
     RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
+}
+
+fn staking_preparation_error(error: eyre::Report) -> PayloadError {
+    if !cfg!(all(test, sumeragi_core_mutation = "HC49")) {
+        if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+            return PayloadError::StakingPreparation(refusal.clone());
+        }
+        if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+            return PayloadError::StakingAdmission(refusal.clone());
+        }
+    }
+    if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
+        error.downcast_ref::<crate::execution_attempt::ExecutionAttemptError<String>>()
+    {
+        return PayloadError::RoutingDeferred(reason.clone());
+    }
+    if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
+        error.downcast_ref::<crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::isi::error::InstructionExecutionError,
+        >>()
+    {
+        return PayloadError::RoutingDeferred(reason.clone());
+    }
+    if let Some(super::evidence::EvidenceAdmissionError::Policy(
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+    )) = error.downcast_ref::<super::evidence::EvidenceAdmissionError>()
+    {
+        return PayloadError::RoutingDeferred(reason.clone());
+    }
+    PayloadError::Staking(error.to_string())
 }
 
 /// Inputs of one nonempty block assembly.
@@ -135,7 +173,18 @@ fn build_at(
     let accepted = transactions.iter().cloned().collect::<Vec<_>>();
     let nexus = state.nexus_snapshot();
     let view = state.view();
-    let npos = view.world().sumeragi_npos_parameters().is_some();
+    let npos = view
+        .world()
+        .sumeragi_npos_parameters()
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                PayloadError::Staking(error)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                PayloadError::RoutingDeferred(reason)
+            }
+        })?
+        .is_some();
     let confidential = compute_confidential_feature_digest(view.world(), view.zk(), height);
     let routing = super::lanes::routing::RoutingSnapshot::of(&view)?;
     let inputs = routing.inputs(view.world());
@@ -171,16 +220,37 @@ fn build_at(
         .with_network_input_time_floor(time)
         .ok_or(PayloadError::TimeOverflow)?;
     let mut proposal = builder.into_unsigned_proposal();
-    let effects = if npos {
+    let mut effects = if npos {
         let header = proposal.header();
         Some(
             super::penalties::PenaltyApplier::new(state, None)
                 .derive_npos_consensus_effects(&header)
-                .map_err(|error| PayloadError::Staking(error.to_string()))?,
+                .map_err(staking_preparation_error)?,
         )
     } else {
         None
     };
+    if height > 2 {
+        let view = state.view();
+        let reader = super::certified_chain::CertifiedChain::new_for_parent_service(&view)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::RoutingDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        let original = reader
+            .parent_service_proposal_original(assembly.parent)
+            .map_err(|error| match error {
+                super::certified_chain::ParentServiceError::Deferred(reason) => {
+                    PayloadError::RoutingDeferred(reason)
+                }
+                error => PayloadError::ParentService(error.to_string()),
+            })?;
+        effects
+            .get_or_insert_with(Default::default)
+            .parent_service_commit_qc = Some(original);
+    }
     proposal.set_npos_consensus_effects(effects);
     Ok(proposal)
 }
@@ -218,10 +288,13 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     let block =
         iroha_data_model::block::decode_versioned_signed_block(payload).map_err(|error| {
-            if error.is_decode_resource_limit() {
-                PayloadError::DecodeResource
-            } else {
+            match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
                 PayloadError::NotCanonical(error.to_string())
+            }) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    PayloadError::DecodeResource(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
             }
         })?;
     if !has_work(&block) {
@@ -333,6 +406,56 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+    #[test]
+    fn original_staking_policy_read_owner_survives_payload_and_block_adapters() {
+        use crate::execution_attempt::ExecutionAttemptError;
+        use crate::{
+            state::{World, WorldReadOnly},
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{
+            isi::error::InstructionExecutionError,
+            parameter::{
+                Parameter,
+                system::{SumeragiConsensusMode, SumeragiNposParameters},
+            },
+        };
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config.genesis_parameters.push(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        let chain = CertifiedTestChain::start(config).unwrap();
+        let view = chain.state().view();
+        let policy = view.world().sumeragi_npos_parameters().unwrap();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || view.world().sumeragi_npos_parameters(),
+        )
+        .unwrap_err()
+        .map_rejection(|message| InstructionExecutionError::InvariantViolation(message.into()));
+        let ExecutionAttemptError::Deferred(expected) = &error else {
+            panic!("original decoder must refuse: {error:?}");
+        };
+        let expected = expected.clone();
+        let payload = staking_preparation_error(
+            eyre::Report::new(error.clone()).wrap_err("original staking preparation"),
+        );
+        assert!(
+            matches!(&payload, PayloadError::RoutingDeferred(actual) if actual == &expected),
+            "payload erased original policy refusal: {payload:?}"
+        );
+        let block = crate::block::BlockValidationError::from_npos_application_error(
+            eyre::Report::new(error).wrap_err("original staking preparation"),
+            "validation",
+        );
+        assert!(
+            matches!(&block, crate::block::BlockValidationError::ExecutionDeferred(actual) if actual == &expected),
+            "validation erased original policy refusal: {block:?}"
+        );
+        assert_eq!(view.world().sumeragi_npos_parameters().unwrap(), policy);
+    }
 
     #[test]
     fn encode_rejects_a_merge_suffix_larger_than_the_input_sequence() {

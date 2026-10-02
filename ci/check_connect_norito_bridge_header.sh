@@ -8,13 +8,14 @@ PRIVATE_SETTLEMENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/private_se
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 PRIVACY_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
-HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
+RETAIL_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/validation_fee/retail.rs"
 RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_reserve_finality_v1.rs"
 TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs"
 TESTNET_VALUE_LEDGER_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_value_ledger_v1.rs"
 TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_startup_v1.rs"
 ORDINARY_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_native_startup.rs"
 ORDINARY_CURRENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_current_control.rs"
+ORDINARY_OUTGOING_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_outgoing_driver.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
@@ -36,6 +37,9 @@ SELF_TESTS=(
   --self-test-missing-ordinary-current-header-symbol
   --self-test-missing-ordinary-current-rust-symbol
   --self-test-bad-ordinary-current-signature
+  --self-test-missing-ordinary-outgoing-header-symbol
+  --self-test-missing-ordinary-outgoing-rust-symbol
+  --self-test-bad-ordinary-outgoing-signature
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-close-header-symbol
   --self-test-missing-kagemusha-install-header-symbol
@@ -69,9 +73,12 @@ SELF_TESTS=(
   --self-test-bad-parliament-page-header-width
   --self-test-retired-parliament-page-rust-name
   --self-test-retired-parliament-page-header-name
-  --self-test-missing-hijiri-header-symbol
-  --self-test-bad-hijiri-signature
-  --self-test-bad-hijiri-constant
+  --self-test-missing-retail-header-symbol
+  --self-test-bad-retail-signature
+  --self-test-bad-retail-marker-bound
+  --self-test-bad-retail-intent-bound
+  --self-test-bad-retail-assessment-bound
+  --self-test-retired-fee-header-symbol
   --self-test-missing-sorafs-reference-header-symbol
   --self-test-missing-sorafs-reference-rust-symbol
   --self-test-bad-sorafs-reference-bundle-signature
@@ -96,7 +103,7 @@ run_contract_check() {
   local umbrella="$3"
   local privacy_model="$4"
   local parliament_rust="$5"
-  local hijiri_api="$6"
+  local retail_model="$6"
   local private_settlement_rust="$7"
   local reserve_finality_rust="$8"
   local testnet_observation_rust="$9"
@@ -104,6 +111,7 @@ run_contract_check() {
   local testnet_startup_rust="${11}"
   local ordinary_startup_rust="${12}"
   local ordinary_current_rust="${13}"
+  local ordinary_outgoing_rust="${14}"
 
   python3 - \
     "${rust_lib}" \
@@ -111,14 +119,15 @@ run_contract_check() {
     "${umbrella}" \
     "${privacy_model}" \
     "${parliament_rust}" \
-    "${hijiri_api}" \
+    "${retail_model}" \
     "${private_settlement_rust}" \
     "${reserve_finality_rust}" \
     "${testnet_observation_rust}" \
     "${testnet_value_ledger_rust}" \
     "${testnet_startup_rust}" \
     "${ordinary_startup_rust}" \
-    "${ordinary_current_rust}" <<'PY'
+    "${ordinary_current_rust}" \
+    "${ordinary_outgoing_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -128,7 +137,7 @@ header = Path(sys.argv[2]).read_text(encoding="utf-8")
 umbrella = Path(sys.argv[3]).read_text(encoding="utf-8")
 privacy = Path(sys.argv[4]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[5]).read_text(encoding="utf-8")
-hijiri_api = Path(sys.argv[6]).read_text(encoding="utf-8")
+retail_model = Path(sys.argv[6]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[9]).read_text(encoding="utf-8")
@@ -136,6 +145,7 @@ rust += "\n" + Path(sys.argv[10]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[11]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[12]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[13]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[14]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -168,6 +178,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -221,9 +232,10 @@ PARLIAMENT_EXPORTS = {
     "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
 }
-HIJIRI_EXPORTS = {
-    "connect_norito_validation_fee_hijiri_quote_request_v1",
-    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+RETAIL_EXPORTS = {
+    "connect_norito_retail_fee_intent_hash_v1",
+    "connect_norito_retail_fee_assessment_marker_v1",
+    "connect_norito_retail_fee_assessment_decode_v1",
 }
 PRIVATE_SETTLEMENT_EXPORTS = {
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -490,8 +502,11 @@ exact(
 )
 exact("Rust Parliament timed-OVN", PARLIAMENT_EXPORTS, rust_exports("connect_norito_parliament_timed_ovn_"))
 exact("C Parliament timed-OVN", PARLIAMENT_EXPORTS, header_exports("connect_norito_parliament_timed_ovn_"))
-exact("Rust Hijiri quote", HIJIRI_EXPORTS, rust_exports("connect_norito_validation_fee_hijiri_quote_"))
-exact("C Hijiri quote", HIJIRI_EXPORTS, header_exports("connect_norito_validation_fee_hijiri_quote_"))
+exact("Rust retail fee", RETAIL_EXPORTS, rust_exports("connect_norito_retail_fee_"))
+exact("C retail fee", RETAIL_EXPORTS, header_exports("connect_norito_retail_fee_"))
+# First-release artifacts cannot retain a second, retired fee protocol.
+exact("retired Rust Hijiri", set(), rust_exports("connect_norito_validation_fee_hijiri_quote_"))
+exact("retired C Hijiri", set(), header_exports("connect_norito_validation_fee_hijiri_quote_"))
 exact("Rust private settlement", PRIVATE_SETTLEMENT_EXPORTS, rust_exports("connect_norito_private_settlement_"))
 exact("C private settlement", PRIVATE_SETTLEMENT_EXPORTS, header_exports("connect_norito_private_settlement_"))
 
@@ -528,7 +543,7 @@ require_signature_parity(
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
     | PARLIAMENT_EXPORTS
-    | HIJIRI_EXPORTS
+    | RETAIL_EXPORTS
     | PRIVATE_SETTLEMENT_EXPORTS
     | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
@@ -550,9 +565,9 @@ for rust_name, value, header_name in (
     ),
     ("ERR_PARLIAMENT_TIMED_OVN", "-505", "CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN"),
     (
-        "ERR_VALIDATION_FEE_HIJIRI_QUOTE",
+        "ERR_RETAIL_FEE_ASSESSMENT",
         "-506",
-        "CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE",
+        "CONNECT_NORITO_ERR_RETAIL_FEE_ASSESSMENT",
     ),
 ):
     require(rf"const\s+{rust_name}\s*:\s*c_int\s*=\s*{value}\s*;", rust, rust_name)
@@ -586,14 +601,23 @@ require(
     "SoraFS bundle descriptor layout",
 )
 
-for rust_name, rust_type, rust_value, header_name, header_value in (
-    ("VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1", "u16", r"1", "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1", "1"),
-    ("VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1", "u32", r"100_000", "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS_V1", "100000"),
-    ("VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1", "usize", r"4\s*\*\s*1024", "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1", "4096"),
-    ("VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1", "usize", r"64\s*\*\s*1024", "CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1", "65536"),
+# These are the actual Native operation bounds, not retired header aliases.
+for name, value in (
+    ("RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES", "262_144"),
+    ("RETAIL_FEE_ASSESSMENT_MAX_BYTES", "4_096"),
+    ("RETAIL_FEE_MARKER_MAX_BYTES", "4_096"),
 ):
-    require(rf"pub\s+const\s+{rust_name}\s*:\s*{rust_type}\s*=\s*{rust_value}\s*;", hijiri_api, rust_name)
-    require(rf"#define\s+{header_name}\s+{header_value}(?:\s|$)", header, header_name)
+    require(rf"const\s+{name}\s*:\s*usize\s*=\s*{value}\s*;", rust, name)
+require(r"pub\s+const\s+RETAIL_FEE_ASSESSMENT_METADATA_KEY\s*:\s*&str\s*=\s*\"validation_fee_assessment\"", retail_model, "typed retail assessment metadata owner")
+for name, maximum, operation in (
+    ("connect_norito_retail_fee_intent_hash_v1", "RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES", "retail_fee_intent_hash_v1"),
+    ("connect_norito_retail_fee_assessment_marker_v1", "RETAIL_FEE_ASSESSMENT_MAX_BYTES", "retail_fee_assessment_marker_v1"),
+    ("connect_norito_retail_fee_assessment_decode_v1", "RETAIL_FEE_MARKER_MAX_BYTES", "retail_fee_assessment_decode_v1"),
+):
+    require(rf"fn\s+{name}\b[^{{]+\{{.*?retail_fee_bridge_call\s*\([^;]*?\b{maximum}\s*,\s*{operation}\b", rust, f"{name} exact operation input bound")
+require(r"value\.qualifying_payments\s*>\s*1_000", rust, "Native retail qualifying count cap")
+require(r"bytes\.len\(\)\s*>\s*\(RETAIL_FEE_MARKER_MAX_BYTES\s*-\s*RETAIL_FEE_MARKER_PREFIX\.len\(\)\)\s*/\s*2", rust, "Native complete marker output cap")
+require(r"json\.len\(\)\s*>\s*RETAIL_FEE_ASSESSMENT_MAX_BYTES", rust, "Native assessment JSON output cap")
 
 require(r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s*:\s*usize\s*=\s*32\s*;", rust, "Parliament seed width")
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s+32\b", header, "C Parliament seed width")
@@ -618,7 +642,7 @@ print(
     "[connect-norito-header] ABI 25 synchronized: "
     f"{len(KAGEMUSHA_EXPORTS)} KAGEMUSHA, {len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
-    f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(HIJIRI_EXPORTS)} Hijiri, "
+    f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(RETAIL_EXPORTS)} retail-fee, "
     f"{len(PRIVATE_SETTLEMENT_EXPORTS)} private-settlement, and "
     f"{len(TRANSACTION_SIGNER_EXPORTS)} transaction-signer exports"
 )
@@ -696,8 +720,9 @@ make_negative_workspace() {
   cp "${TESTNET_STARTUP_RUST}" "${tmp}/kagemusha_testnet_native_startup_v1.rs"
   cp "${ORDINARY_STARTUP_RUST}" "${tmp}/ordinary_native_startup.rs"
   cp "${ORDINARY_CURRENT_RUST}" "${tmp}/ordinary_current_control.rs"
+  cp "${ORDINARY_OUTGOING_RUST}" "${tmp}/ordinary_outgoing_driver.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
-  cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
+  cp "${RETAIL_MODEL}" "${tmp}/retail_fee_model.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
   cp "${UMBRELLA}" "${tmp}/NoritoBridge.h"
   printf '%s' "${tmp}"
@@ -713,14 +738,15 @@ expect_contract_rejection() {
       "${tmp}/NoritoBridge.h" \
       "${tmp}/privacy.rs" \
       "${tmp}/parliament_timed_ovn_ffi.rs" \
-      "${tmp}/validation_fee_api.rs" \
+      "${tmp}/retail_fee_model.rs" \
       "${tmp}/private_settlement_ffi.rs" \
       "${tmp}/kagemusha_reserve_finality_v1.rs" \
       "${tmp}/kagemusha_testnet_observation_v1.rs" \
       "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
       "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
       "${tmp}/ordinary_native_startup.rs" \
-      "${tmp}/ordinary_current_control.rs" 2>&1)"; then
+      "${tmp}/ordinary_current_control.rs" \
+      "${tmp}/ordinary_outgoing_driver.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -749,14 +775,15 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${UMBRELLA}" \
     "${PRIVACY_MODEL}" \
     "${PARLIAMENT_RUST}" \
-    "${HIJIRI_API}" \
+    "${RETAIL_MODEL}" \
     "${PRIVATE_SETTLEMENT_RUST}" \
     "${RESERVE_FINALITY_RUST}" \
     "${TESTNET_OBSERVATION_RUST}" \
     "${TESTNET_VALUE_LEDGER_RUST}" \
     "${TESTNET_STARTUP_RUST}" \
     "${ORDINARY_STARTUP_RUST}" \
-    "${ORDINARY_CURRENT_RUST}" >/dev/null
+    "${ORDINARY_CURRENT_RUST}" \
+    "${ORDINARY_OUTGOING_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -875,6 +902,24 @@ if [[ "${MODE}" == --self-test-* ]]; then
         '(connect_norito_kagemusha_ordinary_current_control_v1\s*\([^;]*?)uint64_t core_handle' \
         '\g<1>uint32_t core_handle'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_current_control_v1"
+      ;;
+    --self-test-missing-ordinary-outgoing-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_outgoing_v1' \
+        'removed_ordinary_outgoing_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
+      ;;
+    --self-test-missing-ordinary-outgoing-rust-symbol)
+      replace_once "${tmp}/ordinary_outgoing_driver.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_outgoing_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_outgoing_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_outgoing_v1']"
+      ;;
+    --self-test-bad-ordinary-outgoing-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_outgoing_v1\s*\([^;]*?)size_t input_len' \
+        '\g<1>uint32_t input_len'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_outgoing_v1"
       ;;
     --self-test-missing-kagemusha-header-symbol)
       replace_once "${tmp_header}" \
@@ -1032,20 +1077,33 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "connect_norito_parliament_timed_ovn_ballot_from_proof_v1" \
         "removed_connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
       ;;
-    --self-test-missing-hijiri-header-symbol)
+    --self-test-missing-retail-header-symbol)
       replace_once "${tmp_header}" \
-        "connect_norito_validation_fee_hijiri_quote_response_verify_v1" \
-        "removed_connect_norito_validation_fee_hijiri_quote_response_verify_v1"
+        "connect_norito_retail_fee_assessment_decode_v1" \
+        "removed_connect_norito_retail_fee_assessment_decode_v1"
       ;;
-    --self-test-bad-hijiri-signature)
+    --self-test-bad-retail-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_validation_fee_hijiri_quote_response_verify_v1\s*\(\s*const uint8_t\* response_norito,\s*)unsigned long response_norito_len' \
-        '\g<1>uint32_t response_norito_len'
+        '(connect_norito_retail_fee_assessment_decode_v1\s*\(\s*const uint8_t\* input,\s*)unsigned long input_len' \
+        '\g<1>uint32_t input_len'
       ;;
-    --self-test-bad-hijiri-constant)
-      replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65536" \
-        "#define CONNECT_NORITO_VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1 65535"
+    --self-test-bad-retail-marker-bound)
+      replace_once "${tmp_rust}" \
+        "const RETAIL_FEE_MARKER_MAX_BYTES: usize = 4_096;" \
+        "const RETAIL_FEE_MARKER_MAX_BYTES: usize = 4_095;"
+      ;;
+    --self-test-bad-retail-intent-bound)
+      replace_once "${tmp_rust}" \
+        "const RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES: usize = 262_144;" \
+        "const RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES: usize = 262_145;"
+      ;;
+    --self-test-bad-retail-assessment-bound)
+      replace_once "${tmp_rust}" \
+        "const RETAIL_FEE_ASSESSMENT_MAX_BYTES: usize = 4_096;" \
+        "const RETAIL_FEE_ASSESSMENT_MAX_BYTES: usize = 4_097;"
+      ;;
+    --self-test-retired-fee-header-symbol)
+      printf '\nint32_t connect_norito_validation_fee_hijiri_quote_request_v1(void);\n' >> "${tmp_header}"
       ;;
     --self-test-missing-sorafs-reference-header-symbol)
       replace_once "${tmp_header}" \
@@ -1103,13 +1161,14 @@ if [[ "${MODE}" == --self-test-* ]]; then
       run_contract_check \
         "${tmp_rust}" "${tmp_header}" "${tmp_umbrella}" \
         "${tmp}/privacy.rs" "${tmp}/parliament_timed_ovn_ffi.rs" \
-        "${tmp}/validation_fee_api.rs" "${tmp}/private_settlement_ffi.rs" \
+        "${tmp}/retail_fee_model.rs" "${tmp}/private_settlement_ffi.rs" \
         "${tmp}/kagemusha_reserve_finality_v1.rs" \
         "${tmp}/kagemusha_testnet_observation_v1.rs" \
         "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
         "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
         "${tmp}/ordinary_native_startup.rs" \
-        "${tmp}/ordinary_current_control.rs"
+        "${tmp}/ordinary_current_control.rs" \
+        "${tmp}/ordinary_outgoing_driver.rs"
       echo "[connect-norito-header] positive control preserved canonical umbrella: ${MODE}"
       exit 0
       ;;
@@ -1139,12 +1198,13 @@ run_contract_check \
   "${UMBRELLA}" \
   "${PRIVACY_MODEL}" \
   "${PARLIAMENT_RUST}" \
-  "${HIJIRI_API}" \
+  "${RETAIL_MODEL}" \
   "${PRIVATE_SETTLEMENT_RUST}" \
   "${RESERVE_FINALITY_RUST}" \
   "${TESTNET_OBSERVATION_RUST}" \
   "${TESTNET_VALUE_LEDGER_RUST}" \
   "${TESTNET_STARTUP_RUST}" \
   "${ORDINARY_STARTUP_RUST}" \
-  "${ORDINARY_CURRENT_RUST}"
+  "${ORDINARY_CURRENT_RUST}" \
+  "${ORDINARY_OUTGOING_RUST}"
 compile_header

@@ -588,7 +588,13 @@ fn publication_recovery_halts_before_poll_and_preserves_safety_persistence() {
             .iter()
             .any(|op| matches!(op, Op::Exec(ExecOp::Append(_))))
     );
-    kernel.complete(0, Completion::Exec(ExecDone::Appended(true)));
+    kernel.complete(
+        0,
+        Completion::Exec(ExecDone::Appended {
+            durable: true,
+            deferred: None,
+        }),
+    );
     assert!(
         kernel
             .poll(0)

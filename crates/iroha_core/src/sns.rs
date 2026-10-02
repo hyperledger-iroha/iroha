@@ -833,6 +833,9 @@ fn alias_auto_renew_attempt(
         }
         return AliasAutoRenewAttempt::Retry(error.to_string());
     }
+    if let Err(error) = crate::retail_fee::finalize(state_transaction) {
+        return AliasAutoRenewAttempt::Retry(error.to_string());
+    }
     let payment = native_payment_for_quote(&quote);
     match renew_resolved_name(
         state_transaction,
@@ -1440,10 +1443,9 @@ pub fn seed_genesis_alias_bootstrap(
         parameter::Parameter,
     };
 
-    iroha_data_model::sumeragi_finality::genesis_epoch(block)
-        .map_err(|error| SnsError::BadRequest(format!("invalid SNS bootstrap genesis: {error}")))?;
+    iroha_data_model::sumeragi_finality::genesis_epoch(block).map_err(sns_genesis_read_error)?;
     let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
-        .map_err(SnsError::BadRequest)?;
+        .map_err(sns_genesis_read_error)?;
     if let SumeragiRootScope::Dataspace { .. } = metadata.sumeragi_context.root_scope {
         let mut policy = None;
         for transaction in block.external_transactions() {
@@ -3177,3 +3179,16 @@ mod genesis_bootstrap_tests;
 mod native_maintenance_tests;
 #[cfg(test)]
 mod tests;
+
+fn sns_genesis_read_error(
+    error: iroha_data_model::sumeragi_finality::GenesisReadError,
+) -> SnsError {
+    match crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+        SnsError::BadRequest(format!("invalid SNS bootstrap genesis: {error}"))
+    }) {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            SnsError::Deferred(reason)
+        }
+    }
+}

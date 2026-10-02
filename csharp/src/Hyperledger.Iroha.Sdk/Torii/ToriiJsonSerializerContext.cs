@@ -173,7 +173,6 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiContractSourceImport))]
 [JsonSerializable(typeof(ToriiContractSourcePackage))]
 [JsonSerializable(typeof(ToriiContractVerifiedSourceJob))]
-[JsonSerializable(typeof(ToriiMultisigProposeRequest))]
 [JsonSerializable(typeof(ToriiMultisigApproveRequest))]
 [JsonSerializable(typeof(ToriiMultisigCancelRequest))]
 [JsonSerializable(typeof(ToriiMultisigCancelResponse))]

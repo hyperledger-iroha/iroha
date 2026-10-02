@@ -360,8 +360,8 @@ where
 {
     let directory = tempfile::tempdir().unwrap();
     let (_, bytes) = key::<C>(4, true, false);
-    let mut admitted = 0;
-    let mut rejected = 0;
+    let mut admitted = Vec::new();
+    let mut rejected = Vec::new();
     for candidate_role in KagemushaArtifactRoleV1::ALL {
         let (set, observed) = fixture(bytes.clone(), binding(candidate_role, &bytes), Fault::None);
         let descriptor = KagemushaArtifactDescriptorV1::for_role(candidate_role);
@@ -378,17 +378,31 @@ where
             assert_eq!(owner.binding().role, candidate_role);
             assert!(owner.matches_artifact_set(&set));
             assert_eq!(observed.opens.load(Ordering::SeqCst), 1);
-            admitted += 1;
+            admitted.push(candidate_role);
         } else {
             assert!(
                 matches!(actual, Err(KagemushaArtifactErrorV1::InvalidBinding(role)) if role == candidate_role)
             );
             assert_eq!(observed.opens.load(Ordering::SeqCst), 0);
-            rejected += 1;
+            rejected.push(candidate_role);
         }
         empty(directory.path());
     }
-    assert_eq!((admitted, rejected), (12, 38));
+    let catalogue = super::super::tests::storage_role_catalogue();
+    let expected_admitted = catalogue
+        .iter()
+        .filter(|(_, kind, parity)| {
+            *kind == KagemushaArtifactKindV1::ProvingKey && *parity == C::PARITY
+        })
+        .map(|(role, _, _)| *role)
+        .collect::<Vec<_>>();
+    let expected_rejected = catalogue
+        .iter()
+        .filter(|(role, _, _)| !expected_admitted.contains(role))
+        .map(|(role, _, _)| *role)
+        .collect::<Vec<_>>();
+    assert_eq!(admitted, expected_admitted);
+    assert_eq!(rejected, expected_rejected);
     let (set, observed) = fixture(bytes.clone(), binding(role::<C>(), &bytes), Fault::None);
     let other = match C::PARITY {
         KagemushaPastaParityV1::Eq => KagemushaPastaParityV1::Ep,

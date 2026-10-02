@@ -592,6 +592,16 @@ public static class PetalDecoder
     }
 
     /// <summary>Tries Reed–Solomon with growing numbers of erasures, least confident first.</summary>
+    /// <remarks>
+    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes, and for lane <c>K</c> also ⅔.
+    /// Lanes <c>D</c> and <c>P</c> stop at ½: their words have only 11 and 13 parity bytes, and a
+    /// further erasure step leaves so few spare ones that it accepts wrong codewords (lane
+    /// <c>D</c> at 7 erasures: about 0.4 % of random words, and 5 wrong lanes in 2 900 simulated
+    /// harsh frames; lane <c>P</c> at 8: 2 wrong lanes in 600 banded 480p frames). Capping them
+    /// costs 0.65 % of the lane <c>D</c> reads and 0.15 % of the lane <c>P</c> reads in those
+    /// frames. Bytes of equal confidence keep their order (the sort is stable, like Rust's
+    /// <c>sort_by</c>), which decides which of them are erased.
+    /// </remarks>
     internal static PetalLaneResult? DecodeWithErasures(PetalLane lane, byte[] word, double[] confidence)
     {
         var nsym = PetalLanes.ParityLength(lane);
@@ -600,6 +610,8 @@ public static class PetalDecoder
             order[i] = i;
         PetalMath.StableSortByKey(order, confidence);
         Span<int> schedule = [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3];
+        if (lane != PetalLane.K)
+            schedule = schedule[..5];
         Span<byte> trial = stackalloc byte[word.Length];
         var previous = -1;
         foreach (var erasures in schedule)

@@ -93,6 +93,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor',
         'unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader',
         'streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary',
+        'warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc',
+        'warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal',
+        'standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks',
     )),
     ('native pending original execution', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/pending_execution_tests.rs', 'pending_execution_tests', 'sumeragi::test_chain::tests::pending_execution_tests', (
         'pending_execution_retains_one_source_and_publishes_once',
@@ -186,6 +189,8 @@ NATIVE_CORE_TEST_OWNERS = (
     ('native executed genesis registration', 'sumeragi/schedule/execution.rs', 'sumeragi/schedule/execution_tests.rs', 'tests', 'sumeragi::schedule::execution::tests', (
         'executed_genesis_must_retain_every_exact_signed_registration',
         'executed_genesis_rejects_an_extra_voting_registration',
+        'executed_genesis_fee_scope_decode_refusal_defers_and_retries_same_authority',
+        'boundary_capture_attempts_retain_capacity_release_and_deterministic_errors',
     )),
     ('native driver persistence', 'sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/file_stores.rs', 'file_stores', 'sumeragi::driver::tests::file_stores', (
         'file_stores_survive_disk_errors',

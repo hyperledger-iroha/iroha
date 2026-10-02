@@ -441,6 +441,93 @@ class PetalImageDecodeTest {
     }
 
     @Test
+    fun randomWordsAreAlmostNeverAccepted() {
+        // Reed–Solomon with erasures can accept a word that is not a transmission. Lane D has only
+        // 11 parity bytes, so its schedule stops at five erasures; at seven it let through about
+        // one random word in 250 (150 of these 40 000). Lane P stops at six for the same reason.
+        // The counts are exact so that this port, fed the same xorshift32 words and byte-valued
+        // confidences (many ties, so the ranking must be stable), reproduces the reference decoder
+        // bit for bit.
+        val rng = PetalXorshift32(0x5EED)
+        val trials = 40_000
+        for ((lane, expected) in listOf(PetalLane.D to 3, PetalLane.P to 0)) {
+            val length = lane.dataLength + lane.parityLength
+            var accepted = 0
+            repeat(trials) {
+                val word = ByteArray(length) { rng.nextByte().toByte() }
+                val confidence = DoubleArray(length) { rng.nextByte().toDouble() }
+                if (PetalDecoder.decodeWithErasures(lane, word, confidence) != null) accepted += 1
+            }
+            assertEquals(expected, accepted, "lane ${lane.letter} of $trials random words")
+        }
+    }
+
+    private fun flip(bytes: ByteArray, position: Int, mask: Int) {
+        bytes[position] = (bytes[position].toInt() xor mask).toByte()
+    }
+
+    @Test
+    fun onlyLaneKUsesTwoThirdsOfItsParityAsErasures() {
+        // damaged bytes: `flagged` of them marked least confident, two more hidden. With the extra
+        // erasure step of the old schedule the decoder would repair them (2·2 + flagged parity
+        // bytes); the capped schedule must refuse instead of risking a wrong codeword.
+        for ((lane, flagged) in listOf(PetalLane.D to 7, PetalLane.P to 8)) {
+            val data = ByteArray(lane.dataLength) { it.toByte() }
+            val word = PetalLanes.encodeLane(lane, data)
+            val damaged = word.copyOf()
+            val confidence = DoubleArray(word.size) { 1.0 }
+            for (position in 0 until flagged) {
+                flip(damaged, position, 0xA5)
+                confidence[position] = 0.0
+            }
+            flip(damaged, 20, 0x3C)
+            flip(damaged, 21, 0x3C)
+            assertNull(PetalDecoder.decodeWithErasures(lane, damaged, confidence), "lane ${lane.letter}")
+            // half the parity flagged plus one hidden error stays comfortably repairable
+            val repairable = word.copyOf()
+            val halfFlagged = DoubleArray(word.size) { 1.0 }
+            for (position in 0 until lane.parityLength / 2) {
+                flip(repairable, position, 0xA5)
+                halfFlagged[position] = 0.0
+            }
+            flip(repairable, 20, 0x3C)
+            val result = assertNotNull(PetalDecoder.decodeWithErasures(lane, repairable, halfFlagged), "lane ${lane.letter}")
+            assertContentEquals(data, result.data, "lane ${lane.letter}")
+            assertTrue(result.erasures <= lane.parityLength / 2, "lane ${lane.letter}")
+        }
+        // lane K keeps the two-thirds step: 30 flagged bytes plus 7 hidden errors need it
+        // (2·7 + 30 = 44 of 45 parity bytes)
+        val data = ByteArray(PetalLanes.K_DATA) { it.toByte() }
+        val damaged = PetalLanes.encodeLane(PetalLane.K, data)
+        val confidence = DoubleArray(damaged.size) { 1.0 }
+        for (position in 0 until 30) {
+            flip(damaged, position, 0xA5)
+            confidence[position] = 0.0
+        }
+        for (position in 60 until 67) flip(damaged, position, 0x3C)
+        val result = assertNotNull(PetalDecoder.decodeWithErasures(PetalLane.K, damaged, confidence), "30 erasures")
+        assertContentEquals(data, result.data)
+        assertEquals(30, result.erasures)
+    }
+
+    @Test
+    fun equalConfidencesAreErasedInPositionOrder() {
+        // Every tile the normalised read erases has confidence exactly 0, so ties are the rule, and
+        // the ranking must be stable or ports disagree about which bytes are erased. Three damaged
+        // bytes at the front plus four hidden ones fit lane D only if exactly the first three
+        // positions are erased (3 erasures + 4 errors = all 11 parity bytes): a step that erased
+        // the last positions instead would see seven errors.
+        val data = ByteArray(PetalLanes.D_DATA) { it.toByte() }
+        val word = PetalLanes.encodeLane(PetalLane.D, data)
+        for (position in listOf(0, 1, 2, 20, 21, 22, 23)) flip(word, position, 0x5A)
+        val confidence = DoubleArray(word.size) { 1.0 }
+        val result = assertNotNull(PetalDecoder.decodeWithErasures(PetalLane.D, word, confidence), "ties in order")
+        assertContentEquals(data, result.data)
+        assertEquals(3, result.erasures)
+        assertEquals(7, result.corrected)
+    }
+
+    @Test
     fun blankFramesReportNoFinders() {
         assertEquals(PetalDecodeError.NO_FINDERS, PetalDecoder.decode(PetalLuma(320, 240)).error)
     }
@@ -455,6 +542,14 @@ class PetalImageDecodeTest {
         // just over the default 12,000,000-pixel budget
         assertEquals(PetalDecodeError.UNSUPPORTED_IMAGE, PetalDecoder.decode(PetalLuma(4000, 3001)).error)
         assertNull(PetalDecoder.decodeAt(PetalLuma(8, 8), PetalHomography.IDENTITY))
+        // the diagnostics refuse unusable images as well (a PetalLuma cannot carry a mismatched buffer)
+        val luma = setup(5).second.toLuma()
+        val decoded = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
+        assertNull(PetalDecoder.observedCells(PetalLuma(47, 400), decoded))
+        assertNull(PetalDecoder.tileMatchError(PetalLuma(47, 400), decoded))
+        assertNull(PetalDecoder.observedCells(luma, decoded, smallBudget))
+        assertNull(PetalDecoder.tileMatchError(luma, decoded, smallBudget))
+        assertNull(PetalDecoder.decodeAt(luma, decoded.homography, smallBudget))
         assertFailsWith<IllegalArgumentException> { PetalDecodeOptions(templateSigmas = doubleArrayOf(0.0, 0.5)) }
         assertFailsWith<IllegalArgumentException> { PetalDecodeOptions(maxPixels = 0) }
     }

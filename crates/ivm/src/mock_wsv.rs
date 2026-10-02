@@ -57,12 +57,14 @@ use std::{
 struct AssetDefinition {
     mintable: Mintable,
     total_supply: Quantity,
+    owner: AccountId,
 }
 impl AssetDefinition {
-    fn new(mintable: Mintable) -> Self {
+    fn new(mintable: Mintable, owner: AccountId) -> Self {
         Self {
             mintable,
             total_supply: Quantity::zero(),
+            owner,
         }
     }
 }
@@ -893,7 +895,7 @@ impl MockWorldStateView {
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
-                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely));
+                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely, account.clone()));
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
             if let Some(def) = wsv.asset_definitions.get_mut(asset) {
@@ -1035,7 +1037,7 @@ impl MockWorldStateView {
             return false;
         }
         self.asset_definitions
-            .insert(id, AssetDefinition::new(mintable))
+            .insert(id, AssetDefinition::new(mintable, caller.clone()))
             .is_none()
     }
     /// Unregister an asset definition when no non-zero balances exist for it.
@@ -1820,6 +1822,69 @@ impl WsvHost {
     }
     fn state_query_gas(payload_len: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+    }
+    /// Materialize the one typed definition query supported by the scale-zero mock.
+    /// No page scan or general query executor is implied by this bounded read.
+    fn asset_definition_query(&self, vm: &mut IVM) -> Result<u64, VMError> {
+        let id = self.decode_asset_reg(vm, 11)?;
+        let input_len = vm.validate_tlv(vm.register(11))?.payload.len();
+        let layout = crate::sum::SumLayoutV1::option(7).map_err(|_| VMError::DecodeError)?;
+        let Some(definition) = self.wsv.asset_definitions.get(&id) else {
+            let gas = Self::state_query_gas(input_len);
+            preflight_reserved_syscall_gas(vm, gas)?;
+            let handle = crate::sum::allocate_words(vm, layout, 0, &[])?;
+            vm.set_register(10, handle);
+            return Ok(gas);
+        };
+        // The mock only stores integer quantities. Reporting an unconstrained or
+        // caller-selected scale would conceal precision failures in pool tests.
+        let scale = iroha_primitives::numeric_abi::IntValueV1::try_new(0.into())
+            .and_then(|value| value.encode_frame())
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let quantity = QuantityValueV1::new(definition.total_supply.clone())
+            .encode_frame()
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let metadata = Json::from(njson::Value::Object(njson::Map::new()));
+        let leaves = [
+            (
+                PointerType::AssetDefinitionId,
+                encode_canonical_norito(&id)?,
+            ),
+            (PointerType::Blob, Vec::new()),
+            (
+                PointerType::AccountId,
+                encode_canonical_norito(&definition.owner)?,
+            ),
+            (PointerType::Quantity, quantity),
+            (PointerType::Int, scale),
+            (PointerType::Json, encode_canonical_norito(&metadata)?),
+        ];
+        let output_len = leaves.iter().fold(0usize, |total, (_, payload)| {
+            total
+                .saturating_add(payload.len())
+                .saturating_add(7 + CryptoHash::LENGTH)
+        });
+        let gas = Self::state_query_gas(input_len.saturating_add(output_len));
+        preflight_reserved_syscall_gas(vm, gas)?;
+        let mut pointers = [0; 6];
+        for (index, (kind, payload)) in leaves.iter().enumerate() {
+            pointers[index] = Self::alloc_tlv_payload(vm, *kind, payload)?;
+        }
+        let optional = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+        let description = crate::sum::allocate_words(vm, optional, 0, &[])?;
+        let numeric_scale = crate::sum::allocate_words(vm, optional, 1, &[pointers[4]])?;
+        let words = [
+            pointers[0],
+            pointers[1],
+            description,
+            pointers[2],
+            pointers[3],
+            numeric_scale,
+            pointers[5],
+        ];
+        let handle = crate::sum::allocate_words(vm, layout, 1, &words)?;
+        vm.set_register(10, handle);
+        Ok(gas)
     }
     fn sysvar_gas(payload_len: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
@@ -2674,9 +2739,10 @@ impl IVMHost for WsvHost {
                 let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 Some(crate::host::state_path_gas(path_len))
             }
-            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
-                Some(Self::state_query_gas(0))
-            }
+            crate::syscalls::SYSCALL_CORE_QUERY_GET => Some(
+                reserve_available_syscall_gas_at_least(vm, Self::state_query_gas(0))?,
+            ),
+            crate::syscalls::SYSCALL_CORE_QUERY_PAGE => Some(Self::state_query_gas(0)),
             _ => None,
         };
         if let Some(quote) = state_quote {
@@ -2712,12 +2778,22 @@ impl IVMHost for WsvHost {
             return Ok(Self::json_gas(cost.input_bytes, cost.output_bytes));
         }
         match number {
-            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
-                Err(VMError::metered_not_implemented(
-                    Self::state_query_gas(0),
-                    number,
-                ))
+            crate::syscalls::SYSCALL_CORE_QUERY_GET => {
+                let tag = ivm_abi::core_query::CoreQueryEntityTagV1::try_from(vm.register(10))
+                    .map_err(|_| VMError::DecodeError)?;
+                if tag == ivm_abi::core_query::CoreQueryEntityTagV1::AssetDefinition {
+                    self.asset_definition_query(vm)
+                } else {
+                    Err(VMError::metered_not_implemented(
+                        Self::state_query_gas(0),
+                        number,
+                    ))
+                }
             }
+            crate::syscalls::SYSCALL_CORE_QUERY_PAGE => Err(VMError::metered_not_implemented(
+                Self::state_query_gas(0),
+                number,
+            )),
             // Durable smart-contract state syscalls
             crate::syscalls::SYSCALL_STATE_GET => {
                 // r10 = &NoritoBytes(StatePath) -> return a host-owned
@@ -7211,5 +7287,142 @@ mod read_deferral_tests {
             Err(VMError::AllocationDeferred(_))
         ));
         assert_eq!(vm.register(10), crate::Memory::INPUT_START);
+    }
+}
+
+#[cfg(test)]
+mod tests_core_asset_definition {
+    use super::*;
+    use ivm_abi::core_query::CoreQueryEntityTagV1;
+
+    fn fixture() -> (AccountId, AssetDefinitionId) {
+        let account = AccountId::new(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+                .parse()
+                .expect("public key"),
+        );
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        );
+        (account, asset)
+    }
+
+    fn query(host: &mut WsvHost, vm: &mut IVM, id: &AssetDefinitionId) -> Vec<u64> {
+        let bytes = encode_canonical_norito(id).expect("asset id encoding");
+        let pointer = WsvHost::alloc_tlv_payload(vm, PointerType::AssetDefinitionId, &bytes)
+            .expect("input pointer");
+        vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
+        vm.set_register(11, pointer);
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_CORE_QUERY_GET, vm)
+            .expect("query gas");
+        let charged = host
+            .syscall(syscalls::SYSCALL_CORE_QUERY_GET, vm)
+            .expect("definition query");
+        assert!(charged <= quote);
+        let (present, words) = crate::sum::read_words(
+            vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(7).unwrap(),
+        )
+        .expect("native optional definition layout");
+        assert_eq!(present, !words.is_empty());
+        words
+    }
+
+    #[test]
+    fn typed_definition_exposes_registered_owner_supply_and_integer_scale() {
+        let (owner, asset) = fixture();
+        let wsv = MockWorldStateView::with_balances(&[(
+            (owner.clone(), asset.clone()),
+            Quantity::from(7u64),
+        )]);
+        let mut host = WsvHost::new_with_subject(wsv, owner.clone());
+        let mut vm = IVM::new(1_000_000);
+        let words = query(&mut host, &mut vm, &asset);
+        assert_eq!(words.len(), 7);
+        assert_eq!(
+            decode_canonical_norito::<AccountId>(vm.validate_tlv(words[3]).unwrap().payload)
+                .unwrap(),
+            owner
+        );
+        assert_eq!(
+            vm.validate_tlv(words[4]).unwrap().payload,
+            QuantityValueV1::new(Quantity::from(7u64))
+                .encode_frame()
+                .unwrap()
+        );
+        let (present, scale) =
+            crate::sum::read_words(&vm, words[5], crate::sum::SumLayoutV1::option(1).unwrap())
+                .unwrap();
+        assert!(present);
+        assert_eq!(
+            vm.validate_tlv(scale[0]).unwrap().payload,
+            iroha_primitives::numeric_abi::IntValueV1::try_new(0.into())
+                .unwrap()
+                .encode_frame()
+                .unwrap()
+        );
+        assert_eq!(
+            crate::sum::read_words(&vm, words[2], crate::sum::SumLayoutV1::option(1).unwrap())
+                .unwrap(),
+            (false, vec![])
+        );
+    }
+
+    #[test]
+    fn absent_definition_and_permission_checked_registration_have_distinct_results() {
+        let (owner, asset) = fixture();
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), owner.clone());
+        let mut vm = IVM::new(1_000_000);
+        assert!(query(&mut host, &mut vm, &asset).is_empty());
+        assert!(
+            !host
+                .wsv
+                .register_asset_definition(&owner, asset.clone(), Mintable::Infinitely)
+        );
+        host.wsv
+            .grant_permission(&owner, PermissionToken::RegisterAssetDefinition);
+        assert!(
+            host.wsv
+                .register_asset_definition(&owner, asset.clone(), Mintable::Infinitely)
+        );
+        let words = query(&mut host, &mut vm, &asset);
+        assert_eq!(
+            decode_canonical_norito::<AccountId>(vm.validate_tlv(words[3]).unwrap().payload)
+                .unwrap(),
+            owner
+        );
+    }
+
+    #[test]
+    fn typed_definition_rejects_bad_tags_and_pointer_types_without_query_fallback() {
+        let (owner, asset) = fixture();
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), owner);
+        let mut vm = IVM::new(1_000_000);
+        vm.set_register(10, 999);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_CORE_QUERY_GET, &mut vm),
+            Err(VMError::DecodeError)
+        );
+        vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
+        assert!(
+            host.syscall(syscalls::SYSCALL_CORE_QUERY_GET, &mut vm)
+                .is_err()
+        );
+        let pointer = WsvHost::alloc_tlv_payload(
+            &mut vm,
+            PointerType::Blob,
+            &encode_canonical_norito(&asset).unwrap(),
+        )
+        .unwrap();
+        vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
+        vm.set_register(11, pointer);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_CORE_QUERY_GET, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert!(host.wsv.asset_definitions.is_empty());
     }
 }

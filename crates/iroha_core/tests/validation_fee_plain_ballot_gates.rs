@@ -23,8 +23,8 @@ use iroha_data_model::{
     isi::{Grant, governance::CastPlainBallot},
     permission::Permission,
     validation_fee::{
-        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-        VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode, ValidationFeePolicyV1,
+        VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
+        ValidationFeePolicyV1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
@@ -49,8 +49,8 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
         "xor".parse().expect("asset name"),
     );
     let domain = Domain::new(domain_id).build(&proposer);
-    let account = Account::new(proposer.clone()).build(&proposer);
-    let world = World::with([domain], [account], []);
+    let proposer_account = Account::new(proposer.clone()).build(&proposer);
+    let world = World::with([domain], [proposer_account], []);
     let mut state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -62,26 +62,66 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
     governance.conviction_step_blocks = 1;
     state.set_gov(governance);
 
+    let contract = iroha_data_model::smart_contract::ContractAddress::derive(
+        state.network_id_ref(),
+        &proposer,
+        1,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    let pool = iroha_data_model::smart_contract::ContractAddress::derive(
+        state.network_id_ref(),
+        &proposer,
+        2,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    let payout = iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1 {
+        treasury_account_id: contract.subject_id(),
+        contract_address: contract,
+        code_hash: [1; 32],
+        entrypoint: "fee_tick".parse().unwrap(),
+        ds_asset_id: fee_asset_id.clone(),
+        xor_asset_id: AssetDefinitionId::derive_from_components(
+            DomainId::try_new("validation_fee", "universal").unwrap(),
+            "xor_reward".parse().unwrap(),
+        ),
+        pool_vault_account_id: pool.subject_id(),
+        pool_contract_address: pool,
+        pool_code_hash: [2; 32],
+        reward_pool_account_id: account(3),
+        reference_feed_id: "xor_per_sbd".parse().unwrap(),
+        reference_feed_config_version: 1,
+        reference_provider_accounts: (10..15).map(account).collect(),
+        max_sbd_per_attempt_minor: 1000,
+        max_sbd_per_day_minor: 100000,
+        min_interval_ms: 60000,
+        max_source_age_ms: 300000,
+        max_slippage_bps: 100,
+        validator_lane_id: iroha_data_model::nexus::LaneId::new(0),
+        min_reward_claim_xor_minor: 1,
+    };
     let policy = ValidationFeePolicyV1 {
+        retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
+        effective_from_ms: 1793451600000,
+        notice_published_at_ms: 1790859600000,
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         network_id: *state.network_id_ref(),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: fee_asset_id,
         ds_scale: VALIDATION_FEE_DS_SCALE,
-        fee: Quantity::zero(),
-        treasury_account_id: proposer.clone(),
-        charging_mode: ValidationFeeChargingMode::Disabled,
-        effective_from_height: BALLOT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-        expires_after_height: None,
-        exemption_classes: Vec::new(),
-        treasury_payout_binding: None,
+        fee: "0.10".parse().unwrap(),
+        treasury_account_id: payout.treasury_account_id.clone(),
+        charging_mode: ValidationFeeChargingMode::RetailMonthlyAllowance,
+
+        exemption_classes: vec!["TREASURY_PAYOUT".into()],
+        reward_custody: payout.custody(),
     };
     assert_eq!(policy.policy_invariant_error(), None);
     let proposal_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: proposer.clone(),
         policy,
-        payout_lifecycle_proposal_id: None,
     });
     let proposal_id = proposal_kind.fingerprint();
     let referendum_id = hex::encode(proposal_id);

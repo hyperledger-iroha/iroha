@@ -209,7 +209,7 @@ fn proof() -> iroha_data_model::proof::ProofBox {
 
 fn finish_empty_internal(
     producer: &mut ExecutionOutputProducer<'_, '_, '_>,
-) -> Result<(), ExecutionAttemptError<String>> {
+) -> Result<(), ExecutionOutputAttemptError> {
     // This fixture's actual registry has no Pipeline or Time actions.
     assert!(producer.state.world.triggers.pipeline_triggers().is_empty());
     assert!(producer.state.world.triggers.time_triggers().is_empty());
@@ -566,7 +566,7 @@ fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
         .unwrap_err();
     assert_eq!(
         error,
-        ExecutionAttemptError::Deferred(
+        ExecutionOutputAttemptError::Deferred(
             ivm::error::ExecutionDeferral::AllocationUnavailable.into()
         )
     );

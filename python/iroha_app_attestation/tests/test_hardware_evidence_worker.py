@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 from iroha_app_attestation.attestation import (AttestationRejected, ANDROID_KEY_DESCRIPTION_OID,
     verify_android_persistent_app_key_raw)
-from iroha_app_attestation.hardware_evidence_worker import (_OriginalGenerationChallenge,
+from iroha_app_attestation.native_time_interval import NativeTimeInterval
+from iroha_app_attestation.hardware_evidence_worker import (NativeHardwareEvidenceVerifier, _OriginalGenerationChallenge,
     require_original_window)
 from test_synthetic_platform_evidence import SignedEnvelope, keymint_description
 
@@ -28,6 +29,20 @@ class HardwareEvidenceWorkerTests(unittest.TestCase):
         require_original_window(100,200,199)
         for args in [(100,200,99),(100,200,200),(0,200,100),(100,120101,100),(True,200,100),(100,200,True)]:
             with self.subTest(args=args),self.assertRaises(AttestationRejected): require_original_window(*args)
+
+    def test_hardware_interval_checks_both_endpoints(self):
+        # Window grammar only, with no signer, issuer/root, Google verdict or installed owner.
+        class Channel:
+            def recheck(self): pass
+            def trusted_time_interval(self): return self.interval
+        channel=Channel()
+        verifier=object.__new__(NativeHardwareEvidenceVerifier);verifier._channel=channel
+        for lower,upper in ((99,101),(199,200)):
+            channel.interval=NativeTimeInterval(lower,upper)
+            with self.subTest(lower=lower,upper=upper),self.assertRaises(AttestationRejected):
+                verifier._window({"issued_at_ms":100,"expires_at_ms":200})
+        channel.interval=NativeTimeInterval(100,199)
+        self.assertEqual(verifier._window({"issued_at_ms":100,"expires_at_ms":200}).endpoints(),(100,199))
 
     def test_full_archive_challenge_authenticates_both_hardware_levels_and_rejects_substitution(self):
         openssl=Path(shutil.which('openssl')).resolve()

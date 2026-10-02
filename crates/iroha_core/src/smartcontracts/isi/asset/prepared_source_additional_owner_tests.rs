@@ -957,7 +957,7 @@ fn original_supply_preparation_is_read_only_and_consumes_exact_balance_then_tota
         let amount = Quantity::from(amount);
         let events_before = transaction.world.internal_event_buf.len();
         let prepared =
-            PreparedNumericSupplyChange::prepare(&transaction, &source, &amount, mint).unwrap();
+            PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, mint).unwrap();
         assert_eq!(prepared.balance_after, Quantity::from(expected));
         assert_eq!(
             prepared.supply_after.as_ref().unwrap(),
@@ -1039,7 +1039,7 @@ fn original_supply_preparation_preserves_deferred_total_error_and_rollback() {
         .total_quantity = Quantity::one();
     let amount = Quantity::from(2_u32);
     let prepared =
-        PreparedNumericSupplyChange::prepare(&transaction, &source, &amount, false).unwrap();
+        PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, false).unwrap();
     assert!(matches!(
         &prepared.supply_after,
         Err(Error::Math(MathError::NotEnoughQuantity))
@@ -1095,7 +1095,7 @@ fn original_supply_preparation_rejects_source_and_recipient_controls_before_writ
     .unwrap();
     let events_before = transaction.world.internal_event_buf.len();
     assert!(matches!(
-        PreparedNumericSupplyChange::prepare(&transaction, &source, &amount, true),
+        PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, true),
         Err(Error::AssetTransferAdmission(
             AssetTransferAdmissionError::HoldingLimitExceeded(_)
         ))
@@ -1103,7 +1103,7 @@ fn original_supply_preparation_rejects_source_and_recipient_controls_before_writ
     assert_eq!(transaction.world.internal_event_buf.len(), events_before);
     seed_prepared_test_orchard_reserve(&mut transaction, &source);
     let events_before = transaction.world.internal_event_buf.len();
-    let error = PreparedNumericSupplyChange::prepare(&transaction, &source, &amount, false)
+    let error = PreparedNumericSupplyChange::prepare(&mut transaction, &source, &amount, false)
         .err()
         .unwrap();
     assert!(

@@ -353,10 +353,11 @@ it carries no authentication of its own.
 The decoder reads the tile lanes (`P` and `K`) against the light and dark levels
 measured at the finders first. A lane that does not decode that way is re-read
 with a normalised read that rescales every tile by its own contrast, so
-over-exposure, veiling light, glare and shadows cost little; lane `K` still needs
-a camera that resolves the glyphs, and lane `D` carries the stream alone when
-nothing else reads. The scanner does not change the camera's settings, so set the
-stream up for it (`specs/petal_stream.md` section 8, "Scanner guidance"):
+over-exposure, veiling light and shadows cost little (a deep glare still defeats
+every lane in the frames it covers); lane `K` still needs a camera that resolves
+the glyphs, and lane `D` carries the stream alone when nothing else reads. The
+scanner does not change the camera's settings, so set the stream up for it
+(`specs/petal_stream.md` section 8, "Scanner guidance"):
 
 - Ask `getUserMedia` for about 1280×720; the default `maxSide` of 1280 already
   matches it. Only drop to 640 when the device cannot sustain about 5 decoded
@@ -3415,24 +3416,6 @@ do {
 } while (page.projection.more_available);
 
 console.log("verified Parliament policy:", page.projection.current_policy);
-```
-
-To price the active policy with the execution account's current Hijiri risk,
-request an authenticated live quote. `quoteValidationFeeHijiri` sends and
-accepts only bounded, unencoded, exact `application/x-norito`, rejects
-cacheable responses, and uses the
-ABI 25 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
-account/count, and `evaluatedStateHeight + 1` before returning an immutable
-projection. Its assurance label is intentionally evaluated-only; admission
-still rejects a quote made stale by an intervening policy or risk update.
-
-```js
-const hijiriQuote = await torii.quoteValidationFeeHijiri(
-  AUTHORITY_ACCOUNT_ID,
-  2,
-  { canonicalAuth },
-);
-console.log(hijiriQuote.aggregateAdjustedFeeMinorUnits);
 ```
 
 Each projected Parliament authorization is the exact certificate-backed V1

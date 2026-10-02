@@ -70,6 +70,7 @@ use iroha_data_model::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionSubmissionReceipt,
         signed::{MultisigSignature, MultisigSignatures, TransactionBuilder},
     },
+    validation_fee::{RetailFeeAssessmentV1, RetailFeeQuoteRequestV1, honiara_month_bounds},
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_executor_data_model::permission::query::CanReadAccountData;
@@ -81,11 +82,8 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,
     validation_fee_api::{
-        VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
-        VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
         VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
         ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
-        ValidationFeeHijiriQuoteRequestV1, ValidationFeeHijiriQuoteResponseV1,
     },
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
@@ -209,13 +207,13 @@ pub use kagemusha_core_coordinator_v1::{
 };
 mod kagemusha_device_bridge_v1;
 #[cfg(unix)]
-#[cfg(unix)]
 mod kagemusha_hardware_evidence_v1;
 #[cfg(unix)]
 pub use kagemusha_hardware_evidence_v1::{
     KagemushaNativeHardwareEvidenceSourceV1, bootstrap_kagemusha_native_hardware_evidence_v1,
     register_kagemusha_native_hardware_evidence_source_v1,
 };
+#[cfg(unix)]
 mod kagemusha_mobile_bootstrap_online_v1;
 mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
@@ -454,7 +452,7 @@ const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
 const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
-const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
+const ERR_RETAIL_FEE_ASSESSMENT: c_int = -506;
 const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
 
 /// Exact capability mask required by the KAGEMUSHA V1 secure-device frame.
@@ -686,7 +684,7 @@ enum BridgeError {
     CanonicalJson,
     ValidationFeePolicyProof,
     ParliamentTimedOvn,
-    ValidationFeeHijiriQuote,
+    RetailFeeAssessment,
     PrivateSettlementResponse,
 }
 impl BridgeError {
@@ -726,7 +724,7 @@ impl BridgeError {
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
             BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
             BridgeError::ParliamentTimedOvn => ERR_PARLIAMENT_TIMED_OVN,
-            BridgeError::ValidationFeeHijiriQuote => ERR_VALIDATION_FEE_HIJIRI_QUOTE,
+            BridgeError::RetailFeeAssessment => ERR_RETAIL_FEE_ASSESSMENT,
             BridgeError::PrivateSettlementResponse => ERR_PRIVATE_SETTLEMENT_RESPONSE,
         }
     }
@@ -4570,72 +4568,96 @@ unsafe fn validation_fee_checkpoint_bytes<'a>(
     // SAFETY: the C caller supplies a readable range; null and size were checked above.
     Ok(unsafe { slice::from_raw_parts(checkpoint_ptr, length) })
 }
-fn validation_fee_hijiri_quote_request_v1(
-    account_id_literal: &str,
-    qualifying_transfer_count: u32,
-) -> BridgeResult<Vec<u8>> {
-    if account_id_literal.is_empty()
-        || account_id_literal.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+const RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES: usize = 262_144;
+const RETAIL_FEE_ASSESSMENT_MAX_BYTES: usize = 4_096;
+const RETAIL_FEE_MARKER_MAX_BYTES: usize = 4_096;
+const RETAIL_FEE_MARKER_PREFIX: &str = "iroha:retail_fee:assessment:v1:";
+fn retail_fee_intent_hash_v1(input: &[u8]) -> BridgeResult<Vec<u8>> {
+    if input.is_empty() || input.len() > RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES {
+        return Err(BridgeError::RetailFeeAssessment);
+    }
+    let request: RetailFeeQuoteRequestV1 =
+        norito::json::from_slice(input).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    if request.transfers.is_empty()
+        || request.transfers.len() > 1_000
+        || request
+            .transfers
+            .iter()
+            .any(|leg| leg.amount_minor_units == 0)
     {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
+        return Err(BridgeError::RetailFeeAssessment);
     }
-    let address = AccountAddress::parse_encoded(account_id_literal, None)
-        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let account_id = address
-        .to_account_id()
-        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let request = ValidationFeeHijiriQuoteRequestV1 {
-        version: VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
-        account_id,
-        qualifying_transfer_count,
-    };
     request
-        .validate()
-        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let archive = norito::to_bytes(&request).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    if archive.is_empty() || archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1 {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
-    }
-    Ok(archive)
+        .intent_hash()
+        .map(|hash| hash.to_vec())
+        .map_err(|_| BridgeError::RetailFeeAssessment)
 }
-fn validation_fee_hijiri_quote_response_verify_v1(
-    response_archive: &[u8],
-    request_archive: &[u8],
-) -> BridgeResult<Vec<u8>> {
-    if response_archive.is_empty()
-        || response_archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-        || request_archive.is_empty()
-        || request_archive.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
+// This codec checks canonical shape. Ledger admission authenticates the policy,
+// enrollment, counter commitment, exact intent, and freshness at execution.
+fn retail_fee_validate_assessment(value: &RetailFeeAssessmentV1) -> BridgeResult<()> {
+    let (start, end) = honiara_month_bounds(value.billing_month_start_ms)
+        .map_err(|_| BridgeError::RetailFeeAssessment)?;
+    if start != value.billing_month_start_ms
+        || value.policy_revision == 0
+        || value.qualifying_payments > 1_000
+        || value
+            .payments_used_before
+            .checked_add(value.qualifying_payments)
+            .is_none()
+        || value.expires_at_ms <= start
+        || value.expires_at_ms > end
+        || !validation_fee_is_canonical_iroha_hash(&value.state_commitment)
+        || !validation_fee_is_canonical_iroha_hash(&value.intent_hash)
+        || (value.qualifying_payments == 0 && value.fee_minor != 0)
     {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
+        return Err(BridgeError::RetailFeeAssessment);
     }
-    let request: ValidationFeeHijiriQuoteRequestV1 =
-        decode_from_bytes(request_archive).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let canonical_request =
-        norito::to_bytes(&request).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    if canonical_request != request_archive {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
+    Ok(())
+}
+fn retail_fee_assessment_marker_v1(input: &[u8]) -> BridgeResult<Vec<u8>> {
+    if input.is_empty() || input.len() > RETAIL_FEE_ASSESSMENT_MAX_BYTES {
+        return Err(BridgeError::RetailFeeAssessment);
     }
-    request
-        .validate()
-        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let response: ValidationFeeHijiriQuoteResponseV1 =
-        decode_from_bytes(response_archive).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let canonical_response =
-        norito::to_bytes(&response).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    if canonical_response != response_archive {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
-    }
-    response
-        .validate_for_request(&request)
-        .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    let projection =
-        norito::json::to_vec(&response).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-    if projection.is_empty() || projection.len() > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
+    let value: RetailFeeAssessmentV1 =
+        norito::json::from_slice(input).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    retail_fee_validate_assessment(&value)?;
+    let bytes = norito::encode_canonical(&value).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    // Every emitted marker must fit the same bound accepted by the decoder.
+    if bytes.is_empty()
+        || bytes.len() > (RETAIL_FEE_MARKER_MAX_BYTES - RETAIL_FEE_MARKER_PREFIX.len()) / 2
     {
-        return Err(BridgeError::ValidationFeeHijiriQuote);
+        return Err(BridgeError::RetailFeeAssessment);
     }
-    Ok(projection)
+    Ok(format!("{RETAIL_FEE_MARKER_PREFIX}{}", hex::encode(bytes)).into_bytes())
+}
+fn retail_fee_assessment_decode_v1(input: &[u8]) -> BridgeResult<Vec<u8>> {
+    if input.is_empty() || input.len() > RETAIL_FEE_MARKER_MAX_BYTES {
+        return Err(BridgeError::RetailFeeAssessment);
+    }
+    let encoded = std::str::from_utf8(input)
+        .ok()
+        .and_then(|s| s.strip_prefix(RETAIL_FEE_MARKER_PREFIX))
+        .ok_or(BridgeError::RetailFeeAssessment)?;
+    if encoded.is_empty()
+        || encoded.len() % 2 != 0
+        || !encoded
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(BridgeError::RetailFeeAssessment);
+    }
+    let bytes = hex::decode(encoded).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    let value: RetailFeeAssessmentV1 =
+        decode_from_bytes(&bytes).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    retail_fee_validate_assessment(&value)?;
+    if norito::encode_canonical(&value).map_err(|_| BridgeError::RetailFeeAssessment)? != bytes {
+        return Err(BridgeError::RetailFeeAssessment);
+    }
+    let json = norito::json::to_vec(&value).map_err(|_| BridgeError::RetailFeeAssessment)?;
+    if json.is_empty() || json.len() > RETAIL_FEE_ASSESSMENT_MAX_BYTES {
+        return Err(BridgeError::RetailFeeAssessment);
+    }
+    Ok(json)
 }
 /// Encode one bounded current-policy proof request from a complete canonical checkpoint.
 ///
@@ -4738,82 +4760,89 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
     })();
     bridge_result_to_code(result)
 }
-/// Encode one exact bounded native-Norito Hijiri validation-fee quote request.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_validation_fee_hijiri_quote_request_v1(
-    account_id_ptr: *const c_uchar,
-    account_id_len: c_ulong,
-    qualifying_transfer_count: u32,
-    out_request_ptr: *mut *mut c_uchar,
-    out_request_len: *mut c_ulong,
+unsafe fn retail_fee_bridge_call(
+    input_ptr: *const c_uchar,
+    input_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+    maximum_input_bytes: usize,
+    operation: fn(&[u8]) -> BridgeResult<Vec<u8>>,
 ) -> c_int {
-    clear_bridge_output(out_request_ptr, out_request_len);
+    clear_bridge_output(out_ptr, out_len);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
-        let account_id_len =
-            usize::try_from(account_id_len).map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-        if account_id_ptr.is_null()
-            || account_id_len == 0
-            || account_id_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
-        {
-            return Err(BridgeError::ValidationFeeHijiriQuote);
+        clear_bridge_output_or_null(out_ptr, out_len)?;
+        let length = usize::try_from(input_len).map_err(|_| BridgeError::RetailFeeAssessment)?;
+        if input_ptr.is_null() || length == 0 || length > maximum_input_bytes {
+            return Err(BridgeError::RetailFeeAssessment);
         }
-        let account_id_bytes = unsafe { slice::from_raw_parts(account_id_ptr, account_id_len) };
-        let account_id = std::str::from_utf8(account_id_bytes)
-            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-        let request =
-            validation_fee_hijiri_quote_request_v1(account_id, qualifying_transfer_count)?;
-        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+        let input = unsafe { slice::from_raw_parts(input_ptr, length) };
+        let bytes = operation(input)?;
+        unsafe { write_bytes_bridge(out_ptr, out_len, &bytes) }
     }));
     result.map_or_else(
-        |_| BridgeError::ValidationFeeHijiriQuote.code(),
+        |_| BridgeError::RetailFeeAssessment.code(),
         bridge_result_to_code,
     )
 }
-/// Validate one canonical native-Norito Hijiri quote against the exact request.
-///
-/// The returned projection is canonical typed Norito JSON and must be released
-/// with [`connect_norito_free`].
+/// Hash the exact ordered payment request using native canonical Norito.
+/// Output is cleared on failure and must be released with `connect_norito_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_validation_fee_hijiri_quote_response_verify_v1(
-    response_norito_ptr: *const c_uchar,
-    response_norito_len: c_ulong,
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_projection_json_ptr: *mut *mut c_uchar,
-    out_projection_json_len: *mut c_ulong,
+pub unsafe extern "C" fn connect_norito_retail_fee_intent_hash_v1(
+    input_ptr: *const c_uchar,
+    input_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
 ) -> c_int {
-    clear_bridge_output(out_projection_json_ptr, out_projection_json_len);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
-        let response_len = usize::try_from(response_norito_len)
-            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-        let request_len = usize::try_from(request_norito_len)
-            .map_err(|_| BridgeError::ValidationFeeHijiriQuote)?;
-        if response_norito_ptr.is_null()
-            || response_len == 0
-            || response_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1
-            || request_norito_ptr.is_null()
-            || request_len == 0
-            || request_len > VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1
-        {
-            return Err(BridgeError::ValidationFeeHijiriQuote);
-        }
-        let response = unsafe { slice::from_raw_parts(response_norito_ptr, response_len) };
-        let request = unsafe { slice::from_raw_parts(request_norito_ptr, request_len) };
-        let projection = validation_fee_hijiri_quote_response_verify_v1(response, request)?;
-        unsafe {
-            write_bytes_bridge(
-                out_projection_json_ptr,
-                out_projection_json_len,
-                &projection,
-            )
-        }
-    }));
-    result.map_or_else(
-        |_| BridgeError::ValidationFeeHijiriQuote.code(),
-        bridge_result_to_code,
-    )
+    unsafe {
+        retail_fee_bridge_call(
+            input_ptr,
+            input_len,
+            out_ptr,
+            out_len,
+            RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
+            retail_fee_intent_hash_v1,
+        )
+    }
+}
+/// Encode a canonical TRACE marker for a reviewed fee assessment.
+/// Output is cleared on failure and must be released with `connect_norito_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_retail_fee_assessment_marker_v1(
+    input_ptr: *const c_uchar,
+    input_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    unsafe {
+        retail_fee_bridge_call(
+            input_ptr,
+            input_len,
+            out_ptr,
+            out_len,
+            RETAIL_FEE_ASSESSMENT_MAX_BYTES,
+            retail_fee_assessment_marker_v1,
+        )
+    }
+}
+/// Decode an exact canonical fee marker into typed assessment JSON.
+/// Output is cleared on failure and must be released with `connect_norito_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_retail_fee_assessment_decode_v1(
+    input_ptr: *const c_uchar,
+    input_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    unsafe {
+        retail_fee_bridge_call(
+            input_ptr,
+            input_len,
+            out_ptr,
+            out_len,
+            RETAIL_FEE_MARKER_MAX_BYTES,
+            retail_fee_assessment_decode_v1,
+        )
+    }
 }
 fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
     use iroha_data_model::prelude::TransferBox;

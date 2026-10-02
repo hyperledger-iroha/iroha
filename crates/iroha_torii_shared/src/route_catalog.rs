@@ -1181,6 +1181,30 @@ fn validate_feature_name(
         });
     }
 }
+/// Certified native multisig execution-record publication.
+pub mod multisig_execution_evidence {
+    use super::{
+        AdmissionPolicy, ApiSurface, HttpMethod, Listener, RouteDescriptor, RouteEffect,
+        RouteProjections,
+    };
+    /// Exact account, entrypoint and proposal selector resource.
+    pub const PATH: &str = crate::multisig_execution_evidence::MULTISIG_EXECUTION_EVIDENCE_PATH_V1;
+    /// Complete native content; finality authority remains independently selected by the reader.
+    pub const GET: RouteDescriptor = RouteDescriptor::new(
+        "multisig.execution_evidence",
+        HttpMethod::Get,
+        PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::ALL)
+    .with_cors_options(true);
+    /// Sole route in this fixed publication family.
+    pub const ROUTES: &[RouteDescriptor] = &[GET];
+}
+
 /// Universal KAGEMUSHA protocol route descriptors.
 pub mod kagemusha {
     use super::{
@@ -1299,6 +1323,19 @@ pub mod kagemusha {
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Exact single-issuer positive current World Mint grant under that issuer's own signature.
+    pub const ORDINARY_MINT_ISSUER_PURPOSE: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.ordinary_mint_issuer_purpose",
+        HttpMethod::Post,
+        "/v1/kagemusha/ordinary/mint-issuer-purpose",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Complete first-release KAGEMUSHA route descriptor inventory.
     pub const ROUTES: &[RouteDescriptor] = &[
         READINESS,
@@ -1309,6 +1346,7 @@ pub mod kagemusha {
         RESOURCE_NAMES_STATE,
         AUTHORITY_ORIGINALS,
         ORDINARY_WALLET_CURRENT,
+        ORDINARY_MINT_ISSUER_PURPOSE,
     ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
@@ -3029,8 +3067,29 @@ pub mod runtime_governance {
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
-    /// Same-snapshot evaluated Hijiri validation-fee quote path.
-    pub const VALIDATION_FEE_HIJIRI_QUOTE_PATH: &str = "/v1/validation-fee/hijiri/quote";
+    /// Authenticated native retail payment quote.
+    pub const VALIDATION_FEE_RETAIL_QUOTE: RouteDescriptor =
+        app_signed_post("validation_fee.retail.quote", "/v1/validation-fee/quote");
+    /// Authenticated canonical wallet monthly fee status.
+    pub const VALIDATION_FEE_RETAIL_STATUS: RouteDescriptor = app_signed_get(
+        "validation_fee.retail.status",
+        "/v1/validation-fee/accounts/{account_id}/status",
+    );
+    /// Authenticated immutable native fee receipts.
+    pub const VALIDATION_FEE_RETAIL_RECEIPTS: RouteDescriptor = app_signed_get(
+        "validation_fee.retail.receipts",
+        "/v1/validation-fee/accounts/{account_id}/receipts",
+    );
+    /// Authenticated current cumulative wallet receipt head and finalized proof.
+    pub const VALIDATION_FEE_RETAIL_STATEMENT_HEAD: RouteDescriptor = app_signed_get(
+        "validation_fee.retail.statement_head",
+        "/v1/validation-fee/accounts/{account_id}/statement/head",
+    );
+    /// Authenticated complete private wallet fee statement.
+    pub const VALIDATION_FEE_RETAIL_STATEMENT: RouteDescriptor = app_signed_post(
+        "validation_fee.retail.statement",
+        "/v1/validation-fee/accounts/{account_id}/statement",
+    );
     /// Typed validation-fee proposal list path.
     pub const VALIDATION_FEE_PROPOSALS_PATH: &str = "/v1/validation-fee/proposals";
     /// Typed validation-fee proposal detail path.
@@ -3042,11 +3101,6 @@ pub mod runtime_governance {
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_compute_post(
         "validation_fee.policy.current_proof",
         VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
-    );
-    /// Evaluate one bounded current-state Hijiri validation-fee quote.
-    pub const VALIDATION_FEE_HIJIRI_QUOTE: RouteDescriptor = app_signed_post(
-        "validation_fee.hijiri.quote",
-        VALIDATION_FEE_HIJIRI_QUOTE_PATH,
     );
     /// List typed validation-fee Parliament proposals.
     pub const VALIDATION_FEE_PROPOSALS: RouteDescriptor = app_signed_get(
@@ -3176,7 +3230,11 @@ pub mod runtime_governance {
         GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
         GOV_PARLIAMENT_TRANSITION_DRAFT,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
-        VALIDATION_FEE_HIJIRI_QUOTE,
+        VALIDATION_FEE_RETAIL_QUOTE,
+        VALIDATION_FEE_RETAIL_STATUS,
+        VALIDATION_FEE_RETAIL_RECEIPTS,
+        VALIDATION_FEE_RETAIL_STATEMENT,
+        VALIDATION_FEE_RETAIL_STATEMENT_HEAD,
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
         VALIDATION_FEE_PROPOSAL_DRAFT,
@@ -4704,6 +4762,7 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     soracloud_gateway::ROUTES,
     content_directory::ROUTES,
     kagemusha::ROUTES,
+    multisig_execution_evidence::ROUTES,
     sccp::ROUTES,
 ];
 const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {

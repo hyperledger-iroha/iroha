@@ -183,7 +183,8 @@ impl DataspaceChain {
             .fold(builder, GenesisBuilder::append_instruction)
             .build_raw()
             .unwrap()
-            .with_consensus_meta();
+            .with_consensus_meta()
+            .expect("valid private-root fixture consensus parameters");
         let genesis = manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(

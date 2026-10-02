@@ -1523,7 +1523,13 @@ impl AvailabilitySchedule for RetainedLaneSchedule {
         self.instance
     }
 
-    fn height_config(&self, height: u64) -> std::io::Result<Option<HeightConfig>> {
+    fn height_config(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<HeightConfig>,
+        iroha_core::execution_attempt::ExecutionAttemptError<std::io::Error>,
+    > {
         Ok((height > 0 && height <= self.merged_height).then(|| self.config.clone()))
     }
 }
@@ -2399,7 +2405,9 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     let schedule = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
         .ok_or_else(|| eyre!("BPNG registration requires the committed NPoS schedule"))?;
     ensure!(
         schedule.epoch_length_blocks.get() == FIXTURE_EPOCH_LENGTH_BLOCKS,

@@ -69,7 +69,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 6] = [
     "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 97] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 108] = [
     "connect_norito_confidential_prover_revision_v1",
     "connect_norito_confidential_prover_create_v1",
     "connect_norito_confidential_prover_close_v1",
@@ -119,6 +119,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 97] = [
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -131,8 +132,15 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 97] = [
     "connect_norito_kagemusha_reserve_finality_hint_v1",
     "connect_norito_kagemusha_reserve_finality_verify_v1",
     "connect_norito_kagemusha_top_up_signed_request_validate_v1",
-    "connect_norito_validation_fee_hijiri_quote_request_v1",
-    "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeBridgeAbiVersion",
+    "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeIntentHashV1",
+    "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeAssessmentMarkerV1",
+    "Java_org_hyperledger_iroha_sdk_validationfee_RetailFeeAssessmentBridge_nativeDecodeAssessmentV1",
+    "connect_norito_retail_fee_intent_hash_v1",
+    "connect_norito_retail_fee_assessment_marker_v1",
+    "connect_norito_retail_fee_assessment_decode_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
@@ -149,6 +157,9 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 97] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeCurrentControlV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeOutgoingV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
@@ -2780,6 +2791,51 @@ mod tests {
         });
         let bytes = python_canonical_json_bytes(&value, false).expect("canonical manifest");
         assert!(validate_native_artifact_manifest_v1(&bytes).is_err());
+    }
+
+    #[test]
+    fn native_manifest_requires_complete_unique_symbol_inventory() {
+        let unique: std::collections::BTreeSet<_> =
+            REQUIRED_C_JNI_SYMBOLS_V1.iter().copied().collect();
+        assert_eq!(unique.len(), REQUIRED_C_JNI_SYMBOLS_V1.len());
+        assert!(unique.contains("connect_norito_kagemusha_ordinary_outgoing_v1"));
+        let make_manifest = |symbols: Vec<&str>| {
+            let value = norito::json!({
+                "artifact_sha256": ("11".repeat(32)),
+                "artifact_size": 4_u64,
+                "bridge_abi_version": 25_u64,
+                "privacy_c_exports": (REQUIRED_PRIVACY_C_EXPORTS_V1.to_vec()),
+                "privacy_c_exports_inspected": true,
+                "required_symbols": symbols,
+                "schema": NATIVE_ARTIFACT_SCHEMA_V1,
+                "sdk": "c-jni",
+                "source_commit": ("22".repeat(20)),
+                "source_tree_clean": true,
+                "target": "aarch64-apple-darwin",
+                "workspace_source_manifest_sha256": ("33".repeat(32)),
+            });
+            python_canonical_json_bytes(&value, false).expect("canonical manifest")
+        };
+        assert!(
+            validate_native_artifact_manifest_v1(&make_manifest(
+                REQUIRED_C_JNI_SYMBOLS_V1.to_vec()
+            ))
+            .is_ok()
+        );
+        for missing in REQUIRED_C_JNI_SYMBOLS_V1 {
+            let incomplete = REQUIRED_C_JNI_SYMBOLS_V1
+                .iter()
+                .copied()
+                .filter(|symbol| *symbol != missing)
+                .collect();
+            assert!(validate_native_artifact_manifest_v1(&make_manifest(incomplete)).is_err());
+        }
+        let mut duplicated = REQUIRED_C_JNI_SYMBOLS_V1.to_vec();
+        duplicated.push("connect_norito_kagemusha_ordinary_current_control_v1");
+        assert!(validate_native_artifact_manifest_v1(&make_manifest(duplicated)).is_err());
+        let mut reordered = REQUIRED_C_JNI_SYMBOLS_V1.to_vec();
+        reordered.reverse();
+        assert!(validate_native_artifact_manifest_v1(&make_manifest(reordered)).is_err());
     }
 
     #[test]

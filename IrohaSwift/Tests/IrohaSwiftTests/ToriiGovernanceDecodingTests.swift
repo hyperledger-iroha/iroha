@@ -70,11 +70,9 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
     }
 
     private func payoutBindingJSON() -> String {
-        let recipients = Array(Self.payoutAccounts.dropFirst()).map {
-            "{\"account_id\":\"\($0)\",\"share\":\"0.25\"}"
-        }.joined(separator: ",")
+        let providers=Self.payoutAccounts.map { "\"\($0)\"" }.joined(separator:",")
         return """
-        {"contract_address":"\(Self.contractAddress)","code_hash":\(fixedBytes(7)),"entrypoint":"autonomous_validation_fee_tick","treasury_account_id":"\(Self.governanceOwner)","ds_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","xor_asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","pool_vault_account_id":"\(Self.payoutAccounts[0])","batch_ds":"10","min_xor_out":"4","max_xor_out":"100","recipients":[\(recipients)]}
+        {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating:"AB",count:32))","entrypoint":"autonomous_validation_fee_tick","treasury_account_id":"\(Self.governanceOwner)","ds_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","xor_asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","pool_contract_address":"\(Self.contractAddress)","pool_code_hash":"\(String(repeating:"CD",count:32))","pool_vault_account_id":"\(Self.payoutAccounts[0])","reward_pool_account_id":"\(Self.payoutAccounts[1])","reference_feed_id":["sbd_xor"],"reference_feed_config_version":1,"reference_provider_accounts":[\(providers)],"max_sbd_per_attempt_minor":1000,"max_sbd_per_day_minor":100000,"min_interval_ms":60000,"max_source_age_ms":300000,"max_slippage_bps":100,"validator_lane_id":1,"min_reward_claim_xor_minor":1}
         """
     }
 
@@ -244,14 +242,15 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let policy = proposalKindJSON(
             kind: "ValidationFeePolicy",
             payload: """
-            {"proposal_operator":"\(Self.governanceOwner)","policy":{"schema_version":1,"network_id":"\(TestNetworkIds.canonical.literal)","policy_version":"1","previous_policy_hash":null,"ds_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","ds_scale":2,"fee":"0","treasury_account_id":"\(Self.governanceOwner)","charging_mode":{"charging_mode":"DISABLED","value":null},"effective_from_height":"10","expires_after_height":null,"exemption_classes":[],"treasury_payout_binding":null},"payout_lifecycle_proposal_id":null}
+            {"proposal_operator":"\(Self.governanceOwner)","policy":{"schema_version":1,"network_id":"\(TestNetworkIds.canonical.literal)","policy_version":"1","previous_policy_hash":null,"ds_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","ds_scale":2,"retail_schedule":{"included_payments":50,"overage_minor":10,"maintenance_tiers":[{"minimum_average_balance_minor":0,"monthly_fee_minor":100},{"minimum_average_balance_minor":50000,"monthly_fee_minor":200}]},"effective_from_ms":1788181200000,"notice_published_at_ms":1785502800000,"fee":"0.1","treasury_account_id":"\(Self.governanceOwner)","charging_mode":{"charging_mode":"RETAIL_MONTHLY_ALLOWANCE","value":null},"exemption_classes":["TREASURY_PAYOUT"],"reward_custody":{"contract_address":"\(Self.contractAddress)","treasury_account_id":"\(Self.governanceOwner)","ds_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","xor_asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","reward_pool_account_id":"\(Self.payoutAccounts[1])","validator_lane_id":1}}}
             """
         )
         guard case .validationFeePolicy(let policyPayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: policy
         ) else { return XCTFail("expected ValidationFeePolicy") }
-        XCTAssertEqual(policyPayload.policy.fee, "0")
+        XCTAssertEqual(policyPayload.policy.fee, "0.1")
+        XCTAssertEqual(policyPayload.policy.retailSchedule.includedPayments, 50)
 
         let lifecycle = proposalKindJSON(
             kind: "ValidationFeePayoutLifecycle",
@@ -261,7 +260,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             ToriiGovernanceProposalKind.self,
             from: lifecycle
         ) else { return XCTFail("expected ValidationFeePayoutLifecycle") }
-        XCTAssertEqual(lifecyclePayload.payoutBinding.recipients.count, 4)
+        XCTAssertEqual(lifecyclePayload.payoutBinding.referenceProviderAccounts.count, 5)
 
         let musubi = proposalKindJSON(
             kind: "MusubiRegistryGovernance",

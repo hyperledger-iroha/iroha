@@ -5,10 +5,10 @@
 //! byte decomposition. Four independently challenged running products bind those bytes
 //! simultaneously to the leaf SHA input and strict-DER output consumer. Two SHA factors are
 //! advanced per hash row, keeping the maximum committed-column degree at three.
+#[cfg(test)]
+use super::accumulator_air::ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::accumulator_air::{
-    ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1, ZkX509CaAccumulatorTraceV1,
-};
+use super::accumulator_air::ZkX509CaAccumulatorTraceV1;
 #[cfg(test)]
 use super::proof_instance::TEST_PROOF_INSTANCE_V1;
 use super::proof_instance::ZkX509ProofInstanceV1;
@@ -168,6 +168,7 @@ const ROOT_SPKI_IO_PRODUCT_START: usize = SERIALIZED_SHA_PRODUCT_START + ZK_X509
 /// Canonical root-SPKI channel before two channels per public disclosure.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_BASE_CHANNEL_V1: u32 = 30;
 /// Exact number of root-SPKI consumer events.
+#[cfg(test)]
 pub(crate) const ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_IO_EVENTS_V1: u16 =
     ZK_X509_CA_SPKI_DER_BYTES_V1 as u16;
 const FIX_ACTIVE: usize = 0;
@@ -426,8 +427,9 @@ pub(crate) struct ZkX509CaAccumulatorStarkPublicV1 {
     /// Verifier-derived final DER I/O channel carrying the exact root SPKI.
     pub(crate) root_spki_channel: F,
 }
-/// Per-call products exposed to the aggregate SHA adapter.
+/// Reference per-call products retained by material and algebraic test controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509CaAccumulatorCallTerminalV1 {
     /// Canonical global SHA call.
     pub(crate) call: u8,
@@ -440,6 +442,7 @@ pub(crate) struct ZkX509CaAccumulatorCallTerminalV1 {
 }
 /// Exact DER-output consumer terminal for the private root SPKI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509CaAccumulatorIoTerminalV1 {
     /// Verifier-derived canonical channel.
     pub(crate) channel: u32,
@@ -448,8 +451,9 @@ pub(crate) struct ZkX509CaAccumulatorIoTerminalV1 {
     /// Product over `(role, channel, endpoint, offset, byte, read)` tuples.
     pub(crate) consumer_products: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
 }
-/// Terminal claims algebraically bound inside the accumulator quotient.
+/// Reference terminal claims used to compare the full and private local relations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509CaAccumulatorStarkTerminalClaimsV1 {
     /// One source terminal per leaf/node SHA call.
     pub(crate) source_products:
@@ -461,7 +465,7 @@ pub(crate) struct ZkX509CaAccumulatorStarkTerminalClaimsV1 {
     pub(crate) root_spki_consumer_products: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
 }
 /// Column-major material consumed by aggregate commitments.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CaAccumulatorStarkMaterialV1 {
     /// Challenge-independent witness columns.
@@ -476,13 +480,13 @@ pub(crate) struct ZkX509CaAccumulatorStarkMaterialV1 {
     /// Exact 91-byte root-SPKI I/O consumer terminal.
     pub(crate) root_spki_terminal: ZkX509CaAccumulatorIoTerminalV1,
 }
-/// Exact cross-subproof binding carried by the outer X5S1 envelope.
+/// Reference terminal binding for algebraic and hostile-shape test controls.
 ///
-/// The outer verifier compares this value with the verifier-derived public
-/// statement, the shared SHA subproof terminals, and the strict-DER RFC output
-/// terminal.  Fixed-size SHA storage makes omission impossible after decode;
-/// the slice validator below rejects omission and excess before conversion.
+/// Current X5S1 carries original-polynomial openings instead of public terminal
+/// products. This test fixture retains exact omission, excess, substitution,
+/// reordering and cross-root assertions against the reference terminal relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ZkX509CaAccumulatorSubproofBindingV1 {
     /// Verifier-bound governed root and derived root-SPKI channel.
     pub(crate) public: ZkX509CaAccumulatorStarkPublicV1,
@@ -1066,7 +1070,7 @@ pub(crate) fn compile_ca_accumulator_fixed_columns_v1()
     Ok(columns)
 }
 /// Build exact base, auxiliary, fixed, and terminal material.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn build_ca_accumulator_stark_material_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1170,7 +1174,7 @@ pub(crate) fn build_ca_accumulator_stark_material_v1(
     })
 }
 /// Extract the exact proof terminal claims from committed material.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn ca_accumulator_stark_terminal_claims_v1(
     material: &ZkX509CaAccumulatorStarkMaterialV1,
 ) -> ZkX509CaAccumulatorStarkTerminalClaimsV1 {
@@ -1180,7 +1184,7 @@ pub(crate) fn ca_accumulator_stark_terminal_claims_v1(
         root_spki_consumer_products: material.root_spki_terminal.consumer_products,
     }
 }
-/// Compile the exact typed binding handed to the outer X5S1 verifier.
+/// Compile the typed reference binding used by algebraic and hostile-shape tests.
 #[cfg(test)]
 pub(crate) fn ca_accumulator_subproof_binding_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
@@ -1210,10 +1214,11 @@ pub(crate) fn ca_accumulator_subproof_terminal_claims_v1(
         root_spki_consumer_products: binding.root_spki_terminal.consumer_products,
     }
 }
-/// Validate decoded variable-length terminals before fixed-size conversion.
+/// Validate variable-length reference terminal fixtures before fixed-size conversion.
 ///
-/// This is the fail-closed decoder boundary for omission, insertion,
-/// substitution, and reordering attacks.
+/// These algebraic controls reject omission, insertion, substitution and reordering;
+/// they are not an X5S1 decoder or an independent credential acceptance path.
+#[cfg(test)]
 pub(crate) fn validate_ca_accumulator_subproof_terminal_sequence_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1255,7 +1260,8 @@ pub(crate) fn validate_ca_accumulator_subproof_terminal_sequence_v1(
     }
     validate_ca_accumulator_io_terminal_v1(public, root_spki_terminal)
 }
-/// Validate one typed outer binding against the verifier-derived statement.
+/// Validate one typed reference binding against the verifier-derived statement.
+#[cfg(test)]
 pub(crate) fn validate_ca_accumulator_subproof_binding_v1(
     expected_public: ZkX509CaAccumulatorStarkPublicV1,
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1288,6 +1294,7 @@ fn validate_ca_accumulator_stark_public_v1(
     Ok(())
 }
 /// Validate the fixed metadata and canonical products of the root-SPKI claim.
+#[cfg(test)]
 pub(crate) fn validate_ca_accumulator_io_terminal_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
     terminal: ZkX509CaAccumulatorIoTerminalV1,
@@ -1537,10 +1544,11 @@ pub(crate) fn evaluate_ca_accumulator_local_residues_v1<A: PolynomialAirFieldV1>
     Ok(residues)
 }
 
-/// Current complete standalone relation, including its public product bindings.
-/// The local prefix is shared with the held joint proof implementation so all
-/// original identities and their order remain unchanged during staged wiring.
+/// Full algebraic test oracle, including reference terminal product bindings.
+/// It shares the shipping local prefix and adds terminal equations for parity and
+/// mutation controls; it is not an independent proof acceptance path.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>(
     public: ZkX509CaAccumulatorStarkPublicV1,
     base: &[A],
@@ -1687,6 +1695,7 @@ fn build_aux_row_v1(
     }
     Ok(aux)
 }
+#[cfg(test)]
 fn selected_node_terminal_v1<A: PolynomialAirFieldV1>(
     fixed: &[A],
     claims: [[F; ZK_X509_SHA_BUS_LANES_V1]; ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1],
@@ -1766,6 +1775,7 @@ fn root_spki_io_factor_v1<A: PolynomialAirFieldV1>(
             sum.add(term.mul_base(coefficient))
         }))
 }
+#[cfg(test)]
 fn selected_call_terminal_v1<A: PolynomialAirFieldV1>(
     fixed: &[A],
     claims: [[F; ZK_X509_SHA_BUS_LANES_V1]; ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1],
@@ -2412,7 +2422,7 @@ fn verify_ca_deep_constraints_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn ca_lde_row_v1(
     columns: &[Vec<F>],
     index: usize,

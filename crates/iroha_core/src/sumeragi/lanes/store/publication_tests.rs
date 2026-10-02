@@ -110,7 +110,7 @@ fn recovered_visible_frame_keeps_original_owner_until_fsync_succeeds() {
     )
     .unwrap();
     let (opening, error) = opening.complete().err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(error.io_kind(), io::ErrorKind::Other);
     let pointer = opening
         .store
         .state
@@ -187,7 +187,7 @@ fn oversized_or_noncanonical_disk_population_cannot_be_recovered() {
             assert_eq!(begin.err().unwrap().kind(), io::ErrorKind::InvalidData);
         } else {
             assert_eq!(
-                begin.unwrap().complete().err().unwrap().1.kind(),
+                begin.unwrap().complete().err().unwrap().1.io_kind(),
                 io::ErrorKind::InvalidData
             );
         }

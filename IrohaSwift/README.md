@@ -949,27 +949,27 @@ The unsigned payload must carry the closed transaction domain as
 `"domain": {"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}`;
 the retired `chain`, `chainId`, and `chain_id` keys and the genesis marker are rejected.
 
-To price that base policy with the execution account's current Hijiri risk,
-request a separate native-Norito quote:
+For the native retail payment policy, hash the customer's exact ordered
+payment intent and inspect the complete assessment marker before signing:
 
 ```swift
-let request = try ValidationFeeHijiriQuoteRequestV1(
+let intent = RetailFeeQuoteRequestV1(
     accountId: accountId,
-    qualifyingTransferCount: 2
+    assetDefinitionId: feeAssetDefinitionId,
+    transfers: [RetailFeePaymentLegV1(destinationAccountId: recipient, amountMinorUnits: 100)]
 )
-let quote = try await torii.postValidationFeeHijiriQuote(
-    request,
-    canonicalAuth: canonicalAuth
-)
+let intentHash = try intent.intentHash()
+let assessment = try RetailFeeAssessmentV1.decodeMarker(assessmentMarker)
+guard assessment.intentHash == intentHash.map { String(format: "%02X", $0) }.joined() else {
+    throw RetailFeeNativeError.invalidNativeOutput
+}
+let canonicalMarker = try assessment.marker()
 ```
 
-The SDK requires bridge ABI 25, signs the exact bounded request, refuses
-redirected, cacheable, encoded, or non-Norito success responses, and exposes
-the 64 KiB-bounded result only after native canonical decoding, request-echo,
-height, hash, and aggregate-Q16 verification. The returned assurance is an
-authenticated same-snapshot evaluation, not an independent state witness;
-transaction admission remains authoritative and rejects a stale policy or
-Hijiri binding.
+The three ABI-25 retail fee operations use native typed Norito and reject
+noncanonical markers. Local decoding does not verify that an assessment is
+current or authorized. Signed read and verified finality remain required before
+payment approval; admission checks the assessment against ledger state.
 
 ### Kotodama contract manifests
 

@@ -38,6 +38,8 @@ pub use lineage_cas::{
     KagemushaOrdinaryReceivedLineageCommitOriginalV1,
 };
 pub(crate) use lineage_cas::{
+    KagemushaAuthenticatedOrdinaryIncomingCommitReceiptV1,
+    KagemushaAuthenticatedOrdinaryIncomingReservationReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageAnchorReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageCommitReceiptV1,
     KagemushaAuthenticatedOrdinaryLineageReservationReceiptV1, KagemushaOrdinaryLineageCasOwnerV1,
@@ -1466,7 +1468,6 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
         self.recheck()?;
         Ok(&self.reservation.secret)
     }
-    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     pub(crate) fn bootstrap_state_nonce_commitment(&self) -> Result<[u8; 32]> {
         use sha2::{Digest as _, Sha256};
         self.recheck()?;
@@ -1479,7 +1480,6 @@ impl KagemushaOrdinaryEnrolledFinancialOwnerV1 {
         self.recheck()?;
         Ok(commitment)
     }
-    #[cfg(all(feature = "zk-halo2-ipa", feature = "kagemusha-production-prover"))]
     pub(crate) fn with_borrowed_financial_secret(
         &self,
         selection: &crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,

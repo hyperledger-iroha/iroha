@@ -219,7 +219,8 @@ impl ValidQueryRequest {
                             limits,
                             ordinary_memory::OrdinaryCursorMode::Stored,
                             state,
-                        )?;
+                        )
+                        .map_err(query_transport_error)?;
                         let output = handle_iter_start_stored_replayable(
                             iter,
                             sel,
@@ -385,7 +386,8 @@ impl ValidQueryRequest {
                                         limits,
                                         ordinary_memory::OrdinaryCursorMode::Stored,
                                         state,
-                                    )?;
+                                    )
+                                    .map_err(query_transport_error)?;
                                     let output = handle_iter_start_stored_replayable(
                                         iter,
                                         sel,
@@ -423,7 +425,8 @@ impl ValidQueryRequest {
                             limits,
                             ordinary_memory::OrdinaryCursorMode::Stored,
                             state,
-                        )?;
+                        )
+                        .map_err(query_transport_error)?;
                         let output = handle_iter_start_stored_replayable(
                             iter,
                             sel,

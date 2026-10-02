@@ -397,7 +397,7 @@ impl<'a> PenaltyApplier<'a> {
         let slashing_delay =
             crate::sumeragi::epoch::parameters::resolve_npos_slashing_delay_blocks_from_world(
                 world,
-            )
+            )?
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let due = |record: &EvidenceRecord| {
             let admitted_at = if cfg!(all(test, sumeragi_core_mutation = "HC3"))
@@ -508,6 +508,7 @@ impl<'a> PenaltyApplier<'a> {
         let (evidence_admissions, penalty_actions, _index) =
             self.derive_from_stable_parent(block_header, true)?;
         Ok(NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions,
             penalty_actions,
         })
@@ -835,7 +836,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
             &tx.world,
             record,
             current_height,
-        ) {
+        )? {
             return Err(eyre!(
                 "native Sumeragi parent evidence prune target is not stale under the post-execution evidence horizon"
             ));
@@ -1204,6 +1205,14 @@ pub(crate) fn seed_penalty_validator_for_tests(
     validator
 }
 
+/// Install explicit accepted penalty-kernel prestate for an original payload pool test.
+/// Native evidence admission and offence authentication have separate real-history controls.
+#[cfg(test)]
+pub(crate) fn pending_payload_penalty_fixture(state: &State) -> (Hash, usize) {
+    let key = tests::insert_evidence(state, tests::fixture_vote_evidence(1, 0), 1);
+    (key, std::mem::size_of::<PendingPenaltyEvidence>())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1367,7 +1376,7 @@ mod tests {
     }
     /// Signed native proof used only as explicit prestate for the penalty kernel.
     /// Native admission and restored attribution are tested against actual history separately.
-    fn fixture_vote_evidence(signer: ValidatorIndex, view: u64) -> Evidence {
+    pub(super) fn fixture_vote_evidence(signer: ValidatorIndex, view: u64) -> Evidence {
         use iroha_sumeragi::{
             message::{Evidence as NativeEvidence, Vote, VoteKind},
             types::{EpochId, Hash32, Signature as NativeSignature},
@@ -1407,7 +1416,11 @@ mod tests {
         topology.extend(peers);
         topology.commit();
     }
-    fn insert_evidence(state: &State, evidence: Evidence, recorded_at_height: u64) -> Hash {
+    pub(super) fn insert_evidence(
+        state: &State,
+        evidence: Evidence,
+        recorded_at_height: u64,
+    ) -> Hash {
         let key = evidence_key(&evidence);
         let iroha_sumeragi::message::Evidence::VoteEquivocation(first, _) =
             evidence.decode_native().unwrap()
@@ -2723,6 +2736,149 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), 0);
     }
     #[test]
+    fn original_staking_payload_refusal_retains_evidence_pool_and_exact_assembly_retry() {
+        use crate::{state::StateReadOnly, sumeragi::payload, tx::AcceptedTransaction};
+        use iroha_data_model::{
+            isi::Log,
+            level::Level,
+            transaction::{FeePaymentIntent, TransactionBuilder},
+        };
+        use iroha_primitives::time::TimeSource;
+        use std::{future::Future, pin::pin, task::Context, time::Duration};
+
+        for state_admission in [false, true] {
+            let state = native_penalty_state();
+            install_one_block_delay_npos(&state);
+            let due = insert_evidence(&state, fixture_vote_evidence(1, 0), 1);
+            let original = state
+                .world
+                .consensus_evidence
+                .view()
+                .get(&due)
+                .cloned()
+                .unwrap();
+            let view = state.view();
+            let parent = view.latest_block().unwrap();
+            let key = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519).unwrap();
+            let mut builder = TransactionBuilder::new(
+                *state.network_id_ref(),
+                AccountId::new(key.public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                "original staking payload retry".to_owned(),
+            )]);
+            builder.set_creation_time(parent.header().creation_time() + Duration::from_millis(1));
+            let (_, clock) =
+                TimeSource::new_mock(parent.header().creation_time() + Duration::from_millis(2));
+            let accepted = AcceptedTransaction::accept_with_time_source(
+                builder.sign(key.private_key()),
+                state.network_id_ref(),
+                Duration::from_secs(1),
+                view.world().parameters().transaction(),
+                &iroha_config::parameters::actual::Crypto::default(),
+                &clock,
+            )
+            .unwrap();
+            drop(view);
+            let assembly = payload::Assembly {
+                parent: &parent,
+                view: 0,
+                cadence: Duration::from_millis(1),
+            };
+            let transactions = [accepted];
+            let original_transaction = transactions[0].hash();
+            let original_parent = parent.hash();
+            let budget = if state_admission {
+                state.kura().block_hash_history_budget()
+            } else {
+                state.evidence_preparation_budget().clone()
+            };
+            let requested_bytes = std::mem::size_of::<PendingPenaltyEvidence>();
+            let occupied_bytes = if state_admission {
+                budget.limit_bytes() - budget.reserved_bytes()
+            } else {
+                budget.limit_bytes() - requested_bytes + 1
+            };
+            let blocking_owner = budget.try_reserve_bytes(occupied_bytes).unwrap();
+            let original_error = PenaltyApplier::new(&state, None)
+                .derive_npos_consensus_effects(&penalty_header(2))
+                .expect_err("the actual original producer must refuse this same evidence backing");
+            let error = payload::assemble(&state, assembly, &transactions)
+                .expect_err("the actual original pool cannot fund this staking preparation");
+            let release = if state_admission {
+                let original_refusal = original_error
+                    .downcast_ref::<crate::state::StateAdmissionError>()
+                    .expect("actual scratch State acquisition preserves its history owner");
+                let refusal = std::error::Error::source(&error)
+                    .and_then(|source| source.downcast_ref::<crate::state::StateAdmissionError>())
+                    .unwrap_or_else(|| panic!("payload loses original State admission: {error:?}"));
+                assert_eq!(refusal, original_refusal);
+                assert!(matches!(
+                    refusal,
+                    crate::state::StateAdmissionError::History(
+                        crate::state::BlockHashAdmissionError::Capacity(
+                            AllocationRefusal::Capacity { .. }
+                        )
+                    )
+                ));
+                refusal.release_wait().unwrap().clone()
+            } else {
+                let original_refusal = original_error
+                    .downcast_ref::<EvidencePreparationError>()
+                    .expect("the original producer retains its typed evidence pool refusal");
+                let refusal = std::error::Error::source(&error)
+                    .and_then(|source| source.downcast_ref::<EvidencePreparationError>())
+                    .unwrap_or_else(|| {
+                        panic!("payload loses original evidence preparation: {error:?}")
+                    });
+                assert_eq!(refusal, original_refusal);
+                assert!(
+                    matches!(refusal, EvidencePreparationError::Admission(AllocationRefusal::Capacity {
+                requested_bytes: actual, reserved_bytes, limit_bytes, ..
+            }) if *actual == requested_bytes && *reserved_bytes == occupied_bytes && *limit_bytes == budget.limit_bytes())
+                );
+                refusal.release_wait().unwrap().clone()
+            };
+            let mut release = pin!(release.wait_for_release());
+            let mut context = Context::from_waker(std::task::Waker::noop());
+            assert!(release.as_mut().poll(&mut context).is_pending());
+            assert!(budget.reserved_bytes() >= occupied_bytes);
+            assert_eq!(
+                state.world.consensus_evidence.view().get(&due),
+                Some(&original)
+            );
+            assert_eq!(state.view().height(), 1);
+            assert_eq!(transactions[0].hash(), original_transaction);
+            assert_eq!(parent.hash(), original_parent);
+            drop(blocking_owner);
+            assert!(release.as_mut().poll(&mut context).is_ready());
+            let proposal = payload::assemble(&state, assembly, &transactions)
+                .expect("the exact parent, transactions and evidence retry after original release");
+            assert!(
+                matches!(proposal.npos_consensus_effects().unwrap().penalty_actions.as_slice(),
+            [NposPenaltyAction::MarkConsensusEvidenceApplied(mark)] if mark.evidence_key == due && mark.height == 2)
+            );
+            assert_eq!(
+                state.world.consensus_evidence.view().get(&due),
+                Some(&original)
+            );
+            assert_eq!(state.view().height(), 1);
+            assert_eq!(transactions[0].hash(), original_transaction);
+            assert_eq!(parent.hash(), original_parent);
+            if !state_admission {
+                assert_eq!(budget.reserved_bytes(), 0);
+            }
+            assert_eq!(
+                payload::encode(&proposal).unwrap(),
+                payload::encode(&payload::assemble(&state, assembly, &transactions).unwrap())
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn pending_penalty_peer_key_refusal_preserves_source_and_retries_after_original_release() {
         use iroha_allocation::AllocationRefusal;
 
@@ -3270,6 +3426,7 @@ mod tests {
         .derive_npos_penalty_actions(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let effects = NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions: Vec::new(),
             penalty_actions,
         };
@@ -3331,7 +3488,11 @@ mod tests {
             .unwrap()
             .0;
         let binding = SumeragiLaneStakeBinding::from_record(record, escrow).unwrap();
-        let params = view.world().sumeragi_npos_parameters().unwrap();
+        let params = view
+            .world()
+            .sumeragi_npos_parameters()
+            .expect("original policy decoder completes")
+            .unwrap();
         let obligation = SumeragiLaneCustody {
             lane: LaneId::new(7),
             incarnation: [0x71; 32],
@@ -3469,6 +3630,7 @@ mod tests {
             .unwrap();
         let mut tx = block.consensus_effects_transaction().unwrap();
         let effects = NposConsensusEffects {
+            parent_service_commit_qc: None,
             evidence_admissions: Vec::new(),
             penalty_actions: actions,
         };

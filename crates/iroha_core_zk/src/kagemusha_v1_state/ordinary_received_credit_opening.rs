@@ -98,6 +98,56 @@ impl<'owner> KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'owner> {
             .reservation
             .previous_app_attest_counter)
     }
+    /// Exact PI selected when this same Main request was durably captured. This historical
+    /// loan never replaces it with the current incoming approval's PI or extends its window.
+    pub(crate) fn selected_integrity_lease(
+        &self,
+    ) -> Result<Option<&KagemushaVerifiedPlayIntegrityRefreshLeaseV1>, KagemushaStateErrorV1> {
+        self.recheck_historical_custody()?;
+        Ok(self.retained()?.lease.as_deref())
+    }
+    /// Original request creation context, retained by Main before the platform fence.
+    /// This context is public DATA; the signed-clock visitor below supplies authentic custody.
+    pub(crate) fn request_clock_context(
+        &self,
+    ) -> Result<KagemushaOrdinaryCashClockContextV1, KagemushaStateErrorV1> {
+        self.recheck_historical_custody()?;
+        Ok(self.retained()?.captured.reservation.clock())
+    }
+    /// Actual request-signature CaptureAck context, unchanged by later PI/counter refresh.
+    pub(crate) fn signature_admission_clock_context(
+        &self,
+    ) -> Result<KagemushaOrdinaryCashClockContextV1, KagemushaStateErrorV1> {
+        self.recheck_historical_custody()?;
+        Ok(self.retained()?.captured.signature_admission_clock)
+    }
+    /// Lend both complete genuine signed clock cuts under this same Main RequestCapture.
+    /// Historical clock proof custody never lends a current elapsed clock or financial effect.
+    pub(crate) fn with_retained_verified_signed_clock_originals(
+        &self,
+        visitor: &mut dyn for<'clock> FnMut(
+            [&'clock KagemushaVerifiedOrdinaryNativeSignedClockOriginalV1; 2],
+        ) -> Result<(), KagemushaStateErrorV1>,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        self.recheck_historical_custody()?;
+        let financial = self.owner.publication.cash_financial();
+        let request_context = self.request_clock_context()?;
+        let admission_context = self.signature_admission_clock_context()?;
+        let request = financial
+            .verified_retained_cash_clock_originals(&request_context)
+            .map_err(material)?;
+        let admission = financial
+            .verified_retained_cash_clock_originals(&admission_context)
+            .map_err(material)?;
+        request
+            .recheck_cash_context(&request_context)
+            .map_err(material)?;
+        admission
+            .recheck_cash_context(&admission_context)
+            .map_err(material)?;
+        visitor([&request, &admission])?;
+        self.recheck_historical_custody()
+    }
     pub(crate) fn financial_owner(
         &self,
     ) -> Result<&KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaStateErrorV1> {

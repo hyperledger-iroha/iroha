@@ -383,7 +383,58 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
         Some((enabled, witness.enabled)),
         false,
     )?;
-    let grammar = witness.request.original_canonical_stream_grammar()?;
+    let original_digest = reconstruct_ordinary_request_canonical_v1(
+        builder,
+        jobs,
+        witness.request,
+        &fields,
+        &clock,
+        &streams.mathematical_codec_original,
+        union.apple,
+    )?;
+    let ctx = builder.main(0);
+    let request_digest = select(ctx, &range, enabled, original_digest);
+    let credential_digest = select(ctx, &range, enabled, credential_digest);
+    equal(
+        ctx,
+        &range,
+        &request_digest,
+        &sources.expected_request_digest,
+    )?;
+    equal(
+        ctx,
+        &range,
+        &credential_digest,
+        &sources.expected_recipient_credential_digest,
+    )?;
+    let as_digest = |name: &str| -> Result<Bytes<F>, String> {
+        field(name)?
+            .try_into()
+            .map_err(|_| "receiver digest width".into())
+    };
+    Ok(OrdinaryReceiverRequestOpeningV1 {
+        request_digest,
+        credential_digest,
+        encryption_key: select(ctx, &range, enabled, as_digest("recipient_encryption_key")?),
+        recipient_lane: select(ctx, &range, enabled, as_digest("recipient_lane_id")?),
+        request_id: select(ctx, &range, enabled, as_digest("request_id")?),
+    })
+}
+
+/// Reconstruct the sole full request original from already-constrained semantic fields and
+/// original evidence bytes. Signature authority belongs to the genuine sender Wrapper or the
+/// complete receiver signature relation; this byte helper creates neither authority.
+pub(super) fn reconstruct_ordinary_request_canonical_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    request: &KagemushaOrdinaryPaymentRequestV1,
+    fields: &BTreeMap<&str, Vec<PastaSha256ByteV1<F>>>,
+    clock: &OrdinaryCashClockCellsV1<F>,
+    codec: &super::canonical_preimage::stream::KagemushaBoundedByteStreamV1<F>,
+    apple: AssignedValue<F>,
+) -> Result<Bytes<F>, String> {
+    let range = builder.range_chip();
+    let grammar = request.original_canonical_stream_grammar()?;
     if grammar.variants.len() != 376 {
         return Err("receiver canonical grammar role count differs".into());
     }
@@ -408,7 +459,6 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
         "clock_context.upper_at_ms",
         assigned_uint_bytes_v1(ctx, gate, clock.upper_at_ms, 64),
     );
-    let codec = &streams.mathematical_codec_original;
     let variants = grammar
         .variants
         .iter()
@@ -418,11 +468,7 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
                 codec.actual_len(),
                 QuantumCell::Constant(F::from(v.evidence_length as u64)),
             );
-            let platform = if v.apple {
-                union.apple
-            } else {
-                gate.not(ctx, union.apple)
-            };
+            let platform = if v.apple { apple } else { gate.not(ctx, apple) };
             let selector = gate.mul(ctx, length_match, platform);
             let mut semantic_bytes = BTreeMap::new();
             for f in &v.layout.fields {
@@ -453,7 +499,7 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let original_digest = reconstruct_selected_canonical_stream_v1(
+    reconstruct_selected_canonical_stream_v1(
         builder,
         jobs,
         &variants,
@@ -463,34 +509,7 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
         grammar.maximum_stream_bytes,
         codec,
         9,
-    )?;
-    let ctx = builder.main(0);
-    let request_digest = select(ctx, &range, enabled, original_digest);
-    let credential_digest = select(ctx, &range, enabled, credential_digest);
-    equal(
-        ctx,
-        &range,
-        &request_digest,
-        &sources.expected_request_digest,
-    )?;
-    equal(
-        ctx,
-        &range,
-        &credential_digest,
-        &sources.expected_recipient_credential_digest,
-    )?;
-    let as_digest = |name: &str| -> Result<Bytes<F>, String> {
-        field(name)?
-            .try_into()
-            .map_err(|_| "receiver digest width".into())
-    };
-    Ok(OrdinaryReceiverRequestOpeningV1 {
-        request_digest,
-        credential_digest,
-        encryption_key: select(ctx, &range, enabled, as_digest("recipient_encryption_key")?),
-        recipient_lane: select(ctx, &range, enabled, as_digest("recipient_lane_id")?),
-        request_id: select(ctx, &range, enabled, as_digest("request_id")?),
-    })
+    )
 }
 
 #[cfg(test)]

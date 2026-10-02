@@ -132,8 +132,8 @@ pub(crate) const ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1: usize = {
     }
     total
 };
-/// Auditable evaluator-section inventory. The ordering follows
-/// [`evaluate_zk_x509_rfc5280_stark_residues_v1`].
+/// Auditable evaluator-section inventory. The ordering follows the shared
+/// RFC relation evaluator, including the reference terminal equations.
 const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
     ("common", 13),
     ("degree-normalization-helpers", 19),
@@ -388,6 +388,7 @@ pub(crate) enum ZkX509Rfc5280OutputRoleV1 {
     CertificateSlotActive = 9,
 }
 const OUTPUT_ROLE_COUNT_V1: usize = ZkX509Rfc5280OutputRoleV1::CertificateSlotActive as usize;
+#[cfg(test)]
 const OUTPUT_ROLES_V1: [ZkX509Rfc5280OutputRoleV1; OUTPUT_ROLE_COUNT_V1] = [
     ZkX509Rfc5280OutputRoleV1::Projection,
     ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
@@ -399,7 +400,7 @@ const OUTPUT_ROLES_V1: [ZkX509Rfc5280OutputRoleV1; OUTPUT_ROLE_COUNT_V1] = [
     ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor,
     ZkX509Rfc5280OutputRoleV1::CertificateSlotActive,
 ];
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn output_role_from_index_v1(index: usize) -> Option<ZkX509Rfc5280OutputRoleV1> {
     OUTPUT_ROLES_V1.get(index).copied()
 }
@@ -4547,6 +4548,7 @@ pub(crate) struct ZkX509Rfc5280StarkTerminalClaimsV1 {
     output_roles: [ZkX509Rfc5280OutputRoleTerminalClaimsV1; PUBLIC_OUTPUT_ROLES_V1.len()],
 }
 impl ZkX509Rfc5280StarkTerminalClaimsV1 {
+    #[cfg(test)]
     fn canonical_identity_v1() -> Self {
         Self {
             output_roles: core::array::from_fn(|index| ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
@@ -4555,6 +4557,7 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
             }),
         }
     }
+    #[cfg(test)]
     pub(crate) fn output_role_products_v1(
         &self,
         role: ZkX509Rfc5280OutputRoleV1,
@@ -4564,6 +4567,7 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
             .position(|expected| *expected == role)
             .map(|index| self.output_roles[index])
     }
+    #[cfg(test)]
     pub(crate) fn governed_trust_anchor_products_v1(
         &self,
     ) -> ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
@@ -7044,7 +7048,7 @@ fn product_relation_family_v1(
 // Original private source-admissibility preflight, independent of the public
 // claim inventory. Fixed selectors are reconstructed from the same material's
 // actual canonical schedule; no supplied selector or role grants proof authority.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn selected_output_role_preflight_v1(
     row: &ZkX509Rfc5280StarkBaseRowV1,
     fixed: &ZkX509Rfc5280StarkFixedRowV1,
@@ -7069,7 +7073,7 @@ fn selected_output_role_preflight_v1(
     Ok(role_index)
 }
 /// Compile only the governed-root consumer products; all other products stay private.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
@@ -7642,11 +7646,12 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         )
     }
 }
-/// Evaluate the complete opened RFC row without a host semantic callback.
+/// Evaluate the complete opened RFC row as an algebraic test oracle.
 ///
 /// Fixed family selectors are verifier-preprocessed. Every family contributes the same residue
 /// inventory on every row, so neither witness values nor roles can alter the composition shape.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     next: &ZkX509Rfc5280StarkBaseRowV1<A>,

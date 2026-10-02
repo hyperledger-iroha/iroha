@@ -1064,13 +1064,13 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         id: "world.musubi_archive_locations",
         capture: capture_musubi_archive_locations_once,
     },
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Availability),
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Resolver),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Availability),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Resolver),
     TableMaterializer::Single {
         id: "world.musubi_resolver_index_checkpoints",
         capture: capture_musubi_resolver_index_checkpoints_once,
     },
-    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Directory),
+    TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Directory),
     TableMaterializer::Single {
         id: "world.musubi_aliases",
         capture: capture_musubi_aliases_once,

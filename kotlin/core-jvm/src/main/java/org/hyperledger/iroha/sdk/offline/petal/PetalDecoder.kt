@@ -266,7 +266,11 @@ object PetalDecoder {
         return finish(image, options, 0, false, homography, reference, null, PetalWorkspace())
     }
 
-    /** Builds the cells the decoder believes it saw in [frame] (level read), for diagnostics. */
+    /**
+     * Builds the cells the decoder believes it saw in [frame], for diagnostics. Tiles are taken
+     * from the level read (the one that judges against the finder levels), even for a frame whose
+     * lanes were rescued by the normalised read. Returns `null` when the image is unusable.
+     */
     @JvmStatic
     @JvmOverloads
     fun observedCells(
@@ -274,6 +278,7 @@ object PetalDecoder {
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
     ): PetalFrameCells? {
+        if (!supported(image, options)) return null
         val h = frame.homography.m
         val reference = referenceLevels(image, h) ?: return null
         val workspace = PetalWorkspace()
@@ -282,7 +287,11 @@ object PetalDecoder {
         return PetalFrameCells.fromWords(words.p, words.k, readDots(image, h, reference).word)
     }
 
-    /** Mean squared tile-match error of [frame] (level read), a quick image-quality indicator. */
+    /**
+     * Mean squared tile-match error of the level read of [frame], a quick image-quality indicator.
+     * It can be large for a frame whose lanes were rescued by the normalised read, which is the
+     * point: the finder levels did not describe that picture. Returns `null` when the image is unusable.
+     */
     @JvmStatic
     @JvmOverloads
     fun tileMatchError(
@@ -290,6 +299,7 @@ object PetalDecoder {
         frame: PetalDecodedFrame,
         options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
     ): Double? {
+        if (!supported(image, options)) return null
         val h = frame.homography.m
         val reference = referenceLevels(image, h) ?: return null
         val workspace = PetalWorkspace()
@@ -507,7 +517,14 @@ object PetalDecoder {
         return decodeWithErasures(PetalLane.D, dots.word, dots.confidence)
     }
 
-    /** Tries Reed–Solomon with growing numbers of erasures, least confident first. */
+    /**
+     * Tries Reed–Solomon with growing numbers of erasures, least confident first.
+     *
+     * The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes (integer division), and for lane `K`
+     * also ⅔. Lanes `D` and `P` stop at ½: their words have only 11 and 13 parity bytes, and a
+     * further erasure step leaves so few spare ones that it accepts wrong codewords (lane `D` at 7
+     * erasures: about 0.4 % of random words; lane `P` at 8: wrong lanes in banded 480p frames).
+     */
     internal fun decodeWithErasures(lane: PetalLane, word: ByteArray, confidence: DoubleArray): PetalLaneResult? {
         val n = word.size
         // Stable sort of byte positions by confidence (`sort_by` with `total_cmp`).
@@ -523,7 +540,11 @@ object PetalDecoder {
             order[j + 1] = position
         }
         val nsym = lane.parityLength
-        val schedule = intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3)
+        val schedule = if (lane == PetalLane.K) {
+            intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3)
+        } else {
+            intArrayOf(0, nsym / 8, nsym / 4, nsym / 3, nsym / 2)
+        }
         val trial = ByteArray(n)
         var previous = -1
         for (erasures in schedule) {

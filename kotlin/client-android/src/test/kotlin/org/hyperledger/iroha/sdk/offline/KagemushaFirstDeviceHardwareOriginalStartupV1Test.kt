@@ -1,6 +1,6 @@
 // Synthetic pure scheduling tests; no runtime authority or Native/Android device is installed.
 package org.hyperledger.iroha.sdk.offline
-import org.junit.jupiter.api.Assertions.*
+import kotlin.test.*
 import org.junit.jupiter.api.Test
 import java.util.concurrent.Executor
 

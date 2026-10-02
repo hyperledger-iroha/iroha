@@ -19,6 +19,11 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# The pending reference service is an explicit development prototype, not a shipping binary.
+dev-tools = []
+
 # The dependency list is frozen with the workspace lockfile. Implementation
 # changes belong in `src/`; feature selections may change without a lock update.
 [dependencies]
@@ -54,3 +59,4 @@ tokio = { workspace = true, features = ["test-util"] }
 [[bin]]
 name = "kagemusha-issuer"
 path = "src/main.rs"
+required-features = ["dev-tools"]
