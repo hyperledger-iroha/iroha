@@ -50,9 +50,16 @@ The current checkout is `optimizations` at `dab3433065`, with the resolved
 `c87c37aaa1` merge still uncommitted. Source22's privacy and Core builds were
 interrupted by that merge; their source guards failed and no planned native
 controls ran. The merge's fixture repairs passed 18 final focused Rust tests.
-The subsequently applied X509 public-extent, fixed-matrix and cleanup changes,
-selected-query diagnostics and private IVM branches await fresh combined native
-validation. The last complete selected privacy candidate is source17, recorded at
+The first post-merge candidate passes the stock verifier-only check, normal Core
+library build, Core/component test compilation and Kagami test compilation.
+Its evidence and privacy test builds expose a test-only DER import and an
+inaccessible CA test helper. Both are repaired, with native reruns pending.
+Genuine quantity and IVM producers each produce identical paired captures;
+the quantity consumer's stale 2 ms expectation is corrected to the authenticated
+5 ms fixture time. Its full consumer rerun and current AIR consumption remain
+required. The subsequent candidate includes seven private IVM shift/rotate
+equations and repaired mandatory-privacy Swift fixture expectations. Combined
+native and SDK validation remains pending. The last complete selected privacy candidate is source17, recorded at
 `dist/zk-remediation/2026-09-30/epoch19-integrated-source17/source.json`
 (SHA-256 `cf8c2dd49d1b315e5040b7f4db0e8daf039ac00607ba01fbef5ecd1e303739b5`).
 Stock Rust 1.93.1 production and normal optimized test builds pass on macOS and
@@ -148,8 +155,14 @@ projection bounds do not establish joint ring, algebraic or related-key security
 The return key targets an embedded old-ring secret, requiring separate analysis:
 its modulo-special-prime screen is incomplete, while the disjoint-digit model
 has finite estimates but leaves its multimodal error structure unqualified.
-The two-secret cycle, full refresh, circuit privacy and complete program relation
-remain open. No candidate is selected or activated by these screens.
+The direct-bootstrap research candidate satisfies a conditional positive-width
+refresh bound; the earlier public-key bootstrap construction fails that bound.
+Its adaptive-key joint-randomizer reduction requires a separate Gaussian-RLWE
+assumption, extractable common-secret admission, authoritative entropy and finite
+sampling evidence. These are mathematical prerequisites, not implemented or
+qualified encryption. The two-secret cycle, full refresh, circuit privacy and
+complete program relation remain open. No candidate is selected or activated by
+these screens.
 
 The held native canonical-input/digit successor passes 19 component tests,
 including nine new controls. It owns both complete canonical ciphertext components,
@@ -193,7 +206,10 @@ Branches use the same constrained predicate for the PC, require both native
 operand tags to be public and preserve the original 21-port history join.
 Prepared-contract admission checks both successors. Scalar, branch, alias/r0,
 gas/cycle, degree and shared-bank controls await native execution on the combined
-source. These components do not enable IVM proof admission.
+source. The same original ports now constrain all seven native shift/rotate
+operations, low-six-bit amounts, operand tags and native gas costs. Their eleven
+new controls also require native execution. These components do not enable IVM
+proof admission.
 
 ### ZK04 — FASTPQ
 

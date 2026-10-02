@@ -132,8 +132,15 @@ Its expanded selection records 1,183 passes and four X509 fixture failures. The
 historical-descriptor repair and independently regenerated scoped DER values
 are applied. The resolved merge and subsequent private scalar/branch equations,
 public X509 coefficient extents, fixed-row construction and cleanup repairs now
-require fresh combined native validation. The source22 build attempts failed
-source-observation guards when the merge began; they supply no native test pass.
+require fresh combined native validation. The first post-merge verifier-only,
+normal Core, Core/component test and Kagami test builds pass. Evidence/privacy
+test builds expose two test-boundary errors; repairs are applied and await
+native reruns. Genuine quantity and IVM captures match across paired runs; the
+quantity consumer's stale timestamp assertion is repaired, with full consumption
+still pending. Seven private IVM shift/rotate equations and Swift fixture/build
+guidance corrections are included in the next combined candidate. The source22
+build attempts failed source-observation guards when the merge began; they supply
+no native test pass.
 All 648 macOS CPU cost/parity measurements pass, with the pruned transform faster
 than the full-transform reference. Linux comparison and a complete current
 maximum proof remain pending.
