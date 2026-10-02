@@ -20713,8 +20713,6 @@ seiyaku Callee {
         .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
         let mut world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
         let mut permissions = Permissions::new();
         assert!(
@@ -20731,7 +20729,7 @@ seiyaku Callee {
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
         ));
         parameters.commit();
-        let state = State::new_for_testing(world, kura, query);
+        let state = contract_test_state_with_world(&authority, world);
         let caller_contract = install_contract(
             &state,
             &authority,

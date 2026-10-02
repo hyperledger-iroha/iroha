@@ -40,7 +40,7 @@ use super::{
         SigmaThirdV1, WordMemoryAccessV1, WordOperationV1, ZkX509Sha256WordCircuitV1,
         build_sha256_word_circuit_v1,
     },
-    stark::ZK_X509_DIGEST_CONTEXT_V1,
+    stark::ZK_X509_FIXED_DIGEST_CONTEXT_V1,
 };
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PrivacyOuterDigestV1,
@@ -2582,7 +2582,7 @@ fn transpose_sorted_memory_to_phase_axis_v1(
 pub(crate) fn zk_x509_sha_fixed_algebraic_compiler_descriptor_digest_v1()
 -> Result<PrivacyOuterDigestV1, ZkX509ShaFixedAlgebraicErrorV1> {
     privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_FIXED_DIGEST_CONTEXT_V1,
         SHA_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1,
         b"sha-fixed-algebraic-compiler",
         0,
@@ -2632,7 +2632,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
                 .copy_from_slice(&child.descriptor_digest_v1().to_bytes());
         }
         let descriptor_digest = privacy_outer_digest_frame_v1(
-            ZK_X509_DIGEST_CONTEXT_V1,
+            ZK_X509_FIXED_DIGEST_CONTEXT_V1,
             SHA_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
             b"sha-fixed-algebraic-composite",
             0,

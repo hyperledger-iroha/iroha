@@ -69,6 +69,17 @@ pub mod isi {
             id: &AssetId,
             amount: &Quantity,
         ) -> Result<(), Error> {
+            let (resolved_id, candidate) =
+                self.precheck_numeric_asset_debit(network_id, id, amount)?;
+            self.apply_prechecked_numeric_asset_debit_exact(&resolved_id, candidate)
+        }
+        /// Retain the original debit calculation after every source and reserve check.
+        fn precheck_numeric_asset_debit(
+            &self,
+            network_id: &iroha_data_model::NetworkId,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(AssetId, Quantity), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             if privacy_public_reserve_owner_v1(&self.privacy_commitments, &resolved_id)
                 .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?
@@ -128,14 +139,19 @@ pub mod isi {
                 &resolved_id,
                 &candidate,
             )?;
+            Ok((resolved_id, candidate))
+        }
+        /// Consume the original checked debit without recomputing its arithmetic.
+        fn apply_prechecked_numeric_asset_debit_exact(
+            &mut self,
+            resolved_id: &AssetId,
+            candidate: Quantity,
+        ) -> Result<(), Error> {
             self.quantity_mutation_observation.changed();
-            let asset = self
-                .assets
-                .get_mut(&resolved_id)
-                .expect("validated numeric asset must remain present");
-            **asset = candidate;
-            if (**asset).is_zero() {
-                assert!(self.remove_asset_and_metadata(&resolved_id).is_some());
+            if candidate.is_zero() {
+                assert!(self.remove_asset_and_metadata(resolved_id).is_some());
+            } else {
+                self.assign_quantity_balance_exact(resolved_id, candidate)?;
             }
             Ok(())
         }
@@ -328,42 +344,28 @@ pub mod isi {
                 balance_after,
             )?;
             if source_id == destination_id {
+                self.precheck_quantity_balance_assignment(source_id, &delta.to_balance_after)?;
                 self.quantity_mutation_observation.changed();
-                let asset = self
-                    .assets
-                    .get_mut(source_id)
-                    .expect("prechecked transfer source must remain present");
-                **asset = delta.to_balance_after.clone();
+                self.assign_prechecked_quantity_balance(source_id, delta.to_balance_after.clone());
                 if !delta.to_balance_after.is_zero() {
                     self.track_nonzero_asset_holder(destination_id);
                 }
                 return Ok(());
             }
-            // Perform the only fallible mutation before touching the source. The precheck above
-            // has already validated the destination account, definition, existing/default value,
-            // and post-balance. Once this succeeds, every remaining operation is an infallible
-            // update of keys held under this exclusive transaction overlay.
-            if self.assets.get(destination_id).is_none() {
-                self.asset_or_insert_exact(destination_id, Quantity::zero())?;
-            }
+            // Repeat all fallible checks before the first write. The original exclusive
+            // World transaction retains both keys through the paired infallible writes.
+            self.precheck_quantity_balance_assignment(source_id, &delta.from_balance_after)?;
+            self.precheck_quantity_balance_assignment(destination_id, &delta.to_balance_after)?;
             self.quantity_mutation_observation.changed();
-            {
-                let asset = self
-                    .assets
-                    .get_mut(source_id)
-                    .expect("prechecked transfer source must remain present");
-                **asset = delta.from_balance_after.clone();
-            }
             if delta.from_balance_after.is_zero() {
                 assert!(self.remove_asset_and_metadata(source_id).is_some());
+            } else {
+                self.assign_prechecked_quantity_balance(
+                    source_id,
+                    delta.from_balance_after.clone(),
+                );
             }
-            {
-                let dst = self
-                    .assets
-                    .get_mut(destination_id)
-                    .expect("prechecked transfer destination must be present");
-                **dst = delta.to_balance_after.clone();
-            }
+            self.assign_prechecked_quantity_balance(destination_id, delta.to_balance_after.clone());
             if !delta.to_balance_after.is_zero() {
                 self.track_nonzero_asset_holder(destination_id);
             }
@@ -435,17 +437,9 @@ pub mod isi {
             id: &AssetId,
             candidate: Quantity,
         ) -> Result<(), Error> {
-            self.asset_or_insert_exact(id, Quantity::zero())?;
             self.quantity_mutation_observation.changed();
-            let is_nonzero = {
-                let dst = self
-                    .assets
-                    .get_mut(id)
-                    .expect("prepared credit asset must exist");
-                let quantity: &mut Quantity = &mut *dst;
-                *quantity = candidate;
-                !quantity.is_zero()
-            };
+            let is_nonzero = !candidate.is_zero();
+            self.assign_quantity_balance_exact(id, candidate)?;
             if is_nonzero {
                 self.track_nonzero_asset_holder(id);
             }
@@ -2168,7 +2162,8 @@ pub mod isi {
         control_policy: NumericAssetTransferControlPolicy,
         destination_admission: NumericAssetDestinationAdmissionPolicy,
     }
-    /// Measure before allocation and charge every framed preimage part, including its delimiter.
+    /// Measure before output allocation and debit the logical frame quota, including its delimiter.
+    /// TODO: retain original physical funding for the remaining retail-policy binding frames.
     fn bounded_quantity_frame<T: norito::NoritoSerialize>(
         value: &T,
         remaining: &mut u64,
@@ -2178,6 +2173,10 @@ pub mod isi {
             .checked_add(8)?;
         *remaining = remaining.checked_sub(length)?;
         norito::encode_canonical(value).ok()
+    }
+    /// Private projections of the existing canonical authorization frames.
+    mod quantity_authorization {
+        include!("asset/quantity_authorization.rs");
     }
     impl NumericAssetMovementAuthorization {
         fn transaction_user(authority: &AccountId, context: &'static str) -> Self {
@@ -2551,7 +2550,164 @@ pub mod isi {
         }
         /// Hash the actual already-checked typed authorization without deriving source ownership.
         /// Unlike the legacy transcript identity, this retains purpose when a call hash exists.
+        fn quantity_authorization_context_inputs(
+            &self,
+            bindings: &quantity_authorization::BindingFrame<'_>,
+            limit: u64,
+        ) -> Option<Hash> {
+            use quantity_authorization::{
+                ControlFrame, DebitFrame, SourceDetail, SourceFrame, TranscriptFrame,
+                write_delimited_frame,
+            };
+            let mut remaining = limit.checked_sub(64)?;
+            let (debit, owner) = match &self.debit {
+                NumericMovementDebitAuthorization::ExactUser(owner) => ("user", Some(owner)),
+                NumericMovementDebitAuthorization::InitialGenesisBootstrap(owner) => {
+                    ("genesis", Some(owner))
+                }
+                NumericMovementDebitAuthorization::Protocol => ("protocol", None),
+            };
+            let (requirement, tag, binding) = match &self.transcript {
+                NumericMovementTranscriptRequirement::TransactionRequired(tag) => {
+                    ("transaction", *tag, &[][..])
+                }
+                NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    tag,
+                    binding,
+                } => ("typed-purpose", *tag, binding.as_slice()),
+            };
+            if u64::try_from(binding.len()).ok()? > remaining {
+                return None;
+            }
+            let (source, detail) = match self.source_policy {
+                NumericAssetTransferSourcePolicy::User => ("User", SourceDetail::Empty),
+                NumericAssetTransferSourcePolicy::GameSessionFunding => {
+                    ("GameSessionFunding", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
+                    ("FxEscrowDeposit", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
+                    ("NativeEscrowCustody", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
+                    ("SorafsReserveCustody", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::FxEscrowRelease => {
+                    ("FxEscrowRelease", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::FeeSponsorCustody => {
+                    ("FeeSponsorCustody", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
+                    ("KagemushaReserveCustody", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::OracleReward => {
+                    ("OracleReward", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::OraclePenalty => {
+                    ("OraclePenalty", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::OracleDisputeResolution => {
+                    ("OracleDisputeResolution", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::SocialReward => {
+                    ("SocialReward", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::SocialEscrow => {
+                    ("SocialEscrow", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::StakingUnbond => {
+                    ("StakingUnbond", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::StakingRewardClaim => {
+                    ("StakingRewardClaim", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::StakingSlash => {
+                    ("StakingSlash", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::ModerationChallengeRefund => {
+                    ("ModerationChallengeRefund", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::ModerationChallengeSlash => {
+                    ("ModerationChallengeSlash", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::GovernanceSlash => {
+                    ("GovernanceSlash", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::GovernanceRestitution => {
+                    ("GovernanceRestitution", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::GovernanceUnlock => {
+                    ("GovernanceUnlock", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::CitizenshipRelease => {
+                    ("CitizenshipRelease", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::SccpEscrowLock => {
+                    ("SccpEscrowLock", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
+                    ("SccpEscrowRelease", SourceDetail::Empty)
+                }
+                NumericAssetTransferSourcePolicy::RetailMonetary(purpose) => {
+                    ("RetailMonetary", SourceDetail::Retail(purpose))
+                }
+                NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner) => {
+                    ("PrivacyPoolBridge", SourceDetail::Privacy(owner))
+                }
+            };
+            let control = match self.control_policy {
+                NumericAssetTransferControlPolicy::Enforce => "Enforce",
+                NumericAssetTransferControlPolicy::KagemushaRedemption => "KagemushaRedemption",
+                NumericAssetTransferControlPolicy::OraclePenalty => "OraclePenalty",
+                NumericAssetTransferControlPolicy::OracleDisputeResolution => {
+                    "OracleDisputeResolution"
+                }
+                NumericAssetTransferControlPolicy::StakingUnbond => "StakingUnbond",
+                NumericAssetTransferControlPolicy::StakingSlash => "StakingSlash",
+                NumericAssetTransferControlPolicy::ModerationChallengeSettlement => {
+                    "ModerationChallengeSettlement"
+                }
+                NumericAssetTransferControlPolicy::GovernanceSlash => "GovernanceSlash",
+                NumericAssetTransferControlPolicy::GovernanceRestitution => "GovernanceRestitution",
+                NumericAssetTransferControlPolicy::GovernanceUnlock => "GovernanceUnlock",
+                NumericAssetTransferControlPolicy::CitizenshipRelease => "CitizenshipRelease",
+            };
+            let destination = match self.destination_admission {
+                NumericAssetDestinationAdmissionPolicy::ImplicitReceive => "implicit-receive",
+                NumericAssetDestinationAdmissionPolicy::ExistingAccount => "existing-account",
+            };
+            Hash::new_from_writer(|writer| {
+                writer.write_all(b"iroha:fastpq:quantity-authorization:v1\0")?;
+                write_delimited_frame(&DebitFrame(debit, owner), &mut remaining, writer)?;
+                write_delimited_frame(
+                    &TranscriptFrame(requirement, tag, binding),
+                    &mut remaining,
+                    writer,
+                )?;
+                write_delimited_frame(&SourceFrame(source, detail), &mut remaining, writer)?;
+                write_delimited_frame(&ControlFrame(control, destination), &mut remaining, writer)?;
+                write_delimited_frame(&self.transcript_authority, &mut remaining, writer)?;
+                write_delimited_frame(bindings, &mut remaining, writer)
+            })
+            .ok()
+        }
+        #[cfg(test)]
         fn quantity_authorization_context(
+            &self,
+            bindings: &[(AssetId, AssetId, Quantity)],
+            limit: u64,
+        ) -> Option<Hash> {
+            self.quantity_authorization_context_inputs(
+                &quantity_authorization::BindingFrame::Owned(bindings),
+                limit,
+            )
+        }
+        /// Hash the actual already-checked typed authorization without deriving source ownership.
+        /// Unlike the legacy transcript identity, this retains purpose when a call hash exists.
+        #[cfg(test)]
+        fn quantity_authorization_context_owned_reference(
             &self,
             bindings: &[(AssetId, AssetId, Quantity)],
             limit: u64,
@@ -2707,13 +2863,10 @@ pub mod isi {
                 state.poison_quantity_candidate_owner();
                 return apply(state);
             }
-            let bindings = legs
-                .iter()
-                .map(|(source, destination, delta)| {
-                    (source.clone(), destination.clone(), delta.amount.clone())
-                })
-                .collect::<Vec<_>>();
-            let Some(context) = self.quantity_authorization_context(&bindings, limit) else {
+            let Some(context) = self.quantity_authorization_context_inputs(
+                &quantity_authorization::BindingFrame::Transfers(legs),
+                limit,
+            ) else {
                 state.poison_quantity_candidate_owner();
                 return apply(state);
             };
@@ -3257,15 +3410,11 @@ pub mod isi {
         }
         let captured_source = source_id.clone();
         let captured_amount = amount.clone();
-        let apply = |state_transaction: &mut StateTransaction<'_, '_>| {
-            state_transaction.world.withdraw_numeric_asset(
-                &state_transaction.network_id,
-                &source_id,
-                &amount,
-            )?;
-            state_transaction
-                .world
-                .decrease_asset_total_amount(source_id.definition(), &amount)?;
+        let apply = |state_transaction: &mut StateTransaction<'_, '_>,
+                     original: PreparedNumericSupplyChange| {
+            original
+                .apply_balance(&mut state_transaction.world)?
+                .apply(&mut state_transaction.world, &amount)?;
             if let Some(record) = control_update {
                 update_control_record(state_transaction, source_id.account(), record)?;
             }
@@ -3304,7 +3453,13 @@ pub mod isi {
             }
             _ => {
                 state_transaction.poison_quantity_candidate_owner();
-                apply(state_transaction)
+                let original = PreparedNumericSupplyChange::prepare(
+                    state_transaction,
+                    &captured_source,
+                    &captured_amount,
+                    false,
+                )?;
+                apply(state_transaction, original)
             }
         }
     }
@@ -7031,6 +7186,83 @@ pub mod isi {
             ),
         )
     }
+    /// TODO: admit retained retail-policy binding, initial closure capture and original
+    /// arithmetic scratch before claiming complete physical capture coverage.
+    /// Original business preparation: no capture-only quantity calculation is retained.
+    /// The total result stays deferred so an existing error still follows the balance write.
+    struct PreparedNumericSupplyChange {
+        id: AssetId,
+        balance_after: Quantity,
+        supply_after: Result<Quantity, Error>,
+        mint: bool,
+    }
+
+    impl PreparedNumericSupplyChange {
+        fn prepare(
+            state: &StateTransaction<'_, '_>,
+            id: &AssetId,
+            amount: &Quantity,
+            mint: bool,
+        ) -> Result<Self, Error> {
+            let (id, balance_after) = if mint {
+                state.world.precheck_numeric_asset_credit(id, amount)?
+            } else {
+                state
+                    .world
+                    .precheck_numeric_asset_debit(&state.network_id, id, amount)?
+            };
+            let supply_after =
+                state
+                    .world
+                    .precheck_asset_total_amount_change(id.definition(), amount, mint);
+            Ok(Self {
+                id,
+                balance_after,
+                supply_after,
+                mint,
+            })
+        }
+
+        fn apply_balance(
+            self,
+            world: &mut WorldTransaction<'_, '_>,
+        ) -> Result<PreparedNumericSupplyTotal, Error> {
+            if self.mint {
+                world.apply_prechecked_numeric_asset_credit_exact(&self.id, self.balance_after)?;
+            } else {
+                world.apply_prechecked_numeric_asset_debit_exact(&self.id, self.balance_after)?;
+            }
+            Ok(PreparedNumericSupplyTotal {
+                definition: self.id.definition().clone(),
+                after: self.supply_after,
+                mint: self.mint,
+            })
+        }
+    }
+
+    /// The original aggregate result moves to the second physical write in program order.
+    struct PreparedNumericSupplyTotal {
+        definition: AssetDefinitionId,
+        after: Result<Quantity, Error>,
+        mint: bool,
+    }
+    impl PreparedNumericSupplyTotal {
+        fn apply(
+            self,
+            world: &mut WorldTransaction<'_, '_>,
+            amount: &Quantity,
+        ) -> Result<(), Error> {
+            let after = self.after?;
+            world.apply_prechecked_asset_total_amount_change(
+                &self.definition,
+                amount,
+                after,
+                self.mint,
+            );
+            Ok(())
+        }
+    }
+
     /// Observe supply only under the exact existing invocation; unsupported direct
     /// protocol supply keeps business semantics and poisons this candidate export.
     fn apply_with_supply_quantity_candidate<T>(
@@ -7040,38 +7272,43 @@ pub mod isi {
         amount: &Quantity,
         mint: bool,
         purpose: (&str, Option<&[u8]>),
-        apply: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, Error>,
+        apply: impl FnOnce(
+            &mut StateTransaction<'_, '_>,
+            PreparedNumericSupplyChange,
+        ) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut remaining = state.quantity_candidate_preimage_limit();
-        let context = purpose
-            .1
-            .and_then(|binding| {
-                if u64::try_from(binding.len()).ok()? > remaining {
-                    return None;
-                }
-                bounded_quantity_frame(
-                    &(
-                        "iroha:fastpq:supply-authorization:v1".to_owned(),
-                        mint,
-                        purpose.0.to_owned(),
-                        binding.to_vec(),
-                        authority.clone(),
-                        id.clone(),
-                        amount.clone(),
-                    ),
-                    &mut remaining,
-                )
-            })
-            .map(Hash::new);
-        match (state.tx_call_hash, context) {
-            (Some(entry_hash), Some(context)) => state.apply_with_quantity_supply_candidate(
-                authority, entry_hash, context, id, amount, mint, apply,
-            ),
-            _ => {
-                state.poison_quantity_candidate_owner();
-                apply(state)
-            }
-        }
+        let context = purpose.1.and_then(|binding| {
+            quantity_authorization::supply_context(
+                &quantity_authorization::SupplyFrame {
+                    mint,
+                    purpose: purpose.0,
+                    binding,
+                    authority,
+                    id,
+                    amount,
+                },
+                state.quantity_candidate_preimage_limit(),
+            )
+        });
+        let original = PreparedNumericSupplyChange::prepare(state, id, amount, mint);
+        let prepared = match (state.tx_call_hash, context, &original) {
+            (Some(entry_hash), Some(context), Ok(original)) => match &original.supply_after {
+                Ok(supply_after) => state.prepare_quantity_supply_candidate(
+                    authority,
+                    entry_hash,
+                    context,
+                    &original.id,
+                    amount,
+                    mint,
+                    &original.balance_after,
+                    supply_after,
+                ),
+                Err(_) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
+            },
+            (_, _, Err(_)) => Err(crate::state::QuantityCaptureIssue::InvalidFacts),
+            _ => Err(crate::state::QuantityCaptureIssue::UnsupportedOwner),
+        };
+        state.apply_with_quantity_candidate(prepared, |state| apply(state, original?))
     }
     impl Execute for Mint<Quantity, Asset> {
         fn execute(
@@ -7141,20 +7378,16 @@ pub mod isi {
                 &captured_quantity,
                 true,
                 ("ordinary-mint", Some(&[])),
-                |state_transaction| {
+                |state_transaction, original| {
                     // Deposit into destination asset balance, creating if needed
                     #[cfg(feature = "telemetry")]
                     let amount_f64 = quantity.as_numeric().clone().to_f64_lossy();
-                    state_transaction
-                        .world
-                        .deposit_numeric_asset(&asset_id, &quantity)?;
+                    let total = original.apply_balance(&mut state_transaction.world)?;
                     #[allow(clippy::float_arithmetic)]
                     {
                         #[cfg(feature = "telemetry")]
                         state_transaction.telemetry.observe_tx_amount(amount_f64);
-                        state_transaction
-                            .world
-                            .increase_asset_total_amount(asset_id.definition(), &quantity)?;
+                        total.apply(&mut state_transaction.world, &quantity)?;
                     }
                     state_transaction
                         .world
@@ -7221,22 +7454,16 @@ pub mod isi {
                 &captured_quantity,
                 false,
                 ("ordinary-burn", Some(&[])),
-                |state_transaction| {
+                |state_transaction, original| {
                     // Withdraw from source asset balance and remove if it reaches zero
-                    state_transaction.world.withdraw_numeric_asset(
-                        &state_transaction.network_id,
-                        &asset_id,
-                        &quantity,
-                    )?;
+                    let total = original.apply_balance(&mut state_transaction.world)?;
                     #[allow(clippy::float_arithmetic)]
                     {
                         #[cfg(feature = "telemetry")]
                         state_transaction
                             .telemetry
                             .observe_tx_amount(quantity.as_numeric().clone().to_f64_lossy());
-                        state_transaction
-                            .world
-                            .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
+                        total.apply(&mut state_transaction.world, &quantity)?;
                     }
                     state_transaction
                         .world
@@ -7348,13 +7575,10 @@ pub mod isi {
             &captured_quantity,
             true,
             ("retail-reserve-mint", policy_binding.as_deref()),
-            |state_transaction| {
-                state_transaction
-                    .world
-                    .deposit_numeric_asset(&asset_id, &quantity)?;
-                state_transaction
-                    .world
-                    .increase_asset_total_amount(asset_id.definition(), &quantity)?;
+            |state_transaction, original| {
+                original
+                    .apply_balance(&mut state_transaction.world)?
+                    .apply(&mut state_transaction.world, &quantity)?;
                 state_transaction
                     .world
                     .emit_asset_event(AssetEvent::Added(AssetChanged {
@@ -7442,15 +7666,10 @@ pub mod isi {
             &captured_quantity,
             false,
             ("retail-reserve-burn", policy_binding.as_deref()),
-            |state_transaction| {
-                state_transaction.world.withdraw_numeric_asset(
-                    &state_transaction.network_id,
-                    &asset_id,
-                    &quantity,
-                )?;
-                state_transaction
-                    .world
-                    .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
+            |state_transaction, original| {
+                original
+                    .apply_balance(&mut state_transaction.world)?
+                    .apply(&mut state_transaction.world, &quantity)?;
                 state_transaction
                     .world
                     .emit_asset_event(AssetEvent::Removed(AssetChanged {
@@ -8189,7 +8408,9 @@ pub mod isi {
             Mintable::Infinitely => Ok(false),
             Mintable::Not => Err(Error::Mintability(MintabilityError::MintUnmintable)),
             Mintable::Once | Mintable::Limited(_) => {
-                let def_mut = state_transaction.world.asset_definition_mut(def_id)?;
+                let mut def_mut = state_transaction
+                    .world
+                    .asset_definition_metadata_mut(def_id)?;
                 let flipped = def_mut.consume_mintability().map_err(Error::Mintability)?;
                 let updated = def_mut.mintable();
                 state_transaction

@@ -44,7 +44,7 @@ that workflow for local release verification.
    export CARGO_BUILD_JOBS=1
    export CARGO_INCREMENTAL=0
    export CARGO_NET_OFFLINE=true
-   export RUSTC_BOOTSTRAP=1
+   unset RUSTC_BOOTSTRAP
    export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
    export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
    export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
@@ -57,10 +57,13 @@ that workflow for local release verification.
      "$NORITO_BRIDGE_BUILD_DIR" \
      "$(dirname "$NORITO_BRIDGE_ARCHIVE_OUTPUT")"
    ./scripts/build_norito_xcframework.sh \
+     --lockfile-path /absolute/read-only-release-input/Cargo.lock \
      --privacy-production-enabled \
      --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
+   The selected external lock must be a read-only, byte-identical copy of the
+   canonical reviewed root `Cargo.lock`; the builder authenticates both.
    The release command requires a clean dependency-closure source tree, compiles the Rust
    bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 and x86_64 macOS targets,
    and writes `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework`. The canonical manifest is embedded at
@@ -75,10 +78,12 @@ that workflow for local release verification.
    hashes they authenticate; the checker rejects every broader child as ordinary
    source. The hermetic Apple build binds that identity consistently through
    `CONNECT_NORITO_SOURCE_REVISION`, `IROHA_GIT_COMMIT_HASH`, and
-   `VERGEN_GIT_SHA`. It replaces user Cargo compiler wrappers with the
-   source-sealed `scripts/apple_proc_macro_rustc_wrapper.sh`, which disables
-   debug-info stripping only for host proc-macro dylibs so they load under the
-   supported Xcode/Rust pair; target libraries retain their release settings.
+   `VERGEN_GIT_SHA`. Stock pinned Cargo builds the original root manifest with
+   its authenticated root lock; a separately selected release lock remains
+   byte-identical evidence. The source-defined `apple-release` profile retains
+   ThinLTO and target optimization, and the inherited release build override
+   preserves host proc-macro symbols. Compiler/profile configuration overrides
+   are refused instead of changing the compiler invocation.
    Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The

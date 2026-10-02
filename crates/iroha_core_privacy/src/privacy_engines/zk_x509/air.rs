@@ -9,13 +9,13 @@
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
 /// Stable digest input for the implemented components.
-pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-public-x5r1-and-private-der-source-terminal-air-links=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-private-committed-terminal-air-links=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification";
+pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-private-source-and-CA-original-polynomial-air-links=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-private-committed-terminal-air-links=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification";
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
 ///
 /// The pin binds the exact X5C1/X5C2 proof system rather than only its component name.
 pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x1b, 0xb7, 0x70, 0x06, 0x53, 0x63, 0xca, 0xc0, 0x35, 0x37, 0xff, 0x83, 0x48, 0x3c, 0xfe, 0x31,
-    0xe5, 0xfa, 0xcf, 0xee, 0x47, 0x9e, 0x4a, 0x8b, 0x12, 0x0f, 0x8a, 0xa2, 0xdd, 0xa0, 0xc0, 0xe6,
+    0x1d, 0xab, 0x24, 0xa7, 0xdd, 0x4c, 0x60, 0x61, 0xbb, 0x38, 0xe1, 0x58, 0x65, 0xdf, 0xdf, 0x5b,
+    0xe7, 0x01, 0x67, 0x16, 0x97, 0xa7, 0xba, 0x66, 0x94, 0x55, 0xc7, 0x78, 0xdd, 0xc1, 0x46, 0x05,
 ];
 /// Failure of an implemented zk-X509 AIR primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -226,32 +226,23 @@ fn validate_bits_v1(bits: &[F]) -> Result<(), ZkX509AirErrorV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     use crate::privacy_engines::zk_x509::{
         accumulator_air::{
             ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1,
-            ZkX509CaAccumulatorTraceV1,
         },
         accumulator_stark::{
             ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
-            ZK_X509_CA_ACCUMULATOR_CHUNKS_V1, ZK_X509_CA_ACCUMULATOR_CLAIM_ENVELOPE_BYTES_V1,
-            ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1,
-            ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
+            ZK_X509_CA_ACCUMULATOR_CHUNKS_V1, ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
             ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1, ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1,
-            ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1,
+            ZK_X509_CA_ACCUMULATOR_FRAME_BYTES_V1, ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1,
+            ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1,
             ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-            ZkX509CaAccumulatorProofErrorV1, ZkX509CaAccumulatorStarkPublicV1,
-            ZkX509CaAccumulatorSubproofBindingV1, ca_accumulator_proof_binding_digest_v1,
-            ca_accumulator_subproof_binding_from_proof_v1, prove_zk_x509_ca_accumulator_stark_v1,
-            verify_zk_x509_ca_accumulator_stark_v1,
         },
-        credential_pre_aux::ZkX509CredentialMainPreAuxV1,
         profile::{
             ZK_X509_CA_FRI_LDE_LOG2_V1, ZK_X509_CA_FRI_ROUNDS_V1,
             ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1, ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
             ZK_X509_CA_TRACE_MASK_DEGREE_V1, ZK_X509_FRI_QUERY_COUNT_V1, ZK_X509_GRINDING_BITS_V1,
         },
-        sha_call_bus_stark::ZkX509ShaCallScheduleV1,
     };
     use sha2::{Digest as _, Sha256};
     #[test]
@@ -326,13 +317,13 @@ mod tests {
         let descriptor = String::from_utf8_lossy(ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1);
         for required in [
             "wire-envelope-X5C1+inner-X5C2",
-            "strict-version-adapter-claim-addresses-length-and-no-trailing-bytes",
+            "strict-version-length-and-no-trailing-bytes",
             "dedicated-lde-log16",
-            "trace-mask696-coefficients",
+            "trace-mask2100-coefficients",
             "fri136-distinct-post-grinding20",
-            "one-shared-deep-point-current+next",
+            "one-MAIN-and-CA-joint-deep-point-current+next",
             "all-four-terminal-families-algebraically-bound",
-            "typed-outer-binding=public-root+channel+ordered-sha13+rfc91",
+            "joint-original-polynomial-MAIN108-links=ordered-sha13-source-and-digest-plus-rfc91-root-consumer",
             "shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots",
             "root-spki-channel=30+2*public-disclosures",
             "checked-native-lde-scratch-resident-and-work-ceilings",
@@ -345,53 +336,26 @@ mod tests {
                 "compact-CA descriptor must bind {required}"
             );
         }
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1, 13);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1, 8192);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1, 12);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1, 4096);
         assert_eq!(ZK_X509_CA_FRI_LDE_LOG2_V1, 16);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, 695);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, 128);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1, 80);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1, 1_379);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1, 1_363);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1, 3);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_CHUNKS_V1, 13);
-        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1 + 1, 696);
+        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1 + 1, 2100);
         assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 136);
         assert_eq!(ZK_X509_CA_FRI_ROUNDS_V1, 6);
         assert_eq!(ZK_X509_CA_FRI_TERMINAL_LOG2_V1, 10);
         assert_eq!(ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1, 143);
         assert_eq!(ZK_X509_GRINDING_BITS_V1, 20);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_CLAIM_ENVELOPE_BYTES_V1, 1_310);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_FRAME_BYTES_V1, 10);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1, 52_800);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1, 1_498_816);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 1_500_126);
-        let _prover: fn(
-            &ZkX509CaAccumulatorTraceV1,
-            &ZkX509ShaCallScheduleV1,
-            ZkX509CredentialMainPreAuxV1,
-        ) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> =
-            prove_zk_x509_ca_accumulator_stark_v1;
-        let _verifier: fn(
-            ZkX509CaAccumulatorStarkPublicV1,
-            &ZkX509ShaCallScheduleV1,
-            ZkX509CredentialMainPreAuxV1,
-            &[u8],
-        ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> = verify_zk_x509_ca_accumulator_stark_v1;
-        let _binding: fn(
-            ZkX509CaAccumulatorStarkPublicV1,
-            &ZkX509ShaCallScheduleV1,
-            ZkX509CredentialMainPreAuxV1,
-            &[u8],
-        ) -> Result<
-            ZkX509CaAccumulatorSubproofBindingV1,
-            ZkX509CaAccumulatorProofErrorV1,
-        > = ca_accumulator_subproof_binding_from_proof_v1;
-        let _binding_digest: fn(
-            ZkX509CaAccumulatorStarkPublicV1,
-            &ZkX509ShaCallScheduleV1,
-            ZkX509CredentialMainPreAuxV1,
-            &[u8],
-        )
-            -> Result<PrivacyOuterDigestV1, ZkX509CaAccumulatorProofErrorV1> =
-            ca_accumulator_proof_binding_digest_v1;
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 1_498_826);
+        let _verifier =
+            super::super::accumulator_stark::joint_verifier::CaJointVerifierOraclesV1::new_v1;
     }
 }

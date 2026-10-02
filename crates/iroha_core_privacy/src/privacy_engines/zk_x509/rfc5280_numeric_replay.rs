@@ -1,11 +1,67 @@
 //! Bounded clearing replay of one temporal lookup auxiliary column.
 
 use super::{
-    F, PrivateTableV1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZkX509Rfc5280StarkChallengesV1,
-    ZkX509Rfc5280StarkErrorV1, numeric, zero_safe_inverse_v1, zeroize_fields_v1,
+    F, ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkErrorV1, numeric, zero_safe_inverse_v1,
+    zeroize_fields_v1,
 };
 
+#[cfg(test)]
+use super::{PrivateTableV1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1};
+
+struct ClearingEventV1(numeric::NumericLookupEventV1<F>);
+impl Drop for ClearingEventV1 {
+    fn drop(&mut self) {
+        self.0.source.zeroize_v1();
+        self.0.query.zeroize_v1();
+        self.0.multiplicity.zeroize_v1();
+        zeroize_fields_v1(&mut self.0.tuple);
+    }
+}
+
+/// Advance one numeric lookup lane, returning all four prefix/inverse values.
+/// The caller retains and clears the two sums, and checks both after the final row.
+pub(super) fn step_v1(
+    event: numeric::NumericLookupEventV1<F>,
+    challenges: ZkX509Rfc5280StarkChallengesV1,
+    lane: usize,
+    state: &mut [F; 2],
+) -> Result<[F; 4], ZkX509Rfc5280StarkErrorV1> {
+    let event = ClearingEventV1(event);
+    let event = &event.0;
+    if lane >= numeric::LOOKUP_LANES_V1 {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    if ![event.source, event.query, event.multiplicity]
+        .into_iter()
+        .chain(event.tuple)
+        .all(|value| F::canonical(value.0).is_some())
+        || !matches!(event.source, F::ZERO | F::ONE)
+        || !matches!(event.query, F::ZERO | F::ONE)
+        || event.source == F::ONE && event.query == F::ONE
+    {
+        return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
+    }
+    let active = event.source.add(event.query);
+    let factor = numeric::lookup_factor_v1(event.tuple, challenges.tuple[lane]);
+    let (zero, inverse) = zero_safe_inverse_v1(active, factor);
+    let values = [inverse, zero, state[0], state[1]];
+    let weight = event.source.mul(event.multiplicity).sub(event.query);
+    state[0] = state[0].add(weight.mul(inverse));
+    state[1] = state[1].add(weight.mul(zero));
+    Ok(values)
+}
+
+#[cfg(test)]
+struct ClearingSumsV1([F; 2]);
+#[cfg(test)]
+impl Drop for ClearingSumsV1 {
+    fn drop(&mut self) {
+        zeroize_fields_v1(&mut self.0);
+    }
+}
+
 /// Emit a prefix column without retaining another event or column matrix.
+#[cfg(test)]
 pub(super) fn build_column_v1(
     rows: usize,
     offset: usize,
@@ -27,37 +83,16 @@ pub(super) fn build_column_v1(
     values
         .try_reserve_exact(rows)
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-    let mut sum = F::ZERO;
-    let mut zero_sum = F::ZERO;
+    let mut sums = ClearingSumsV1([F::ZERO; 2]);
     for index in 0..rows {
         let event = event_at(index)?;
-        if ![event.source, event.query, event.multiplicity]
-            .into_iter()
-            .chain(event.tuple)
-            .all(|value| F::canonical(value.0).is_some())
-            || !matches!(event.source, F::ZERO | F::ONE)
-            || !matches!(event.query, F::ZERO | F::ONE)
-            || event.source == F::ONE && event.query == F::ONE
-        {
-            return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
-        }
-        let active = event.source.add(event.query);
-        let factor = numeric::lookup_factor_v1(event.tuple, challenges.tuple[lane]);
-        let (zero, inverse) = zero_safe_inverse_v1(active, factor);
-        values.push(match kind {
-            0 => inverse,
-            1 => zero,
-            2 => sum,
-            3 => zero_sum,
-            _ => return Err(ZkX509Rfc5280StarkErrorV1::Shape),
-        });
-        let weight = event.source.mul(event.multiplicity).sub(event.query);
-        sum = sum.add(weight.mul(inverse));
-        zero_sum = zero_sum.add(weight.mul(zero));
+        let mut output = step_v1(event, challenges, lane, &mut sums.0)?;
+        values.push(output[kind]);
+        zeroize_fields_v1(&mut output);
     }
     // The final row is included: the AIR terminal checks prefix + final delta.
     // This also catches a malformed census while replaying inverse/zero columns.
-    if sum != F::ZERO || zero_sum != F::ZERO {
+    if sums.0 != [F::ZERO; 2] {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
     Ok(values.into_vec())

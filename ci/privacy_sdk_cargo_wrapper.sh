@@ -439,10 +439,8 @@ assert_no_cargo_policy_environment() {
         fi
         ;;
       RUSTC_BOOTSTRAP)
-        if [[ "${environment_value}" != "1" ]]; then
-          echo "error: privacy SDK Cargo bootstrap policy must remain fixed" >&2
-          return 1
-        fi
+        echo "error: privacy SDK Cargo must not enable compiler bootstrap" >&2
+        return 1
         ;;
       PYO3_PYTHON)
         if [[ -z "${IROHA_PRIVACY_AUTHENTICATED_PYO3_PYTHON:-}" || \
@@ -631,11 +629,9 @@ assert_authenticated_cargo_execution_policy() {
       "${PYTHON_BIN}" || return 1
   fi
 
-  if [[ -n "${expected_target}" && -n "${expected_home}" ]]; then
-    if [[ "${RUSTC_BOOTSTRAP:-}" != "1" ]]; then
-      echo "error: privacy SDK Cargo bootstrap policy must remain fixed" >&2
-      return 1
-    fi
+  if [[ -n "${RUSTC_BOOTSTRAP+x}" ]]; then
+    echo "error: privacy SDK Cargo must not enable compiler bootstrap" >&2
+    return 1
   fi
 }
 
@@ -720,6 +716,20 @@ assert_authenticated_cargo_lock_state() {
     -n "${AUTHENTICATED_COMMAND_NAME}" ]]; then
     assert_no_cargo_policy_environment || status=1
   fi
+  case "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE}" in
+    "present:${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo "error: stock Cargo requires the sealed canonical root Cargo.lock" >&2
+      status=1
+      ;;
+  esac
+  case "${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL}" in
+    "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}:"*) ;;
+    *)
+      echo "error: stock Cargo requires byte-identical external lock evidence" >&2
+      status=1
+      ;;
+  esac
   assert_authenticated_cargo_configuration || status=1
   if [[ "${validate_command_environment}" == "1" ]]; then
     assert_authenticated_cargo_execution_policy || status=1
@@ -1033,6 +1043,8 @@ done
 assert_authenticated_maturin_arguments || exit 1
 
 has_locked=0
+has_manifest=0
+selected_manifest="${IROHA_PRIVACY_SDK_ROOT}/Cargo.toml"
 argument_index=0
 while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
   argument="${original_arguments[${argument_index}]}"
@@ -1048,6 +1060,21 @@ while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
     --lockfile-path|--lockfile-path=*)
       reject_cargo_invocation \
         "rejected an invocation that attempted to override the selected lockfile"
+      ;;
+    --manifest-path|--manifest-path=*)
+      if [[ "${has_manifest}" != "0" ]]; then
+        reject_cargo_invocation "rejected duplicate Cargo manifest selection"
+      fi
+      has_manifest=1
+      if [[ "${argument}" == "--manifest-path" ]]; then
+        if [[ $((argument_index + 1)) -ge "${cargo_argument_limit}" ]]; then
+          reject_cargo_invocation "rejected Cargo manifest without its required value"
+        fi
+        argument_index=$((argument_index + 1))
+        selected_manifest="${original_arguments[${argument_index}]}"
+      else
+        selected_manifest="${argument#--manifest-path=}"
+      fi
       ;;
     --target|--target=*|\
     --rustc|--rustc=*|--rustc-wrapper|--rustc-wrapper=*|\
@@ -1125,6 +1152,9 @@ while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
   argument_index=$((argument_index + 1))
 done
 
+privacy_sdk_assert_stock_cargo_manifest \
+  "${IROHA_PRIVACY_SDK_ROOT}" "${selected_manifest}" "${PYTHON_BIN}" || exit 1
+
 # Maturin 1.14.1 needs one exact, authenticated install-name pair for this
 # abi3 module on Darwin. Every other post-`--` rustc surface stays closed.
 if [[ "${command_name}" == "rustc" ]]; then
@@ -1152,7 +1182,9 @@ while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
   arguments+=("${original_arguments[${argument_index}]}")
   argument_index=$((argument_index + 1))
 done
-arguments+=(--lockfile-path "${SELECTED_LOCKFILE}")
+if [[ "${has_manifest}" == "0" ]]; then
+  arguments+=(--manifest-path "${IROHA_PRIVACY_SDK_ROOT}/Cargo.toml")
+fi
 if [[ "${has_locked}" == "0" ]]; then
   arguments+=(--locked)
 fi
@@ -1162,4 +1194,4 @@ while [[ "${argument_index}" -lt "${argument_count}" ]]; do
 done
 
 printf '%s\n' "${command_name}" >>"${CARGO_AUDIT_PATH}"
-run_real_cargo_and_verify_locks -Z unstable-options "${arguments[@]}"
+run_real_cargo_and_verify_locks "${arguments[@]}"

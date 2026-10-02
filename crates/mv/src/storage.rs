@@ -732,6 +732,8 @@ mod block {
     pub struct Block<'store, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
         pub(super) writers: StorageWriters<'store, K, V, M>,
         pub(super) dirty: bool,
+        pub(super) direct_write: bool,
+        pub(super) applied_transactions: u64,
         pub(super) failed: bool,
         pub(super) predecessor: CapturedPublication,
         pub(super) next: Option<NextPublication>,
@@ -832,6 +834,15 @@ mod block {
         }
     }
     impl<'store, K: Key, V: Value> Block<'store, K, V> {
+        /// Local executing-writer observation for an enclosing complete-effect owner.
+        ///
+        /// Direct mutable leases remain visible even after value restoration. Child
+        /// transactions count only after successful application; rollback changes neither
+        /// field. This diagnostic grants no write, source or publication authority.
+        pub fn write_observation(&self) -> (bool, u64) {
+            self.assert_operable();
+            (self.direct_write, self.applied_transactions)
+        }
         pub(super) fn new(
             writers: StorageWriters<'store, K, V, Untracked>,
             dirty: bool,
@@ -841,6 +852,8 @@ mod block {
             Self {
                 writers,
                 dirty,
+                direct_write: false,
+                applied_transactions: 0,
                 failed: false,
                 predecessor,
                 next: Some(NextPublication::new()),
@@ -862,6 +875,7 @@ mod block {
                 touched: TransactionTouches::Untracked(BTreeSet::new()),
                 dirty: self.dirty,
                 parent_dirty: &mut self.dirty,
+                parent_applied_transactions: &mut self.applied_transactions,
                 failed: false,
                 allocation: None,
                 parent_failure: Some(super::admitted_transaction::ParentFailure::new(
@@ -905,9 +919,11 @@ mod block {
             self.assert_operable();
             self.failed = true;
             let dirty = &mut self.dirty;
+            let direct_write = &mut self.direct_write;
             let OriginalWriters { revert, blocks } = self.writers.as_mut();
             let value = blocks.get_mut(key).inspect(|value| {
                 *dirty = true;
+                *direct_write = true;
                 if !revert.contains_key(key) {
                     revert.insert(key.clone(), Some((*value).clone()));
                 }
@@ -921,6 +937,7 @@ mod block {
             // The first-preimage clone runs outside either tree cursor. Keep
             // aggregate failure armed until both edits and input cleanup finish.
             self.failed = true;
+            self.direct_write = true;
             let OriginalWriters { revert, blocks } = self.writers.as_mut();
             let prev_value = blocks.insert(key.clone(), value);
             if !revert.contains_key(&key) {
@@ -936,6 +953,7 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             self.assert_operable();
             self.failed = true;
+            self.direct_write = true;
             let OriginalWriters { revert, blocks } = self.writers.as_mut();
             let prev_value = blocks.remove(&key);
             if !revert.contains_key(&key) {
@@ -1003,6 +1021,7 @@ mod block {
         // Constructors bind this one touch owner to the original map mode.
         pub(super) touched: TransactionTouches<K>,
         pub(super) parent_dirty: &'block mut bool,
+        pub(super) parent_applied_transactions: &'block mut u64,
         pub(super) dirty: bool,
         pub(super) failed: bool,
         pub(super) allocation: Option<&'block iroha_allocation::AllocationBudget>,
@@ -1172,6 +1191,10 @@ mod block {
                 // still keeps both transfers and metadata ahead of cleanup.
                 let _retirements = (current_retirement, undo_retirement);
             }
+            *self.parent_applied_transactions = self
+                .parent_applied_transactions
+                .checked_add(1)
+                .expect("applied transaction count exceeds the finite block domain");
             self.parent_failure
                 .as_mut()
                 .expect("original parent")
@@ -1822,3 +1845,103 @@ impl<K: Key, V: Value, M: StorageMode<K, V>> Block<'_, K, V, M> {
 #[path = "storage/publication_slot.rs"]
 mod publication_slot;
 pub use publication_slot::BlockPublicationSlot;
+
+#[cfg(test)]
+mod quantity_write_observation_tests {
+    use super::{Storage, StorageReadOnly};
+
+    #[test]
+    fn direct_mutation_leases_and_restored_writes_remain_visible() {
+        for mutation in 0..4 {
+            let storage = Storage::from_iter([(1_u64, 10_u64)]);
+            let mut block = storage.block();
+            assert_eq!(block.write_observation(), (false, 0));
+            assert!(block.get_mut(&9).is_none());
+            assert_eq!(block.write_observation(), (false, 0));
+            match mutation {
+                0 => {
+                    *block.get_mut(&1).unwrap() = 11;
+                    *block.get_mut(&1).unwrap() = 10;
+                }
+                1 => {
+                    block.insert(1, 11);
+                    block.insert(1, 10);
+                }
+                2 => {
+                    let old = block.remove(1).unwrap();
+                    block.insert(1, old);
+                }
+                3 => {
+                    assert_eq!(block.remove(9), None);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(block.get(&1), Some(&10));
+            assert_eq!(block.write_observation(), (true, 0));
+        }
+    }
+
+    #[test]
+    fn child_rollback_and_unwind_preserve_original_observation_and_values() {
+        let storage = Storage::from_iter([(1_u64, 10_u64)]);
+        let mut block = storage.block();
+        {
+            let mut child = block.transaction();
+            child.insert(1, 11);
+        }
+        assert_eq!(block.write_observation(), (false, 0));
+        assert_eq!(block.get(&1), Some(&10));
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut child = block.transaction();
+            child.insert(1, 12);
+            panic!("abort actual child owner before application");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(block.write_observation(), (false, 0));
+        assert_eq!(block.get(&1), Some(&10));
+        block.transaction().apply();
+        assert_eq!(block.write_observation(), (false, 1));
+    }
+
+    #[test]
+    fn every_successful_child_apply_counts_including_empty_and_restored_writes() {
+        let storage = Storage::from_iter([(1_u64, 10_u64)]);
+        let mut block = storage.block();
+        block.transaction().apply();
+        assert_eq!(block.write_observation(), (false, 1));
+        {
+            let mut child = block.transaction();
+            child.insert(1, 11);
+            child.insert(1, 10);
+            child.apply();
+        }
+        assert_eq!(block.write_observation(), (false, 2));
+        assert_eq!(block.get(&1), Some(&10));
+        {
+            let mut child = block.transaction();
+            child.remove(9);
+            child.apply();
+        }
+        assert_eq!(block.write_observation(), (false, 3));
+        block.insert(1, 10);
+        block.transaction().apply();
+        assert_eq!(block.write_observation(), (true, 4));
+    }
+
+    #[test]
+    fn exhausted_application_lineage_poison_cannot_be_published() {
+        let storage = Storage::from_iter([(1_u64, 10_u64)]);
+        let mut block = storage.block();
+        block.applied_transactions = u64::MAX;
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            block.transaction().apply();
+        }));
+        assert!(failure.is_err());
+        let observation =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| block.write_observation()));
+        assert!(
+            observation.is_err(),
+            "original MV failure owner remains armed"
+        );
+    }
+}

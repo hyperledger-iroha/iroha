@@ -212,7 +212,9 @@ pub mod isi {
                 ));
             }
             {
-                let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
+                let mut asset_definition = state_transaction
+                    .world
+                    .asset_definition_metadata_mut(&object)?;
                 if asset_definition.owned_by() != &source {
                     return Err(Error::Find(FindError::Account(source)));
                 }

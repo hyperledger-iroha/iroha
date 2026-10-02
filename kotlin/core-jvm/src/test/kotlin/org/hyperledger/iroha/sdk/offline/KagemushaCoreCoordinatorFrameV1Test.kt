@@ -276,7 +276,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
     }
 
     @Test
-    fun `App Attest commit acknowledgment binds every original byte and exact next counter`() {
+    fun `App Attest acknowledgment binds original counter independently of logical exact next indices`() {
         val method = KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
         val selection = domain + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(403).array() +
@@ -289,16 +289,23 @@ class KagemushaCoreCoordinatorFrameV1Test {
         selection[323] = 1
         selection[331] = 2
         selection.fill(0, 428, 460)
-        selection[428] = 4
-        selection[444] = 5
+        selection[428] = 70
+        selection[444] = 71
+        val auth = ByteArray(37) { 0x42 }.also {
+            it[32] = 0x40
+            ByteBuffer.wrap(it, 33, 4).putInt(11)
+        }
+        val assertion = byteArrayOf(0xa2.toByte(), 0x71) + "authenticatorData".toByteArray() +
+            byteArrayOf(0x58, 37) + auth + byteArrayOf(0x69) + "signature".toByteArray() +
+            byteArrayOf(0x48, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01)
         val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
-            selection, byteArrayOf(0xa2.toByte(), 1, 2), KagemushaCoreCoordinatorFrameV1.u32(4),
+            selection, assertion, KagemushaCoreCoordinatorFrameV1.u32(4),
             ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
         val encoded = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, request)
         val response = listOf(request[0], MessageDigest.getInstance("SHA-256").digest(request[1]),
             MessageDigest.getInstance("SHA-256").digest(request[2]),
             MessageDigest.getInstance("SHA-256").digest(request[3]),
-            KagemushaCoreCoordinatorFrameV1.u32(5), request[5], request[6])
+            KagemushaCoreCoordinatorFrameV1.u32(11), request[5], request[6])
         val reply = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, response)
         KagemushaCoreCoordinatorFrameV1.decodeResponse(method, encoded, reply)
         for (offset in listOf(57, 331, 428, 444)) {
@@ -308,10 +315,53 @@ class KagemushaCoreCoordinatorFrameV1Test {
                 KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
             }
         }
-        val otherCounter = request.map { it.copyOf() }.toMutableList()
-        otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(3)
+        for (staleCounter in listOf(11, 12)) {
+            val otherCounter = request.map { it.copyOf() }.toMutableList()
+            otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(staleCounter)
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
+            }
+        }
+        for (actual in listOf(3, 4, 12)) {
+            val changed = request.map { it.copyOf() }.toMutableList()
+            // The retained canonical map places authData at21 and its counter at33.
+            ByteBuffer.wrap(changed[3], 21 + 33, 4).putInt(actual)
+            if (actual <= 4) {
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+                }
+            } else {
+                val changedRequest = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+                val rehashed = response.map { it.copyOf() }.toMutableList()
+                rehashed[3] = MessageDigest.getInstance("SHA-256").digest(changed[3])
+                assertFailsWith<IllegalArgumentException> {
+                    KagemushaCoreCoordinatorFrameV1.encodeResponse(method, changedRequest, rehashed)
+                }
+                rehashed[4] = KagemushaCoreCoordinatorFrameV1.u32(actual)
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, changedRequest, rehashed)
+            }
+        }
+        val enrollment = request.map { it.copyOf() }.toMutableList()
+        enrollment[2][331] = 0
+        enrollment[2].fill(0, 364, 460)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        enrollment[2][444] = 1
         assertFailsWith<IllegalArgumentException> {
-            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, enrollment)
+        }
+        val maximumCounter = request.map { it.copyOf() }.toMutableList()
+        maximumCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(-2)
+        ByteBuffer.wrap(maximumCounter[3], 21 + 33, 4).putInt(-1)
+        val maximumRequest = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, maximumCounter)
+        val maximumResponse = response.map { it.copyOf() }.toMutableList()
+        maximumResponse[3] = MessageDigest.getInstance("SHA-256").digest(maximumCounter[3])
+        maximumResponse[4] = KagemushaCoreCoordinatorFrameV1.u32(-1)
+        KagemushaCoreCoordinatorFrameV1.encodeResponse(method, maximumRequest, maximumResponse)
+        val overflow = request.map { it.copyOf() }
+        overflow[2].fill(-1, 428, 444)
+        overflow[2].fill(0, 444, 460)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, overflow)
         }
         response.indices.forEach { index ->
             val changed = response.map { it.copyOf() }

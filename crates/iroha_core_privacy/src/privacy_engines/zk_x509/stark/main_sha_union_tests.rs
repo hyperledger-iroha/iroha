@@ -169,7 +169,10 @@ fn union_openings_reject_wrong_counts_noncanonical_missing_and_singular_values()
 #[test]
 fn union_transcript_binds_every_endpoint_and_ordered_source_coordinate() {
     let (_, plan) = plan_v1();
-    let fresh = || new_main_transcript_after_profile_validation_v1(&[7; 32], [8; 32]).unwrap();
+    let fresh = || {
+        new_main_transcript_after_profile_validation_v1(TEST_PROOF_INSTANCE_V1, &[7; 32], [8; 32])
+            .unwrap()
+    };
     let expected = plan.derive_alphas_v1(&mut fresh()).unwrap();
     assert_eq!(expected.len(), UNION_QUOTIENTS_V1);
     assert_eq!(expected.capacity(), UNION_QUOTIENTS_V1);

@@ -1,7 +1,7 @@
 //! Complete SHA registration Fp4 arithmetic, degree and public-context checks.
 
 use super::super::super::{
-    sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallRoleV1},
+    sha_call_bus_stark::ZkX509ShaCallBusLaneChallengesV1,
     sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneChallengesV1},
 };
 use super::*;
@@ -39,36 +39,17 @@ fn challenges() -> (
     (word, call, rfc)
 }
 
-fn boundaries() -> [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1] {
-    core::array::from_fn(|index| ZkX509ShaCallBoundaryTerminalV1 {
-        call: 16 + index as u8,
-        role: if index == 0 {
-            ZkX509ShaCallRoleV1::CaLeaf
-        } else {
-            ZkX509ShaCallRoleV1::CaNode(index as u8 - 1)
-        },
-        source_start_products: [F(29); 4],
-        digest_start_products: [F(31); 4],
-        source_products: [F(37); 4],
-        digest_products: [F(41); 4],
-    })
-}
-
 fn terminal(segment: u16) -> u8 {
     segment as u8
 }
 
-fn context(
-    terminal: u8,
-    boundaries: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
-) -> ShaMainFp4AirContextV1<'_> {
+fn context(terminal: u8) -> ShaMainFp4AirContextV1 {
     let (word, call, rfc) = challenges();
     ShaMainFp4AirContextV1 {
         word,
         call,
         rfc,
         segment: terminal,
-        ca_calls: boundaries,
     }
 }
 
@@ -93,7 +74,6 @@ fn map_row<A: Copy, B>(
 
 #[test]
 fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting() {
-    let boundaries = boundaries();
     let (word, call, rfc) = challenges();
     let w = E::canonical([0, 1, 0, 0]).unwrap();
     let mut instances = Vec::new();
@@ -117,9 +97,9 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
             E::canonical([i + 11, i + 13, i + 17, i + 19]).unwrap()
         });
         let actual = evaluator
-            .evaluate_residues_v1(&current, &next, context(terminal, &boundaries))
+            .evaluate_residues_v1(&current, &next, context(terminal))
             .unwrap();
-        assert_eq!(actual.len(), 772);
+        assert_eq!(actual.len(), 564);
         let mut expected = vec![E::ZERO; actual.len()];
         // Total degree six includes fixed columns. Cubic cell substitution
         // therefore needs nineteen independent base-field samples.
@@ -134,14 +114,13 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
             };
             let current_base = map_row(&current, scalar);
             let next_base = map_row(&next, scalar);
-            let base = evaluate_zk_x509_sha_batch_residues_v1(
+            let base = evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                 &current_base,
                 &next_base,
                 word,
                 call,
                 rfc,
                 terminal,
-                &boundaries,
             )
             .unwrap();
             let mut numerator = E::ONE;
@@ -161,11 +140,7 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
                 let embedded_next = map_row(&next_base, E::from_base);
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(
-                            &embedded_current,
-                            &embedded_next,
-                            context(terminal, &boundaries)
-                        )
+                        .evaluate_residues_v1(&embedded_current, &embedded_next, context(terminal))
                         .unwrap(),
                     base.into_iter().map(E::from_base).collect::<Vec<_>>()
                 );
@@ -184,20 +159,18 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
 #[test]
 fn complete_sha_call_bus_total_degree_fits_six() {
     let (word, call, rfc) = challenges();
-    let boundaries = boundaries();
     let mut samples = (0..9)
         .map(|sample| {
             let t = F(sample);
             let current = row(|index| F(index as u64 + 1).add(t.mul(F(index as u64 + 3))));
             let next = row(|index| F(index as u64 + 11).add(t.mul(F(index as u64 + 13))));
-            evaluate_zk_x509_sha_batch_residues_v1(
+            evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                 &current,
                 &next,
                 word,
                 call,
                 rfc,
                 terminal(0),
-                &boundaries,
             )
             .unwrap()
         })
@@ -218,7 +191,7 @@ fn complete_sha_call_bus_total_degree_fits_six() {
 }
 
 #[test]
-fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_changed_terminal_claims() {
+fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_binds_local_recurrences() {
     let registration = AggregateProofLayoutV1::for_full_profile_v1()
         .unwrap()
         .registered_segments
@@ -230,18 +203,17 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_changed_terminal_claims(
     else {
         panic!("SHA evaluator")
     };
-    let boundaries = boundaries();
     let current = row(|index| E::from_base(F(index as u64 + 1)));
     let next = row(|index| E::from_base(F(index as u64 + 11)));
     let terminal = terminal(registration.segment.instance);
     let original = evaluator
-        .evaluate_residues_v1(&current, &next, context(terminal, &boundaries))
+        .evaluate_residues_v1(&current, &next, context(terminal))
         .unwrap();
     let mut wrong_instance = terminal;
     wrong_instance = (wrong_instance + 1) % 4;
     assert!(
         evaluator
-            .evaluate_residues_v1(&current, &next, context(wrong_instance, &boundaries))
+            .evaluate_residues_v1(&current, &next, context(wrong_instance))
             .is_err()
     );
     // Private RFC endpoints remain locally bound by all16 stream recurrences.
@@ -251,68 +223,42 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_changed_terminal_claims(
         changed.aux[62 + product] = changed.aux[62 + product].add(E::ONE);
         assert_ne!(
             evaluator
-                .evaluate_residues_v1(&current, &changed, context(terminal, &boundaries))
+                .evaluate_residues_v1(&current, &changed, context(terminal))
                 .unwrap(),
             original
         );
     }
-    // Every retained compact-CA input/digest start and call-product remains
-    // independently constrained after whole-segment totals leave the wire.
-    for call in 0..ZK_X509_SHA_CA_CALL_COUNT_V1 {
-        for family in 0..4 {
-            for lane in 0..4 {
-                let mut changed = boundaries;
-                let products = match family {
-                    0 => &mut changed[call].source_start_products,
-                    1 => &mut changed[call].digest_start_products,
-                    2 => &mut changed[call].source_products,
-                    3 => &mut changed[call].digest_products,
-                    _ => unreachable!(),
-                };
-                products[lane] = products[lane].add(F::ONE);
-                assert_ne!(
-                    evaluator
-                        .evaluate_residues_v1(&current, &next, context(terminal, &changed))
-                        .unwrap(),
-                    original,
-                    "CA call {call}, family {family}, lane {lane}"
-                );
-            }
+    // CA products have no public slots. The local running products remain
+    // constrained; the MAIN108 quotient mutation tests cover their cross joins.
+    for lane in 0..4 {
+        for column in [54 + lane, 58 + lane] {
+            let mut changed = next;
+            changed.aux[column] = changed.aux[column].add(E::ONE);
+            assert_ne!(
+                evaluator
+                    .evaluate_residues_v1(&current, &changed, context(terminal))
+                    .unwrap(),
+                original
+            );
         }
     }
-    let mut changed_boundaries = boundaries;
-    changed_boundaries[12].digest_start_products[3] =
-        changed_boundaries[12].digest_start_products[3].add(F::ONE);
-    assert_ne!(
-        evaluator
-            .evaluate_residues_v1(&current, &next, context(terminal, &changed_boundaries))
-            .unwrap(),
-        original
-    );
-    changed_boundaries[12].call = 27;
-    assert!(
-        evaluator
-            .evaluate_residues_v1(&current, &next, context(terminal, &changed_boundaries))
-            .is_err()
-    );
     let (word, call, rfc) = challenges();
     let mut noncanonical = map_row(&current, |value| value.coefficients()[0]);
     noncanonical.base[88] = F(GOLDILOCKS_MODULUS_V1);
     assert!(
-        evaluate_zk_x509_sha_batch_residues_v1(
+        evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
             &noncanonical,
             &map_row(&next, |value| value.coefficients()[0]),
             word,
             call,
             rfc,
             terminal,
-            &boundaries
         )
         .is_err()
     );
     assert!(
         evaluator
-            .evaluate_residues_v1(&current, &next, context(u8::MAX, &boundaries))
+            .evaluate_residues_v1(&current, &next, context(u8::MAX))
             .is_err()
     );
 }

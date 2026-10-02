@@ -11,7 +11,7 @@
 //! kept behind byte-identical fallbacks.
 use crate::{
     SyscallPolicy,
-    contract_return_stack::{ContractReturnStack, MAX_CONTRACT_CALL_DEPTH},
+    contract_return_stack::ContractReturnStack,
     decoder,
     error::{
         Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
@@ -26,6 +26,7 @@ use crate::{
     gas,
     host::{DefaultHost, IVMHost, host_syscall_metering_spec},
     instruction,
+    limits::MAX_CONTRACT_CALL_DEPTH,
     memory::{Memory, MemoryTemplateMismatch},
     metadata::{
         EmbeddedContractDebugInfoV1, LiteralKindV1, ParsedLiteralSection, ProgramMetadata,

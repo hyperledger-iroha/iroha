@@ -327,8 +327,8 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi25() ->
     assert "NORITO_BRIDGE_OUT_DIR=" in job
     assert "NORITO_BRIDGE_BUILD_DIR=" in job
     assert (
-        'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path '
-        '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+        'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked --manifest-path '
+        '"$GITHUB_WORKSPACE/Cargo.toml"'
     ) in job
     assert "chmod -R a-w" in job
     assert "scripts/build_norito_xcframework.sh" in job

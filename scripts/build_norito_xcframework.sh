@@ -168,9 +168,12 @@ reject_retired_mode \
   NORITO_BRIDGE_SKIP_CARGO_BUILDS "${NORITO_BRIDGE_SKIP_CARGO_BUILDS+set}"
 if [[ "${CARGO_BUILD_JOBS:-}" != "1" \
     || "${CARGO_INCREMENTAL:-}" != "0" \
-    || "${CARGO_NET_OFFLINE:-}" != "true" \
-    || "${RUSTC_BOOTSTRAP:-}" != "1" ]]; then
-  echo "[-] NoritoBridge requires CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0, CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1" >&2
+    || "${CARGO_NET_OFFLINE:-}" != "true" ]]; then
+  echo "[-] NoritoBridge requires CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0, CARGO_NET_OFFLINE=true" >&2
+  exit 1
+fi
+if [[ "${RUSTC_BOOTSTRAP+set}" == "set" ]]; then
+  echo "[-] NoritoBridge requires stock Cargo; RUSTC_BOOTSTRAP must be unset" >&2
   exit 1
 fi
 if [[ -z "${CARGO_TARGET_DIR:-}" || -z "${RUSTC:-}" || -z "${RUSTDOC:-}" ]]; then
@@ -1432,10 +1435,9 @@ run_hermetic_apple_cargo() {
       ;;
   esac
   assert_selected_cargo_lock "the $profile Cargo preflight"
-  # Cargo also reads the user's config.toml. Replace ambient wrappers with the
-  # source-sealed helper, which disables rustc's broken debug-info stripping
-  # for host proc-macro dylibs on macOS 27 (rust-lang/rust#157750). Ordinary
-  # target libraries retain the source-sealed apple-release compiler settings.
+  # Compile the authenticated original root graph with stock Cargo. The selected
+  # external lock is release evidence only; source admission requires byte-for-
+  # byte equality with the root lock before and after this invocation.
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
       --set "CARGO=$CARGO_BINARY" \
@@ -1452,18 +1454,13 @@ run_hermetic_apple_cargo() {
       --set "NORITO_SKIP_BINDINGS_SYNC=1" \
       --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
       --set "RUSTC=$RUSTC_BINARY" \
-      --set "RUSTC_BOOTSTRAP=1" \
       --set "RUSTDOC=$RUSTDOC_BINARY" \
       --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
       --set "TMPDIR=$MOBILE_TMPDIR" \
       --set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT" \
       "${platform_environment[@]}" \
-      -- "$CARGO_BINARY" \
-      -Z host-config -Z target-applies-to-host \
-      --config "build.rustc-wrapper=\"$ROOT_DIR/scripts/apple_proc_macro_rustc_wrapper.sh\"" \
-      --config 'build.rustc-workspace-wrapper=""' \
-      "$cargo_subcommand" \
-      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" \
+      -- "$CARGO_BINARY" "$cargo_subcommand" \
+      --manifest-path "$ROOT_DIR/Cargo.toml" \
       --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
     cargo_status=0
   else
@@ -1792,7 +1789,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
-        "RUSTC_BOOTSTRAP",
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
@@ -1817,7 +1813,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
-        "RUSTC_BOOTSTRAP",
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
@@ -1841,7 +1836,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
-        "RUSTC_BOOTSTRAP",
         "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",

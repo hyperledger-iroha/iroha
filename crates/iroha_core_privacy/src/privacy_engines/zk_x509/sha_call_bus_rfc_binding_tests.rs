@@ -105,7 +105,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             ZkX509GovernanceV1,
             release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
         },
-        rfc5280_stark::{ZkX509Rfc5280StarkColumnProviderV1, ZkX509ShaSegmentTerminalClaimsV1},
+        rfc5280_stark::ZkX509Rfc5280StarkColumnProviderV1,
     };
     let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
         .expect("maximum signed credential");
@@ -267,20 +267,19 @@ crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1::identit
         assert!(seen.into_iter().all(|seen| seen));
         assert_eq!(streamed, terminal);
         boundary_rows.push(rows);
-        segments.push(terminal.segment);
-        ca_calls.extend(terminal.ca_call_boundaries);
+        ca_calls.extend_from_slice(&terminal.ca_call_boundaries);
+        segments.push(terminal.into_segment_v1());
     }
-    let claims =
-        ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(ca_calls.try_into().unwrap())
-            .expect("four canonical segments and all thirteen compact-CA call boundaries");
+    let ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1] = ca_calls
+        .try_into()
+        .expect("four canonical segments and all thirteen compact-CA call boundaries");
+    for (index, boundary) in ca_calls.iter().enumerate() {
+        boundary
+            .validate_identity_v1(index)
+            .expect("canonical compact-CA call identity and field products");
+    }
     for (segment, rows) in boundary_rows.iter().enumerate() {
-        assert_actual_sha_cyclic_boundaries_v1(
-            segment,
-            rows,
-            binding,
-            segment as u8,
-            &claims.ca_calls,
-        );
+        assert_actual_sha_cyclic_boundaries_v1(segment, rows, binding, segment as u8, &ca_calls);
     }
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         assert_eq!(

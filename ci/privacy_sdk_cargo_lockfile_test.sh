@@ -41,8 +41,9 @@ write_test_rust_toolchain() {
 }
 
 write_test_rust_toolchain "${REPOSITORY_ROOT}"
-write_test_lock "${REPOSITORY_ROOT}/Cargo.lock" "workspace"
-write_test_lock "${PRIVATE_ROOT}/Cargo.lock" "selected"
+install_tracked_test_root_lock "${REPOSITORY_ROOT}"
+: >"${REPOSITORY_ROOT}/Cargo.toml"
+install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${PRIVATE_ROOT}/Cargo.lock"
 write_test_lock "${PRIVATE_ROOT}/other-Cargo.lock" "other"
 REPOSITORY_PRIVATE_LOCK="${REPOSITORY_ROOT}/target/kotodama-lock-final-current.test/Cargo.lock"
 mkdir -p "$(dirname "${REPOSITORY_PRIVATE_LOCK}")"
@@ -337,6 +338,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${FAKE_CARGO_LOG:?}"' \
+  '[[ -z "${RUSTC_BOOTSTRAP+x}" ]] || exit 95' \
   'while IFS= read -r environment_name; do' \
   '  case "${environment_name}" in' \
   '    IROHA_PRIVACY_*|IROHA_JS_CARGO_LOCKFILE_PATH)' \
@@ -446,7 +448,7 @@ export CARGO_BUILD_JOBS=1
 export CARGO_NET_OFFLINE=true
 export CARGO_INCREMENTAL=0
 export CARGO_ENCODED_RUSTFLAGS=""
-export RUSTC_BOOTSTRAP=1
+unset RUSTC_BOOTSTRAP
 cd "${REPOSITORY_ROOT}"
 
 expect_wrapper_rejection() {
@@ -538,28 +540,20 @@ assert_exact_lines "${FAKE_CARGO_LOG}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=metadata" \
   "arg=--format-version" \
   "arg=1" \
   "arg=--manifest-path" \
   "arg=${REPOSITORY_ROOT}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
   "arg=--locked" \
   "invocation" \
   "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=rustc" \
   "arg=--manifest-path" \
   "arg=${REPOSITORY_ROOT}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
   "arg=--locked" \
   "arg=--"
 env \
@@ -574,28 +568,20 @@ assert_exact_lines "${FAKE_CARGO_LOG}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=metadata" \
   "arg=--format-version" \
   "arg=1" \
   "arg=--manifest-path" \
   "arg=${REPOSITORY_ROOT}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
   "arg=--locked" \
   "invocation" \
   "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=rustc" \
   "arg=--manifest-path" \
   "arg=${REPOSITORY_ROOT}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
   "arg=--locked" \
   "arg=--" \
   "invocation" \
@@ -603,15 +589,13 @@ assert_exact_lines "${FAKE_CARGO_LOG}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=metadata" \
   "arg=--all-features" \
   "arg=--format-version" \
   "arg=1" \
   "arg=--no-deps" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
   "arg=--locked"
 REPLACEABLE_RUSTC="${FAKE_TOOLCHAIN_BIN}/replaceable-rustc"
 REPLACEMENT_RUSTC="${TEST_ROOT}/replacement-rustc"
@@ -643,6 +627,24 @@ expect_failure \
   bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" \
   metadata "--lockfile-path=${REPOSITORY_ROOT}/Cargo.lock"
 [[ "$(grep -c '^invocation$' "${FAKE_CARGO_LOG}")" -eq "${FAKE_INVOCATIONS_BEFORE}" ]]
+
+for bootstrap_value in "" 0 1; do
+  expect_wrapper_rejection \
+    "must not enable compiler bootstrap" \
+    env RUSTC_BOOTSTRAP="${bootstrap_value}" \
+    bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata
+done
+expect_wrapper_rejection \
+  "duplicate Cargo manifest selection" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata \
+  --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" \
+  "--manifest-path=${REPOSITORY_ROOT}/Cargo.toml"
+expect_wrapper_rejection \
+  "manifest without its required value" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata --manifest-path
+expect_wrapper_rejection \
+  "not bound to the authenticated root" \
+  bash "${SCRIPT_DIR}/privacy_sdk_cargo_wrapper.sh" metadata --manifest-path "${TEST_ROOT}/Cargo.toml"
 
 for external_command in \
   fmt help external generate-lockfile run bench doc tree package publish install; do
@@ -910,28 +912,22 @@ assert_exact_lines "${FAKE_CARGO_LOG}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=--color" \
   "arg=always" \
   "arg=metadata" \
   "arg=--format-version" \
   "arg=1" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
+  "arg=--manifest-path" \
+  "arg=${REPOSITORY_ROOT}/Cargo.toml" \
   "arg=--locked" \
   "invocation" \
   "CARGO_HOME=${WRAPPER_CARGO_HOME}" \
   "CARGO_BUILD_JOBS=1" \
   "CARGO_NET_OFFLINE=true" \
   "CARGO_TARGET_DIR=${WRAPPER_CARGO_TARGET}" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=test" \
   "arg=--manifest-path" \
   "arg=${REPOSITORY_ROOT}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PRIVATE_ROOT}/Cargo.lock" \
   "arg=--locked" \
   "arg=--" \
   "arg=--locked" \
@@ -1221,7 +1217,7 @@ IROHA_PRIVACY_SDK_ROOT="${WRAPPER_CREATED_ROOT}"
 IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE="absent"
 export IROHA_PRIVACY_SDK_ROOT IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE
 expect_failure \
-  "workspace Cargo.lock was created" \
+  "stock Cargo requires the sealed canonical root Cargo.lock" \
   env \
   FAKE_CARGO_MUTATE_PATH="${WRAPPER_CREATED_ROOT}/Cargo.lock" \
   IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${WRAPPER_CREATED_CONFIG}" \
@@ -1304,8 +1300,8 @@ chmod 700 "${PROVISION_HELPER_PATH}" \
 cmp "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" "${PROVISION_HELPER_PATH}"
 
 # Exercise the checked-in CI provisioning corridor with fake Cargo. The fake
-# implements only locked metadata and records the exact unstable-option and
-# external-lock arguments; no real Cargo command runs in this self-test.
+# implements only locked metadata and records the exact stock-Cargo arguments;
+# no real Cargo command runs in this self-test.
 PROVISION_REPOSITORY="${TEST_ROOT}/provision-repository"
 PROVISION_CORRIDOR="${TEST_ROOT}/provision-corridor"
 PROVISION_BIN="${TEST_ROOT}/provision-toolchain/1.93.1-x86_64-unknown-linux-gnu/bin"
@@ -1329,6 +1325,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${PROVISION_CARGO_LOG:?}"' \
+  '[[ -z "${RUSTC_BOOTSTRAP+x}" ]] || exit 95' \
   '[[ -n "${CARGO_HOME:-}" && -d "${CARGO_HOME}" && ! -e "${CARGO_HOME}/config" && ! -e "${CARGO_HOME}/config.toml" ]] || exit 96' \
   'printf "invocation\\n" >>"${PROVISION_CARGO_LOG}"' \
   'printf "CARGO_HOME=%s\\n" "${CARGO_HOME}" >>"${PROVISION_CARGO_LOG}"' \
@@ -1340,11 +1337,11 @@ printf '%s\n' \
   '  printf "%s\\n" cached >"${CARGO_HOME}/git/fake-cache-entry"' \
   'fi' \
   'command_name=""' \
-  'lockfile_path=""' \
+  'lockfile_path="${CARGO_HOME%/cargo-home}/lock/Cargo.lock"' \
   'while [[ $# -gt 0 ]]; do' \
   '  case "$1" in' \
   '    metadata) command_name="metadata" ;;' \
-  '    --lockfile-path) shift; lockfile_path="${1:-}" ;;' \
+  '    -Z|-Z*|--lockfile-path|--lockfile-path=*) exit 97 ;;' \
   '  esac' \
   '  shift' \
   'done' \
@@ -1627,16 +1624,12 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "invocation" \
   "CARGO_HOME=${PROVISION_CARGO_FAILURE_CORRIDOR}/cargo-home" \
   "CARGO_NET_OFFLINE=false" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=metadata" \
   "arg=--locked" \
   "arg=--format-version" \
   "arg=1" \
   "arg=--manifest-path" \
-  "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PROVISION_CARGO_FAILURE_CORRIDOR}/lock/Cargo.lock"
+  "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml"
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
@@ -1701,16 +1694,12 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "invocation" \
   "CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" \
   "CARGO_NET_OFFLINE=false" \
-  "arg=-Z" \
-  "arg=unstable-options" \
   "arg=metadata" \
   "arg=--locked" \
   "arg=--format-version" \
   "arg=1" \
   "arg=--manifest-path" \
-  "arg=${PROVISION_REPOSITORY}/Cargo.toml" \
-  "arg=--lockfile-path" \
-  "arg=${PROVISION_CORRIDOR}/lock/Cargo.lock"
+  "arg=${PROVISION_REPOSITORY}/Cargo.toml"
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
   "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
@@ -1914,6 +1903,9 @@ prepare_python_guard_root() {
   local relative
   mkdir -p "${root}/.cargo" "${root}/python/iroha_python/src/iroha_python" "${root}/python/iroha_native/src/iroha_native"
   install_tracked_test_root_lock "${root}"
+  cp "${SOURCE_ROOT}/Cargo.toml" "${root}/Cargo.toml"
+  mkdir -p "${root}/python/iroha_python/iroha_python_rs"
+  cp "${SOURCE_ROOT}/python/iroha_python/iroha_python_rs/Cargo.toml" "${root}/python/iroha_python/iroha_python_rs/Cargo.toml"
   cp "${SOURCE_ROOT}/python/iroha_python/requirements-ci.lock" "${root}/python/iroha_python/requirements-ci.lock"
   cp "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
   write_test_rust_toolchain "${root}"
@@ -1961,6 +1953,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   ': "${INTEGRATION_CARGO_LOG:?}"' \
+  '[[ -z "${RUSTC_BOOTSTRAP+x}" ]] || exit 95' \
   'while IFS= read -r environment_name; do' \
   '  case "${environment_name}" in' \
   '    IROHA_PRIVACY_*|IROHA_JS_CARGO_LOCKFILE_PATH)' \
@@ -2099,7 +2092,6 @@ run_python_guard_for_root() {
     CARGO_INCREMENTAL=0 \
     CARGO_ENCODED_RUSTFLAGS="" \
     CARGO_HOME="${inherited_home}" \
-    RUSTC_BOOTSTRAP=1 \
     "$@" || return 1
 }
 
@@ -3795,8 +3787,6 @@ environment = [
 ]
 expected_arguments = (
     [
-        "-Z",
-        "unstable-options",
         "metadata",
         "--format-version",
         "1",
@@ -3804,12 +3794,8 @@ expected_arguments = (
         manifest_path,
         "--locked",
         "--offline",
-        "--lockfile-path",
-        lock_path,
     ],
     [
-        "-Z",
-        "unstable-options",
         "rustc",
         "--jobs",
         "1",
@@ -3824,8 +3810,6 @@ expected_arguments = (
         "--manifest-path",
         manifest_path,
         "--lib",
-        "--lockfile-path",
-        lock_path,
         "--",
         "-C",
         "link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so",
@@ -4357,7 +4341,6 @@ PROVISIONED_GATE_ENV="${TEST_ROOT}/provisioned-gate-env"
 PROVISIONED_GATE_PATH="${TEST_ROOT}/provisioned-gate-path"
 PROVISIONED_GATE_AMBIENT_HOME="${TEST_ROOT}/provisioned-gate-ambient-home"
 prepare_python_guard_root "${PROVISIONED_GATE_ROOT}"
-: >"${PROVISIONED_GATE_ROOT}/Cargo.toml"
 : >"${PROVISIONED_GATE_ENV}"
 : >"${PROVISIONED_GATE_PATH}"
 mkdir -p \
@@ -4619,14 +4602,15 @@ if grep -Fq 'cache-dependency-path: python/iroha_python/requirements-ci.lock' \
   echo "privacy workflow retained a forbidden pip or Rust cache action" >&2
   exit 1
 fi
-[[ "$(grep -Fc 'cargo fetch --locked' "${WORKFLOW_PATH}")" -eq 6 ]]
+[[ "$(grep -Fc 'cargo fetch --locked' "${WORKFLOW_PATH}")" -eq 4 ]]
+[[ "$(grep -Fc 'fetch --locked --manifest-path' "${WORKFLOW_PATH}")" -eq 2 ]]
 [[ "$(grep -Fc 'RUSTUP_DIST_SERVER="https://static.rust-lang.org" \' "${WORKFLOW_PATH}")" -eq 6 ]]
 [[ "$(grep -Fc '"${HOME}/.cargo/bin/rustup" toolchain install \' "${WORKFLOW_PATH}")" -eq 6 ]]
-grep -Fq 'RUSTC_BOOTSTRAP=1 \' "${LOCK_HELPER_PATH}"
-grep -Fq '"${real_cargo}" -Z unstable-options metadata --locked --format-version 1 \' \
+expect_no_match -Fq 'RUSTC_BOOTSTRAP=1' "${LOCK_HELPER_PATH}"
+grep -Fq '"${real_cargo}" metadata --locked --format-version 1 \' \
   "${LOCK_HELPER_PATH}"
 grep -Fq 'CARGO_HOME="${private_cargo_home}"' "${LOCK_HELPER_PATH}"
-[[ "$(grep -Fc -- '--lockfile-path "${lock_path}"' "${LOCK_HELPER_PATH}")" -eq 1 ]]
+expect_no_match -Fq -- '--lockfile-path' "${LOCK_HELPER_PATH}"
 grep -Fq 'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_materialize_canonical_cargo_lock' "${LOCK_HELPER_PATH}"
 expect_no_match -Fq 'generate-lockfile' "${LOCK_HELPER_PATH}"
@@ -4945,7 +4929,7 @@ def validate(source: str) -> None:
         "ci/privacy_sdk_cargo_lockfile.sh provision-ci": 4,
         "ci/privacy_sdk_cargo_lockfile.sh verify-ci": 8,
         "cargo fetch --locked": 4,
-        "fetch --locked --lockfile-path": 2,
+        "fetch --locked --manifest-path": 2,
         'python-version: "3.12"': 6,
         "update-environment: false": 6,
     }
@@ -5006,7 +4990,7 @@ def validate(source: str) -> None:
                 "Authenticate canonical privacy graph snapshot",
                 frozen,
                 fetch,
-                "fetch --locked --lockfile-path",
+                "fetch --locked --manifest-path",
                 consumer,
             ),
             name,
@@ -5029,7 +5013,7 @@ for name in private:
     for marker in ("provision-ci", "verify-ci", "RUSTUP_DIST_SERVER", "cargo fetch --locked"):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
 for name in artifact:
-    for marker in ("Download frozen source-bound privacy lock input", frozen, "source ci/privacy_sdk_cargo_lockfile.sh", 'cmp -s "$release_lock" Cargo.lock', "fetch --locked --lockfile-path"):
+    for marker in ("Download frozen source-bound privacy lock input", frozen, "source ci/privacy_sdk_cargo_lockfile.sh", 'cmp -s "$release_lock" Cargo.lock', "fetch --locked --manifest-path"):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
     block = job_match(workflow, name).group(0)
     for step in re.split(r"(?m)(?=^      - )", block):

@@ -387,3 +387,104 @@ fn candidate_quantity_capture_can_only_inspect_retained_invocations() {
             .is_err()
     );
 }
+
+fn reconciled_dual_pool() -> (
+    PreparedSourceQuota,
+    [iroha_data_model::fastpq::FastpqSourceExecutionEntryV1; 3],
+    BTreeMap<Hash, Vec<TransferTranscript>>,
+) {
+    use iroha_data_model::fastpq::{
+        FastpqSourceExecutionEntryV1, FastpqSourceExecutionKindV1, FastpqSourceRouteV1,
+    };
+    let mut quota = prepared(1);
+    let empty = Hash::new(b"retained rejected invocation");
+    let ordinary = Hash::new(b"retained successful invocation");
+    let mandatory = Hash::new(b"applied mandatory purpose");
+    for hash in [empty, ordinary] {
+        quota.retain_ordinary_entry(hash).unwrap();
+    }
+    let transcripts = BTreeMap::from([
+        (ordinary, vec![transcript(ordinary)]),
+        (mandatory, vec![transcript(mandatory)]),
+    ]);
+    let mut transaction = quota.transaction().unwrap();
+    transaction.authorize_governance_purposes();
+    transaction
+        .replace_entry(ordinary, false, &transcripts[&ordinary])
+        .unwrap();
+    transaction
+        .replace_entry(mandatory, true, &transcripts[&mandatory])
+        .unwrap();
+    transaction.commit();
+    let entries =
+        [(empty, false), (ordinary, false), (mandatory, true)].map(|(entry_hash, protocol)| {
+            FastpqSourceExecutionEntryV1 {
+                entry_hash,
+                execution_kind: if protocol {
+                    FastpqSourceExecutionKindV1::ProtocolPurpose
+                } else {
+                    FastpqSourceExecutionKindV1::ExecutionCall
+                },
+                route: FastpqSourceRouteV1::Unrouted,
+                dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            }
+        });
+    (quota, entries, transcripts)
+}
+
+#[test]
+fn retained_dual_quota_requires_complete_reconciliation_and_original_frozen_policy() {
+    let (quota, entries, transcripts) = reconciled_dual_pool();
+    assert!(
+        quota
+            .reconcile_and_retain(&entries[1..], &transcripts)
+            .is_err()
+    );
+    let mut missing = transcripts.clone();
+    missing.remove(&entries[2].entry_hash);
+    assert!(quota.reconcile_and_retain(&entries, &missing).is_err());
+    let mut repeated = entries;
+    repeated[1] = repeated[0];
+    assert!(quota.reconcile_and_retain(&repeated, &transcripts).is_err());
+    let seal = quota.reconcile_and_retain(&entries, &transcripts).unwrap();
+    assert!(quota.matches_retained(&seal, quota.profile, quota.output));
+    let mut wrong_profile = quota.profile;
+    wrong_profile.intrinsic.max_deltas += 1;
+    assert!(!quota.matches_retained(&seal, wrong_profile, quota.output));
+    let mut wrong_output = quota.output;
+    wrong_output.max_time_invocations += 1;
+    assert!(!quota.matches_retained(&seal, quota.profile, wrong_output));
+    let (reconstructed, _, _) = reconciled_dual_pool();
+    assert_eq!(quota.ordinary_usage(), reconstructed.ordinary_usage());
+    assert_eq!(quota.mandatory_usage(), reconstructed.mandatory_usage());
+    assert!(!reconstructed.matches_retained(&seal, quota.profile, quota.output));
+}
+
+#[test]
+fn retained_dual_quota_preserves_empty_and_dropped_children_but_detects_either_pool_commit() {
+    for protocol in [false, true] {
+        let (mut quota, entries, transcripts) = reconciled_dual_pool();
+        let hash = entries[if protocol { 2 } else { 1 }].entry_hash;
+        let seal = quota.reconcile_and_retain(&entries, &transcripts).unwrap();
+        let before = (quota.ordinary_usage(), quota.mandatory_usage());
+        {
+            let mut transaction = quota.transaction().unwrap();
+            transaction.authorize_governance_purposes();
+            transaction
+                .replace_entry(hash, protocol, &transcripts[&hash])
+                .unwrap();
+        }
+        quota.transaction().unwrap().commit();
+        assert_eq!((quota.ordinary_usage(), quota.mandatory_usage()), before);
+        assert!(quota.matches_retained(&seal, quota.profile, quota.output));
+        let mut transaction = quota.transaction().unwrap();
+        transaction.authorize_governance_purposes();
+        transaction.replace_entry(hash, protocol, []).unwrap();
+        transaction
+            .replace_entry(hash, protocol, &transcripts[&hash])
+            .unwrap();
+        transaction.commit();
+        assert_eq!((quota.ordinary_usage(), quota.mandatory_usage()), before);
+        assert!(!quota.matches_retained(&seal, quota.profile, quota.output));
+    }
+}

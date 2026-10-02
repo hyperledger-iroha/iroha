@@ -296,17 +296,47 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             mock.patch.object(
                 seal, "source_seal_tools", return_value=(cargo, rustc, rustdoc, git)
             ),
-            mock.patch.object(seal, "source_seal_environment", return_value={}),
+            mock.patch.object(seal, "source_seal_environment", return_value={"CARGO_HOME": str(self.root / "cargo-home")}),
             mock.patch.object(seal, "run", return_value=b"{}") as run,
         ):
             seal.metadata(self.root, "aarch64-apple-darwin", root_lock)
         arguments = run.call_args.args[2]
-        self.assertIn("-Z", arguments)
-        self.assertIn("unstable-options", arguments)
+        self.assertNotIn("-Z", arguments)
+        self.assertNotIn("unstable-options", arguments)
+        self.assertNotIn("--lockfile-path", arguments)
+        self.assertIn("--locked", arguments)
+        self.assertIn("--offline", arguments)
         self.assertEqual(
-            arguments[arguments.index("--lockfile-path") + 1],
-            str(root_lock),
+            arguments[arguments.index("--manifest-path") + 1],
+            str(self.root / "Cargo.toml"),
         )
+
+    def test_external_snapshot_rejects_replaced_root_lock_with_identical_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as external_directory:
+            external = Path(external_directory).resolve() / "Cargo.lock"
+            root_lock = self.root / "Cargo.lock"
+            external.write_bytes(root_lock.read_bytes())
+            calls = 0
+
+            def observe_fingerprint(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    replacement = self.root / "replacement.lock"
+                    replacement.write_bytes(root_lock.read_bytes())
+                    replacement.replace(root_lock)
+                return "1" * 64
+
+            with (
+                mock.patch.object(seal, "seal_inputs", return_value=[]),
+                mock.patch.object(seal, "source_commit", return_value="1" * 40),
+                mock.patch.object(seal, "status", return_value=""),
+                mock.patch.object(seal, "fingerprint", side_effect=observe_fingerprint),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "root Cargo lock changed while authenticating"):
+                    seal.snapshot(self.root, "apple", external)
+            self.assertEqual(calls, 2)
+            self.assertEqual(root_lock.read_bytes(), external.read_bytes())
 
     def test_selected_lock_must_be_explicit_canonical_regular_and_non_symbolic(self) -> None:
         root_lock = self.root / "Cargo.lock"
@@ -378,22 +408,61 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
                 seal.selected_lockfile_path(self.root, alias / "Cargo.lock")
 
-    def test_external_metadata_receives_exact_selected_path_and_retains_locked_offline(self) -> None:
+    def test_external_metadata_authenticates_equal_lock_and_uses_original_root_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as external_directory:
             external = Path(external_directory).resolve() / "Cargo.lock"
             external.write_bytes((self.root / "Cargo.lock").read_bytes())
             with (
                 mock.patch.object(seal, "source_seal_tools", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), Path("/usr/bin/git"))),
-                mock.patch.object(seal, "source_seal_environment", return_value={}),
+                mock.patch.object(seal, "source_seal_environment", return_value={"CARGO_HOME": str(self.root / "cargo-home")}),
                 mock.patch.object(seal, "run", return_value=b"{}") as run,
             ):
                 seal.metadata(self.root, "aarch64-apple-darwin", external)
             arguments = run.call_args.args[2]
-            self.assertEqual(arguments[arguments.index("--lockfile-path") + 1], str(external))
+            self.assertEqual(arguments[arguments.index("--manifest-path") + 1], str(self.root / "Cargo.toml"))
             self.assertIn("--locked", arguments)
             self.assertIn("--offline", arguments)
-            self.assertIn("-Z", arguments)
-            self.assertIn("unstable-options", arguments)
+            self.assertNotIn("--lockfile-path", arguments)
+            self.assertNotIn("-Z", arguments)
+            self.assertNotIn("unstable-options", arguments)
+            external.write_bytes(b"different graph\n")
+            with self.assertRaisesRegex(RuntimeError, "canonical reviewed graph"):
+                seal.metadata(self.root, "aarch64-apple-darwin", external)
+
+    def test_native_metadata_rechecks_configuration_even_after_cargo_failure(self) -> None:
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        configuration = cargo_home / "config.toml"
+        for target in seal.APPLE_TARGETS + seal.ANDROID_TARGETS:
+            with self.subTest(target=target):
+                configuration.unlink(missing_ok=True)
+
+                def changed_configuration(*_args, **_kwargs):
+                    configuration.write_text('[net]\noffline = true\n', encoding="utf-8")
+                    raise RuntimeError("mock Cargo failure")
+
+                with (
+                    mock.patch.object(seal, "source_seal_tools", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), Path("/usr/bin/git"))),
+                    mock.patch.object(seal, "source_seal_environment", return_value={"CARGO_HOME": str(cargo_home)}),
+                    mock.patch.object(seal, "run", side_effect=changed_configuration),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "configuration changed during invocation"):
+                        seal.metadata(self.root, target, self.root / "Cargo.lock")
+
+    def test_android_metadata_rejects_bootstrap_configuration_before_cargo(self) -> None:
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        (cargo_home / "config.toml").write_text(
+            '[env]\nRUSTC_BOOTSTRAP = {value = "1", force = true}\n', encoding="utf-8"
+        )
+        with (
+            mock.patch.object(seal, "source_seal_tools", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), Path("/usr/bin/git"))),
+            mock.patch.object(seal, "source_seal_environment", return_value={"CARGO_HOME": str(cargo_home)}),
+            mock.patch.object(seal, "run") as run,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Native Cargo configuration forbids env"):
+                seal.metadata(self.root, seal.ANDROID_TARGETS[0], self.root / "Cargo.lock")
+        run.assert_not_called()
 
     def test_canonical_graph_owner_is_unique_strict_and_part_of_both_platform_seals(self) -> None:
         owner = self.root / seal.CANONICAL_CARGO_LOCK_OWNER
@@ -503,6 +572,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertEqual(environment["CARGO_TARGET_DIR"], str(target))
         self.assertEqual(environment["RUSTC"], str(tools / "rustc"))
         self.assertEqual(environment["RUSTDOC"], str(tools / "rustdoc"))
+        self.assertNotIn("RUSTC_BOOTSTRAP", environment)
 
         missing_target = dict(configured)
         del missing_target["NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR"]
@@ -560,17 +630,18 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             self.assertIn("--platform apple", invocation)
         self.assertGreaterEqual(
             builder.count('--lockfile-path "$CARGO_LOCKFILE"'),
-            3,
+            2,
         )
 
     def test_apple_builder_uses_one_selected_lock_for_all_five_builds(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")
         self.assertEqual(builder.count("run_hermetic_apple_cargo \\\n"), 5)
-        self.assertIn(
+        self.assertNotIn(
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
             builder,
         )
-        self.assertIn('--set "RUSTC_BOOTSTRAP=1"', builder)
+        self.assertIn('--manifest-path "$ROOT_DIR/Cargo.toml"', builder)
+        self.assertNotIn('--set "RUSTC_BOOTSTRAP=1"', builder)
         self.assertIn('--set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"', builder)
         self.assertIn('--set "RUSTDOC=$RUSTDOC_BINARY"', builder)
         self.assertEqual(
@@ -606,7 +677,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         target.mkdir()
         for name in ("cargo", "rustc", "rustdoc"):
             executable = tools / name
-            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.write_text('#!/bin/sh\nif [ "${RUSTC_BOOTSTRAP+x}" = x ]; then exit 77; fi\nexit 0\n', encoding="utf-8")
             executable.chmod(0o755)
         environment = {
             "CARGO": str(tools / "cargo"),
@@ -625,7 +696,6 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "NORITO_SKIP_BINDINGS_SYNC": "1",
             "PATH": f"{tools}:/usr/bin:/bin",
             "RUSTC": str(tools / "rustc"),
-            "RUSTC_BOOTSTRAP": "1",
             "RUSTDOC": str(tools / "rustdoc"),
             "RUSTUP_HOME": str(self.root / "rustup-home"),
             "SDKROOT": str(self.root / "sdk"),
@@ -633,15 +703,29 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "VERGEN_GIT_SHA": "1" * 40,
         }
 
-        def run(assignments: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        def run(assignments: dict[str, str], profile: str = "apple-ios-device") -> subprocess.CompletedProcess[str]:
             command = [sys.executable, "-I", "-S", str(HERMETIC_RUNNER)]
-            command.extend(("--profile", "apple-ios-device"))
+            command.extend(("--profile", profile))
             for name, value in assignments.items():
                 command.extend(("--set", f"{name}={value}"))
             command.extend(("--", str(tools / "cargo")))
             return subprocess.run(command, text=True, capture_output=True, check=False)
 
-        self.assertEqual(run(environment).returncode, 0)
+        for profile in ("apple-ios-device", "apple-ios-simulator", "apple-macos"):
+            selected = dict(environment)
+            if profile == "apple-ios-simulator":
+                selected["IPHONESIMULATOR_DEPLOYMENT_TARGET"] = "15.0"
+            elif profile == "apple-macos":
+                del selected["IPHONEOS_DEPLOYMENT_TARGET"]
+                selected["MACOSX_DEPLOYMENT_TARGET"] = "12.0"
+            with self.subTest(profile=profile), mock.patch.dict(os.environ, {"RUSTC_BOOTSTRAP": "1"}):
+                self.assertEqual(run(selected, profile).returncode, 0, "ambient bootstrap must not reach Apple Cargo")
+                for bootstrap in ("", "0", "1"):
+                    injected = dict(selected, RUSTC_BOOTSTRAP=bootstrap)
+                    refused = run(injected, profile)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn("unexpected=['RUSTC_BOOTSTRAP']", refused.stderr)
+
         missing_rustdoc = dict(environment)
         del missing_rustdoc["RUSTDOC"]
         rejected = run(missing_rustdoc)
@@ -675,25 +759,120 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("non-symbolic canonical directory", rejected.stderr)
 
+    def apple_configuration_runner(self):
+        spec = importlib.util.spec_from_file_location("tested_mobile_hermetic_command", HERMETIC_RUNNER)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_apple_cargo_configuration_keeps_registry_network_and_custom_aliases(self) -> None:
+        runner = self.apple_configuration_runner()
+        nested = self.root / "nested" / "work"
+        nested.mkdir(parents=True)
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        configuration = self.root / ".cargo" / "config.toml"
+        configuration.parent.mkdir(exist_ok=True)
+        configuration.write_text('[net]\noffline = true\n[registries.fixture]\nindex = "https://example.invalid/index"\n[alias]\nxtask = "run --package xtask --"\n', encoding="utf-8")
+        observations = runner.authenticate_build_cargo_configuration(nested, cargo_home)
+        self.assertIn(configuration, observations)
+        self.assertIsNotNone(observations[configuration])
+        self.assertIn(cargo_home / "config", observations)
+        self.assertIsNone(observations[cargo_home / "config"])
+        runner.recheck_build_cargo_configuration(observations)
+
+    def test_apple_cargo_configuration_refuses_all_compiler_override_owners(self) -> None:
+        runner = self.apple_configuration_runner()
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        configuration = cargo_home / "config.toml"
+        forbidden = (
+            '[profile.release]\nopt-level = 0\n',
+            '[unstable]\nbuild-std = ["std"]\n',
+            '[build]\nrustc-wrapper = "/untrusted/wrapper"\n',
+            '[build]\nrustc-workspace-wrapper = "/untrusted/wrapper"\n',
+            '[build]\nrustflags = ["--cfg", "unreviewed"]\n',
+            '[build]\nrustdocflags = ["--cfg", "unreviewed"]\n',
+            '[build]\ntarget-dir = "/untrusted/target"\n',
+            '[target.aarch64-apple-darwin]\nlinker = "/untrusted/linker"\n',
+            '[target.aarch64-apple-darwin]\nrunner = "/untrusted/runner"\n',
+            '[target.aarch64-apple-darwin.native]\nrustc-cfg = ["unreviewed"]\n',
+            '[env]\nRUSTC_BOOTSTRAP = {value = "1", force = true}\n',
+            '[alias]\nbuild = "check"\n',
+            'paths = ["/untrusted/dependency"]\n',
+            '[patch.crates-io]\nexample = {path = "/untrusted/dependency"}\n',
+            'include = "/untrusted/config"\n',
+        )
+        for body in forbidden:
+            with self.subTest(config=body.splitlines()[0]):
+                configuration.write_text(body, encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "Native Cargo configuration (forbids|overrides)"):
+                    runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.write_text('malformed = [', encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "cannot be parsed"):
+            runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+
+    def test_apple_cargo_configuration_rechecks_absence_contents_and_inode(self) -> None:
+        runner = self.apple_configuration_runner()
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        configuration = cargo_home / "config"
+        observations = runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.write_text('[net]\noffline = true\n', encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "changed during invocation"):
+            runner.recheck_build_cargo_configuration(observations)
+        observations = runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.write_text('[net]\noffline = false\n', encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "changed during invocation"):
+            runner.recheck_build_cargo_configuration(observations)
+        observations = runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        replacement = cargo_home / "replacement"
+        replacement.write_bytes(configuration.read_bytes())
+        replacement.replace(configuration)
+        with self.assertRaisesRegex(RuntimeError, "changed during invocation"):
+            runner.recheck_build_cargo_configuration(observations)
+        observations = runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.unlink()
+        with self.assertRaisesRegex(RuntimeError, "changed during invocation"):
+            runner.recheck_build_cargo_configuration(observations)
+
+    def test_apple_cargo_configuration_rejects_symbolic_nonregular_and_oversized_files(self) -> None:
+        runner = self.apple_configuration_runner()
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        configuration = cargo_home / "config.toml"
+        target = cargo_home / "original"
+        target.write_text('[net]\noffline = true\n', encoding="utf-8")
+        configuration.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "not canonical"):
+            runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.unlink()
+        configuration.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "bounded regular file"):
+            runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+        configuration.rmdir()
+        configuration.write_bytes(b" " * (runner._BUILD_CARGO_CONFIG_MAX_BYTES + 1))
+        with self.assertRaisesRegex(RuntimeError, "bounded regular file"):
+            runner.authenticate_build_cargo_configuration(self.root, cargo_home)
+
     def test_android_builder_binds_exact_root_lock_and_complete_cargo_envelope(
         self,
     ) -> None:
         builder = ANDROID_BUILDER.read_text(encoding="utf-8")
         for required in (
             '"CARGO_BUILD_JOBS"',
-            '"RUSTC_BOOTSTRAP"',
             '"RUSTDOC"',
             '"cargo_build_jobs" to 1',
             '"rustdoc_release" to tools.rustdocRelease',
             '"rustdoc_commit_hash" to tools.rustdocCommitHash',
             '"rustdoc_binary_sha256" to sha256Hex(tools.rustdoc)',
             '"CARGO_BUILD_JOBS=1"',
-            '"RUSTC_BOOTSTRAP=1"',
             '"RUSTDOC=${tools.rustdoc}"',
             '"--locked"',
             '"--offline"',
             '"--jobs"',
-            '"unstable-options"',
             '"--lockfile-path"',
             'tools.cargoLock.toString()',
             '"NORITO_BRIDGE_SEAL_RUSTDOC" to tools.rustdoc.toString()',
@@ -702,6 +881,10 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             self.assertIn(required, builder)
         self.assertIn("rustdocCommitHash == rustcCommitHash", builder)
         self.assertNotIn("MOBILE_SDK_ANDROID_CARGO_LOCK", builder)
+        self.assertNotIn("RUSTC_BOOTSTRAP", builder)
+        self.assertNotIn('"unstable-options"', builder)
+        self.assertIn('"--manifest-path",\n                        irohaRoot.resolve("Cargo.toml").absolutePath,', builder)
+        self.assertEqual(builder.count('"--lockfile-path",\n                tools.cargoLock.toString(),'), 2)
 
     def test_android_hermetic_runner_rejects_inexact_environment_and_command(
         self,
@@ -714,7 +897,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         ndk.mkdir()
         for name in ("cargo", "rustc", "rustdoc"):
             executable = tools / name
-            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.write_text('#!/bin/sh\nif [ "${RUSTC_BOOTSTRAP+x}" = x ]; then exit 77; fi\nexit 0\n', encoding="utf-8")
             executable.chmod(0o755)
         environment = {
             "ANDROID_NDK_HOME": str(ndk),
@@ -731,7 +914,6 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "NORITO_SKIP_BINDINGS_SYNC": "1",
             "PATH": f"{tools}:/usr/bin:/bin",
             "RUSTC": str(tools / "rustc"),
-            "RUSTC_BOOTSTRAP": "1",
             "RUSTDOC": str(tools / "rustdoc"),
             "RUSTUP_HOME": str(self.root / "rustup-home"),
             "TMPDIR": str(self.root),
@@ -747,10 +929,8 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "--offline",
             "--jobs",
             "1",
-            "-Z",
-            "unstable-options",
-            "--lockfile-path",
-            str(self.root / "Cargo.lock"),
+            "--manifest-path",
+            str(self.root / "Cargo.toml"),
             "--release",
             "-p",
             "connect_norito_bridge",
@@ -773,13 +953,33 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                 check=False,
             )
 
-        accepted = run(environment, cargo_arguments)
+        with mock.patch.dict(os.environ, {"RUSTC_BOOTSTRAP": "1"}):
+            accepted = run(environment, cargo_arguments)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        for bootstrap in ("", "0", "1"):
+            with self.subTest(bootstrap=bootstrap):
+                changed = dict(environment, RUSTC_BOOTSTRAP=bootstrap)
+                rejected = run(changed, cargo_arguments)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("unexpected=['RUSTC_BOOTSTRAP']", rejected.stderr)
+        for forbidden in ("-Z", "-Zunstable-options", "--lockfile-path", "--config", "--config=build.jobs=2"):
+            with self.subTest(forbidden=forbidden):
+                rejected = run(environment, [*cargo_arguments, forbidden])
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("alternate Cargo envelope form", rejected.stderr)
+        cargo_home = Path(environment["CARGO_HOME"])
+        cargo_home.mkdir()
+        config = cargo_home / "config.toml"
+        config.write_text('[env]\nRUSTC_BOOTSTRAP = {value = "1", force = true}\n', encoding="utf-8")
+        rejected = run(environment, cargo_arguments)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("Native Cargo configuration forbids env", rejected.stderr)
+        config.unlink()
 
         for name, value, expected in (
             ("CARGO_BUILD_JOBS", "2", "must be exactly '1'"),
             ("CARGO_NET_OFFLINE", "false", "must be exactly 'true'"),
-            ("RUSTC_BOOTSTRAP", "0", "must be exactly '1'"),
         ):
             with self.subTest(environment=name):
                 changed = dict(environment)
@@ -797,7 +997,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         for removed, expected in (
             (("--offline",), "exactly one --offline"),
             (("--jobs", "1"), "exactly one --jobs"),
-            (("-Z", "unstable-options"), "exactly one -Z"),
+            (("--manifest-path", str(self.root / "Cargo.toml")), "exactly one --manifest-path"),
         ):
             with self.subTest(command=removed):
                 altered = list(cargo_arguments)
@@ -807,20 +1007,20 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertIn(expected, rejected.stderr)
 
-        alternate_lock = self.root / "alternate-Cargo.lock"
-        alternate_lock.write_text("# alternate\n", encoding="utf-8")
+        alternate_manifest = self.root / "alternate-Cargo.toml"
+        alternate_manifest.write_text("[workspace]\n", encoding="utf-8")
         altered = list(cargo_arguments)
-        altered[altered.index("--lockfile-path") + 1] = str(alternate_lock)
+        altered[altered.index("--manifest-path") + 1] = str(alternate_manifest)
         rejected = run(environment, altered)
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("exact sequence --lockfile-path", rejected.stderr)
+        self.assertIn("exact sequence --manifest-path", rejected.stderr)
 
         (tools / "cargo").write_text(
             """#!/bin/sh
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--lockfile-path" ]; then
+  if [ "$1" = "--manifest-path" ]; then
     shift
-    printf '# changed during invocation\\n' > "$1"
+    printf '# changed during invocation\\n' > "${1%/*}/Cargo.lock"
     exit 0
   fi
   shift

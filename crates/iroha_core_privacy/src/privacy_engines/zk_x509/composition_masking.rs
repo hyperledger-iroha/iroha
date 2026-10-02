@@ -4,8 +4,8 @@
 //! Q_i + X^s T_i - T_{i-1}. The recomposed quotient is unchanged, while each
 //! chunk stays below the original FRI cap D by choosing s = D - h. Here h is
 //! the number of FRI queries plus the one extension-field DEEP query.
-//! TODO: complete the joint mixed-native-domain transcript hiding argument;
-//! this algebraic repair does not hide the remaining public terminal claims.
+//! TODO: complete the joint mixed-native-domain transcript hiding argument,
+//! including adaptive openings, full FRI terminals, and construction failures.
 
 use crate::privacy_engines::aggregate_stark::{
     AggregateProofLayoutV1, AggregateStarkErrorV1 as Error, AggregateStarkParametersV1,

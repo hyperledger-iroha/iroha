@@ -55,6 +55,44 @@ pub struct FastpqSourceInventoryV1 {
     tx_set_hash: [u8; 32],
 }
 
+/// Fixed local custody retained by State through capture, extraction and commit.
+/// The private seal retains both original ledger allocations; an equal rebuilt
+/// journal or inventory cannot recover authority after any observed mismatch.
+pub(super) struct SourceQuotaInventorySeal {
+    inventory: Arc<FastpqSourceInventoryV1>,
+    quota: crate::fastpq::source_reservation::admission::SourceQuotaSeal,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl SourceQuotaInventorySeal {
+    fn verify(
+        &self,
+        block: &StateBlock<'_>,
+        inventory: &Arc<FastpqSourceInventoryV1>,
+    ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        let valid = Arc::ptr_eq(&self.inventory, inventory)
+            && block
+                .fastpq_source_policy_at_block_start
+                .is_some_and(|(profile, output)| {
+                    block.fastpq_source_quota.as_ref().is_some_and(|quota| {
+                        quota
+                            .as_ref()
+                            .is_ok_and(|quota| quota.matches_retained(&self.quota, profile, output))
+                    })
+                });
+        if !valid {
+            self.failed.store(true, Ordering::Relaxed);
+        }
+        if self.failed.load(Ordering::Relaxed) {
+            return Err(
+                "FASTPQ source quota ownership changed after inventory finalization".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl FastpqSourceInventoryV1 {
     /// Frozen network and height of this inventory.
     pub const fn source(&self) -> FastpqSourceStatementContextV1 {
@@ -134,11 +172,19 @@ impl StateBlock<'_> {
         sources: &OwnedExecutionSources,
         pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
     ) -> Result<(), String> {
-        self.finalize_fastpq_source_inventory_from(
+        let result = self.finalize_fastpq_source_inventory_from(
             pending,
             |state| state.validate_owned_fastpq_sources(sources),
             |state, tx_set_hash| state.build_owned_fastpq_source_inventory(sources, tx_set_hash),
-        )
+        );
+        // Only this original completed producer may retain the quantity census.
+        // Diagnostic incompleteness never grants D7 authority or changes business results.
+        if result.is_ok() {
+            self.retain_quantity_source_census();
+        } else {
+            self.reject_quantity_source_census();
+        }
+        result
     }
 
     fn validate_owned_fastpq_sources(&self, sources: &OwnedExecutionSources) -> Result<(), String> {
@@ -240,25 +286,32 @@ impl StateBlock<'_> {
                 pending,
             );
             let inventory = build(self, tx_set_hash)?;
-            self.fastpq_source_quota
+            let quota = self
+                .fastpq_source_quota
                 .as_ref()
                 .ok_or("source capacity was not frozen")?
                 .as_ref()
                 .map_err(|error| error.clone())?
-                .reconcile(inventory.entries(), &self.fastpq_transcripts)?;
+                .reconcile_and_retain(inventory.entries(), &self.fastpq_transcripts)?;
             self.fastpq_source_captures
                 .seal()
                 .map_err(|error| error.to_string())?;
-            Ok(inventory)
+            Ok((inventory, quota))
         });
         match inventory {
-            Ok(inventory) => {
+            Ok((inventory, quota)) => {
                 self.fastpq_entry_dataspaces = inventory
                     .entries
                     .iter()
                     .map(|entry| (entry.entry_hash, entry.dataspace_id))
                     .collect();
-                self.fastpq_source_inventory = Some(Ok(Arc::new(inventory)));
+                let inventory = Arc::new(inventory);
+                self.fastpq_source_quota_seal = Some(SourceQuotaInventorySeal {
+                    inventory: Arc::clone(&inventory),
+                    quota,
+                    failed: std::sync::atomic::AtomicBool::new(false),
+                });
+                self.fastpq_source_inventory = Some(Ok(inventory));
                 Ok(())
             }
             Err(error) => {
@@ -505,6 +558,10 @@ impl StateBlock<'_> {
             Some(Err(error)) => return Err(error.clone()),
             Some(Ok(inventory)) => inventory,
         };
+        self.fastpq_source_quota_seal
+            .as_ref()
+            .ok_or("FASTPQ witness capture has no retained original quota journals")?
+            .verify(self, inventory)?;
         let captures = self
             .fastpq_source_captures
             .sealed_sources()

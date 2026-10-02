@@ -231,7 +231,12 @@ object KagemushaCoreCoordinatorFrameV1 {
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
                 bounded(fields, 3, 8 * 1024)
-                KagemushaSelectionFrameV1.requireAppAttest(selection, number(fields, 4).toUInt())
+                val previous = number(fields, 4).toUInt()
+                require(previous != UInt.MAX_VALUE) { "App Attest counter is exhausted" }
+                KagemushaSelectionFrameV1.requireAppAttest(selection)
+                require(KagemushaAppAttestOriginalCounterV1.read(field(fields, 3)) > previous) {
+                    "App Attest assertion counter did not advance"
+                }
                 digest(fields, 5); digest(fields, 6)
             }
         }
@@ -329,8 +334,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                         "App Attest acknowledgment substituted original bytes"
                     }
                 }
-                require(number(response, 4).toUInt() == number(request, 4).toUInt() + 1u) {
-                    "App Attest acknowledgment skipped the committed counter"
+                require(number(response, 4).toUInt() == KagemushaAppAttestOriginalCounterV1.read(field(request, 3))) {
+                    "App Attest acknowledgment substituted the original assertion counter"
                 }
                 equal(response, 5, request, 5); equal(response, 6, request, 6)
             }

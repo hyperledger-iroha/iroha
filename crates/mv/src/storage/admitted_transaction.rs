@@ -98,6 +98,7 @@ where
             revert: Some(revert),
             touched: TransactionTouches::Admitted(SortedTouches::new()),
             parent_dirty: &mut self.dirty,
+            parent_applied_transactions: &mut self.applied_transactions,
             dirty,
             failed: false,
             allocation: Some(allocation),
@@ -375,6 +376,10 @@ where
         *self.parent_dirty = self.dirty;
         drop(current_retirement);
         drop(undo_retirement);
+        *self.parent_applied_transactions = self
+            .parent_applied_transactions
+            .checked_add(1)
+            .expect("applied transaction count exceeds the finite block domain");
         self.resolve();
     }
 }

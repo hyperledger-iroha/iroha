@@ -232,8 +232,8 @@ pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1: u16 = 9;
 pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1: u16 = 64;
 /// BCI/Haböck affine batching parameter, distinct from the one Fp4 lane.
 pub(crate) const ZK_X509_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
-/// Exact affine arities in theorem order.
-pub(crate) const ZK_X509_FRI_AFFINE_ARITIES_V1: [u8; 3] = [2, 2, 2];
+/// Arity repeated for every actual binary FRI reduction.
+pub(crate) const ZK_X509_FRI_BINARY_FOLD_ARITY_V1: u8 = 2;
 /// Proven lower-bound exponent `|F_{p^4}| > 2^252`.
 pub(crate) const ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 252;
 /// Number of transcript-derived DEEP points per subproof.
@@ -248,16 +248,17 @@ pub(crate) const ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
 pub(crate) const ZK_X509_CA_FRI_ROUNDS_V1: u8 = 6;
 /// Compact-CA composition coefficient chunks.
 pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
-/// Compact-CA trace mask degree for `h = 5q + 16 = 696`.
-pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 695;
+/// Compact-CA mask degree for all own and translated MAIN query coordinates.
+/// `(2 + 13) * (q + 4*n_deep) = 2100` coefficients cover the complete closure.
+pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 2099;
 /// Exact maximum of the main aggregate proof before DEEP openings.
 pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 7_536_672;
 /// Exact maximum of the compact-CA aggregate proof before DEEP openings.
 pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 1_446_016;
 /// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
-pub(crate) const ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1: u32 = 1_310;
-/// Exact X5M1 framing, 212 public RFC/SHA records and 31 key/digest DEEP values.
-pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 4_420;
+pub(crate) const ZK_X509_CA_FRAME_BYTES_V1: u32 = 10;
+/// Exact claim-free X5M1 framing and31 original key/digest DEEP values.
+pub(crate) const ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_002;
 /// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
 pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 424_896;
 /// Fiat-Shamir proof-of-work grinding bits.
@@ -281,16 +282,15 @@ const ZK_X509_SHARED_STARK_MAIN_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
 const ZK_X509_SHARED_STARK_MAIN_COMPOSITION_CHUNKS_V1: u8 = 6;
 const ZK_X509_SHARED_STARK_MAIN_MASK_DEGREE_V1: u16 = 1_815;
 const ZK_X509_SHARED_STARK_MAIN_FRI_ROUNDS_V1: u8 = 12;
-// q=136 makes the compact-CA mask degree 695.  With a log-10 terminal,
-// degree-143 terminal polynomial, and binary folds, the FRI degree cap is
-// 9/8 of the native row count.  Therefore the masking margin requires
-// `2^native_log2 / 8 > 695`; log 13 is the least satisfying native domain and
-// the mandatory blowup-eight LDE is log 16.
-const ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1: u8 = 13;
+// The joint original-column schedule requires 2,100 CA hiding coefficients.
+// Its log-12 native trace and degree-2,099 mask fit the unchanged exclusive
+// FRI degree cap of 9,216. Six binary folds retain the log-10 terminal domain
+// and degree-143 terminal polynomial on the shared log-16 LDE.
+const ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1: u8 = 12;
 const ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1: u8 = 16;
 const ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1: u8 = 10;
 const ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
-const ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1: u16 = 695;
+const ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1: u16 = 2099;
 const ZK_X509_SHARED_STARK_CA_FRI_ROUNDS_V1: u8 = 6;
 /// Exact maximum inner MAIN proof for the present 5,811-column opening
 /// schedule after applying q=136, blowup eight, Fp4 openings, six composition
@@ -301,7 +301,7 @@ const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 7_908_768;
 #[cfg(test)]
 const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_322_368;
 /// Exact maximum compact-CA inner proof after padding its 104 active rows to a
-/// log-13 native trace and using four composition chunks on the shared log-16 LDE.
+/// log-12 native trace and using four composition chunks on the shared log-16 LDE.
 const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 1_498_816;
 
 /// Whether zk-X509 has completed the non-negotiable shared-STARK hard cut.
@@ -321,7 +321,7 @@ const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
         && ZK_X509_TRACE_MASK_DEGREE_V1 == ZK_X509_SHARED_STARK_MAIN_MASK_DEGREE_V1
         && ZK_X509_FRI_ROUNDS_V1 == ZK_X509_SHARED_STARK_MAIN_FRI_ROUNDS_V1
         && ZK_X509_CA_FRI_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1
-        && ZK_X509_CA_FRI_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1 + 3
+        && ZK_X509_CA_FRI_LDE_LOG2_V1 == ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1 + 4
         && ZK_X509_CA_FRI_TERMINAL_LOG2_V1 == ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1
         && ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1
             == ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1
@@ -332,7 +332,7 @@ const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
 }
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
 #[doc(hidden)]
-pub const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_413_406;
+pub const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;
 /// Exact encoded byte length of the deterministic first-release X5S1 KAT.
 ///
 /// This stays zero only while the one-time capture corridor is open. The production activation gate
@@ -351,7 +351,7 @@ pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: [u8; 32] = 
 /// Consensus activation stays fail-closed while this descriptor records the
 /// complete reduced opening schedule.  Governance and release-evidence pins cannot override the
 /// shared q=136/blowup-eight verifier or the fixed proof-byte ceiling.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-public-terminal-records=212-rfc4+sha208|main-claim-envelope-bytes=4420+includes992-key-and-digest-DEEP-values|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=aux-roots+remaining-public-claims+local-alphas+ordered-link-descriptors+link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings+MAIN31-derived-key-and-digest-openings:5-power8+6-power2+20-power32:all-admissible-and-authenticated|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1654-degree4-five-key-outputs-der-node-byte-lookups-length66-offset1-output-metadata-six-verifier-fixed-equations-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9413406|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable";
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-and-private-link-alphas+closed108-CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1650-degree4-five-key-outputs-der-node-byte-lookups-length66-offset1-output-metadata-six-verifier-fixed-equations-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9412944|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable";
 #[cfg(feature = "privacy-release-evidence")]
 #[doc(hidden)]
 pub use readiness_certificates::{
@@ -644,12 +644,12 @@ fn fri_theorem_certificate_v1(
     terminal_degree_bound: u16,
 ) -> AggregateFriTheorem2CertificateV1 {
     AggregateFriTheorem2CertificateV1 {
-        l_minus_one_numerator: 3,
-        l_minus_one_denominator: 2,
+        affine_coefficient_numerator: 3,
+        affine_coefficient_denominator: 2,
         batching_parameter_m: ZK_X509_FRI_BATCHING_PARAMETER_M_V1,
         rho_numerator: 1,
         rho_denominator: 7,
-        affine_arities: ZK_X509_FRI_AFFINE_ARITIES_V1,
+        binary_fold_arity: ZK_X509_FRI_BINARY_FOLD_ARITY_V1,
         domain_log2,
         extension_field_lower_bound_bits: ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1,
         base_field_two_adicity: 32,
@@ -730,7 +730,7 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         .ok_or(ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     // TODO: the inherited single-DEEP scalar geometry is not a joint hiding
     // proof for correlated key/digest power maps. The conditional fixed-success
-    // oracle query view fits the trace/chunk/FRI masks; public-terminal privacy,
+    // oracle query view fits the trace/chunk/FRI masks; joint private-join hiding,
     // abort behavior and full transcript simulation still block activation.
     let main_mask = transparent_stark_zk_mask_geometry_v1(
         usize::from(ZK_X509_MAX_CONSTRAINT_DEGREE_V1) - 1,
@@ -754,14 +754,15 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         ZK_X509_FRI_ROUNDS_V1,
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;
-    let ca_fri = validate_fri_subproof_v1(
-        super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        ZK_X509_CA_FRI_LDE_LOG2_V1 - super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-        ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
-        ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
-        ZK_X509_CA_FRI_ROUNDS_V1,
-        ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1,
-    )?;
+    let ca_fri = super::accumulator_stark::validate_ca_fri_theorem_certificate_v1(
+        fri_theorem_certificate_v1(
+            ZK_X509_CA_FRI_LDE_LOG2_V1,
+            ZK_X509_CA_FRI_ROUNDS_V1,
+            ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
+            ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
+        ),
+    )
+    .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     checked_transparent_stark_work_security_v1(128, 157, 256, 64)
         .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     let streaming_lde_batch_bytes = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1)
@@ -801,7 +802,8 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || main_mask.minimum_mask_coefficients != 1_816
         || main_mask.minimum_mask_degree != usize::from(ZK_X509_TRACE_MASK_DEGREE_V1)
         || ca_mask.minimum_mask_coefficients != 696
-        || ca_mask.minimum_mask_degree != usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1)
+        || usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1) + 1 != (2 + 13) * (136 + 4)
+        || ca_mask.minimum_mask_degree > usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1)
         || main_fri
             != (AggregateFriTheorem2BoundV1 {
                 query_error_bits: 160,
@@ -836,8 +838,8 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         || ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             .checked_add(ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1)
             .and_then(|bytes| bytes.checked_add(ZK_X509_DEEP_OPENING_BYTES_V1))
-            .and_then(|bytes| bytes.checked_add(ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1))
-            .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1))
+            .and_then(|bytes| bytes.checked_add(ZK_X509_CA_FRAME_BYTES_V1))
+            .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_FRAME_BYTES_V1))
             .and_then(|bytes| {
                 bytes.checked_add(
                     super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 as u32,
@@ -887,7 +889,7 @@ mod tests {
         assert!(zk_x509_shared_stark_geometry_is_release_ready_v1());
         assert_eq!(ZK_X509_SHARED_STARK_QUERY_COUNT_V1, 136);
         assert_eq!(ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1, 8);
-        assert_eq!(ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1, 13);
+        assert_eq!(ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1, 12);
         assert_eq!(ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1, 16);
         assert_eq!(
             ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1,
@@ -913,16 +915,16 @@ mod tests {
         assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
         assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 22);
         assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 7_536_672);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_413_406);
-        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 4_420);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_412_944);
+        assert_eq!(ZK_X509_MAIN_FRAME_BYTES_V1, 1_002);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            23_778
+            24_240
         );
         assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 136);
         assert_eq!(ZK_X509_MAX_CONSTRAINT_DEGREE_V1, 7);
         assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 1_815);
-        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 695);
+        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 2_099);
         assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1);
         assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);
         assert_eq!(ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1, 12 * 1024 * 1024 * 1024);
@@ -1127,34 +1129,50 @@ mod tests {
     }
     #[test]
     fn shared_main_and_ca_fri_theorem_substitutions_fail_closed() {
-        for (native_log2, blowup_log2, terminal_log2, terminal_degree, fold_count, chunks) in
-            [(19, 3, 10, 143, 12, 6), (13, 3, 10, 143, 6, 3)]
-        {
-            let parameters = fri_parameters_v1(
-                native_log2,
-                blowup_log2,
-                terminal_log2,
-                terminal_degree,
-                chunks,
+        let main_parameters = fri_parameters_v1(19, 3, 10, 143, 6);
+        let main_layout = AggregateProofLayoutV1::new(
+            main_parameters,
+            vec![AggregateTraceGroupLayoutV1 {
+                native_trace_log2: 19,
+                segment_instances: 1,
+                base_width: 1,
+                aux_width: 1,
+            }],
+        )
+        .expect("MAIN theorem layout");
+        for is_ca in [false, true] {
+            let certificate = if is_ca {
+                fri_theorem_certificate_v1(
+                    ZK_X509_CA_FRI_LDE_LOG2_V1,
+                    ZK_X509_CA_FRI_ROUNDS_V1,
+                    ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
+                    ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
+                )
+            } else {
+                fri_theorem_certificate_v1(22, 12, 10, 143)
+            };
+            let validate = |candidate| {
+                if is_ca {
+                    super::super::accumulator_stark::validate_ca_fri_theorem_certificate_v1(
+                        candidate,
+                    )
+                    .map_err(|_| ())
+                } else {
+                    validate_affine_batched_fri_theorem2_v1(
+                        main_parameters,
+                        &main_layout,
+                        candidate,
+                    )
+                    .map_err(|_| ())
+                }
+            };
+            assert_eq!(
+                validate(certificate),
+                Ok(AggregateFriTheorem2BoundV1 {
+                    query_error_bits: 160,
+                    commitment_error_bits: if is_ca { 199 } else { 187 },
+                }),
             );
-            let layout = AggregateProofLayoutV1::new(
-                parameters,
-                vec![AggregateTraceGroupLayoutV1 {
-                    native_trace_log2: native_log2,
-                    segment_instances: 1,
-                    base_width: 1,
-                    aux_width: 1,
-                }],
-            )
-            .expect("subproof layout");
-            let certificate = fri_theorem_certificate_v1(
-                native_log2 + blowup_log2,
-                fold_count,
-                terminal_log2,
-                u16::try_from(terminal_degree).expect("small terminal degree"),
-            );
-            validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate)
-                .expect("canonical theorem certificate");
             for mutation in [
                 AggregateFriTheorem2CertificateV1 {
                     rho_denominator: 6,
@@ -1173,7 +1191,7 @@ mod tests {
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
-                    l_minus_one_numerator: 2,
+                    affine_coefficient_numerator: 2,
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
@@ -1193,7 +1211,7 @@ mod tests {
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
-                    affine_arities: [2, 2, 1],
+                    binary_fold_arity: 1,
                     ..certificate
                 },
                 AggregateFriTheorem2CertificateV1 {
@@ -1210,7 +1228,7 @@ mod tests {
                 },
             ] {
                 assert!(
-                    validate_affine_batched_fri_theorem2_v1(parameters, &layout, mutation).is_err(),
+                    validate(mutation).is_err(),
                     "main and compact-CA theorem substitutions must reject"
                 );
             }

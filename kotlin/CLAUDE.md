@@ -111,10 +111,11 @@ All mutable collections and byte arrays are copied on construction and access. U
   into provenance. AGP packages those generated outputs and explicitly excludes
   `src/main/jniLibs`. Every ABI uses canonical Rust 1.93.1 `cargo`, `rustc`, and
   `rustdoc`, plus `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`,
-  `CARGO_NET_OFFLINE=true`, and `RUSTC_BOOTSTRAP=1`. The Cargo command always
-  includes `--locked --offline --jobs 1 -Z unstable-options --lockfile-path`
-  with the canonical repository-root `Cargo.lock`; alternate locks and legacy
-  overrides are rejected.
+  and `CARGO_NET_OFFLINE=true`. Stock Cargo receives
+  `--locked --offline --jobs 1 --manifest-path <canonical-iroha-root>/Cargo.toml`
+  and consumes the authenticated repository-root `Cargo.lock`. Bootstrap,
+  alternate locks, and compiler or profile configuration overrides are rejected;
+  the root lock and effective Cargo configuration are rechecked after execution.
 
 ## Testing
 

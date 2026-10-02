@@ -122,8 +122,8 @@ pub(crate) const PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
 pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_NUMERATOR_V1: u8 = 1;
 /// Exact effective FRI code-rate denominator.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1: u8 = 7;
-/// Complete affine arities whose sum enters the commitment-error term.
-pub(crate) const PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1: [u8; 3] = [2, 2, 2];
+/// Arity repeated for every actual binary FRI reduction.
+pub(crate) const PROOF_MANAGED_NOTE_FRI_BINARY_FOLD_ARITY_V1: u8 = 2;
 /// Proven lower-bound exponent for the Goldilocks quartic extension field.
 pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 252;
 /// Complete relation-neutral first-release proof-driver geometry.
@@ -131,7 +131,7 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriSha3_384Goldilocks:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:fri-algebraic-commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriSha3_384Goldilocks:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:affine-batching-coefficient=3/2:batching-m=3:rho-upper-bound=1/7:binary-fold-arity=2:extension-field-lower-bound-bits=252:query-error-bits=160:fri-algebraic-commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1";
 /// Derive the canonical digest of shared proof geometry plus one relation.
 pub(crate) fn proof_managed_note_stark_profile_digest_v1(
     domains: aggregate::AggregateStarkDomainsV1,
@@ -302,12 +302,12 @@ fn validate_note_fri_soundness_v1(
     let query_count = u8::try_from(parameters.query_count)
         .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
     let certificate = aggregate::AggregateFriTheorem2CertificateV1 {
-        l_minus_one_numerator: 3,
-        l_minus_one_denominator: 2,
+        affine_coefficient_numerator: 3,
+        affine_coefficient_denominator: 2,
         batching_parameter_m: PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1,
         rho_numerator: PROOF_MANAGED_NOTE_FRI_RATE_NUMERATOR_V1,
         rho_denominator: PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1,
-        affine_arities: PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1,
+        binary_fold_arity: PROOF_MANAGED_NOTE_FRI_BINARY_FOLD_ARITY_V1,
         domain_log2: layout.common_lde_log2(),
         extension_field_lower_bound_bits: PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1,
         base_field_two_adicity: 32,
@@ -3742,7 +3742,7 @@ mod tests {
     #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
-            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:fri-algebraic-commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1",
+            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:affine-batching-coefficient=3/2:batching-m={}:rho-upper-bound={}/{}:binary-fold-arity={}:extension-field-lower-bound-bits={}:query-error-bits={}:fri-algebraic-commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1",
             std::str::from_utf8(PROOF_MANAGED_NOTE_STARK_SUITE_V1).expect("ASCII suite"),
             NOTE_COPY_WIDTH_V1,
             NOTE_COPY_LANES_V1,
@@ -3764,9 +3764,7 @@ mod tests {
             PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1,
             PROOF_MANAGED_NOTE_FRI_RATE_NUMERATOR_V1,
             PROOF_MANAGED_NOTE_FRI_RATE_DENOMINATOR_V1,
-            PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1[0],
-            PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1[1],
-            PROOF_MANAGED_NOTE_FRI_AFFINE_ARITIES_V1[2],
+            PROOF_MANAGED_NOTE_FRI_BINARY_FOLD_ARITY_V1,
             PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1,
             PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1,
             PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1,

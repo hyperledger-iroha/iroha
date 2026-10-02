@@ -194,8 +194,9 @@ impl JoinedTraceCommitmentPlanV1 {
     }
 
     /// Collect an original clearing cut, or replay only original queried subtrees.
-    /// Coefficients, complete LDE evaluation and canonical-field checking remain
-    /// identical to the full replay. Only digest absorption/reduction is selected.
+    /// The initial commitment evaluates the full domain. A replay requests only
+    /// canonical global rows of the original queried cuts, while the transform
+    /// owner validates every original coefficient and preserves mask custody.
     pub(crate) fn commit_retained_replayed_v1(
         &self,
         domains: AggregateStarkDomainsV1,
@@ -206,6 +207,7 @@ impl JoinedTraceCommitmentPlanV1 {
             &[ZeroizingFieldColumnV1],
             u8,
             u8,
+            Option<&[usize]>,
         ) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1>,
     ) -> Result<
         (
@@ -255,9 +257,16 @@ impl JoinedTraceCommitmentPlanV1 {
                 for column in start..end {
                     batch.push(ZeroizingFieldColumnV1(coefficients(group, column)?));
                 }
-                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2)?;
+                let selected = match &builder {
+                    RetainedReplayBuilderV1::Initial(_) => None,
+                    RetainedReplayBuilderV1::Selected(builder) => Some(builder.selected_rows_v1()),
+                };
+                let evaluated_rows = selected.map_or(rows, <[usize]>::len);
+                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2, selected)?;
                 if evaluations.len() != batch.len()
-                    || evaluations.iter().any(|column| column.len() != rows)
+                    || evaluations
+                        .iter()
+                        .any(|column| column.len() != evaluated_rows)
                 {
                     return Err(AggregateStarkErrorV1::InvalidLayout);
                 }
@@ -266,7 +275,7 @@ impl JoinedTraceCommitmentPlanV1 {
                         builder.absorb_columns_v1(&evaluations)?
                     }
                     RetainedReplayBuilderV1::Selected(builder) => {
-                        builder.absorb_columns_v1(&evaluations)?
+                        builder.absorb_selected_columns_v1(&evaluations)?
                     }
                 }
             }

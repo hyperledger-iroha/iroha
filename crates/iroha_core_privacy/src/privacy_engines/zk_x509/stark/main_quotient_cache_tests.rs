@@ -343,3 +343,258 @@ fn private_cache_clears_output_and_replay_after_failed_or_unwound_forward_batch(
         Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
     ));
 }
+
+#[test]
+fn added_joint_owners_reduce_real_cache_without_changing_source_coordinates() {
+    const COEFFICIENTS: usize = 37;
+    let original =
+        MainQuotientCachePlanV1::from_budget_v1(10, 7, COEFFICIENTS, 4, budget(17, COEFFICIENTS))
+            .unwrap();
+    let per_column = budget(1, COEFFICIENTS) - budget(0, COEFFICIENTS);
+    for retained in [0, 1, 9, 10, 12, 17] {
+        let reserved = (17 - retained) * per_column;
+        let narrowed = original.reserve_additional_v1(reserved).unwrap();
+        assert_eq!(narrowed.base_columns, retained.min(10));
+        assert_eq!(narrowed.aux_columns, retained.saturating_sub(10));
+        assert_eq!(narrowed.payload_limit + reserved, original.payload_limit);
+        let mut generated = Vec::new();
+        let cache = MainQuotientReplayCacheV1::from_replay_v1(narrowed, |kind, range| {
+            for column in range.clone() {
+                generated.push((kind, column));
+            }
+            Ok(replay(kind, range, COEFFICIENTS))
+        })
+        .unwrap();
+        assert_eq!(generated.len(), retained);
+        for (ordinal, (kind, column)) in generated.iter().enumerate() {
+            let expected_kind = if ordinal < 10 {
+                MainTraceColumnKindV1::Base
+            } else {
+                MainTraceColumnKindV1::Aux
+            };
+            assert_eq!(
+                core::mem::discriminant(kind),
+                core::mem::discriminant(&expected_kind)
+            );
+            assert_eq!(*column, if ordinal < 10 { ordinal } else { ordinal - 10 });
+            for degree in [0, 7, COEFFICIENTS - 1] {
+                assert_eq!(
+                    cache.columns[ordinal][degree],
+                    coefficient(expected_kind, *column, degree)
+                );
+            }
+        }
+        assert!(
+            cache.columns.capacity() * core::mem::size_of::<PrivateTableV1<F>>()
+                + cache
+                    .columns
+                    .iter()
+                    .map(|c| c.capacity() * 8)
+                    .sum::<usize>()
+                + core::mem::size_of::<MainQuotientReplayCacheV1>()
+                <= narrowed.payload_limit
+        );
+    }
+    for reserved in [17 * per_column + 1, original.payload_limit, usize::MAX] {
+        assert!(original.reserve_additional_v1(reserved).is_err());
+    }
+    let one_pass =
+        MainQuotientCachePlanV1::from_budget_v1(10, 7, COEFFICIENTS, 1, budget(17, COEFFICIENTS))
+            .unwrap()
+            .reserve_additional_v1(per_column)
+            .unwrap();
+    assert_eq!((one_pass.base_columns, one_pass.aux_columns), (0, 0));
+    MainQuotientReplayCacheV1::from_replay_v1(one_pass, |_, _| panic!("no single-stripe cache"))
+        .unwrap();
+}
+
+#[test]
+fn arithmetic_priority_preserves_capacity_and_every_original_column() {
+    const COEFFICIENTS: usize = 37;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let registration = *layout
+        .registered_segments
+        .iter()
+        .find(|item| item.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .unwrap();
+    assert_eq!(
+        (
+            registration.segment.base_width,
+            registration.segment.aux_width
+        ),
+        (211, 72)
+    );
+    for retained in [0, 1, 8, 16, 18, 56, 64, 72, 73, 267, 277, 283] {
+        let original = MainQuotientCachePlanV1::from_budget_v1(
+            211,
+            72,
+            COEFFICIENTS,
+            4,
+            budget(retained, COEFFICIENTS),
+        )
+        .unwrap();
+        let priority = original.prioritize_registration_v1(registration).unwrap();
+        assert_eq!(priority.base_columns, retained.saturating_sub(72));
+        assert_eq!(priority.aux_columns, retained.min(72));
+        assert_eq!(priority.payload_limit, original.payload_limit);
+        assert_eq!(priority.coefficient_count, original.coefficient_count);
+        assert_eq!(priority.base_columns + priority.aux_columns, retained);
+    }
+    // The extra CA owners must reduce the count, then reapply the same public
+    // priority. Neither an old base-first prefix nor two owners spend this slack.
+    let ordinary = MainQuotientCachePlanV1::from_budget_v1(
+        211,
+        72,
+        COEFFICIENTS,
+        4,
+        budget(277, COEFFICIENTS),
+    )
+    .unwrap()
+    .prioritize_registration_v1(registration)
+    .unwrap();
+    let per_column = budget(1, COEFFICIENTS) - budget(0, COEFFICIENTS);
+    for retained in 0..=277 {
+        let reserved = (277 - retained) * per_column;
+        let narrowed = ordinary
+            .reserve_additional_v1(reserved)
+            .unwrap()
+            .prioritize_registration_v1(registration)
+            .unwrap();
+        assert_eq!(narrowed.base_columns, retained.saturating_sub(72));
+        assert_eq!(narrowed.aux_columns, retained.min(72));
+        assert_eq!(narrowed.payload_limit + reserved, ordinary.payload_limit);
+    }
+    let plan = ordinary
+        .reserve_additional_v1(10 * per_column)
+        .unwrap()
+        .prioritize_registration_v1(registration)
+        .unwrap();
+    assert_eq!((ordinary.base_columns, ordinary.aux_columns), (205, 72));
+    assert_eq!((plan.base_columns, plan.aux_columns), (195, 72));
+    assert_eq!(plan.payload_limit + 10 * per_column, ordinary.payload_limit);
+    let mut generated = 0;
+    let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+        generated += range.len();
+        assert!(range.len() <= 8);
+        Ok(replay(kind, range, COEFFICIENTS))
+    })
+    .unwrap();
+    let root = goldilocks_primitive_root_v1(6).unwrap();
+    for ordinal in 0..4 {
+        let stripe = main_quotient_stripes::MainQuotientStripeV1 {
+            rows: 16,
+            count: 4,
+            ordinal,
+            next_stride: 2,
+            root: root.pow(4),
+            shift: F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(ordinal as u128)),
+        };
+        for (kind, width) in [
+            (MainTraceColumnKindV1::Base, 211),
+            (MainTraceColumnKindV1::Aux, 72),
+        ] {
+            let values = cache
+                .evaluate_v1(
+                    kind,
+                    width,
+                    stripe,
+                    MainBoundedTransformPolicyV1::cpu_v1(),
+                    |range| {
+                        assert!(matches!(kind, MainTraceColumnKindV1::Base));
+                        assert!(range.start >= 195 && range.end <= 211 && range.len() <= 8);
+                        generated += range.len();
+                        Ok(replay(kind, range, COEFFICIENTS))
+                    },
+                )
+                .unwrap();
+            for (column, values) in values.iter().enumerate() {
+                for (row, value) in values.iter().enumerate() {
+                    let x = stripe.shift.mul(stripe.root.pow(row as u128));
+                    let expected = (0..COEFFICIENTS).rev().fold(F::ZERO, |sum, degree| {
+                        sum.mul(x).add(coefficient(kind, column, degree))
+                    });
+                    assert_eq!(*value, expected);
+                }
+            }
+        }
+    }
+    assert_eq!(generated, 267 + 4 * 16);
+    for item in &layout.registered_segments {
+        if item.segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
+            let old = MainQuotientCachePlanV1::from_budget_v1(
+                item.segment.base_width,
+                item.segment.aux_width,
+                COEFFICIENTS,
+                4,
+                budget(18, COEFFICIENTS),
+            )
+            .unwrap();
+            let unchanged = old.prioritize_registration_v1(*item).unwrap();
+            assert_eq!(
+                (unchanged.base_columns, unchanged.aux_columns),
+                (old.base_columns, old.aux_columns)
+            );
+            assert_eq!(unchanged.payload_limit, old.payload_limit);
+        }
+    }
+    let single = MainQuotientCachePlanV1::from_budget_v1(
+        211,
+        72,
+        COEFFICIENTS,
+        1,
+        budget(283, COEFFICIENTS),
+    )
+    .unwrap()
+    .prioritize_registration_v1(registration)
+    .unwrap();
+    assert_eq!((single.base_columns, single.aux_columns), (0, 0));
+    let mut foreign = plan;
+    foreign.aux_columns = 73;
+    assert!(foreign.prioritize_registration_v1(registration).is_err());
+    foreign = plan;
+    foreign.base_columns = 212;
+    assert!(foreign.prioritize_registration_v1(registration).is_err());
+}
+
+#[test]
+fn arithmetic_priority_clears_auxiliary_cache_on_success_error_and_unwind() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let registration = *layout
+        .registered_segments
+        .iter()
+        .find(|item| item.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .unwrap();
+    for failure in [0, 1, 2] {
+        let plan = MainQuotientCachePlanV1::from_budget_v1(211, 72, 8, 4, budget(9, 8))
+            .unwrap()
+            .prioritize_registration_v1(registration)
+            .unwrap();
+        assert_eq!((plan.base_columns, plan.aux_columns), (0, 9));
+        let (result, erased) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+                    assert!(matches!(kind, MainTraceColumnKindV1::Aux));
+                    if range.start == 8 && failure != 0 {
+                        assert!(failure != 2, "injected prioritized auxiliary unwind");
+                        return Err(ZkX509StarkErrorV1::InternalInvariant);
+                    }
+                    Ok(replay(kind, range, 8))
+                })?;
+                drop(cache);
+                Ok::<_, ZkX509StarkErrorV1>(())
+            }))
+        });
+        match failure {
+            0 => assert!(result.unwrap().is_ok()),
+            1 => assert!(result.unwrap().is_err()),
+            _ => assert!(result.is_err()),
+        }
+        let cells = if failure == 0 { 72 } else { 64 };
+        assert_eq!(erased.iter().map(|item| item.cells).sum::<usize>(), cells);
+        assert_eq!(
+            erased.iter().map(|item| item.nonzero_before).sum::<usize>(),
+            cells
+        );
+        assert!(erased.iter().all(|item| item.nonzero_after == 0));
+    }
+}

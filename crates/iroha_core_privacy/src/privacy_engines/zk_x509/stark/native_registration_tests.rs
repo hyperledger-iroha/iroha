@@ -754,7 +754,7 @@ fn sha_batch_registration_is_exact_and_every_range_mutation_fails_closed() {
     );
     assert_eq!(
         registration.segment.constraint_count,
-        ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1
+        ZK_X509_SHA_BATCH_LOCAL_CONSTRAINT_COUNT_V1
     );
     assert_eq!(
         registration.segment.constraint_degree,

@@ -320,6 +320,20 @@ pub(super) fn bank_residues(
     selectors: [F; 6],
 ) -> Vec<F> {
     let mut out = Vec::with_capacity(BANK_CONSTRAINTS);
+    append_bank_residues(&mut out, bank, limbs, signs, selectors);
+    out
+}
+
+/// Append the same exact comparisons to the caller's original residual owner.
+/// The caller retains canonical source limbs/signs and private fetch selectors.
+pub(super) fn append_bank_residues(
+    out: &mut Vec<F>,
+    bank: &[F],
+    limbs: [[F; 4]; 2],
+    signs: [F; 2],
+    selectors: [F; 6],
+) {
+    let start = out.len();
     out.extend(bank[DIGITS..BORROW].iter().copied().map(word::radix4));
     for limb in 0..4 {
         out.push(bank[DIFF + limb].sub(word::pack(
@@ -369,8 +383,7 @@ pub(super) fn bank_residues(
     out.push(equality.sub(equality_from_limbs));
     out.push(bit(bank[TAKEN_BANK_OFFSET]));
     out.push(bank[TAKEN_BANK_OFFSET].sub(expected_taken));
-    debug_assert_eq!(out.len(), BANK_CONSTRAINTS);
-    out
+    debug_assert_eq!(out.len() - start, BANK_CONSTRAINTS);
 }
 
 pub(super) fn bank_witness(opcode: u8, left: u64, right: u64) -> [F; BANK_WIDTH] {

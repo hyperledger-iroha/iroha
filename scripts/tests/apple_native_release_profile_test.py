@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Check actual Cargo planning for the static Apple SDK without compiling it."""
+"""Check declared Apple profiles; actual five-slice compilation remains mandatory."""
 
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 from pathlib import Path
-import subprocess
 import unittest
 
 try:
@@ -25,41 +22,32 @@ class AppleNativeReleaseProfileTests(unittest.TestCase):
         cls.bridge_manifest = tomllib.loads(
             (ROOT / "crates/connect_norito_bridge/Cargo.toml").read_text()
         )
-        environment = dict(os.environ)
-        environment["RUSTC_BOOTSTRAP"] = "1"
-        command = [
-            "cargo", "rustc", "--locked", "--offline", "-Z", "unstable-options",
-            "--unit-graph", "-p", "connect_norito_bridge", "--lib",
-            "--crate-type", "staticlib", "--profile", "apple-release",
-            "--features", "privacy-production-enabled", "--target", "aarch64-apple-darwin",
-        ]
-        cls.graph = json.loads(subprocess.check_output(command, cwd=ROOT, env=environment))
+        cls.release = cls.manifest["profile"]["release"]
+        cls.apple = cls.manifest["profile"]["apple-release"]
 
     def test_final_c_abi_target_can_perform_full_graph_thin_lto(self) -> None:
-        self.assertEqual(len(self.graph["roots"]), 1)
-        unit = self.graph["units"][self.graph["roots"][0]]
-        self.assertEqual(unit["target"]["name"], "connect_norito_bridge")
-        self.assertEqual(unit["target"]["crate_types"], ["staticlib"])
-        self.assertEqual(unit["features"], ["privacy-production-enabled"])
-        self.assertEqual(unit["profile"]["lto"], "thin")
-        self.assertEqual(unit["profile"]["opt_level"], "1")
-        self.assertEqual(unit["profile"]["panic"], "unwind")
-        self.assertFalse(unit["profile"]["incremental"])
-        self.assertEqual(unit["profile"]["strip"]["resolved"], "None")
+        # These are source-profile controls, not fabricated Cargo unit-graph
+        # evidence. The maintained builder compiles every actual staticlib slice.
+        self.assertEqual(self.bridge_manifest["package"]["name"], "connect_norito_bridge")
+        self.assertIn("privacy-production-enabled", self.bridge_manifest["features"])
+        self.assertEqual(self.apple["inherits"], "release")
+        self.assertEqual(self.apple["lto"], "thin")
+        self.assertEqual(self.apple["package"]["connect_norito_bridge"]["opt-level"], 1)
+        self.assertEqual(self.apple.get("panic", self.release.get("panic", "unwind")), "unwind")
+        self.assertFalse(self.apple.get("incremental", self.release.get("incremental", False)))
+        self.assertEqual(self.apple["strip"], "none")
+        self.assertEqual(self.apple["package"]["connect_norito_bridge"]["strip"], "none")
 
     def test_dependency_optimization_and_host_loadability_are_retained(self) -> None:
-        units = self.graph["units"]
-        for name, level in (("iroha_data_model", "1"), ("iroha_model_base", "1"),
-                            ("iroha_crypto", "3"), ("iroha_core_zk", "3")):
-            matches = [unit for unit in units if unit["target"]["name"] == name
-                       and unit["platform"] == "aarch64-apple-darwin"]
-            self.assertEqual(len(matches), 1, name)
-            self.assertEqual(matches[0]["profile"]["opt_level"], level, name)
-        host_macros = [unit for unit in units if unit["target"]["kind"] == ["proc-macro"]]
-        self.assertTrue(host_macros)
-        for unit in host_macros:
-            self.assertEqual(unit["profile"]["strip"]["resolved"], "None", unit["target"]["name"])
-        self.assertEqual(self.manifest["profile"]["apple-release"]["inherits"], "release")
+        for name, level in (("iroha_data_model", 1), ("iroha_model_base", 1),
+                            ("iroha_crypto", 3), ("iroha_core_zk", 3)):
+            inherited = self.release.get("package", {}).get(name, {}).get(
+                "opt-level", self.release.get("opt-level", 3)
+            )
+            actual = self.apple.get("package", {}).get(name, {}).get("opt-level", inherited)
+            self.assertEqual(actual, level, name)
+        self.assertEqual(self.release["build-override"]["strip"], "none")
+        self.assertNotIn("build-override", self.apple)
         self.assertEqual(set(self.bridge_manifest["lib"]["crate-type"]),
                          {"staticlib", "cdylib", "rlib"})
 

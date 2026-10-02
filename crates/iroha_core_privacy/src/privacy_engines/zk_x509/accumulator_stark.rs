@@ -1,6 +1,6 @@
 //! Proof-facing adapter for compact trust-anchor membership.
 //!
-//! The adapter registers one log-thirteen trace. Thirteen rows own the exact shared SHA calls for one
+//! The adapter registers one log-twelve trace. Thirteen rows own the exact shared SHA calls for one
 //! occupied leaf and twelve internal nodes, and 91 rows serialize the root SPKI with one reusable
 //! byte decomposition. Four independently challenged running products bind those bytes
 //! simultaneously to the leaf SHA input and strict-DER output consumer. Two SHA factors are
@@ -9,6 +9,9 @@
 use super::accumulator_air::{
     ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1, ZkX509CaAccumulatorTraceV1,
 };
+#[cfg(test)]
+use super::proof_instance::TEST_PROOF_INSTANCE_V1;
+use super::proof_instance::ZkX509ProofInstanceV1;
 use super::{
     accumulator_air::{
         CA_CURRENT_START, CA_DIGEST_BYTE_BITS_START, CA_DIGEST_START, CA_DIRECTION,
@@ -44,16 +47,15 @@ use super::{
         ZkX509ShaCallActivationV1, ZkX509ShaCallBusChallengesV1, ZkX509ShaCallRoleV1,
         ZkX509ShaCallScheduleV1, ZkX509ShaCallWordKindV1, compress_sha_call_fields_v1,
     },
-    stark::ZK_X509_DIGEST_CONTEXT_V1,
+    stark::ZK_X509_FIXED_DIGEST_CONTEXT_V1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, goldilocks_evaluate_coset_v1, grind_nonce_v1,
-    masked_trace_lde_column_v1,
 };
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
@@ -66,16 +68,22 @@ use crate::privacy_engines::{
         verify_grinding_nonce_v1,
     },
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::TryCryptoRng;
-#[cfg(test)]
-use rand::rngs::OsRng;
 use thiserror::Error;
+#[path = "accumulator_joint_verifier.rs"]
+pub(crate) mod joint_verifier;
 #[cfg(test)]
 #[path = "accumulator_stark_oods_tests.rs"]
 mod oods_tests;
+#[path = "accumulator_private_links.rs"]
+pub(crate) mod private_links;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "accumulator_retained_columns.rs"]
+mod retained_columns;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "accumulator_stages.rs"]
+pub(crate) mod stages;
 /// Native trace logarithm for 104 non-padding rows.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1: u8 = 13;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1: u8 = 12;
 /// SHA call products plus serialized SHA-source and RFC-output products.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1: usize = 128;
 /// Verifier-preprocessed row selectors, source constants, and I/O schedule.
@@ -83,6 +91,12 @@ pub(crate) const ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1: usize = 80;
 /// SHA within-row identities plus serialized product initialization,
 /// transition, and canonical-zero identities.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_AUX_CONSTRAINT_COUNT_V1: usize = 144;
+/// Complete local base/auxiliary relation before cross-proof endpoint binding.
+/// This is not a standalone relation: the mandatory joint MAIN composition
+/// binds the omitted endpoints through 108 original-polynomial quotients.
+pub(crate) const ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1: usize =
+    ZK_X509_CA_ACCUMULATOR_BASE_CONSTRAINT_COUNT_V1
+        + ZK_X509_CA_ACCUMULATOR_AUX_CONSTRAINT_COUNT_V1;
 /// Exact opened-row residue count.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1: usize =
     ZK_X509_CA_ACCUMULATOR_BASE_CONSTRAINT_COUNT_V1
@@ -208,7 +222,7 @@ const _: () = {
     assert!(LEAF_DYNAMIC_WORD_END_V1 == 38);
 };
 /// Stable proof-facing compact accumulator identity.
-pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max1446016:inner-deep52800:subproof-max1500126:single-log13-trace8192:dedicated-lde-log16:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask696-coefficients:max-fri-rate9over64:fri136-distinct-post-grinding20:fri-ordered-low-high-pair-leaves:binary-fri6-rounds-terminal1024-degree143:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:complete-fp4-air1379-and-verifier-fixed-polynomials-at-deep:current-only-queries-after-complete-oods-no-scalar-query-callback:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree34851:composition-degree-chunks4:canonical-chunk-stride9079:independent-adjacent-fp4-masks137-before-commitment:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding8088:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=30+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
+pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-length-and-no-trailing-bytes:claim-free-frame10bytes:inner-predeep-max1446016:inner-deep52800:subproof-max1498826:single-log12-trace4096:dedicated-lde-log16:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask2100-coefficients-with108-translated-original-openings:max-fri-rate9over64:fri136-distinct-post-grinding20:fri-ordered-low-high-pair-leaves:binary-fri6-rounds-terminal1024-degree143:independent-fp4-fri-mask-root-before-deep-batching:one-MAIN-and-CA-joint-deep-point-current+next-plus108-translated-original-aux:both-local-checkpoints-and-both-original-composition-and-FRI-mask-roots-before-point:both-local-DEEP-plus-MAIN31-key-and-orderedMAIN24-CA108-before-independent-mixes:complete-fp4-local-air1363-and-verifier-fixed-polynomials-at-deep:current-only-queries-after-complete-oods-no-scalar-query-callback:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree22679:composition-degree-chunks4:canonical-chunk-stride9079:independent-adjacent-fp4-masks137-before-commitment:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding3992:base695-11chunks:aux128-2chunks:fixed80:constraints1363:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=30+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:joint-original-polynomial-MAIN108-links=ordered-sha13-source-and-digest-plus-rfc91-root-consumer:no-public-terminal-products:shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
 const CA_PROOF_MAGIC_V1: [u8; 4] = *b"X5C1";
 const CA_INNER_PROOF_MAGIC_V1: [u8; 4] = *b"X5C2";
 const CA_ADAPTER_ID_V1: u16 = 5;
@@ -225,16 +239,11 @@ const CA_DEEP_FIELD_COUNT_V1: usize = 2
 const CA_DEEP_BYTES_V1: usize = CA_DEEP_FIELD_COUNT_V1 * core::mem::size_of::<[u64; 4]>();
 const CA_INNER_MAXIMUM_PROOF_BYTES_V1: usize =
     ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1 as usize + CA_DEEP_BYTES_V1;
-const CA_CLAIM_FIELDS_V1: usize =
-    2 * ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 * ZK_X509_SHA_BUS_LANES_V1
-        + ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-const CA_CLAIM_RECORD_BYTES_V1: usize = 4 + core::mem::size_of::<u64>();
-const CA_PROOF_LENGTH_OFFSET_V1: usize =
-    4 + 2 + 2 + 2 + CA_CLAIM_FIELDS_V1 * CA_CLAIM_RECORD_BYTES_V1;
+const CA_PROOF_LENGTH_OFFSET_V1: usize = 4 + 2;
 const CA_PROOF_ENVELOPE_BYTES_V1: usize = CA_PROOF_LENGTH_OFFSET_V1 + 4;
 /// Exact typed-claim envelope bytes, excluding the inner aggregate proof.
 #[cfg(test)]
-pub(crate) const ZK_X509_CA_ACCUMULATOR_CLAIM_ENVELOPE_BYTES_V1: usize = CA_PROOF_ENVELOPE_BYTES_V1;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_FRAME_BYTES_V1: usize = CA_PROOF_ENVELOPE_BYTES_V1;
 /// Exact dedicated compact-CA DEEP payload bytes.
 #[cfg(test)]
 pub(crate) const ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1: usize = CA_DEEP_BYTES_V1;
@@ -271,8 +280,6 @@ const CA_PUBLIC_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:ca-accumulator
 const CA_SCHEDULE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:schedule-digest:v1";
 const CA_REGISTRATION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:ca-accumulator:registration:v1";
-const CA_TERMINAL_CLAIMS_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:ca-accumulator:terminal-claims:v1";
 const CA_CONSTRAINT_ALPHA_LABEL_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:constraint-alpha:v1";
 const CA_DEEP_BASE_CURRENT_MIX_LABEL_V1: &[u8] =
@@ -287,9 +294,7 @@ const CA_DEEP_COMPOSITION_MIX_LABEL_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:deep-composition-mix:v1";
 const CA_GRINDING_NONCE_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:grinding-nonce:v1";
-#[cfg(test)]
-const CA_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:ca-accumulator:proof-binding:v1";
-const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
+pub(super) const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
         proof_magic: CA_INNER_PROOF_MAGIC_V1,
         proof_version: ZK_X509_PROOF_VERSION_V1,
@@ -308,9 +313,11 @@ const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
         maximum_aux_columns_per_instance: 64,
         maximum_proof_bytes: CA_INNER_MAXIMUM_PROOF_BYTES_V1,
     };
-const CA_AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
+const fn ca_domains_v1(
+    proof_instance: ZkX509ProofInstanceV1,
+) -> aggregate::AggregateStarkDomainsV1 {
     aggregate::AggregateStarkDomainsV1 {
-        digest_context: ZK_X509_DIGEST_CONTEXT_V1,
+        digest_context: proof_instance.ca_context_v1(),
         base_leaf: CA_BASE_LEAF_DOMAIN_V1,
         base_node: CA_BASE_NODE_DOMAIN_V1,
         aux_leaf: CA_AUX_LEAF_DOMAIN_V1,
@@ -326,19 +333,19 @@ const CA_AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         fri_root_label: CA_FRI_ROOT_LABEL_V1,
         fri_beta_label: CA_FRI_BETA_LABEL_V1,
         query_seed: CA_QUERY_SEED_DOMAIN_V1,
-    };
+    }
+}
 const _: () = {
     assert!(CA_QUERY_COUNT_V1 == 136);
-    assert!(CA_BLOWUP_LOG2_V1 == 3);
+    assert!(CA_BLOWUP_LOG2_V1 == 4);
     assert!(CA_TERMINAL_LOG2_V1 == 10);
     assert!(ZK_X509_CA_FRI_ROUNDS_V1 == ZK_X509_CA_FRI_LDE_LOG2_V1 - CA_TERMINAL_LOG2_V1);
     assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 4);
-    assert!(CA_MASK_DEGREE_V1 == 695);
+    assert!(CA_MASK_DEGREE_V1 == 2099);
     assert!(CA_DEEP_BYTES_V1 == 52_800);
-    assert!(CA_CLAIM_FIELDS_V1 == 108);
-    assert!(CA_PROOF_ENVELOPE_BYTES_V1 == 1_310);
+    assert!(CA_PROOF_ENVELOPE_BYTES_V1 == 10);
     assert!(CA_INNER_MAXIMUM_PROOF_BYTES_V1 == 1_498_816);
-    assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 == 1_500_126);
+    assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 == 1_498_826);
     assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 };
 /// Exact caller-supplied resource shape admitted by the first release.
@@ -631,6 +638,22 @@ fn map_transparent_proof_error_v1(
         _ => ZkX509CaAccumulatorProofErrorV1::ConstraintOpening,
     }
 }
+/// Complete per-column primitive-coordinate closure for the CA-to-MAIN links.
+/// Thirteen translated MAIN query/DEEP points join the two local points.
+/// Frobenius closure counts at most four base coordinates per extension point.
+fn ca_private_query_closure_coefficients_v1(
+    deep_points: usize,
+    queries: usize,
+) -> Result<usize, ZkX509AccumulatorStarkErrorV1> {
+    if queries == 0 {
+        return Err(ZkX509AccumulatorStarkErrorV1::Resource);
+    }
+    deep_points
+        .checked_mul(4)
+        .and_then(|deep| queries.checked_add(deep))
+        .and_then(|points| points.checked_mul(2 + ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1))
+        .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)
+}
 /// Derive the minimum safe local request for the compiled cubic AIR and exact
 /// outer DEEP/FRI parameters.
 pub(crate) fn ca_accumulator_resource_request_v1(
@@ -648,7 +671,12 @@ pub(crate) fn ca_accumulator_resource_request_v1(
         fri_query_count,
     )
     .map_err(|_| ZkX509AccumulatorStarkErrorV1::Resource)?;
-    let mask_degree = geometry.minimum_mask_degree;
+    let mask_coefficients =
+        ca_private_query_closure_coefficients_v1(deep_query_count, fri_query_count)?;
+    if mask_coefficients < geometry.minimum_mask_coefficients {
+        return Err(ZkX509AccumulatorStarkErrorV1::Resource);
+    }
+    let mask_degree = mask_coefficients - 1;
     let maximum_masked_trace_degree = ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1
         .checked_add(mask_degree)
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
@@ -715,8 +743,12 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         request.fri_query_count,
     )
     .map_err(|_| ZkX509AccumulatorStarkErrorV1::Resource)?;
-    if mask_coefficients != geometry.minimum_mask_coefficients
-        || request.mask_degree != geometry.minimum_mask_degree
+    if mask_coefficients
+        != ca_private_query_closure_coefficients_v1(
+            request.deep_query_count,
+            request.fri_query_count,
+        )?
+        || mask_coefficients < geometry.minimum_mask_coefficients
     {
         return Err(ZkX509AccumulatorStarkErrorV1::Resource);
     }
@@ -1273,9 +1305,11 @@ pub(crate) fn validate_ca_accumulator_io_terminal_v1(
     }
     Ok(())
 }
-/// Evaluate the exact residue vector at one opened current/next pair.
+/// Evaluate every local CA identity without exposing any endpoint product.
+/// The consuming joint proof must additionally enforce all108 original-column
+/// links; this function alone does not establish SHA/RFC witness consistency.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>(
+pub(crate) fn evaluate_ca_accumulator_local_residues_v1<A: PolynomialAirFieldV1>(
     public: ZkX509CaAccumulatorStarkPublicV1,
     base: &[A],
     next_base: &[A],
@@ -1284,7 +1318,6 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>
     fixed: &[A],
     sha_challenges: ZkX509ShaCallBusChallengesV1,
     io_challenges: ZkX509Rfc5280StarkChallengesV1,
-    terminal_claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
 ) -> Result<Vec<A>, ZkX509AccumulatorStarkErrorV1> {
     if base.len() != ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1
         || next_base.len() != ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1
@@ -1305,9 +1338,6 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>
         || public
             .governed_root
             .iter()
-            .chain(terminal_claims.source_products.iter().flatten())
-            .chain(terminal_claims.digest_products.iter().flatten())
-            .chain(terminal_claims.root_spki_consumer_products.iter())
             .any(|value| F::canonical(value.0).is_none())
         || base
             .iter()
@@ -1327,6 +1357,8 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>
     let transition = fixed[FIX_TRANSITION];
     let io_transition = fixed[FIX_IO_TRANSITION];
     let last = fixed[FIX_LAST];
+    // Keep the current public wrapper's exact allocation until its endpoint
+    // envelope is removed together with the completed joint proof.
     let mut residues = Vec::with_capacity(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1);
     let digest_bits = &base[CA_DIGEST_BYTE_BITS_START..CA_DIGEST_BYTE_BITS_START + 32 * 8];
     let sibling_bits = &base[CA_SIBLING_BYTE_BITS_START..CA_SIBLING_BYTE_BITS_START + 32 * 8];
@@ -1499,6 +1531,48 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>
         residues.push(non_io.mul(serialized_sha));
         residues.push(non_io.mul(root_spki_io));
     }
+    if residues.len() != ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1 {
+        return Err(ZkX509AccumulatorStarkErrorV1::Shape);
+    }
+    Ok(residues)
+}
+
+/// Current complete standalone relation, including its public product bindings.
+/// The local prefix is shared with the held joint proof implementation so all
+/// original identities and their order remain unchanged during staged wiring.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>(
+    public: ZkX509CaAccumulatorStarkPublicV1,
+    base: &[A],
+    next_base: &[A],
+    aux: &[A],
+    next_aux: &[A],
+    fixed: &[A],
+    sha_challenges: ZkX509ShaCallBusChallengesV1,
+    io_challenges: ZkX509Rfc5280StarkChallengesV1,
+    terminal_claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
+) -> Result<Vec<A>, ZkX509AccumulatorStarkErrorV1> {
+    if terminal_claims
+        .source_products
+        .iter()
+        .flatten()
+        .chain(terminal_claims.digest_products.iter().flatten())
+        .chain(terminal_claims.root_spki_consumer_products.iter())
+        .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(ZkX509AccumulatorStarkErrorV1::Shape);
+    }
+    let mut residues = evaluate_ca_accumulator_local_residues_v1(
+        public,
+        base,
+        next_base,
+        aux,
+        next_aux,
+        fixed,
+        sha_challenges,
+        io_challenges,
+    )?;
+    let leaf = fixed[FIX_LEAF];
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         let leaf_constant_source = leaf_constant_source_product_v1(lane, sha_challenges)?;
         let selected_source = leaf
@@ -1530,6 +1604,7 @@ pub(crate) fn evaluate_ca_accumulator_stark_residues_v1<A: PolynomialAirFieldV1>
     }
     Ok(residues)
 }
+
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_aux_row_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
@@ -1892,6 +1967,19 @@ fn ca_aggregate_layout_v1()
     }
     Ok(layout)
 }
+/// Validate the FRI certificate against the same closed CA parameters and layout
+/// used by the actual prover and verifier. A one-column surrogate cannot admit
+/// this profile's dedicated native12-to-LDE16 padding geometry.
+pub(super) fn validate_ca_fri_theorem_certificate_v1(
+    certificate: aggregate::AggregateFriTheorem2CertificateV1,
+) -> Result<aggregate::AggregateFriTheorem2BoundV1, ZkX509CaAccumulatorProofErrorV1> {
+    aggregate::validate_affine_batched_fri_theorem2_v1(
+        CA_AGGREGATE_PARAMETERS_V1,
+        &ca_aggregate_layout_v1()?,
+        certificate,
+    )
+    .map_err(map_aggregate_proof_error_v1)
+}
 fn canonical_ca_manifest_role_v1(
     call: usize,
 ) -> Result<ZkX509ShaCallRoleV1, ZkX509CaAccumulatorProofErrorV1> {
@@ -1970,7 +2058,7 @@ fn ca_schedule_digest_v1(
         );
     }
     privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_FIXED_DIGEST_CONTEXT_V1,
         CA_SCHEDULE_DIGEST_DOMAIN_V1,
         b"ca-sha-call-schedule",
         0,
@@ -2013,7 +2101,7 @@ pub(crate) fn ca_profile_digest_v1() -> Result<PrivacyOuterDigestV1, ZkX509CaAcc
             .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
     );
     privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        ZK_X509_FIXED_DIGEST_CONTEXT_V1,
         CA_PROFILE_DIGEST_DOMAIN_V1,
         b"ca-proof-profile",
         0,
@@ -2044,6 +2132,7 @@ fn validate_ca_proof_public_v1(
         .map_err(ZkX509CaAccumulatorProofErrorV1::from)
 }
 pub(crate) fn ca_public_digest_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public: ZkX509CaAccumulatorStarkPublicV1,
     schedule: &ZkX509ShaCallScheduleV1,
 ) -> Result<PrivacyOuterDigestV1, ZkX509CaAccumulatorProofErrorV1> {
@@ -2060,7 +2149,7 @@ pub(crate) fn ca_public_digest_v1(
     let schedule_digest = ca_schedule_digest_v1(schedule)?;
     let schedule_digest = schedule_digest.to_bytes();
     privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        proof_instance.ca_context_v1(),
         CA_PUBLIC_DIGEST_DOMAIN_V1,
         b"ca-public-statement",
         0,
@@ -2071,14 +2160,15 @@ pub(crate) fn ca_public_digest_v1(
     .map_err(map_transparent_proof_error_v1)
 }
 fn new_ca_transcript_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public: ZkX509CaAccumulatorStarkPublicV1,
     schedule: &ZkX509ShaCallScheduleV1,
     layout: &aggregate::AggregateProofLayoutV1,
 ) -> Result<TransparentTranscriptV1, ZkX509CaAccumulatorProofErrorV1> {
     let profile_digest = ca_profile_digest_v1()?;
-    let public_digest = ca_public_digest_v1(public, schedule)?;
+    let public_digest = ca_public_digest_v1(proof_instance, public, schedule)?;
     let mut transcript = TransparentTranscriptV1::new(
-        ZK_X509_DIGEST_CONTEXT_V1,
+        proof_instance.ca_context_v1(),
         ZK_X509_SUITE_V1,
         &profile_digest,
         &public_digest,
@@ -2096,7 +2186,7 @@ fn new_ca_transcript_v1(
     aggregate::absorb_layout_v1(
         &mut transcript,
         CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
+        ca_domains_v1(proof_instance),
         CA_RELATION_LAYOUT_DOMAIN_V1,
         layout,
     )
@@ -2121,95 +2211,16 @@ fn new_ca_transcript_v1(
         .map_err(map_transparent_proof_error_v1)?;
     Ok(transcript)
 }
-fn ca_claim_address_v1(index: usize) -> Result<(u8, u8, u8), ZkX509CaAccumulatorProofErrorV1> {
-    let sha_family_fields = ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 * ZK_X509_SHA_BUS_LANES_V1;
-    if index < sha_family_fields {
-        let row = index / ZK_X509_SHA_BUS_LANES_V1;
-        return Ok((
-            1,
-            u8::try_from(ZK_X509_SHA_CA_LEAF_CALL_V1 + row)
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-            u8::try_from(index % ZK_X509_SHA_BUS_LANES_V1)
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-        ));
-    }
-    if index < 2 * sha_family_fields {
-        let local = index - sha_family_fields;
-        let row = local / ZK_X509_SHA_BUS_LANES_V1;
-        return Ok((
-            2,
-            u8::try_from(ZK_X509_SHA_CA_LEAF_CALL_V1 + row)
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-            u8::try_from(local % ZK_X509_SHA_BUS_LANES_V1)
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-        ));
-    }
-    let lane = index
-        .checked_sub(2 * sha_family_fields)
-        .filter(|lane| *lane < ZK_X509_RFC5280_STARK_BUS_LANES_V1)
-        .ok_or(ZkX509CaAccumulatorProofErrorV1::Resource)?;
-    Ok((
-        3,
-        0,
-        u8::try_from(lane).map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-    ))
-}
-fn ca_claim_value_v1(
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-    index: usize,
-) -> Result<F, ZkX509CaAccumulatorProofErrorV1> {
-    let sha_family_fields = ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 * ZK_X509_SHA_BUS_LANES_V1;
-    if index < sha_family_fields {
-        return Ok(claims.source_products[index / ZK_X509_SHA_BUS_LANES_V1]
-            [index % ZK_X509_SHA_BUS_LANES_V1]);
-    }
-    if index < 2 * sha_family_fields {
-        let local = index - sha_family_fields;
-        return Ok(claims.digest_products[local / ZK_X509_SHA_BUS_LANES_V1]
-            [local % ZK_X509_SHA_BUS_LANES_V1]);
-    }
-    claims
-        .root_spki_consumer_products
-        .get(index - 2 * sha_family_fields)
-        .copied()
-        .ok_or(ZkX509CaAccumulatorProofErrorV1::Resource)
-}
-fn encode_ca_claim_records_v1(
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
-    let mut records = Vec::new();
-    records
-        .try_reserve_exact(CA_CLAIM_FIELDS_V1 * CA_CLAIM_RECORD_BYTES_V1)
-        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
-    for index in 0..CA_CLAIM_FIELDS_V1 {
-        let (family, subject, lane) = ca_claim_address_v1(index)?;
-        let value = ca_claim_value_v1(claims, index)?;
-        if F::canonical(value.0).is_none() {
-            return Err(ZkX509CaAccumulatorProofErrorV1::NonCanonicalField);
-        }
-        records.extend_from_slice(&[family, subject, lane, 0]);
-        append_u64_v1(&mut records, value.0);
-    }
-    Ok(records)
-}
-fn absorb_ca_terminal_claims_v1(
-    transcript: &mut TransparentTranscriptV1,
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
-    let records = encode_ca_claim_records_v1(claims)?;
-    transcript
-        .absorb(CA_TERMINAL_CLAIMS_DOMAIN_V1, &[b"X5T1", &records])
-        .map_err(map_transparent_proof_error_v1)
-}
+/// Encode the sole claim-free CA component frame. Acceptance requires both
+/// members of the paired original-oracle credential verifier.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn encode_ca_proof_envelope_v1(
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-    inner: &[u8],
-) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
-    if inner.is_empty() || inner.len() > CA_INNER_MAXIMUM_PROOF_BYTES_V1 {
-        return Err(ZkX509CaAccumulatorProofErrorV1::ProofTooLarge);
+fn encode_ca_proof_envelope_v1(inner: &[u8]) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
+    if inner.len() < 4
+        || inner[..4] != CA_INNER_PROOF_MAGIC_V1
+        || inner.len() > CA_INNER_MAXIMUM_PROOF_BYTES_V1
+    {
+        return Err(ZkX509CaAccumulatorProofErrorV1::MalformedProof);
     }
-    let records = encode_ca_claim_records_v1(claims)?;
     let exact = CA_PROOF_ENVELOPE_BYTES_V1
         .checked_add(inner.len())
         .ok_or(ZkX509CaAccumulatorProofErrorV1::ProofTooLarge)?;
@@ -2222,98 +2233,42 @@ fn encode_ca_proof_envelope_v1(
         .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
     encoded.extend_from_slice(&CA_PROOF_MAGIC_V1);
     append_u16_v1(&mut encoded, ZK_X509_PROOF_VERSION_V1);
-    append_u16_v1(&mut encoded, CA_ADAPTER_ID_V1);
-    append_u16_v1(
-        &mut encoded,
-        u16::try_from(CA_CLAIM_FIELDS_V1).map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?,
-    );
-    encoded.extend_from_slice(&records);
     append_u32_v1(
         &mut encoded,
         u32::try_from(inner.len()).map_err(|_| ZkX509CaAccumulatorProofErrorV1::ProofTooLarge)?,
     );
     encoded.extend_from_slice(inner);
-    if encoded.len() != exact {
-        return Err(ZkX509CaAccumulatorProofErrorV1::Resource);
-    }
     Ok(encoded)
 }
-fn decode_ca_proof_envelope_v1(
-    encoded: &[u8],
-) -> Result<(ZkX509CaAccumulatorStarkTerminalClaimsV1, &[u8]), ZkX509CaAccumulatorProofErrorV1> {
+fn decode_ca_proof_envelope_v1(encoded: &[u8]) -> Result<&[u8], ZkX509CaAccumulatorProofErrorV1> {
     if encoded.len() > ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 {
         return Err(ZkX509CaAccumulatorProofErrorV1::ProofTooLarge);
     }
-    if encoded.len() < CA_PROOF_ENVELOPE_BYTES_V1
-        || encoded.get(..4) != Some(CA_PROOF_MAGIC_V1.as_slice())
+    if encoded.len() < CA_PROOF_ENVELOPE_BYTES_V1 + 4
+        || encoded[..4] != CA_PROOF_MAGIC_V1
         || u16::from_be_bytes(
             encoded[4..6]
                 .try_into()
                 .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
         ) != ZK_X509_PROOF_VERSION_V1
-        || u16::from_be_bytes(
-            encoded[6..8]
-                .try_into()
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
-        ) != CA_ADAPTER_ID_V1
-        || usize::from(u16::from_be_bytes(
-            encoded[8..10]
-                .try_into()
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
-        )) != CA_CLAIM_FIELDS_V1
     {
         return Err(ZkX509CaAccumulatorProofErrorV1::MalformedProof);
     }
-    let mut values = [F::ZERO; CA_CLAIM_FIELDS_V1];
-    for (index, value) in values.iter_mut().enumerate() {
-        let start = 10_usize
-            .checked_add(
-                index
-                    .checked_mul(CA_CLAIM_RECORD_BYTES_V1)
-                    .ok_or(ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
-            )
-            .ok_or(ZkX509CaAccumulatorProofErrorV1::MalformedProof)?;
-        let (family, subject, lane) = ca_claim_address_v1(index)?;
-        if encoded.get(start..start + 4) != Some([family, subject, lane, 0].as_slice()) {
-            return Err(ZkX509CaAccumulatorProofErrorV1::MalformedProof);
-        }
-        let raw = u64::from_be_bytes(
-            encoded[start + 4..start + CA_CLAIM_RECORD_BYTES_V1]
-                .try_into()
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
-        );
-        *value = F::canonical(raw).ok_or(ZkX509CaAccumulatorProofErrorV1::NonCanonicalField)?;
-    }
-    let inner_len = usize::try_from(u32::from_be_bytes(
+    let len = usize::try_from(u32::from_be_bytes(
         encoded[CA_PROOF_LENGTH_OFFSET_V1..CA_PROOF_ENVELOPE_BYTES_V1]
             .try_into()
             .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?,
     ))
     .map_err(|_| ZkX509CaAccumulatorProofErrorV1::MalformedProof)?;
-    if inner_len == 0
-        || inner_len > CA_INNER_MAXIMUM_PROOF_BYTES_V1
-        || encoded.len()
-            != CA_PROOF_ENVELOPE_BYTES_V1
-                .checked_add(inner_len)
-                .ok_or(ZkX509CaAccumulatorProofErrorV1::MalformedProof)?
+    if len < 4
+        || len > CA_INNER_MAXIMUM_PROOF_BYTES_V1
+        || CA_PROOF_ENVELOPE_BYTES_V1.checked_add(len) != Some(encoded.len())
+        || encoded[CA_PROOF_ENVELOPE_BYTES_V1..CA_PROOF_ENVELOPE_BYTES_V1 + 4]
+            != CA_INNER_PROOF_MAGIC_V1
     {
         return Err(ZkX509CaAccumulatorProofErrorV1::MalformedProof);
     }
-    let sha_family_fields = ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 * ZK_X509_SHA_BUS_LANES_V1;
-    let claims = ZkX509CaAccumulatorStarkTerminalClaimsV1 {
-        source_products: core::array::from_fn(|row| {
-            core::array::from_fn(|lane| values[row * ZK_X509_SHA_BUS_LANES_V1 + lane])
-        }),
-        digest_products: core::array::from_fn(|row| {
-            core::array::from_fn(|lane| {
-                values[sha_family_fields + row * ZK_X509_SHA_BUS_LANES_V1 + lane]
-            })
-        }),
-        root_spki_consumer_products: core::array::from_fn(|lane| {
-            values[2 * sha_family_fields + lane]
-        }),
-    };
-    Ok((claims, &encoded[CA_PROOF_ENVELOPE_BYTES_V1..]))
+    Ok(&encoded[CA_PROOF_ENVELOPE_BYTES_V1..])
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ca_fixed_lde_columns_v1(
@@ -2395,13 +2350,12 @@ fn verify_ca_deep_constraints_v1(
     native_fixed: &[Vec<F>],
     sha_challenges: ZkX509ShaCallBusChallengesV1,
     io_challenges: ZkX509Rfc5280StarkChallengesV1,
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
     alphas: &[E],
 ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
     if !aggregate::deep_point_is_admissible_v1(point, CA_AGGREGATE_PARAMETERS_V1, layout)
         .map_err(map_aggregate_proof_error_v1)?
         || CA_SECURITY_LANES_V1 != 1
-        || alphas.len() != ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1
+        || alphas.len() != ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1
         || alphas.iter().any(|value| !value.is_canonical())
     {
         return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
@@ -2413,7 +2367,7 @@ fn verify_ca_deep_constraints_v1(
         return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
     };
     let fixed = ca_fixed_columns_at_deep_v1(native_fixed, point)?;
-    let residues = evaluate_ca_accumulator_stark_residues_v1(
+    let residues = evaluate_ca_accumulator_local_residues_v1(
         public,
         &group.base_current,
         &group.base_next,
@@ -2422,7 +2376,6 @@ fn verify_ca_deep_constraints_v1(
         &fixed,
         sha_challenges,
         io_challenges,
-        claims,
     )
     .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
     let inverse_vanishing = point
@@ -2460,33 +2413,6 @@ fn verify_ca_deep_constraints_v1(
     Ok(())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn ca_masked_lde_columns_v1<R: TryCryptoRng + ?Sized>(
-    native_columns: &[Vec<F>],
-    expected_width: usize,
-    rng: &mut HealthCheckedTryCryptoRngV1<'_, R>,
-) -> Result<Vec<Vec<F>>, ZkX509CaAccumulatorProofErrorV1> {
-    if native_columns.len() != expected_width
-        || native_columns
-            .iter()
-            .any(|column| column.len() != ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1)
-    {
-        return Err(ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness);
-    }
-    native_columns
-        .iter()
-        .map(|column| {
-            masked_trace_lde_column_v1(
-                column,
-                ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
-                ZK_X509_CA_FRI_LDE_LOG2_V1,
-                CA_MASK_DEGREE_V1,
-                rng,
-            )
-            .map_err(map_transparent_proof_error_v1)
-        })
-        .collect()
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ca_lde_row_v1(
     columns: &[Vec<F>],
     index: usize,
@@ -2504,37 +2430,13 @@ fn ca_lde_row_v1(
 fn derive_ca_constraint_alphas_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<Vec<E>, ZkX509CaAccumulatorProofErrorV1> {
-    (0..ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1)
+    (0..ZK_X509_CA_ACCUMULATOR_LOCAL_CONSTRAINT_COUNT_V1)
         .map(|_| {
             transcript
                 .challenge_fp4(CA_CONSTRAINT_ALPHA_LABEL_V1)
                 .map_err(map_transparent_proof_error_v1)
         })
         .collect()
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn ca_quotient_value_v1(
-    x: F,
-    residues: &[F],
-    alphas: &[E],
-) -> Result<E, ZkX509CaAccumulatorProofErrorV1> {
-    if residues.len() != ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1
-        || residues.len() != alphas.len()
-    {
-        return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
-    }
-    let inverse_vanishing = x
-        .pow(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 as u128)
-        .sub(F::ONE)
-        .inv()
-        .ok_or(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening)?;
-    Ok(residues
-        .iter()
-        .zip(alphas)
-        .fold(E::ZERO, |sum, (residue, alpha)| {
-            sum.add(alpha.mul_base(*residue))
-        })
-        .mul_base(inverse_vanishing))
 }
 /// Clearing owner retained through every commitment, transcript and FRI operation.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2565,81 +2467,6 @@ fn own_ca_composition_lane_v1(
     Ok(lanes)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn ca_composition_lanes_v1<R: rand::TryRngCore>(
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    base_lde: &[Vec<F>],
-    aux_lde: &[Vec<F>],
-    fixed_lde: &[Vec<F>],
-    sha_challenges: ZkX509ShaCallBusChallengesV1,
-    io_challenges: ZkX509Rfc5280StarkChallengesV1,
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-    alphas: &[E],
-    layout: &aggregate::AggregateProofLayoutV1,
-    rng: &mut R,
-) -> Result<CaCompositionLanesV1, ZkX509CaAccumulatorProofErrorV1> {
-    let rows = layout.common_lde_size();
-    let group = layout
-        .trace_groups()
-        .first()
-        .ok_or(ZkX509CaAccumulatorProofErrorV1::Resource)?;
-    let stride = group
-        .next_stride(layout.common_lde_log2())
-        .map_err(map_aggregate_proof_error_v1)?;
-    if rows != 1_usize << ZK_X509_CA_FRI_LDE_LOG2_V1
-        || group.base_width != ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1
-        || group.aux_width != ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1
-    {
-        return Err(ZkX509CaAccumulatorProofErrorV1::Resource);
-    }
-    let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2())
-        .map_err(map_transparent_proof_error_v1)?;
-    let mut evaluations =
-        super::private_table::PrivateTableV1::new(Vec::new(), |values: &mut [E]| {
-            super::private_table::zeroize_words_v1(values);
-        });
-    evaluations
-        .try_reserve_exact(rows)
-        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
-    let mut x = F(GOLDILOCKS_GENERATOR_V1);
-    for index in 0..rows {
-        let next = (index + stride) % rows;
-        let base = ca_lde_row_v1(base_lde, index, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, rows)?;
-        let next_base = ca_lde_row_v1(base_lde, next, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, rows)?;
-        let aux = ca_lde_row_v1(aux_lde, index, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, rows)?;
-        let next_aux = ca_lde_row_v1(aux_lde, next, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, rows)?;
-        let fixed = ca_lde_row_v1(
-            fixed_lde,
-            index,
-            ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1,
-            rows,
-        )?;
-        let residues = evaluate_ca_accumulator_stark_residues_v1(
-            public,
-            &base,
-            &next_base,
-            &aux,
-            &next_aux,
-            &fixed,
-            sha_challenges,
-            io_challenges,
-            claims,
-        )
-        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-        evaluations.push(ca_quotient_value_v1(x, &residues, alphas)?);
-        x = x.mul(lde_root);
-    }
-    let geometry = super::composition_masking::QuotientChunkGeometryV1::new_v1(
-        layout,
-        CA_AGGREGATE_PARAMETERS_V1,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let chunks = geometry
-        .split_evaluations_v1(evaluations.into_vec(), layout.common_lde_log2(), rng)
-        .map_err(map_aggregate_proof_error_v1)?;
-    own_ca_composition_lane_v1(chunks)
-}
 fn ca_challenge_vector_v1(
     transcript: &mut TransparentTranscriptV1,
     label: &[u8],
@@ -2827,370 +2654,16 @@ fn absorb_ca_grinding_nonce_v1(
         .absorb(CA_GRINDING_NONCE_DOMAIN_V1, &[&nonce.to_be_bytes()])
         .map_err(map_transparent_proof_error_v1)
 }
-fn ca_binding_from_claims_v1(
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    schedule: &ZkX509ShaCallScheduleV1,
-    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
-) -> Result<ZkX509CaAccumulatorSubproofBindingV1, ZkX509CaAccumulatorProofErrorV1> {
-    let binding = ZkX509CaAccumulatorSubproofBindingV1 {
-        public,
-        sha_terminals: core::array::from_fn(|row| {
-            let call = ZK_X509_SHA_CA_LEAF_CALL_V1 + row;
-            ZkX509CaAccumulatorCallTerminalV1 {
-                call: u8::try_from(call).expect("compact CA call fits u8"),
-                role: if row == 0 {
-                    ZkX509ShaCallRoleV1::CaLeaf
-                } else {
-                    ZkX509ShaCallRoleV1::CaNode(
-                        u8::try_from(row - 1).expect("compact CA level fits u8"),
-                    )
-                },
-                source_products: claims.source_products[row],
-                digest_products: claims.digest_products[row],
-            }
-        }),
-        root_spki_terminal: ZkX509CaAccumulatorIoTerminalV1 {
-            channel: u32::try_from(public.root_spki_channel.0)
-                .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?,
-            event_count: ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_IO_EVENTS_V1,
-            consumer_products: claims.root_spki_consumer_products,
-        },
-    };
-    validate_ca_accumulator_subproof_binding_v1(public, schedule, binding)
-        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    Ok(binding)
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn ca_base_columns_v1(
-    trace: &ZkX509CaAccumulatorTraceV1,
-) -> Result<Vec<Vec<F>>, ZkX509CaAccumulatorProofErrorV1> {
-    trace
-        .validate()
-        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?;
-    let mut columns = allocate_columns_v1(
-        ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
-        ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1,
-    )
-    .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    for index in 0..ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 {
-        let row = trace
-            .base_row(index)
-            .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?;
-        append_array_row_v1(&mut columns, &row).map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    }
-    Ok(columns)
-}
-/// Construct the sole canonical dedicated compact-CA proof with injected,
-/// fallible cryptographic entropy.
-///
-/// Public/witness/resource preflight is complete before the source is touched.
-/// One fixed-block, health-checked reservoir session then covers every trace, quotient
-/// and FRI mask, and the producer independently verifies the final canonical
-/// bytes. Returned errors and source unwinds poison the session.
-#[allow(clippy::too_many_lines)]
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
-    trace: &ZkX509CaAccumulatorTraceV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-    rng: &mut R,
-) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
-    trace
-        .validate()
-        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?;
-    validate_ca_proof_schedule_v1(sha_schedule)?;
-    let public = ca_accumulator_stark_public_v1(trace, sha_schedule)
-        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    validate_ca_proof_public_v1(public, sha_schedule)?;
-    let request = ca_accumulator_resource_request_v1(
-        ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1,
-        1,
-        CA_QUERY_COUNT_V1,
-    )
-    .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    let envelope = checked_ca_accumulator_resource_envelope_v1(request)
-        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    if request.lde_log2 != ZK_X509_CA_FRI_LDE_LOG2_V1
-        || request.mask_degree != CA_MASK_DEGREE_V1
-        || envelope.mask_coefficients != CA_MASK_DEGREE_V1 + 1
-    {
-        return Err(ZkX509CaAccumulatorProofErrorV1::Resource);
-    }
-    let layout = ca_aggregate_layout_v1()?;
-    let base_columns = ca_base_columns_v1(trace)?;
-    let fixed_columns =
-        compile_ca_accumulator_fixed_columns_v1().map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    let mut checked_rng = HealthCheckedTryCryptoRngV1::new(rng).map_err(|error| match error {
-        TryCryptoProverRandomnessErrorV1::Unavailable => {
-            ZkX509CaAccumulatorProofErrorV1::RandomnessUnavailable
-        }
-        TryCryptoProverRandomnessErrorV1::Unhealthy => {
-            ZkX509CaAccumulatorProofErrorV1::RandomnessUnhealthy
-        }
-    })?;
-    let base_lde = ca_masked_lde_columns_v1(
-        &base_columns,
-        ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
-        &mut checked_rng,
-    )?;
-    let base_tree = aggregate::row_tree_v1(
-        CA_AGGREGATE_DOMAINS_V1.digest_context,
-        CA_BASE_LEAF_DOMAIN_V1,
-        CA_BASE_NODE_DOMAIN_V1,
-        0,
-        &base_lde,
-        layout.common_lde_size(),
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
-        base_root: base_tree.root(),
-        aux_root: PrivacyOuterDigestV1::default(),
-        base_frontier: Vec::new(),
-        aux_frontier: Vec::new(),
-    }];
-    let mut transcript = new_ca_transcript_v1(public, sha_schedule, &layout)?;
-    aggregate::absorb_base_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_DOMAINS_V1,
-        &trace_group_proofs,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let credential_pre_aux = derive_zk_x509_credential_pre_aux_binding_v1(
-        credential_main_pre_aux,
-        ca_profile_digest_v1()?,
-        ca_public_digest_v1(public, sha_schedule)?,
-        trace_group_proofs[0].base_root,
-    )
-    .map_err(map_credential_pre_aux_error_v1)?;
-    absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, credential_pre_aux)
-        .map_err(map_credential_pre_aux_error_v1)?;
-    let sha_challenges = credential_pre_aux.sha();
-    let io_challenges = credential_pre_aux.rfc5280();
-    let material =
-        build_ca_accumulator_stark_material_v1(trace, sha_schedule, sha_challenges, io_challenges)
-            .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    if material.base_columns != base_columns || material.fixed_columns != fixed_columns {
-        return Err(ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness);
-    }
-    let claims = ca_accumulator_stark_terminal_claims_v1(&material);
-    ca_binding_from_claims_v1(public, sha_schedule, claims)?;
-    let aux_lde = ca_masked_lde_columns_v1(
-        &material.aux_columns,
-        ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
-        &mut checked_rng,
-    )?;
-    let aux_tree = aggregate::row_tree_v1(
-        CA_AGGREGATE_DOMAINS_V1.digest_context,
-        CA_AUX_LEAF_DOMAIN_V1,
-        CA_AUX_NODE_DOMAIN_V1,
-        0,
-        &aux_lde,
-        layout.common_lde_size(),
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    trace_group_proofs[0].aux_root = aux_tree.root();
-    aggregate::absorb_aux_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_DOMAINS_V1,
-        &trace_group_proofs,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    absorb_ca_terminal_claims_v1(&mut transcript, claims)?;
-    let alphas = derive_ca_constraint_alphas_v1(&mut transcript)?;
-    let fixed_lde = ca_fixed_lde_columns_v1(&fixed_columns)?;
-    let compositions = ca_composition_lanes_v1(
-        public,
-        &base_lde,
-        &aux_lde,
-        &fixed_lde,
-        sha_challenges,
-        io_challenges,
-        claims,
-        &alphas,
-        &layout,
-        &mut checked_rng,
-    )?;
-    let mut composition_trees = Vec::new();
-    let mut composition_roots = Vec::new();
-    for (lane, chunks) in compositions.iter().enumerate() {
-        let tree = aggregate::composition_tree_v1(CA_AGGREGATE_DOMAINS_V1, lane, chunks)
-            .map_err(map_aggregate_proof_error_v1)?;
-        composition_roots.push(tree.root());
-        composition_trees.push(tree);
-    }
-    aggregate::absorb_composition_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &composition_roots,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let fri_masks = aggregate::build_fri_mask_oracles_v1(
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &layout,
-        &mut checked_rng,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let fri_mask_roots = fri_masks
-        .iter()
-        .map(|mask| mask.tree.root())
-        .collect::<Vec<_>>();
-    aggregate::absorb_fri_mask_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &fri_mask_roots,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
-        base_lde,
-        aux_lde,
-        base_tree,
-        aux_tree,
-    }];
-    let deep_point =
-        aggregate::derive_deep_point_v1(&mut transcript, CA_AGGREGATE_PARAMETERS_V1, &layout)
-            .map_err(map_aggregate_proof_error_v1)?;
-    let deep = aggregate::build_materialized_deep_proof_v1(
-        &trace_materials,
-        &compositions,
-        CA_AGGREGATE_PARAMETERS_V1,
-        &layout,
-        deep_point,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    aggregate::absorb_deep_openings_v1(&mut transcript, &deep, CA_AGGREGATE_PARAMETERS_V1, &layout)
-        .map_err(map_aggregate_proof_error_v1)?;
-    let deep_mixes = derive_ca_deep_mixes_v1(&mut transcript, &layout)?;
-    let mut fri_materials = Vec::new();
-    for lane in 0..CA_SECURITY_LANES_V1 {
-        let mut base = ca_fri_base_v1(
-            &trace_materials[0],
-            &compositions[lane],
-            &deep,
-            deep_point,
-            &deep_mixes[lane],
-            &layout,
-        )?;
-        aggregate::add_fri_mask_oracle_v1(&mut base, &fri_masks[lane])
-            .map_err(map_aggregate_proof_error_v1)?;
-        fri_materials.push(
-            aggregate::build_fri_lane_v1(
-                CA_AGGREGATE_PARAMETERS_V1,
-                CA_AGGREGATE_DOMAINS_V1,
-                &layout,
-                lane,
-                base,
-                &mut transcript,
-            )
-            .map_err(map_aggregate_proof_error_v1)?,
-        );
-    }
-    let grinding_state = transcript.state();
-    let grinding_nonce = grind_nonce_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
-        &grinding_state,
-        ZK_X509_GRINDING_BITS_V1,
-    )
-    .map_err(map_transparent_proof_error_v1)?;
-    absorb_ca_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-    let query_indices = aggregate::query_indices_v1(
-        &transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &layout,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let queries = query_indices
-        .iter()
-        .copied()
-        .map(|index| {
-            aggregate::build_query_v1(
-                CA_AGGREGATE_PARAMETERS_V1,
-                &layout,
-                index,
-                &trace_materials,
-                &compositions,
-                &fri_masks,
-                &fri_materials,
-            )
-            .map_err(map_aggregate_proof_error_v1)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let (trace_frontiers, composition_frontiers, fri_mask_frontiers, fri_round_frontiers) =
-        aggregate::build_all_frontiers_v1(
-            CA_AGGREGATE_PARAMETERS_V1,
-            &layout,
-            &queries,
-            &trace_materials,
-            &composition_trees,
-            &fri_masks,
-            &fri_materials,
-        )
-        .map_err(map_aggregate_proof_error_v1)?;
-    for (group, (base_frontier, aux_frontier)) in trace_group_proofs.iter_mut().zip(trace_frontiers)
-    {
-        group.base_frontier = base_frontier;
-        group.aux_frontier = aux_frontier;
-    }
-    let proof = aggregate::AggregateStarkProofV1 {
-        version: ZK_X509_PROOF_VERSION_V1,
-        trace_groups: trace_group_proofs,
-        composition_roots,
-        composition_frontiers,
-        fri_mask_roots,
-        fri_mask_frontiers,
-        fri_lanes: fri_materials
-            .into_iter()
-            .zip(fri_round_frontiers)
-            .map(
-                |(lane, round_frontiers)| aggregate::AggregateFriLaneProofV1 {
-                    roots: lane.roots,
-                    terminal_values: lane
-                        .terminal_values
-                        .into_iter()
-                        .map(|value| value.coefficients().map(F::value))
-                        .collect(),
-                    round_frontiers,
-                },
-            )
-            .collect(),
-        queries,
-        grinding_nonce,
-    };
-    let inner =
-        aggregate::encode_proof_with_deep_v1(&proof, &deep, CA_AGGREGATE_PARAMETERS_V1, &layout)
-            .map_err(map_aggregate_proof_error_v1)?;
-    let encoded = encode_ca_proof_envelope_v1(claims, &inner)?;
-    verify_ca_accumulator_and_binding_v1(public, sha_schedule, credential_main_pre_aux, &encoded)
-        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::ProverSelfCheckFailed)?;
-    Ok(encoded)
-}
-/// Construct the canonical dedicated compact-CA proof with operating-system cryptographic entropy.
-#[cfg(test)]
-pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1(
-    trace: &ZkX509CaAccumulatorTraceV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-) -> Result<Vec<u8>, ZkX509CaAccumulatorProofErrorV1> {
-    prove_zk_x509_ca_accumulator_stark_v1_with_rng(
-        trace,
-        sha_schedule,
-        credential_main_pre_aux,
-        &mut OsRng,
-    )
-}
 /// Decode the sole compact-CA base root needed by the joint X5S1 schedule.
 ///
 /// Decoding establishes canonical shape and bounds but is not proof verification. An outer verifier
 /// may use this root to construct the shared pre-auxiliary schedule only if it subsequently accepts
-/// [`verify_zk_x509_ca_accumulator_stark_v1`] for the same exact proof bytes.
+/// both joint CA and MAIN verifier finishes for the same exact proof bytes.
 pub(crate) fn ca_accumulator_base_root_from_proof_v1(
     proof_bytes: &[u8],
 ) -> Result<PrivacyOuterDigestV1, ZkX509CaAccumulatorProofErrorV1> {
     let layout = ca_aggregate_layout_v1()?;
-    let (_, inner) = decode_ca_proof_envelope_v1(proof_bytes)?;
+    let inner = decode_ca_proof_envelope_v1(proof_bytes)?;
     let (proof, _) =
         aggregate::decode_proof_with_deep_v1(inner, CA_AGGREGATE_PARAMETERS_V1, &layout)
             .map_err(map_aggregate_proof_error_v1)?;
@@ -3201,196 +2674,105 @@ pub(crate) fn ca_accumulator_base_root_from_proof_v1(
         .map(|group| group.base_root)
         .ok_or(ZkX509CaAccumulatorProofErrorV1::MalformedProof)
 }
-fn verify_ca_accumulator_and_binding_v1(
+// Independent full-reference composition oracle for local-relation differential tests.
+#[cfg(test)]
+fn ca_quotient_value_v1(
+    x: F,
+    residues: &[F],
+    alphas: &[E],
+) -> Result<E, ZkX509CaAccumulatorProofErrorV1> {
+    if residues.len() != ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1
+        || residues.len() != alphas.len()
+    {
+        return Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening);
+    }
+    let inverse_vanishing = x
+        .pow(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1 as u128)
+        .sub(F::ONE)
+        .inv()
+        .ok_or(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening)?;
+    Ok(residues
+        .iter()
+        .zip(alphas)
+        .fold(E::ZERO, |sum, (residue, alpha)| {
+            sum.add(alpha.mul_base(*residue))
+        })
+        .mul_base(inverse_vanishing))
+}
+
+#[cfg(test)]
+fn ca_composition_lanes_v1<R: rand::TryRngCore>(
     public: ZkX509CaAccumulatorStarkPublicV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-    proof_bytes: &[u8],
-) -> Result<ZkX509CaAccumulatorSubproofBindingV1, ZkX509CaAccumulatorProofErrorV1> {
-    validate_ca_proof_public_v1(public, sha_schedule)?;
-    let request = ca_accumulator_resource_request_v1(
-        ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1,
-        1,
-        CA_QUERY_COUNT_V1,
-    )
-    .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    checked_ca_accumulator_resource_envelope_v1(request)
-        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    let layout = ca_aggregate_layout_v1()?;
-    let (claims, inner) = decode_ca_proof_envelope_v1(proof_bytes)?;
-    let binding = ca_binding_from_claims_v1(public, sha_schedule, claims)?;
-    let (proof, deep) =
-        aggregate::decode_proof_with_deep_v1(inner, CA_AGGREGATE_PARAMETERS_V1, &layout)
-            .map_err(map_aggregate_proof_error_v1)?;
-    let mut transcript = new_ca_transcript_v1(public, sha_schedule, &layout)?;
-    aggregate::absorb_base_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_DOMAINS_V1,
-        &proof.trace_groups,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let ca_base_root = proof
-        .trace_groups
+    base_lde: &[Vec<F>],
+    aux_lde: &[Vec<F>],
+    fixed_lde: &[Vec<F>],
+    sha_challenges: ZkX509ShaCallBusChallengesV1,
+    io_challenges: ZkX509Rfc5280StarkChallengesV1,
+    claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
+    alphas: &[E],
+    layout: &aggregate::AggregateProofLayoutV1,
+    rng: &mut R,
+) -> Result<CaCompositionLanesV1, ZkX509CaAccumulatorProofErrorV1> {
+    let rows = layout.common_lde_size();
+    let group = layout
+        .trace_groups()
         .first()
-        .filter(|_| proof.trace_groups.len() == 1)
-        .ok_or(ZkX509CaAccumulatorProofErrorV1::MalformedProof)?
-        .base_root;
-    let credential_pre_aux = derive_zk_x509_credential_pre_aux_binding_v1(
-        credential_main_pre_aux,
-        ca_profile_digest_v1()?,
-        ca_public_digest_v1(public, sha_schedule)?,
-        ca_base_root,
-    )
-    .map_err(map_credential_pre_aux_error_v1)?;
-    absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, credential_pre_aux)
-        .map_err(map_credential_pre_aux_error_v1)?;
-    let sha_challenges = credential_pre_aux.sha();
-    let io_challenges = credential_pre_aux.rfc5280();
-    aggregate::absorb_aux_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_DOMAINS_V1,
-        &proof.trace_groups,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    absorb_ca_terminal_claims_v1(&mut transcript, claims)?;
-    let alphas = derive_ca_constraint_alphas_v1(&mut transcript)?;
-    aggregate::absorb_composition_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &proof.composition_roots,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    aggregate::absorb_fri_mask_roots_v1(
-        &mut transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &proof.fri_mask_roots,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let deep_point =
-        aggregate::derive_deep_point_v1(&mut transcript, CA_AGGREGATE_PARAMETERS_V1, &layout)
-            .map_err(map_aggregate_proof_error_v1)?;
-    aggregate::absorb_deep_openings_v1(&mut transcript, &deep, CA_AGGREGATE_PARAMETERS_V1, &layout)
+        .ok_or(ZkX509CaAccumulatorProofErrorV1::Resource)?;
+    let stride = group
+        .next_stride(layout.common_lde_log2())
         .map_err(map_aggregate_proof_error_v1)?;
-    let deep_mixes = derive_ca_deep_mixes_v1(&mut transcript, &layout)?;
-    let (fri_betas, terminals) = aggregate::verify_fri_commitments_v1(
-        &proof,
+    if rows != 1_usize << ZK_X509_CA_FRI_LDE_LOG2_V1
+        || group.base_width != ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1
+        || group.aux_width != ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1
+    {
+        return Err(ZkX509CaAccumulatorProofErrorV1::Resource);
+    }
+    let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2())
+        .map_err(map_transparent_proof_error_v1)?;
+    let mut evaluations =
+        super::private_table::PrivateTableV1::new(Vec::new(), |values: &mut [E]| {
+            super::private_table::zeroize_words_v1(values);
+        });
+    evaluations
+        .try_reserve_exact(rows)
+        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
+    let mut x = F(GOLDILOCKS_GENERATOR_V1);
+    for index in 0..rows {
+        let next = (index + stride) % rows;
+        let base = ca_lde_row_v1(base_lde, index, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, rows)?;
+        let next_base = ca_lde_row_v1(base_lde, next, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1, rows)?;
+        let aux = ca_lde_row_v1(aux_lde, index, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, rows)?;
+        let next_aux = ca_lde_row_v1(aux_lde, next, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, rows)?;
+        let fixed = ca_lde_row_v1(
+            fixed_lde,
+            index,
+            ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1,
+            rows,
+        )?;
+        let residues = evaluate_ca_accumulator_stark_residues_v1(
+            public,
+            &base,
+            &next_base,
+            &aux,
+            &next_aux,
+            &fixed,
+            sha_challenges,
+            io_challenges,
+            claims,
+        )
+        .map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
+        evaluations.push(ca_quotient_value_v1(x, &residues, alphas)?);
+        x = x.mul(lde_root);
+    }
+    let geometry = super::composition_masking::QuotientChunkGeometryV1::new_v1(
+        layout,
         CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &layout,
-        &mut transcript,
     )
     .map_err(map_aggregate_proof_error_v1)?;
-    let grinding_state = transcript.state();
-    verify_grinding_nonce_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
-        &grinding_state,
-        ZK_X509_GRINDING_BITS_V1,
-        proof.grinding_nonce,
-    )
-    .map_err(|_| ZkX509CaAccumulatorProofErrorV1::TranscriptMismatch)?;
-    absorb_ca_grinding_nonce_v1(&mut transcript, proof.grinding_nonce)?;
-    let expected_indices = aggregate::query_indices_v1(
-        &transcript,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &layout,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    aggregate::verify_all_merkle_openings_v1(
-        &proof,
-        CA_AGGREGATE_PARAMETERS_V1,
-        CA_AGGREGATE_DOMAINS_V1,
-        &layout,
-        &expected_indices,
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    let fixed_columns =
-        compile_ca_accumulator_fixed_columns_v1().map_err(ZkX509CaAccumulatorProofErrorV1::from)?;
-    verify_ca_deep_constraints_v1(
-        public,
-        &deep,
-        deep_point,
-        &layout,
-        &fixed_columns,
-        sha_challenges,
-        io_challenges,
-        claims,
-        &alphas,
-    )?;
-    aggregate::verify_opened_query_relations_after_complete_oods_v1(
-        &proof,
-        &deep,
-        deep_point,
-        &deep_mixes,
-        CA_AGGREGATE_PARAMETERS_V1,
-        &layout,
-        &expected_indices,
-        &fri_betas,
-        &terminals,
-        &[],
-    )
-    .map_err(map_aggregate_proof_error_v1)?;
-    Ok(binding)
-}
-/// Verify the exact canonical compact-CA proof against verifier-owned public
-/// input and SHA schedule.
-#[cfg(test)]
-pub(crate) fn verify_zk_x509_ca_accumulator_stark_v1(
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-    proof_bytes: &[u8],
-) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
-    verify_ca_accumulator_and_binding_v1(public, sha_schedule, credential_main_pre_aux, proof_bytes)
-        .map(|_| ())
-}
-/// Verify and return the exact typed cross-subproof terminal binding.
-pub(crate) fn ca_accumulator_subproof_binding_from_proof_v1(
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-    proof_bytes: &[u8],
-) -> Result<ZkX509CaAccumulatorSubproofBindingV1, ZkX509CaAccumulatorProofErrorV1> {
-    verify_ca_accumulator_and_binding_v1(public, sha_schedule, credential_main_pre_aux, proof_bytes)
-}
-/// Verify then hash the canonical proof together with its exact public
-/// statement and verifier-owned schedule for the outer X5S1 envelope.
-#[cfg(test)]
-pub(crate) fn ca_accumulator_proof_binding_digest_v1(
-    public: ZkX509CaAccumulatorStarkPublicV1,
-    sha_schedule: &ZkX509ShaCallScheduleV1,
-    credential_main_pre_aux: ZkX509CredentialMainPreAuxV1,
-    proof_bytes: &[u8],
-) -> Result<PrivacyOuterDigestV1, ZkX509CaAccumulatorProofErrorV1> {
-    verify_ca_accumulator_and_binding_v1(
-        public,
-        sha_schedule,
-        credential_main_pre_aux,
-        proof_bytes,
-    )?;
-    let ca_base_root = ca_accumulator_base_root_from_proof_v1(proof_bytes)?;
-    let credential_pre_aux = derive_zk_x509_credential_pre_aux_binding_v1(
-        credential_main_pre_aux,
-        ca_profile_digest_v1()?,
-        ca_public_digest_v1(public, sha_schedule)?,
-        ca_base_root,
-    )
-    .map_err(map_credential_pre_aux_error_v1)?;
-    let public_digest = ca_public_digest_v1(public, sha_schedule)?;
-    let public_digest = public_digest.to_bytes();
-    let transcript_state = credential_pre_aux.transcript_state().to_bytes();
-    privacy_outer_digest_frame_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
-        CA_BINDING_DIGEST_DOMAIN_V1,
-        b"verified-ca-proof-binding",
-        0,
-        0,
-        0,
-        &[&public_digest, &transcript_state, proof_bytes],
-    )
-    .map_err(map_transparent_proof_error_v1)
+    let chunks = geometry
+        .split_evaluations_v1(evaluations.into_vec(), layout.common_lde_log2(), rng)
+        .map_err(map_aggregate_proof_error_v1)?;
+    own_ca_composition_lane_v1(chunks)
 }
 #[cfg(test)]
 mod tests {
@@ -3407,8 +2789,7 @@ mod tests {
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
         stark::zk_x509_test_digest384_v1,
     };
-    use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
-    use std::sync::OnceLock;
+    use rand::{TryCryptoRng, TryRngCore};
     fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
         let mut spki = [0x42; ZK_X509_CA_SPKI_DER_BYTES_V1];
         spki[..2].copy_from_slice(&index.to_be_bytes());
@@ -3438,7 +2819,7 @@ mod tests {
             }),
         }
     }
-    fn fixture() -> (
+    pub(super) fn fixture() -> (
         ZkX509CaAccumulatorTraceV1,
         ZkX509ShaCallScheduleV1,
         ZkX509ShaCallBusChallengesV1,
@@ -3467,7 +2848,7 @@ mod tests {
         .expect("schedule");
         (trace, schedule, challenges(), io_challenges())
     }
-    fn credential_main_pre_aux_v1() -> ZkX509CredentialMainPreAuxV1 {
+    pub(super) fn credential_main_pre_aux_v1() -> ZkX509CredentialMainPreAuxV1 {
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x91; 32],
             [0x92; 32],
@@ -3525,25 +2906,36 @@ mod tests {
         ZkX509ShaCallScheduleV1,
         Vec<u8>,
     ) {
-        static FIXTURE: OnceLock<(
-            ZkX509CaAccumulatorStarkPublicV1,
-            ZkX509ShaCallScheduleV1,
-            Vec<u8>,
-        )> = OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let (trace, schedule, _, _) = fixture();
-            let public =
-                ca_accumulator_stark_public_v1(&trace, &schedule).expect("canonical public");
-            let mut rng = StdRng::seed_from_u64(0xCA11_ACC0_5A17_0001);
-            let proof = prove_zk_x509_ca_accumulator_stark_v1_with_rng(
-                &trace,
-                &schedule,
-                credential_main_pre_aux_v1(),
-                &mut rng,
-            )
-            .expect("canonical compact-CA proof");
-            (public, schedule, proof)
-        })
+        &stages::joint::tests::fixture_v1().evidence
+    }
+    fn verify_ca_component_v1(
+        public: ZkX509CaAccumulatorStarkPublicV1,
+        schedule: &ZkX509ShaCallScheduleV1,
+        pre_aux: ZkX509CredentialMainPreAuxV1,
+        encoded: &[u8],
+    ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
+        let fixture = stages::joint::tests::fixture_v1();
+        fixture.verify_v1(public, schedule, pre_aux, encoded, fixture.openings)
+    }
+    fn begin_ca_component_v1<R: TryCryptoRng + ?Sized>(
+        trace: &ZkX509CaAccumulatorTraceV1,
+        schedule: &ZkX509ShaCallScheduleV1,
+        pre_aux: ZkX509CredentialMainPreAuxV1,
+        rng: &mut R,
+    ) -> Result<(), ZkX509CaAccumulatorProofErrorV1> {
+        trace
+            .validate()
+            .map_err(|_| ZkX509CaAccumulatorProofErrorV1::InvalidStatementOrWitness)?;
+        validate_ca_proof_schedule_v1(schedule)?;
+        let mut rng = HealthCheckedTryCryptoRngV1::new(rng).map_err(|error| match error {
+            TryCryptoProverRandomnessErrorV1::Unavailable => {
+                ZkX509CaAccumulatorProofErrorV1::RandomnessUnavailable
+            }
+            TryCryptoProverRandomnessErrorV1::Unhealthy => {
+                ZkX509CaAccumulatorProofErrorV1::RandomnessUnhealthy
+            }
+        })?;
+        stages::commit_ca_through_auxiliary_v1(trace, schedule, pre_aux, &mut rng).map(|_| ())
     }
     #[test]
     fn dimensions_calls_and_terminals_are_exact() {
@@ -3622,7 +3014,7 @@ mod tests {
     #[test]
     fn halkindi_parameterized_resource_envelope_is_exact_and_common_lifting_fails() {
         for (reduced_air_degree, deep_queries, fri_queries, expected_mask_coefficients) in
-            [(2, 0, 60, 300), (2, 1, 60, 316), (2, 2, 60, 332)]
+            [(2, 0, 60, 900), (2, 1, 60, 960), (2, 2, 60, 1020)]
         {
             let request =
                 ca_accumulator_resource_request_v1(reduced_air_degree, deep_queries, fri_queries)
@@ -3657,8 +3049,8 @@ mod tests {
                     < (envelope.fri_degree_cap + 1 - request.fri_query_count - 1)
                         * COMPOSITION_DEGREE_CHUNKS_V1
             );
-            assert_eq!(envelope.native_material_field_cells, 7_397_376);
-            assert_eq!(envelope.native_material_bytes, 59_179_008);
+            assert_eq!(envelope.native_material_field_cells, 3_698_688);
+            assert_eq!(envelope.native_material_bytes, 29_589_504);
             assert_eq!(
                 envelope.committed_lde_field_evaluations,
                 (ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1 + ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1)
@@ -3677,12 +3069,12 @@ mod tests {
         }
         let oversized_query_request =
             ca_accumulator_resource_request_v1(2, 1, 1700).expect("arithmetic high-query request");
-        assert_eq!(oversized_query_request.mask_degree + 1, 8516);
-        assert_eq!(oversized_query_request.lde_log2, 17);
+        assert_eq!(oversized_query_request.mask_degree + 1, 25_560);
+        assert_eq!(oversized_query_request.lde_log2, 18);
         assert_eq!(
             checked_ca_accumulator_resource_envelope_v1(oversized_query_request),
             Err(ZkX509AccumulatorStarkErrorV1::Resource),
-            "the materialized log17 LDE must not bypass the 512 MiB local LDE cap"
+            "the materialized log18 LDE must not bypass the 512 MiB local LDE cap"
         );
         // The compiled AIR is cubic, hence Haböck--Al Kindi uses d=d_AIR-1=2.
         // The outer theorem still chooses the exact DEEP and FRI counts.
@@ -3693,20 +3085,20 @@ mod tests {
             checked_ca_accumulator_resource_envelope_v1(request).expect("release resource census");
         assert_eq!(request.reduced_air_degree, 2);
         assert_eq!(request.fri_query_count, CA_QUERY_COUNT_V1);
-        assert_eq!(envelope.mask_coefficients, 696);
-        assert_eq!(envelope.maximum_masked_trace_degree, 8_887);
+        assert_eq!(envelope.mask_coefficients, 2100);
+        assert_eq!(envelope.maximum_masked_trace_degree, 6_195);
         assert_eq!(envelope.fri_degree_cap, 9_215);
-        assert_eq!(envelope.maximum_quotient_degree, 34_851);
-        assert_eq!(envelope.minimum_safe_lde_rows, 63_204);
+        assert_eq!(envelope.maximum_quotient_degree, 22_679);
+        assert_eq!(envelope.minimum_safe_lde_rows, 44_061);
         assert_eq!(envelope.total_local_lde_bytes, 473_432_064);
         assert_eq!(envelope.encrypted_scratch_bytes, 480_829_440);
         assert_eq!(envelope.current_next_block_bytes, 1_849_344);
-        assert_eq!(envelope.streamed_column_bytes, 589_824);
-        assert_eq!(envelope.trace_mask_bytes, 4_582_464);
+        assert_eq!(envelope.streamed_column_bytes, 557_056);
+        assert_eq!(envelope.trace_mask_bytes, 13_826_400);
         assert_eq!(envelope.composition_residue_evaluations, 90_374_144);
         assert_eq!(envelope.composition_component_evaluations, 361_496_576);
-        assert_eq!(envelope.lde_butterflies, 521_515_008);
-        assert_eq!(envelope.adapter_resident_payload_bytes, 549_212_024);
+        assert_eq!(envelope.lde_butterflies, 495_624_192);
+        assert_eq!(envelope.adapter_resident_payload_bytes, 528_833_688);
         assert!(
             envelope.adapter_resident_payload_bytes >= envelope.total_local_lde_bytes,
             "the materialized first-release LDE must be counted as resident"
@@ -3916,8 +3308,87 @@ mod tests {
             .expect("residues");
             assert_eq!(residues.len(), 1_379);
             assert!(residues.iter().all(|residue| *residue == F::ZERO));
+            let local = evaluate_ca_accumulator_local_residues_v1(
+                public,
+                &row(&material.base_columns, index),
+                &row(&material.base_columns, next_index),
+                &row(&material.aux_columns, index),
+                &row(&material.aux_columns, next_index),
+                &row(&material.fixed_columns, index),
+                sha_challenges,
+                io_challenges,
+            )
+            .unwrap();
+            assert_eq!(local.len(), 1363);
+            assert_eq!(local, residues[..1363]);
         }
     }
+    #[test]
+    fn private_local_relation_binds_all_call_products_and_last_serialized_rows() {
+        let (trace, schedule, sha, io) = fixture();
+        let public = ca_accumulator_stark_public_v1(&trace, &schedule).unwrap();
+        let material = build_ca_accumulator_stark_material_v1(&trace, &schedule, sha, io).unwrap();
+        let evaluate = |index: usize, aux: &[F], next_aux: &[F]| {
+            let next = (index + 1) % ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1;
+            evaluate_ca_accumulator_local_residues_v1(
+                public,
+                &row(&material.base_columns, index),
+                &row(&material.base_columns, next),
+                aux,
+                next_aux,
+                &row(&material.fixed_columns, index),
+                sha,
+                io,
+            )
+            .unwrap()
+        };
+        // Each of13 source and digest endpoint rows is fixed by its own local
+        // recurrence. No now-private endpoint is accepted merely because some
+        // other endpoint has been altered to compensate its aggregate product.
+        for index in 0..ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 {
+            let honest = row(&material.aux_columns, index);
+            let next = row(&material.aux_columns, index + 1);
+            for lane in 0..4 {
+                for column in [
+                    source_aux_cell_v1(SOURCE_STATES_V1 - 1, lane),
+                    digest_aux_cell_v1(DIGEST_STATES_V1 - 1, lane),
+                ] {
+                    let mut changed = honest.clone();
+                    changed[column] = changed[column].add(F::ONE);
+                    assert!(
+                        evaluate(index, &changed, &next)
+                            .iter()
+                            .any(|r| *r != F::ZERO)
+                    );
+                }
+            }
+        }
+        // The serialized source and RFC products have after-row semantics.
+        // The preceding row binds a changed next product with coefficient one,
+        // including at the final active row and when a multiplicative factor
+        // vanishes. Padding is never substituted for that original endpoint.
+        for index in
+            ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1..ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1
+        {
+            let honest = row(&material.aux_columns, index);
+            for lane in 0..4 {
+                for column in [
+                    serialized_sha_product_cell_v1(lane),
+                    root_spki_io_product_cell_v1(lane),
+                ] {
+                    let mut changed = honest.clone();
+                    changed[column] = changed[column].add(F::ONE);
+                    let residues = if index == ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1 {
+                        evaluate(index, &changed, &row(&material.aux_columns, index + 1))
+                    } else {
+                        evaluate(index - 1, &row(&material.aux_columns, index - 1), &changed)
+                    };
+                    assert!(residues.iter().any(|r| *r != F::ZERO));
+                }
+            }
+        }
+    }
+
     #[test]
     fn base_aux_fixed_and_public_mutations_fail_closed() {
         let (trace, schedule, sha_challenges, io_challenges) = fixture();
@@ -4211,10 +3682,9 @@ mod tests {
                 .expect("FRI degree cap"),
             9_216
         );
-        assert_eq!(CA_MASK_DEGREE_V1 + 1, 696);
+        assert_eq!(CA_MASK_DEGREE_V1 + 1, 2100);
         assert_eq!(CA_QUERY_COUNT_V1, 136);
         assert_eq!(CA_DEEP_BYTES_V1, 52_800);
-        assert_eq!(CA_CLAIM_FIELDS_V1, 108);
         assert_eq!(
             aggregate::maximum_encoded_proof_with_deep_bytes_v1(
                 CA_AGGREGATE_PARAMETERS_V1,
@@ -4226,82 +3696,48 @@ mod tests {
         let request =
             ca_accumulator_resource_request_v1(2, 1, CA_QUERY_COUNT_V1).expect("exact request");
         assert_eq!(request.lde_log2, 16);
-        assert_eq!(request.mask_degree, 695);
+        assert_eq!(request.mask_degree, 2099);
         assert_eq!(
             checked_ca_accumulator_resource_envelope_v1(request)
                 .expect("exact envelope")
                 .mask_coefficients,
-            696
+            2100
         );
     }
     #[test]
-    fn strict_claim_envelope_rejects_omission_reorder_noncanonical_and_suffix() {
-        let (trace, schedule, sha_challenges, io_challenges) = fixture();
-        let material = build_ca_accumulator_stark_material_v1(
-            &trace,
-            &schedule,
-            sha_challenges,
-            io_challenges,
-        )
-        .expect("material");
-        let claims = ca_accumulator_stark_terminal_claims_v1(&material);
-        let inner = b"synthetic-inner-proof";
-        let encoded = encode_ca_proof_envelope_v1(claims, inner).expect("envelope");
-        let (decoded, decoded_inner) =
-            decode_ca_proof_envelope_v1(&encoded).expect("decode envelope");
-        assert_eq!(decoded, claims);
-        assert_eq!(decoded_inner, inner);
-        for truncated in [
-            0,
-            1,
-            4,
-            9,
-            CA_PROOF_ENVELOPE_BYTES_V1 - 1,
-            encoded.len() - 1,
-        ] {
-            assert!(
-                decode_ca_proof_envelope_v1(&encoded[..truncated]).is_err(),
-                "truncation at {truncated} must fail"
-            );
+    fn claim_free_ca_frame_rejects_retired_products_bad_lengths_and_suffix() {
+        let inner = b"X5C2component-shape-fixture";
+        let encoded = encode_ca_proof_envelope_v1(inner).unwrap();
+        assert_eq!(encoded.len(), 10 + inner.len());
+        assert_eq!(decode_ca_proof_envelope_v1(&encoded).unwrap(), inner);
+        for length in 0..encoded.len() {
+            assert!(decode_ca_proof_envelope_v1(&encoded[..length]).is_err());
         }
-        let mut trailing = encoded.clone();
-        trailing.push(0);
-        assert!(decode_ca_proof_envelope_v1(&trailing).is_err());
-        for offset in [0, 4, 6, 8] {
+        for offset in 0..10 {
             let mut changed = encoded.clone();
             changed[offset] ^= 1;
             assert!(decode_ca_proof_envelope_v1(&changed).is_err());
         }
-        let mut reordered = encoded.clone();
-        let first = 10;
-        let second = first + CA_CLAIM_RECORD_BYTES_V1;
-        let first_record = reordered[first..second].to_vec();
-        let second_record = reordered[second..second + CA_CLAIM_RECORD_BYTES_V1].to_vec();
-        reordered[first..second].copy_from_slice(&second_record);
-        reordered[second..second + CA_CLAIM_RECORD_BYTES_V1].copy_from_slice(&first_record);
-        assert!(decode_ca_proof_envelope_v1(&reordered).is_err());
-        let mut noncanonical = encoded.clone();
-        noncanonical[14..22].copy_from_slice(&0xffff_ffff_0000_0001_u64.to_be_bytes());
-        assert_eq!(
-            decode_ca_proof_envelope_v1(&noncanonical),
-            Err(ZkX509CaAccumulatorProofErrorV1::NonCanonicalField)
-        );
-        let mut zero_inner = encoded;
-        zero_inner[CA_PROOF_LENGTH_OFFSET_V1..CA_PROOF_ENVELOPE_BYTES_V1]
-            .copy_from_slice(&0_u32.to_be_bytes());
-        assert!(decode_ca_proof_envelope_v1(&zero_inner).is_err());
-        let oversized = vec![0_u8; ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 + 1];
-        assert_eq!(
-            decode_ca_proof_envelope_v1(&oversized),
+        for extra in [1, 2, 4, 1296, 1300] {
+            let mut retired = encoded.clone();
+            retired.splice(6..6, vec![0; extra]);
+            assert!(decode_ca_proof_envelope_v1(&retired).is_err());
+        }
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(decode_ca_proof_envelope_v1(&trailing).is_err());
+        assert!(encode_ca_proof_envelope_v1(b"X5C1wrong-inner").is_err());
+        assert!(matches!(
+            decode_ca_proof_envelope_v1(&vec![0; ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 + 1]),
             Err(ZkX509CaAccumulatorProofErrorV1::ProofTooLarge)
-        );
+        ));
     }
     #[test]
     fn prover_preflight_precedes_entropy_and_rng_health_fails_closed() {
         let (trace, schedule, _, _) = fixture();
         for period in [1, 2, 4, 8, 16, 32] {
             assert_eq!(
-                prove_zk_x509_ca_accumulator_stark_v1_with_rng(
+                begin_ca_component_v1(
                     &trace,
                     &schedule,
                     credential_main_pre_aux_v1(),
@@ -4312,7 +3748,7 @@ mod tests {
             );
         }
         assert_eq!(
-            prove_zk_x509_ca_accumulator_stark_v1_with_rng(
+            begin_ca_component_v1(
                 &trace,
                 &schedule,
                 credential_main_pre_aux_v1(),
@@ -4323,7 +3759,7 @@ mod tests {
         let mut invalid = trace;
         invalid.statement.governed_root[0] ^= 1;
         assert_eq!(
-            prove_zk_x509_ca_accumulator_stark_v1_with_rng(
+            begin_ca_component_v1(
                 &invalid,
                 &schedule,
                 credential_main_pre_aux_v1(),
@@ -4333,42 +3769,12 @@ mod tests {
         );
     }
     #[test]
-    fn canonical_dedicated_proof_roundtrips_and_exports_exact_binding() {
+    fn canonical_joint_ca_component_roundtrips_and_binds_originals() {
         let (public, schedule, proof) = canonical_proof_fixture();
         assert!(proof.len() <= ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1);
-        verify_zk_x509_ca_accumulator_stark_v1(
-            *public,
-            schedule,
-            credential_main_pre_aux_v1(),
-            proof,
-        )
-        .expect("canonical proof verifies");
-        let binding = ca_accumulator_subproof_binding_from_proof_v1(
-            *public,
-            schedule,
-            credential_main_pre_aux_v1(),
-            proof,
-        )
-        .expect("typed binding");
-        validate_ca_accumulator_subproof_binding_v1(*public, schedule, binding)
-            .expect("binding validates");
-        let first_digest = ca_accumulator_proof_binding_digest_v1(
-            *public,
-            schedule,
-            credential_main_pre_aux_v1(),
-            proof,
-        )
-        .expect("binding digest");
-        let second_digest = ca_accumulator_proof_binding_digest_v1(
-            *public,
-            schedule,
-            credential_main_pre_aux_v1(),
-            proof,
-        )
-        .expect("deterministic binding digest");
-        assert_eq!(first_digest, second_digest);
-        assert_ne!(first_digest, PrivacyOuterDigestV1::default());
-        let (_, inner) = decode_ca_proof_envelope_v1(proof).expect("outer decode");
+        verify_ca_component_v1(*public, schedule, credential_main_pre_aux_v1(), proof)
+            .expect("canonical proof verifies");
+        let inner = decode_ca_proof_envelope_v1(proof).expect("outer decode");
         let layout = ca_aggregate_layout_v1().expect("layout");
         let (decoded, deep) =
             aggregate::decode_proof_with_deep_v1(inner, CA_AGGREGATE_PARAMETERS_V1, &layout)
@@ -4420,48 +3826,33 @@ mod tests {
         let canonical = credential_main_pre_aux_v1();
         let mut wrong_consensus = canonical;
         wrong_consensus.consensus_context_digest_mut_for_test_v1()[0] ^= 1;
-        assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_consensus, proof,)
-                .is_err()
-        );
+        assert!(verify_ca_component_v1(*public, schedule, wrong_consensus, proof,).is_err());
         let mut wrong_profile = canonical;
         wrong_profile.main_profile_digest_mut_for_test_v1()[31] ^= 1;
-        assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_profile, proof,)
-                .is_err()
-        );
+        assert!(verify_ca_component_v1(*public, schedule, wrong_profile, proof,).is_err());
         let mut wrong_roots = canonical;
         let root = &mut wrong_roots.main_base_roots_mut_for_test_v1()[0];
         let mut bytes = root.to_bytes();
         bytes[0] ^= 1;
         *root = PrivacyOuterDigestV1::from_bytes(bytes);
-        assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, wrong_roots, proof,).is_err()
-        );
-        let canonical_digest =
-            ca_accumulator_proof_binding_digest_v1(*public, schedule, canonical, proof)
-                .expect("canonical outer binding digest");
+        assert!(verify_ca_component_v1(*public, schedule, wrong_roots, proof,).is_err());
         let mut changed_proof = proof.clone();
         changed_proof[CA_PROOF_ENVELOPE_BYTES_V1 + 8] ^= 1;
         assert!(
             ca_accumulator_base_root_from_proof_v1(&changed_proof).is_ok_and(|root| root
                 != ca_accumulator_base_root_from_proof_v1(proof).expect("canonical CA base root"))
         );
-        assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(*public, schedule, canonical, &changed_proof,)
-                .is_err()
-        );
-        assert_ne!(canonical_digest, PrivacyOuterDigestV1::default());
+        assert!(verify_ca_component_v1(*public, schedule, canonical, &changed_proof,).is_err());
     }
     #[test]
-    fn dedicated_proof_rejects_public_claim_root_deep_fri_query_and_frontier_mutations() {
+    fn joint_ca_component_rejects_frame_root_deep_fri_query_and_frontier_mutations() {
         let (public, schedule, proof) = canonical_proof_fixture();
         let inner_start = CA_PROOF_ENVELOPE_BYTES_V1;
         let root_bytes = crate::privacy_engines::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
         let deep_start = inner_start + 8 + 4 * root_bytes;
         let fri_start = deep_start + CA_DEEP_BYTES_V1;
         let hostile_offsets = [
-            10 + 4,
+            6,
             inner_start,
             inner_start + 8,
             inner_start + 8 + root_bytes,
@@ -4476,13 +3867,8 @@ mod tests {
             let mut changed = proof.clone();
             changed[offset] ^= 1;
             assert!(
-                verify_zk_x509_ca_accumulator_stark_v1(
-                    *public,
-                    schedule,
-                    credential_main_pre_aux_v1(),
-                    &changed,
-                )
-                .is_err(),
+                verify_ca_component_v1(*public, schedule, credential_main_pre_aux_v1(), &changed,)
+                    .is_err(),
                 "mutation at {offset} must fail"
             );
         }
@@ -4496,7 +3882,7 @@ mod tests {
             + (1 << CA_TERMINAL_LOG2_V1) * core::mem::size_of::<[u64; 4]>()
             + core::mem::size_of::<u64>();
         assert_eq!(query_bytes_v1, 7_132);
-        let (_, inner) = decode_ca_proof_envelope_v1(proof).expect("canonical CA envelope");
+        let inner = decode_ca_proof_envelope_v1(proof).expect("canonical CA envelope");
         let layout = ca_aggregate_layout_v1().expect("canonical CA layout");
         let (decoded, _) =
             aggregate::decode_proof_with_deep_v1(inner, CA_AGGREGATE_PARAMETERS_V1, &layout)
@@ -4510,7 +3896,7 @@ mod tests {
         duplicate_query[query_start + query_bytes_v1..query_start + query_bytes_v1 + 4]
             .copy_from_slice(&first_index);
         assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(
+            verify_ca_component_v1(
                 *public,
                 schedule,
                 credential_main_pre_aux_v1(),
@@ -4522,7 +3908,7 @@ mod tests {
         let mut grinding_mutation = proof.clone();
         grinding_mutation[query_start - 1] ^= 1;
         assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(
+            verify_ca_component_v1(
                 *public,
                 schedule,
                 credential_main_pre_aux_v1(),
@@ -4539,7 +3925,7 @@ mod tests {
             proof.len() - 1,
         ] {
             assert!(
-                verify_zk_x509_ca_accumulator_stark_v1(
+                verify_ca_component_v1(
                     *public,
                     schedule,
                     credential_main_pre_aux_v1(),
@@ -4551,31 +3937,21 @@ mod tests {
         let mut trailing = proof.clone();
         trailing.extend_from_slice(&[0, 1, 2, 3]);
         assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(
-                *public,
-                schedule,
-                credential_main_pre_aux_v1(),
-                &trailing,
-            )
-            .is_err()
+            verify_ca_component_v1(*public, schedule, credential_main_pre_aux_v1(), &trailing,)
+                .is_err()
         );
         let mut wrong_public = *public;
         wrong_public.governed_root[0] = wrong_public.governed_root[0].add(F::ONE);
         assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(
-                wrong_public,
-                schedule,
-                credential_main_pre_aux_v1(),
-                proof,
-            )
-            .is_err()
+            verify_ca_component_v1(wrong_public, schedule, credential_main_pre_aux_v1(), proof,)
+                .is_err()
         );
         let other_schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 3,
         })
         .expect("alternate public schedule");
         assert!(
-            verify_zk_x509_ca_accumulator_stark_v1(
+            verify_ca_component_v1(
                 *public,
                 &other_schedule,
                 credential_main_pre_aux_v1(),

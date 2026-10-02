@@ -453,6 +453,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         eprintln!("{text}");
         append_receipt_v1(&receipt, &text).expect("durable public diagnostic receipt");
     };
+    record(format!("rayon_workers={}", rayon::current_num_threads()));
     record(format!(
         "output_directory={}\nprofile=complete49-MAIN-plus-compactCA\nproof_cap_bytes={ZK_X509_MAX_PROOF_BYTES_V1}\nencoded_geometry_bound_bytes={ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1}\nprover_target_seconds={ZK_X509_PROVER_TARGET_SECONDS_V1}\npeak_rss_limit_bytes={ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1}\naddress_space_limit_bytes={ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1}\nrss_evidence=external-time-l-required\nactivation=unavailable\nprivate_witness_recorded=false",
         directory.display(),

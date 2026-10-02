@@ -108,6 +108,16 @@ impl EntryBundleReservationLedger {
         self.entries.keys().copied()
     }
 
+    /// Preserve the original quota journal allocation and applied lineage.
+    pub(super) fn retain_commit_seal(&self) -> super::ReservationCommitSeal {
+        self.inner.retain_commit_seal()
+    }
+
+    /// Public entry/counter reconstruction never replaces original journal custody.
+    pub(super) fn matches_commit_seal(&self, seal: &super::ReservationCommitSeal) -> bool {
+        self.inner.matches_commit_seal(seal)
+    }
+
     /// Exact committed E/T/D/I/M/S usage.
     pub(crate) fn usage(&self) -> SourceUsage {
         self.inner.usage()

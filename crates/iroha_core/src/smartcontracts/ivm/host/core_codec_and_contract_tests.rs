@@ -643,6 +643,10 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     let domain = Domain::new(fixture_domain_id()).build(authority);
     let account = build_fixture_account(authority, authority);
     let world = World::with([domain], [account], []);
+    contract_test_state_with_world(authority, world)
+}
+/// Initialize the supplied World through its original signed genesis before host execution.
+pub(super) fn contract_test_state_with_world(authority: &AccountId, world: World) -> State {
     use crate::sumeragi::{
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},

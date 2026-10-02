@@ -11,7 +11,7 @@ use fastpq_prover::goldilocks_transform::{
     transform_goldilocks_columns_v1,
 };
 
-/// Public geometry fixes the retained base-then-auxiliary prefix before replay.
+/// Public geometry fixes each retained kind prefix before private replay.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MainQuotientCachePlanV1 {
     pub(super) base_columns: usize,
@@ -21,6 +21,63 @@ pub(super) struct MainQuotientCachePlanV1 {
 }
 
 impl MainQuotientCachePlanV1 {
+    /// Keep expensive P-256 arithmetic auxiliary replay in the same byte budget.
+    /// Base columns copy already-retained cells; auxiliary columns reconstruct
+    /// running products. Other registrations retain their existing priorities.
+    /// Call after all additional-owner reservations, before any private replay.
+    pub(super) fn prioritize_registration_v1(
+        self,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        let segment = registration.segment;
+        if self.base_columns > segment.base_width || self.aux_columns > segment.aux_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if segment.adapter != SegmentAdapterIdV1::P256Arithmetic {
+            return Ok(self);
+        }
+        let retained = self
+            .base_columns
+            .checked_add(self.aux_columns)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let aux_columns = retained.min(segment.aux_width);
+        Ok(Self {
+            base_columns: retained - aux_columns,
+            aux_columns,
+            ..self
+        })
+    }
+
+    /// Charge additional simultaneous owners without increasing the admitted
+    /// column count. The owner reapplies its public registration priority after
+    /// narrowing. A single-stripe plan keeps its empty cache even with slack.
+    pub(super) fn reserve_additional_v1(self, bytes: usize) -> Result<Self, ZkX509StarkErrorV1> {
+        let payload_limit = self
+            .payload_limit
+            .checked_sub(bytes)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let available = payload_limit
+            .checked_sub(core::mem::size_of::<MainQuotientReplayCacheV1>())
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let per_column = self
+            .coefficient_count
+            .checked_mul(core::mem::size_of::<F>())
+            .and_then(|value| value.checked_add(core::mem::size_of::<PrivateTableV1<F>>()))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let old_count = self
+            .base_columns
+            .checked_add(self.aux_columns)
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+        let count = old_count.min(available / per_column);
+        let base_columns = count.min(self.base_columns);
+        Ok(Self {
+            base_columns,
+            aux_columns: count - base_columns,
+            coefficient_count: self.coefficient_count,
+            payload_limit,
+        })
+    }
+
     /// Fit an ordered prefix using only public dimensions and admitted bytes.
     pub(super) fn from_budget_v1(
         base_width: usize,

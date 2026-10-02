@@ -68,20 +68,20 @@ fn contract_artifact(body: &[u32], max_cycles: u64, mode: u8) -> Arc<[u8]> {
     Arc::from(program)
 }
 
-fn contract(body: &[u32], max_cycles: u64, mode: u8) -> PreparedContract {
+pub(super) fn contract(body: &[u32], max_cycles: u64, mode: u8) -> PreparedContract {
     ivm::prepare_contract(contract_artifact(body, max_cycles, mode))
         .expect("admitted V1 scalar fixture")
 }
 
-fn bits(row: &mut [F], value: u64) {
+pub(super) fn bits(row: &mut [F], value: u64) {
     for (i, bit) in row.iter_mut().enumerate() {
         *bit = F((value >> i) & 1);
     }
 }
-fn bytes(value: u64) -> [u8; 16] {
+pub(super) fn bytes(value: u64) -> [u8; 16] {
     (value as u128).to_le_bytes()
 }
-fn event(
+pub(super) fn event(
     space: Space,
     generation: u16,
     index: u32,
@@ -105,7 +105,7 @@ fn event(
     }
     .fields(clock as usize)
 }
-fn carries(row: &mut [F], left: u64, right: u64, subtract: bool) {
+pub(super) fn carries(row: &mut [F], left: u64, right: u64, subtract: bool) {
     let mut carry = 0u64;
     for i in 0..4 {
         let a = (left >> (16 * i)) & 0xffff;
@@ -120,16 +120,18 @@ fn carries(row: &mut [F], left: u64, right: u64, subtract: bool) {
 }
 
 #[derive(Clone)]
-struct Fixture {
-    schedule: Schedule,
-    row: [F; WIDTH],
-    packets: OriginalPackets,
+pub(super) struct Fixture {
+    pub(super) schedule: Schedule,
+    pub(super) row: [F; WIDTH],
+    pub(super) packets: OriginalPackets,
 }
 impl Fixture {
     fn new(program: &Program, slot: usize, root: bool, return_delta: u64) -> Self {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
         let schedule = Schedule::new(7, clocks).unwrap();
         let mut row = [F::ZERO; WIDTH];
+        row[SCALAR + scalar::COMPARE..]
+            .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
         let mut p = [[F::ZERO; packet::WIDTH]; PORTS];
         let w = program.words[slot];
         let role = role(w).unwrap();
@@ -193,7 +195,7 @@ impl Fixture {
             true,
         );
         bits(
-            &mut row[RETURN_DELTA..WIDTH],
+            &mut row[RETURN_DELTA..SCALAR],
             if returning { return_delta } else { 0 },
         );
         for (slot, index, before, after, write) in [
@@ -335,6 +337,26 @@ impl Fixture {
                 true,
             );
         }
+        let depth = if returning && root { 0 } else { 3 };
+        let depth_after = depth + u64::from(child) - u64::from(returning && !root);
+        for (side, value) in [depth, depth_after].into_iter().enumerate() {
+            bits(
+                &mut row[DEPTH_BITS + side * DEPTH_BITS_PER_VALUE
+                    ..DEPTH_BITS + (side + 1) * DEPTH_BITS_PER_VALUE],
+                value,
+            );
+        }
+        p[CALL_DEPTH] = event(
+            Space::Owner,
+            0,
+            CALL_DEPTH_OWNER,
+            depth,
+            depth_after,
+            child || returning,
+            clocks[CALL_DEPTH],
+            false,
+            false,
+        );
         p[PC_WRITE] = event(
             Space::Owner,
             0,
@@ -363,7 +385,28 @@ impl Fixture {
             packets: OriginalPackets::candidate(p),
         }
     }
-    fn padding() -> Self {
+    fn set_depth(&mut self, before: u64, after: u64) {
+        for (side, value) in [before, after].into_iter().enumerate() {
+            bits(
+                &mut self.row[DEPTH_BITS + side * DEPTH_BITS_PER_VALUE
+                    ..DEPTH_BITS + (side + 1) * DEPTH_BITS_PER_VALUE],
+                value,
+            );
+        }
+        let previous = self.packets.fields[CALL_DEPTH];
+        self.packets.fields[CALL_DEPTH] = event(
+            Space::Owner,
+            0,
+            CALL_DEPTH_OWNER,
+            before,
+            after,
+            previous[packet::WRITE] == F::ONE,
+            self.schedule.clocks[CALL_DEPTH],
+            false,
+            false,
+        );
+    }
+    pub(super) fn padding() -> Self {
         let clocks = core::array::from_fn(|i| 100 + i as u32 * 10);
         let mut packets = [[F::ZERO; packet::WIDTH]; PORTS];
         packets[RUNNING_WRITE] = event(
@@ -379,11 +422,16 @@ impl Fixture {
         );
         Self {
             schedule: Schedule::new(7, clocks).unwrap(),
-            row: [F::ZERO; WIDTH],
+            row: {
+                let mut row = [F::ZERO; WIDTH];
+                row[SCALAR + scalar::COMPARE..]
+                    .copy_from_slice(&super::super::super::branch::bank_witness(0, 0, 0));
+                row
+            },
             packets: OriginalPackets::candidate(packets),
         }
     }
-    fn accepts(&self, program: &Program) -> bool {
+    pub(super) fn accepts(&self, program: &Program) -> bool {
         let mut out = Vec::new();
         let decoded = append_residues(&mut out, program, self.schedule, &self.row, &self.packets);
         assert!(core::ptr::eq(
@@ -401,6 +449,10 @@ impl Fixture {
         assert!(core::ptr::eq(
             decoded.store_value,
             self.packets.producer(STORE_VALUE).unwrap()
+        ));
+        assert!(core::ptr::eq(
+            decoded.call_depth,
+            self.packets.producer(CALL_DEPTH).unwrap()
         ));
         out.into_iter().all(|r| r == F::ZERO)
     }
@@ -471,7 +523,7 @@ fn unsupported_fetch_words_wrong_encoding_and_wrong_code_identity_reject() {
         enc::encode_ri(wide::control::JALR, 1, 1, 0),
         enc::encode_ri(wide::control::JALR, 0, 2, 0),
         enc::encode_ri(wide::control::JALR, 0, 1, 1),
-        enc::encode_ri(wide::arithmetic::ADDI, 2, 3, 1),
+        enc::encode_rr(wide::arithmetic::SLL, 2, 3, 1),
     ] {
         assert!(role(w).is_none());
     }
@@ -555,7 +607,7 @@ fn private_dispatch_polynomials_remain_degree_two_over_original_columns() {
                     .unwrap()
             }));
             let mut out = Vec::new();
-            append_residues(
+            append_control_residues(
                 &mut out,
                 &program,
                 schedule,
@@ -574,7 +626,7 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
         E, NOTE_COPY_WIDTH_V1, ORDERED, PublicPacketBus, ROW_WIDTH, SORTED, permutation,
         private_history,
     };
-    fn history_accepts(original: &OriginalPackets, after: u64) -> bool {
+    fn history_accepts(original: &OriginalPackets, after: u64, depth: Option<u64>) -> bool {
         let mut events = vec![None; PORTS];
         events[RUNNING_WRITE] = Some(Event {
             space: Space::Owner,
@@ -587,6 +639,19 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
             before_private: 0,
             after_private: 0,
         });
+        if let Some(depth) = depth {
+            events[CALL_DEPTH] = Some(Event {
+                space: Space::Owner,
+                vm: 7,
+                generation: 0,
+                index: CALL_DEPTH_OWNER,
+                write: true,
+                before: bytes(0),
+                after: bytes(depth),
+                before_private: 0,
+                after_private: 0,
+            });
+        }
         let bus = PublicPacketBus::new(events).unwrap();
         let columns = bus.columns();
         let challenges = permutation::Challenges::testing(
@@ -639,12 +704,33 @@ fn every_owned_producer_is_joined_to_the_same_private_history_window() {
         false,
     );
     let original = OriginalPackets::candidate(fields);
-    assert!(history_accepts(&original, 0));
+    assert!(history_accepts(&original, 0, None));
     // Both separately sorted histories are well-typed zero-first writes; only
     // the complete original source join rejects this coherent substitution.
-    assert!(!history_accepts(&original, 1));
+    assert!(!history_accepts(&original, 1, None));
     fields[RUNNING_WRITE][packet::AFTER] = F::ONE;
-    assert!(history_accepts(&OriginalPackets::candidate(fields), 1));
+    assert!(history_accepts(
+        &OriginalPackets::candidate(fields),
+        1,
+        None
+    ));
+    fields[CALL_DEPTH] = event(
+        Space::Owner,
+        0,
+        CALL_DEPTH_OWNER,
+        0,
+        1,
+        true,
+        CALL_DEPTH as u32,
+        false,
+        false,
+    );
+    let with_depth = OriginalPackets::candidate(fields);
+    assert!(history_accepts(&with_depth, 1, Some(1)));
+    // Both depth histories satisfy their local zero-first range/write relation;
+    // only the exact original tuple join rejects the substituted depth.
+    assert!(!history_accepts(&with_depth, 1, Some(2)));
+    assert!(!history_accepts(&with_depth, 1, None));
 }
 
 #[test]
@@ -685,6 +771,63 @@ fn dispatcher_witness_tail_uses_its_own_width_and_constrains_both_alignment_bits
             let mut invalid = fixture.clone();
             invalid.row[index] = F(2);
             assert!(!invalid.accepts(&program), "tail column {index}");
+        }
+    }
+}
+
+#[test]
+fn protected_depth_matches_every_native_push_pop_and_store_boundary() {
+    let program = program();
+    assert_eq!(MAX_CONTRACT_CALL_DEPTH, 1024);
+    for before in 0..=MAX_CONTRACT_CALL_DEPTH as u64 {
+        for slot in [0, 1] {
+            let mut call = Fixture::new(&program, slot, false, 0);
+            call.set_depth(before, before + 1);
+            assert_eq!(
+                call.accepts(&program),
+                before < MAX_CONTRACT_CALL_DEPTH as u64
+            );
+        }
+        let mut store = Fixture::new(&program, 2, false, 0);
+        store.set_depth(before, before);
+        assert!(store.accepts(&program));
+        let mut returning = Fixture::new(&program, 3, false, 0);
+        returning.set_depth(before, before.wrapping_sub(1));
+        assert_eq!(returning.accepts(&program), before != 0);
+        let mut root_return = Fixture::new(&program, 3, true, 0);
+        root_return.set_depth(before, before);
+        assert_eq!(root_return.accepts(&program), before == 0);
+    }
+    assert!(Fixture::padding().accepts(&program));
+}
+
+#[test]
+fn protected_depth_refuses_coherent_overflow_underflow_and_wrong_root_identity() {
+    let program = program();
+    for (slot, root, before, after) in [
+        (0, false, 1024, 1025),
+        (1, false, 1025, 1026),
+        (2, false, 1025, 1025),
+        (3, false, 1025, 1024),
+        (3, false, 0, u64::MAX),
+        (3, true, 1, 1),
+        (0, false, u64::MAX, 0),
+        (0, false, 7, 7),
+        (3, false, 7, 7),
+        (2, false, 7, 8),
+    ] {
+        let mut invalid = Fixture::new(&program, slot, root, 0);
+        invalid.set_depth(before, after);
+        assert!(
+            !invalid.accepts(&program),
+            "slot={slot} root={root} {before}->{after}"
+        );
+    }
+    for fixture in [Fixture::new(&program, 0, false, 0), Fixture::padding()] {
+        for index in DEPTH_BITS..RETURN_DELTA {
+            let mut invalid = fixture.clone();
+            invalid.row[index] = F(2);
+            assert!(!invalid.accepts(&program));
         }
     }
 }

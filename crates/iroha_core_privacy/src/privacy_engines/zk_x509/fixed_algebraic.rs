@@ -21,7 +21,7 @@
 //! The extension-point evaluator uses the same schedule and sum kernels with
 //! quartic-field weights. It evaluates the actual fixed polynomials at `z`,
 //! without treating an extension element as an LDE index or a selector bit.
-use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
+use super::stark::ZK_X509_FIXED_DIGEST_CONTEXT_V1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
 use crate::privacy_engines::transparent_stark::{
@@ -665,7 +665,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
         };
         let descriptor = schedule.canonical_descriptor_v1()?;
         schedule.descriptor_digest = privacy_outer_digest_frame_v1(
-            ZK_X509_DIGEST_CONTEXT_V1,
+            ZK_X509_FIXED_DIGEST_CONTEXT_V1,
             ZK_X509_FIXED_ALGEBRAIC_DIGEST_DOMAIN_V1,
             b"verifier-fixed-algebraic-schedule",
             0,

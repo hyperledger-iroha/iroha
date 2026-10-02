@@ -210,9 +210,7 @@ fn core_queries_return_typed_handles_and_specialists_remain_norito() {
         ));
         parameters.commit();
     }
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
+    let state = contract_test_state_with_world(&authority, world);
     let contract_address = install_contract(
         &state,
         &authority,

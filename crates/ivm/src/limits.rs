@@ -1,6 +1,14 @@
-//! Gas schedule exposure helpers for host/runtime enforcement.
+//! Canonical runtime limits and gas schedule exposure for hosts and relation owners.
 use crate::gas;
 use iroha_crypto::Hash;
+
+/// Maximum nested protected return PCs in one ABI V1 contract invocation.
+///
+/// The root invocation uses its separate outer return sentinel and consumes no
+/// slot. The interpreter, funded stack owner and execution relation share this
+/// bound; callers cannot select a larger depth.
+pub const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
+
 /// Single opcode entry in the canonical gas schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GasScheduleEntry {

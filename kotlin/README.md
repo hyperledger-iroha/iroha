@@ -851,15 +851,17 @@ unaudited native proving remains disabled.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
 executables from exact Rust 1.93.1. It requires one job, incremental compilation
-off, offline dependency resolution, and `RUSTC_BOOTSTRAP=1`, then invokes the
-Cargo build with the exact root lock contract:
+off and offline dependency resolution, then invokes stock Cargo through
+cargo-ndk with the authenticated root manifest and lock:
 
 ```text
-build --locked --offline --jobs 1 -Z unstable-options \
-  --lockfile-path <canonical-iroha-root>/Cargo.lock
+build --locked --offline --jobs 1 \
+  --manifest-path <canonical-iroha-root>/Cargo.toml
 ```
 
-There is no alternate-lock or compatibility override.
+The original root `Cargo.lock` is authenticated before and after execution.
+Bootstrap, alternate locks, and compiler or profile configuration overrides
+are rejected.
 
 The first build takes ~5-10 minutes because it compiles all Rust dependencies.
 The isolated target can reuse dependency artifacts, but compiler incremental

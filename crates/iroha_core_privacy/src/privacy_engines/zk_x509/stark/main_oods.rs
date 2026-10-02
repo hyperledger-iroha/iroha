@@ -383,7 +383,6 @@ fn main_deep_composition_v1(
                 RfcMainFp4AirContextV1 {
                     der: log19.post_base.der(),
                     rfc: log19.post_base.rfc5280(),
-                    terminals: log19.claims.rfc5280,
                 },
             )?,
             MainFp4AirEvaluatorV1::Sha(evaluator) => {
@@ -424,7 +423,6 @@ fn main_deep_composition_v1(
                         call: log19.post_base.sha(),
                         rfc: log19.post_base.rfc5280(),
                         segment: segment as u8,
-                        ca_calls: &log19.claims.sha.ca_calls,
                     },
                 )?
             }
@@ -462,6 +460,44 @@ pub(super) fn verify_main_deep_constraints_v1(
     projection: &MainProjectionVerifierConstraintSourceV1,
     io: &MainIoVerifierConstraintSourceV1,
     log19: &MainLog19VerifierConstraintSourceV1,
+) -> Result<(), ZkX509StarkErrorV1> {
+    verify_main_deep_constraints_with_ca_v1(
+        layout,
+        deep,
+        point,
+        alphas,
+        link_alphas,
+        key_plan,
+        key_alphas,
+        key_openings,
+        sha_union_plan,
+        sha_union_alphas,
+        p256,
+        projection,
+        io,
+        log19,
+        None,
+    )
+}
+
+/// Check the complete local relation and the verifier-owned original CA joins.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(super) fn verify_main_deep_constraints_with_ca_v1(
+    layout: &AggregateProofLayoutV1,
+    deep: &aggregate::AggregateDeepProofV1,
+    point: E,
+    alphas: &[Vec<Vec<E>>],
+    link_alphas: &[E],
+    key_plan: &main_key_joins::MainKeyJoinPlanV1,
+    key_alphas: &[E],
+    key_openings: &[E; main_key_joins::OPENINGS_V1],
+    sha_union_plan: &main_sha_union::MainShaUnionPlanV1,
+    sha_union_alphas: &[E],
+    p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
+    projection: &MainProjectionVerifierConstraintSourceV1,
+    io: &MainIoVerifierConstraintSourceV1,
+    log19: &MainLog19VerifierConstraintSourceV1,
+    ca: Option<main_joint::MainCaOpenedContributionV1<'_>>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     layout.validate_exact_full_profile_registration_v1()?;
     let shared = layout.as_shared()?;
@@ -518,6 +554,17 @@ pub(super) fn verify_main_deep_constraints_v1(
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     let expected = expected.add(sha_union_plan.evaluate_v1(&groups, point, sha_union_alphas)?);
+    let expected = if let Some(ca) = ca {
+        expected.add(ca.plan.evaluate_v1(
+            &groups,
+            point,
+            ca.alphas,
+            &ca.openings.main,
+            &ca.openings.ca,
+        )?)
+    } else {
+        expected
+    };
     verify_composition_v1(&shared, deep, point, expected)
 }
 

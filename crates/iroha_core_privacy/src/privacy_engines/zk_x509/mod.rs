@@ -21,6 +21,7 @@ pub(crate) mod allocation_payload;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
 mod composition_masking;
+mod credential_joint;
 pub(crate) mod credential_pre_aux;
 #[doc(hidden)]
 pub mod credential_stark;
@@ -54,6 +55,7 @@ mod private_table;
 #[doc(hidden)]
 pub mod profile;
 pub(crate) mod projection_air;
+mod proof_instance;
 #[cfg(test)]
 mod prover_observation;
 #[cfg(any(test, feature = "privacy-release-evidence"))]

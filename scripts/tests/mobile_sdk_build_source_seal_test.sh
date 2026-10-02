@@ -53,7 +53,7 @@ test_build_source_seal() {
   export NORITO_BRIDGE_BUILD_DIR="$bridge_build"
   export NORITO_BRIDGE_OUT_DIR="$bridge_output"
   export RUSTC="$exact_rustc"
-  export RUSTC_BOOTSTRAP=1
+  unset RUSTC_BOOTSTRAP
   export RUSTDOC="$exact_rustdoc"
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \

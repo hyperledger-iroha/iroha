@@ -3079,9 +3079,9 @@ pub mod isi {
             )?;
             state_transaction
                 .world
-                .asset_definition_mut(&asset_definition_id)
+                .asset_definition_metadata_mut(&asset_definition_id)
                 .map_err(Error::from)
-                .map(|asset_definition| {
+                .map(|mut asset_definition| {
                     asset_definition
                         .metadata_mut()
                         .insert(key.clone(), value.clone())
@@ -3119,8 +3119,8 @@ pub mod isi {
             }
             let value = state_transaction
                 .world
-                .asset_definition_mut(&asset_definition_id)
-                .and_then(|asset_definition| {
+                .asset_definition_metadata_mut(&asset_definition_id)
+                .and_then(|mut asset_definition| {
                     asset_definition
                         .metadata_mut()
                         .remove(self.key().as_ref())

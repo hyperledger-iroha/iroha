@@ -119,20 +119,25 @@ def screen(
     main_pre_deep = _constant(profile, "ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1")
     ca_pre_deep = _constant(profile, "ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1")
     deep = _constant(profile, "ZK_X509_DEEP_OPENING_BYTES_V1")
-    main_claim = _constant(profile, "ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1")
-    ca_claim = _constant(profile, "ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1")
+    main_frame = _constant(profile, "ZK_X509_MAIN_FRAME_BYTES_V1")
+    ca_frame = _constant(profile, "ZK_X509_CA_FRAME_BYTES_V1")
     combined = _constant(profile, "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1")
-    fixed_header = _constant(credential, "FIXED_HEADER_BYTES_V1")
+    proof_instance_bytes = _constant(credential, "PROOF_INSTANCE_BYTES_V1")
+    public_header = _constant(credential, "PUBLIC_HEADER_BYTES_V1")
+    joint_openings = _constant(credential, "JOINT_OPENING_BYTES_V1")
+    fixed_header = public_header + joint_openings
     subproof_header = _constant(credential, "SUBPROOF_HEADER_BYTES_V1")
     outer = fixed_header + 2 * subproof_header
     ca_section_cap = _asserted_value(
         accumulator, "ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1"
     )
     if (
-        outer != 92
+        outer != 4348
+        or proof_instance_bytes != 32
+        or (main_frame, ca_frame, public_header, joint_openings) != (1002, 10, 108, 4224)
         or ca_inner != ca_pre_deep + (deep - (wide_main - main_pre_deep))
-        or ca_section_cap != ca_inner + ca_claim
-        or combined != main_pre_deep + ca_pre_deep + deep + main_claim + ca_claim + outer
+        or ca_section_cap != ca_inner + ca_frame
+        or combined != main_pre_deep + ca_pre_deep + deep + main_frame + ca_frame + outer
     ):
         raise GeometryError("X5S1 component sizes disagree with the canonical maximum")
     if any("AggregateFriCommitmentLayoutV1::Paired" not in source for source in (profile, stark, accumulator)):
@@ -204,10 +209,14 @@ def screen(
         raise GeometryError("P-256 width is not within the MAIN opening inventory")
 
     main_section_cap = cap - outer - ca_section_cap
-    if combined > cap or wide_main + main_claim > main_section_cap:
+    if combined > cap or wide_main + main_frame > main_section_cap:
         raise GeometryError("complete relation exceeds the unchanged proof ceiling")
     return {
         "proof_cap_bytes": cap,
+        "public_terminal_product_fields": 0,
+        "joint_original_opening_bytes": joint_openings,
+        "proof_instance_nonce_bytes": proof_instance_bytes,
+        "outer_framing_bytes": outer,
         "combined_current_max_bytes": combined,
         "headroom_bytes": cap - combined,
         "implemented_paired_fri_saving_bytes": paired_saving,

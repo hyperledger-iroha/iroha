@@ -31,6 +31,18 @@ pub(crate) struct PreparedSourceQuota {
     #[cfg(test)]
     mandatory_ceiling: SourceUsage,
     profile: FastpqSourcePolicyV1,
+    output: ExecutionOutputPolicyV1,
+}
+
+/// Original ordinary/mandatory quota lineage after complete source reconciliation.
+/// No public constructor, serializer, cloning or new backing allocation exists.
+/// This receipt does not attest complete quantity coverage or source finality.
+#[derive(Debug)]
+pub(crate) struct SourceQuotaSeal {
+    ordinary: super::ReservationCommitSeal,
+    mandatory: super::ReservationCommitSeal,
+    profile: FastpqSourcePolicyV1,
+    output: ExecutionOutputPolicyV1,
 }
 
 /// Disposable physical contribution whose failed preparation cannot be ignored.
@@ -386,6 +398,7 @@ impl PreparedSourceQuota {
             #[cfg(test)]
             mandatory_ceiling: usage(mandatory),
             profile,
+            output,
         })
     }
 
@@ -478,6 +491,40 @@ impl PreparedSourceQuota {
             );
         }
         Ok(())
+    }
+
+    /// Retain both original journals only after the full original archive reconciles.
+    /// The two Arc references share their existing allocations; no entry or public
+    /// measurement is accepted as a replacement journal identity.
+    pub(crate) fn reconcile_and_retain(
+        &self,
+        entries: &[iroha_data_model::fastpq::FastpqSourceExecutionEntryV1],
+        transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
+    ) -> Result<SourceQuotaSeal, String> {
+        self.reconcile(entries, transcripts)?;
+        Ok(SourceQuotaSeal {
+            ordinary: self.ordinary.retain_commit_seal(),
+            mandatory: self.mandatory.retain_commit_seal(),
+            profile: self.profile,
+            output: self.output,
+        })
+    }
+
+    /// Check original pools against the exact policies frozen before block effects.
+    /// Empty or discarded children preserve this receipt. Every applied nonempty
+    /// journal changes its original generation, including a same-value replacement.
+    pub(crate) fn matches_retained(
+        &self,
+        seal: &SourceQuotaSeal,
+        profile: FastpqSourcePolicyV1,
+        output: ExecutionOutputPolicyV1,
+    ) -> bool {
+        self.profile == profile
+            && self.output == output
+            && seal.profile == profile
+            && seal.output == output
+            && self.ordinary.matches_commit_seal(&seal.ordinary)
+            && self.mandatory.matches_commit_seal(&seal.mandatory)
     }
 
     /// Confirm invocation ownership against the execution producer's complete archive.

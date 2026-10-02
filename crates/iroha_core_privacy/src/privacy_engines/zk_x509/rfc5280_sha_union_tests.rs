@@ -97,7 +97,9 @@ fn all_sixteen_native_bridge_columns_are_constant_and_air_rejects_coordinated_dr
         centers,
     )
     .unwrap();
-    let claims = provider.terminal_claims_v1();
+    let claims = provider
+        .terminal_claims_v1()
+        .expect("valid RFC union fixture private products");
     let offset = RFC5280_RESIDUE_SECTIONS_V1[..12]
         .iter()
         .map(|(_, count)| count)

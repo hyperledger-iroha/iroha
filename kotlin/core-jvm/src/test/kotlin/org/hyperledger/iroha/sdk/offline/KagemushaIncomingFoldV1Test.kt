@@ -32,7 +32,16 @@ class KagemushaIncomingFoldV1Test {
     @Test fun `method18 is a closed empty request and exact three nonzero digest response`() {
         val method = KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY
         assertEquals(18, method.code)
-        assertEquals(18, KagemushaCoreCoordinatorMethodV1.entries.size)
+        assertEquals(listOf(
+            "RESERVE_OPERATION_ID", "ACCEPT_QUALIFICATION", "ACCEPT_AUTHENTICATED_REPLY",
+            "BEGIN_SENDER_TRANSITION", "PROVE_PREPARED_SENDER_TRANSITION", "BUILD_TERMINAL_ENVELOPE",
+            "ACCEPT_INSTALLED_TERMINAL", "RECOVER_SENDER", "RECOVER_TERMINAL_ENVELOPE", "RELEASE_OUTBOX",
+            "BEGIN_OBSERVATION", "INITIAL_ENROLLMENT", "ACKNOWLEDGE_COMMITTED_APP_ATTEST",
+            "EXPORT_OUTGOING_STATE_PROOF", "PREPARE_INCOMING_FOLD", "COMPLETE_INCOMING_FOLD",
+            "STAGE_INCOMING_ORIGINAL", "AUTHENTICATED_HARDWARE_POLICY", "PREPARED_APP_OPERATION_APPROVAL",
+            "PREPARED_APP_ENROLLMENT_POSSESSION", "PREPARED_ORDINARY_APP_IDENTITY",
+        ).mapIndexed { index, name -> name to index + 1 },
+            KagemushaCoreCoordinatorMethodV1.entries.map { it.name to it.code })
         val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, emptyList())
         val response = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request,
             listOf(digest(41), digest(42), digest(43)))

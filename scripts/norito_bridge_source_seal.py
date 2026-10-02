@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -62,7 +63,6 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
     "IrohaSwift/VERSION",
     "scripts/archive_norito_xcframework.py",
-    "scripts/apple_proc_macro_rustc_wrapper.sh",
     "scripts/build_norito_xcframework.sh",
     "scripts/normalize_pqcrypto_archive.py",
     "scripts/exec_with_file_lock.py",
@@ -358,7 +358,6 @@ def source_seal_environment(
         "LC_ALL": "C.UTF-8",
         "PATH": os.pathsep.join(path_entries),
         "RUSTC": str(rustc.invocation),
-        "RUSTC_BOOTSTRAP": "1",
         "RUSTDOC": str(rustdoc.invocation),
         "RUSTUP_HOME": str(rustup_home),
         "TMPDIR": str(temporary_directory),
@@ -453,9 +452,28 @@ def metadata(
 ) -> dict[str, object]:
     lockfile = selected_lockfile_path(root, lockfile_path)
     lock_identity_before = lockfile_identity(lockfile)
+    root_lock = root / "Cargo.lock"
+    root_lock_identity_before = lockfile_identity(root_lock)
     cargo, rustc, rustdoc, git = source_seal_tools()
     rustc.authenticate()
     rustdoc.authenticate()
+    environment = source_seal_environment(
+        cargo=cargo, rustc=rustc, rustdoc=rustdoc, git=git
+    )
+    configuration_owner = None
+    configuration = None
+    if target in APPLE_TARGETS + ANDROID_TARGETS:
+        helper = pathlib.Path(__file__).with_name("run_mobile_hermetic_command.py")
+        specification = importlib.util.spec_from_file_location(
+            "norito_bridge_build_configuration", helper
+        )
+        if specification is None or specification.loader is None:
+            raise RuntimeError("Native Cargo configuration owner is unavailable")
+        configuration_owner = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(configuration_owner)
+        configuration = configuration_owner.authenticate_build_cargo_configuration(
+            root, pathlib.Path(environment["CARGO_HOME"])
+        )
     try:
         output = run(
             root,
@@ -464,10 +482,8 @@ def metadata(
                 "metadata",
                 "--locked",
                 "--offline",
-                "-Z",
-                "unstable-options",
-                "--lockfile-path",
-                str(lockfile),
+                "--manifest-path",
+                str(root / "Cargo.toml"),
                 "--format-version",
                 "1",
                 "--features",
@@ -475,18 +491,17 @@ def metadata(
                 "--filter-platform",
                 target,
             ],
-            source_seal_environment(
-                cargo=cargo,
-                rustc=rustc,
-                rustdoc=rustdoc,
-                git=git,
-            ),
+            environment,
         )
     finally:
         rustc.authenticate()
         rustdoc.authenticate()
+        if configuration_owner is not None:
+            configuration_owner.recheck_build_cargo_configuration(configuration)
         if lockfile_identity(lockfile) != lock_identity_before:
             raise RuntimeError("selected Cargo lock changed during metadata authentication")
+        if lockfile_identity(root_lock) != root_lock_identity_before:
+            raise RuntimeError("root Cargo lock changed during metadata authentication")
     return json.loads(output)
 
 
@@ -798,6 +813,8 @@ def snapshot(
 
     lockfile = selected_lockfile_path(root, lockfile_path)
     lock_identity_before = lockfile_identity(lockfile)
+    root_lock = root / "Cargo.lock"
+    root_lock_identity_before = lockfile_identity(root_lock)
     inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
     source_status_before = status(root, inputs, lockfile)
@@ -807,6 +824,8 @@ def snapshot(
     source_commit_after = source_commit(root)
     if lockfile_identity(lockfile) != lock_identity_before:
         raise RuntimeError("selected Cargo lock changed while authenticating the source snapshot")
+    if lockfile_identity(root_lock) != root_lock_identity_before:
+        raise RuntimeError("root Cargo lock changed while authenticating the source snapshot")
     if source_commit_before != source_commit_after:
         raise RuntimeError(
             f"{platform} NoritoBridge source commit changed while authenticating "

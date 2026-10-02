@@ -36,7 +36,6 @@ COMMON_CARGO_ENVIRONMENT = frozenset(
 )
 SERIALIZED_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {
     "CARGO_BUILD_JOBS",
-    "RUSTC_BOOTSTRAP",
     "RUSTDOC",
 }
 APPLE_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
@@ -195,7 +194,6 @@ def authenticate_cargo_environment(
         "CARGO_INCREMENTAL": "0",
         "CARGO_NET_OFFLINE": "true",
         "NORITO_SKIP_BINDINGS_SYNC": "1",
-        "RUSTC_BOOTSTRAP": "1",
     }
     for name, expected in exact_values.items():
         if environment[name] != expected:
@@ -266,30 +264,137 @@ def authenticate_android_cargo_arguments(
     locked_position = exact_token("--locked")
     offline_position = exact_token("--offline")
     jobs_position = exact_pair("--jobs", "1")
-    unstable_position = exact_pair("-Z", "unstable-options")
-    lock_position = exact_pair("--lockfile-path", str(root_lock))
+    manifest_position = exact_pair("--manifest-path", str(canonical_workspace / "Cargo.toml"))
     if not (
         build_position
         < locked_position
         < offline_position
         < jobs_position
-        < unstable_position
-        < lock_position
+        < manifest_position
     ):
         raise RuntimeError(
             "Android Cargo command must use build --locked --offline --jobs 1 "
-            "-Z unstable-options --lockfile-path <root Cargo.lock> in that order"
+            "--manifest-path <root Cargo.toml> in that order"
         )
     if any(
         value == "-j"
         or (value.startswith("-j") and value != "-Z")
         or value.startswith("--jobs=")
+        or value.startswith("--manifest-path=")
+        or value == "--lockfile-path"
         or value.startswith("--lockfile-path=")
-        or value.startswith("-Zunstable-options")
+        or value == "--config"
+        or value.startswith("--config=")
+        or value.startswith("-Z")
         for value in arguments
     ):
         raise RuntimeError("Android Cargo command contains an alternate Cargo envelope form")
     return root_lock, lock_identity
+
+
+# Cargo reads configuration from the invocation directory, every ancestor and
+# CARGO_HOME even when the child environment is closed. Keep network/registry
+# configuration usable, while refusing a second compiler/profile authority.
+_BUILD_CARGO_CONFIG_MAX_BYTES = 1024 * 1024
+_CARGO_BUILTIN_ALIASES = frozenset({
+    "add", "b", "bench", "build", "c", "check", "clean", "clippy", "doc", "d",
+    "fetch", "fix", "fmt", "generate-lockfile", "help", "init", "install",
+    "locate-project", "login", "logout", "metadata", "new", "owner", "package",
+    "pkgid", "publish", "r", "read-manifest", "remove", "report", "run", "rustc",
+    "rustdoc", "search", "t", "test", "tree", "uninstall", "update", "vendor",
+    "verify-project", "version", "yank",
+})
+
+
+def _build_cargo_config_observation(candidate: pathlib.Path) -> tuple[object, ...] | None:
+    import hashlib
+    import stat
+
+    if candidate.resolve(strict=False) != candidate:
+        raise RuntimeError(f"Native Cargo configuration path is not canonical: {candidate}")
+    try:
+        descriptor = os.open(candidate, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > _BUILD_CARGO_CONFIG_MAX_BYTES:
+            raise RuntimeError(f"Native Cargo configuration is not a bounded regular file: {candidate}")
+        chunks: list[bytes] = []
+        length = 0
+        while True:
+            chunk = os.read(descriptor, min(64 * 1024, _BUILD_CARGO_CONFIG_MAX_BYTES + 1 - length))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+            if length > _BUILD_CARGO_CONFIG_MAX_BYTES:
+                raise RuntimeError(f"Native Cargo configuration exceeds its byte limit: {candidate}")
+        after = os.fstat(descriptor)
+        linked = candidate.lstat()
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if (identity(before) != identity(after) or identity(after) != identity(linked)
+                or length != after.st_size or candidate.resolve(strict=True) != candidate):
+            raise RuntimeError(f"Native Cargo configuration changed during inspection: {candidate}")
+        contents = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    try:
+        import tomllib
+        config = tomllib.loads(contents.decode("utf-8"))
+    except (ImportError, UnicodeError, ValueError) as error:
+        raise RuntimeError(f"Native Cargo configuration cannot be parsed with Python 3.11+ TOML: {candidate}") from error
+    # [env] can override any declared compiler variable using force=true and
+    # defeats a closed child inventory even when its key is otherwise unknown.
+    for table in ("profile", "unstable", "env", "paths", "patch", "include"):
+        if table in config:
+            raise RuntimeError(f"Native Cargo configuration forbids {table}: {candidate}")
+    build = config.get("build", {})
+    if not isinstance(build, dict):
+        raise RuntimeError(f"Native Cargo build configuration is not a table: {candidate}")
+    compile_keys = {
+        "rustc", "rustc-wrapper", "rustc-workspace-wrapper", "rustdoc", "rustflags",
+        "rustdocflags", "target", "target-dir", "build-dir", "jobs", "incremental",
+    }
+    if compile_keys.intersection(build):
+        raise RuntimeError(f"Native Cargo configuration overrides the compiler envelope: {candidate}")
+    # Every target-specific table can select a linker/runner, add flags or
+    # override build-script outputs through a links-name subtable.
+    if config.get("target"):
+        raise RuntimeError(f"Native Cargo configuration overrides a target: {candidate}")
+    aliases = config.get("alias", {})
+    if not isinstance(aliases, dict) or _CARGO_BUILTIN_ALIASES.intersection(aliases):
+        raise RuntimeError(f"Native Cargo configuration overrides a built-in command: {candidate}")
+    return (*identity(after), hashlib.sha256(contents).hexdigest())
+
+
+def authenticate_build_cargo_configuration(
+    directory: pathlib.Path, cargo_home: pathlib.Path,
+) -> dict[pathlib.Path, tuple[object, ...] | None]:
+    """Authenticate every effective Cargo config, including absent candidates.
+
+    Apple Cargo and Android cargo-ndk use the same configuration authority.
+    The caller must recheck the returned observations after its Cargo command.
+    """
+    for name, value in (("invocation directory", directory), ("CARGO_HOME", cargo_home)):
+        if not value.is_absolute() or value.resolve(strict=False) != value:
+            raise RuntimeError(f"Native Cargo {name} must be absolute and canonical")
+    candidates: dict[pathlib.Path, None] = {}
+    for parent in (directory, *directory.parents):
+        for filename in ("config", "config.toml"):
+            candidates[parent / ".cargo" / filename] = None
+    for filename in ("config", "config.toml"):
+        candidates[cargo_home / filename] = None
+    return {candidate: _build_cargo_config_observation(candidate) for candidate in candidates}
+
+
+def recheck_build_cargo_configuration(
+    observations: dict[pathlib.Path, tuple[object, ...] | None],
+) -> None:
+    """Refuse changed, replaced, newly created or removed Cargo config files."""
+    for candidate, expected in observations.items():
+        if _build_cargo_config_observation(candidate) != expected:
+            raise RuntimeError(f"Native Cargo configuration changed during invocation: {candidate}")
 
 
 def main() -> int:
@@ -311,6 +416,11 @@ def main() -> int:
 
     authenticated_tools: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
     authenticated_files: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
+    build_configuration = {}
+    if args.profile in AUTHENTICATED_CARGO_PROFILES:
+        build_configuration = authenticate_build_cargo_configuration(
+            pathlib.Path.cwd(), pathlib.Path(environment["CARGO_HOME"])
+        )
     if args.profile in AUTHENTICATED_CARGO_PROFILES:
         authenticated_tools = authenticate_cargo_environment(environment)
     if args.profile == "android-cargo":
@@ -338,6 +448,7 @@ def main() -> int:
         close_fds=True,
         check=False,
     )
+    recheck_build_cargo_configuration(build_configuration)
     for name, (path, expected_identity) in authenticated_tools.items():
         _, current_identity = authenticate_regular_executable(name, str(path))
         if current_identity != expected_identity:

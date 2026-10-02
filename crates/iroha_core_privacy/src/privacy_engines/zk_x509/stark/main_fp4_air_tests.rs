@@ -513,11 +513,7 @@ fn der_and_rfc_fp4_capabilities_require_complete_registered_openings() {
         challenges: der,
         public: ZkX509DerStarkPublicTerminalsV1,
     };
-    let rfc_context = || RfcMainFp4AirContextV1 {
-        der,
-        rfc,
-        terminals: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
-    };
+    let rfc_context = || RfcMainFp4AirContextV1 { der, rfc };
     let mut counts = [0; 2];
     for registration in AggregateProofLayoutV1::for_full_profile_v1()
         .unwrap()

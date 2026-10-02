@@ -235,6 +235,7 @@ impl State {
                     .take()
                     .expect("prepared State input"),
                 fastpq_source_inventory: None,
+                fastpq_source_quota_seal: None,
                 fastpq_witness_context: None,
                 axt_envelopes: axt_envelopes.take().expect("prepared State input"),
                 axt_block_start_snapshot: None,

@@ -42,6 +42,18 @@ pub(super) fn witness(opcode: u8, left: u64, right: u64) -> [F; WIDTH] {
 
 pub(super) fn residues(bank: &[F], sources: Sources<'_>, selectors: [F; 4]) -> Vec<F> {
     let mut out = Vec::with_capacity(CONSTRAINTS);
+    append_residues(&mut out, bank, sources, selectors);
+    out
+}
+
+/// Append the shared equations without allocating a second private residue owner.
+pub(super) fn append_residues(
+    out: &mut Vec<F>,
+    bank: &[F],
+    sources: Sources<'_>,
+    selectors: [F; 4],
+) {
+    let start = out.len();
     let [is_sub, is_and, is_or, is_xor] = selectors;
     let is_bitwise = is_and.add(is_or).add(is_xor);
     let is_add = F::ONE.sub(is_sub).sub(is_bitwise);
@@ -69,11 +81,10 @@ pub(super) fn residues(bank: &[F], sources: Sources<'_>, selectors: [F; 4]) -> V
         out.push(is_add.mul(add).add(is_sub.mul(sub)));
     }
     bitwise::append_residues(
-        &mut out,
+        out,
         &bank[DIGITS..TRANSFER],
         sources,
         [is_and, is_or, is_xor],
     );
-    debug_assert_eq!(out.len(), CONSTRAINTS);
-    out
+    debug_assert_eq!(out.len() - start, CONSTRAINTS);
 }

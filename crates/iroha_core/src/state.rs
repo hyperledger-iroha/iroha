@@ -351,7 +351,11 @@ mod output_capacity;
 mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 mod fastpq_governance_source;
+mod fastpq_quantity_archive;
 mod fastpq_quantity_capture;
+pub(crate) use fastpq_quantity_capture::QuantityCaptureIssue;
+mod fastpq_quantity_storage;
+mod fastpq_quantity_write_plan;
 mod fastpq_rejection_tail;
 #[cfg(test)]
 mod fastpq_source_quota_tests;
@@ -1501,6 +1505,12 @@ use scalar_cell_custody::ScalarCellFixtureBlock;
 
 // Four fixed operation indexes admit child checkpoints through their original pool.
 macro_rules! world_field_transaction {
+    ($field:expr, assets) => {
+        fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
+    };
+    ($field:expr, asset_definitions) => {
+        fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
+    };
     ($field:expr, kagemusha_mint_credit_operations) => {
         $field.try_transaction_admitted()?
     };
@@ -6437,7 +6447,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) account_recovery_requests:
         StorageTransaction<'block, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
-    pub(crate) asset_definitions: StorageTransaction<'block, AssetDefinitionId, AssetDefinition>,
+    pub(crate) asset_definitions: fastpq_quantity_storage::QuantityStorageTransaction<
+        'block,
+        AssetDefinitionId,
+        AssetDefinition,
+    >,
     /// Index mapping asset alias literals to canonical asset definition ids.
     pub(crate) asset_definition_aliases:
         StorageTransaction<'block, AssetDefinitionAlias, AssetDefinitionId>,
@@ -6471,7 +6485,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_definition_nonzero_holders:
         StorageTransaction<'block, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
-    pub(crate) assets: StorageTransaction<'block, AssetId, AssetValue>,
+    pub(crate) assets:
+        fastpq_quantity_storage::QuantityStorageTransaction<'block, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
     pub(crate) asset_metadata: StorageTransaction<'block, AssetId, Metadata>,
     /// Registered NFTs.
@@ -7915,7 +7930,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if self.assets.get(asset_id).is_some() {
             self.quantity_mutation_observation.changed();
         }
-        let removed = self.assets.remove(asset_id.clone());
+        let removed = self.remove_quantity_balance(asset_id);
         self.asset_metadata.remove(asset_id.clone());
         if removed.is_some() {
             self.refresh_nonzero_asset_holder(asset_id);
@@ -12570,6 +12585,8 @@ pub struct StateBlockFields<'state> {
     fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,
     /// Sealed validator-owned inventory or its latched construction error.
     fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,
+    /// Original quota journals joined to the finalized inventory, with sticky refusal.
+    fastpq_source_quota_seal: Option<fastpq_source_inventory::SourceQuotaInventorySeal>,
     /// Local-only context for background FASTPQ batch construction.
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
@@ -25428,6 +25445,7 @@ impl<'block> WorldTransaction<'block, '_> {
     /// - There is no account with such name.
     /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
@@ -25486,40 +25504,8 @@ impl<'block> WorldTransaction<'block, '_> {
         definition_id: &AssetDefinitionId,
         increment: &Quantity,
     ) -> Result<(), Error> {
-        let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(increment, spec)?;
-        // Update the aggregate based on the stored value rather than recomputing
-        // from the current storage view (which would already include the change)
-        // to avoid double-counting.
-        // Compute and persist the new total first, then emit events.
-        let new_total = {
-            let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(&def.total_quantity, spec)?;
-            let new_total = def
-                .total_quantity
-                .checked_add(increment)
-                .map_err(|_| MathError::Overflow)?;
-            ensure_asset_quantity_value(&new_total, spec)?;
-            new_total
-        };
-        self.quantity_mutation_observation.changed();
-        self.asset_definitions
-            .get_mut(definition_id)
-            .expect("definition retained through total preparation")
-            .total_quantity = new_total.clone();
-        debug!(
-            target: "iroha::state::asset_totals",
-            "increased total quantity for {} by {} -> {}",
-            definition_id,
-            increment,
-            new_total
-        );
-        self.emit_asset_definition_event(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        ));
+        let new_total = self.precheck_asset_total_amount_change(definition_id, increment, true)?;
+        self.apply_prechecked_asset_total_amount_change(definition_id, increment, new_total, true);
         Ok(())
     }
     /// Decrease [`AssetDefinition::total_quantity`] by `decrement`.
@@ -25537,43 +25523,62 @@ impl<'block> WorldTransaction<'block, '_> {
         definition_id: &AssetDefinitionId,
         decrement: &Quantity,
     ) -> Result<(), Error> {
+        let new_total = self.precheck_asset_total_amount_change(definition_id, decrement, false)?;
+        self.apply_prechecked_asset_total_amount_change(definition_id, decrement, new_total, false);
+        Ok(())
+    }
+
+    /// Compute the original checked aggregate replacement without writing it.
+    /// The supply owner retains this result until its balance mutation has completed.
+    pub(crate) fn precheck_asset_total_amount_change(
+        &self,
+        definition_id: &AssetDefinitionId,
+        amount: &Quantity,
+        mint: bool,
+    ) -> Result<Quantity, Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(decrement, spec)?;
-        // Update the aggregate directly to avoid double-counting when storage
-        // has already been mutated by the caller.
-        // Compute and persist the new total first, then emit events.
-        let new_total = {
-            let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(&def.total_quantity, spec)?;
-            if &def.total_quantity < decrement {
+        ensure_asset_quantity_value(amount, spec)?;
+        let definition = self.asset_definition(definition_id)?;
+        ensure_asset_quantity_value(&definition.total_quantity, spec)?;
+        let new_total = if mint {
+            definition
+                .total_quantity
+                .checked_add(amount)
+                .map_err(|_| MathError::Overflow)?
+        } else {
+            if &definition.total_quantity < amount {
                 return Err(MathError::NotEnoughQuantity.into());
             }
-            let new_total = def
+            definition
                 .total_quantity
-                .checked_sub(decrement)
-                .map_err(|_| MathError::NotEnoughQuantity)?;
-            ensure_asset_quantity_value(&new_total, spec)?;
-            new_total
+                .checked_sub(amount)
+                .map_err(|_| MathError::NotEnoughQuantity)?
         };
+        ensure_asset_quantity_value(&new_total, spec)?;
+        Ok(new_total)
+    }
+
+    /// Apply the original aggregate calculation after the corresponding exact balance write.
+    pub(crate) fn apply_prechecked_asset_total_amount_change(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        amount: &Quantity,
+        new_total: Quantity,
+        mint: bool,
+    ) {
         self.quantity_mutation_observation.changed();
-        self.asset_definitions
-            .get_mut(definition_id)
-            .expect("definition retained through total preparation")
-            .total_quantity = new_total.clone();
-        debug!(
-            target: "iroha::state::asset_totals",
-            "decreased total quantity for {} by {} -> {}",
-            definition_id,
-            decrement,
-            new_total
-        );
+        self.assign_quantity_supply(definition_id, new_total.clone());
+        if mint {
+            debug!(target: "iroha::state::asset_totals", "increased total quantity for {} by {} -> {}", definition_id, amount, new_total);
+        } else {
+            debug!(target: "iroha::state::asset_totals", "decreased total quantity for {} by {} -> {}", definition_id, amount, new_total);
+        }
         self.emit_asset_definition_event(AssetDefinitionEvent::TotalQuantityChanged(
             AssetDefinitionTotalQuantityChanged {
                 asset_definition: definition_id.clone(),
                 total_amount: new_total,
             },
         ));
-        Ok(())
     }
     /// Get mutable reference to [`Nft`]
     ///
@@ -29352,7 +29357,12 @@ impl State {
                 .expect("closed public decision matches its frozen policy");
             wtx.governance_referenda.insert(rid, record);
         }
+        // Classify this original block-start child before its existing publication.
+        // Raw quantity leases remain a refusal; only successful apply advances lineage.
+        let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();
+        quantity_candidate.observe(&wtx);
         wtx.apply();
+        sb.fastpq_quantity_candidate.apply(quantity_candidate);
         Ok(())
     }
 
@@ -29509,7 +29519,12 @@ impl State {
                 )
             },
         );
+        // Classify this original block-start child before its existing publication.
+        // Raw quantity leases remain a refusal; only successful apply advances lineage.
+        let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();
+        quantity_candidate.observe(&wtx);
         wtx.apply();
+        sb.fastpq_quantity_candidate.apply(quantity_candidate);
         Ok(())
     }
 
@@ -36854,6 +36869,7 @@ impl<'state> StateBlock<'state> {
     /// work, or mismatched ordinary transcript contents and unexpected prepared batches.
     /// Content failures remain latched and invalidate every cached witness-derived output.
     pub fn capture_exec_witness(&mut self) -> Result<(), String> {
+        self.observe_quantity_block_journals();
         self.verify_sumeragi_lane_state_seal()?;
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
             Ok(inventory) => inventory,
@@ -37034,6 +37050,7 @@ impl<'state> StateBlock<'state> {
     }
     /// Reject stale output extraction even when capture has not been called again.
     fn guard_captured_exec_witness(&mut self) -> bool {
+        self.observe_quantity_block_journals();
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
             Ok(inventory) => inventory,
             Err(_) => {
@@ -41334,7 +41351,7 @@ impl StateTransaction<'_, '_> {
         } = self;
         block_pending_public_lane_slash_observability
             .append(&mut pending_public_lane_slash_observability);
-        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
+        pending_fastpq_quantity_candidate.observe(&world);
         world.apply();
         block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
     }
@@ -41579,7 +41596,7 @@ impl StateTransaction<'_, '_> {
         prev_committed_topology.apply();
         committed_topology.apply();
         block_hashes.apply();
-        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
+        pending_fastpq_quantity_candidate.observe(&world);
         world.apply();
         block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
         public_lane_staking_status_overlay.commit();

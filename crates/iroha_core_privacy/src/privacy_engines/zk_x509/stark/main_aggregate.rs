@@ -7,17 +7,19 @@
 #[cfg(test)]
 use super::super::prover_observation::{PhaseTimerV1, PhaseV1};
 use super::super::{
-    der_stark::ZkX509DerStarkChallengesV1,
-    rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
-    sha_call_bus_stark::{
-        ZK_X509_SHA_CA_CALL_COUNT_V1, ZkX509ShaCallBoundaryTerminalV1, ZkX509ShaCallBusChallengesV1,
-    },
+    der_stark::ZkX509DerStarkChallengesV1, rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
+    sha_call_bus_stark::ZkX509ShaCallBusChallengesV1,
     sha_word_stark::ZkX509ShaWordStarkChallengesV1,
 };
 use super::*;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_bounded_transform.rs"]
 mod main_bounded_transform;
+#[path = "main_ca_links.rs"]
+pub(super) mod main_ca_links;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_ca_resources.rs"]
+mod main_ca_resources;
 #[cfg(test)]
 #[path = "main_composition_ownership_tests.rs"]
 mod main_composition_ownership_tests;
@@ -30,6 +32,8 @@ mod main_fixed_replay_batch_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_fri_retention.rs"]
 mod main_fri_retention;
+#[path = "main_joint.rs"]
+pub(crate) mod main_joint;
 #[path = "main_key_joins.rs"]
 pub(super) mod main_key_joins;
 #[cfg(test)]
@@ -188,7 +192,9 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
         )?;
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
-        if self.public.consensus_context_digest == [0_u8; 32]
+        if self.base_polynomials.proof_instance_v1() != self.pre_aux.proof_instance_v1()
+            || self.transcript.context() != self.pre_aux.proof_instance_v1().main_context_v1()
+            || self.public.consensus_context_digest == [0_u8; 32]
             || self.trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
             || self.transcript.state() != self.base_transcript_state
             || self.trace_groups.iter().any(|group| {
@@ -223,7 +229,6 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     trace_groups: Vec<TraceGroupProofV1>,
     base_polynomials: MainTracePolynomialSetV1,
     aux_polynomials: MainTracePolynomialSetV1,
-    terminal_claims: ZkX509MainTerminalClaimsV1,
     link_alphas: Vec<E>,
     key_plan: main_key_joins::MainKeyJoinPlanV1,
     key_alphas: Vec<E>,
@@ -237,6 +242,14 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
+        let proof_instance = self.binding.proof_instance_v1();
+        if self.base_polynomials.proof_instance_v1() != proof_instance
+            || self.aux_polynomials.proof_instance_v1() != proof_instance
+            || self.transcript.context() != proof_instance.main_context_v1()
+        {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+
         self.layout.validate_exact_full_profile_registration_v1()?;
         validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
         main_resources::MainProverBufferPlanV1::new_v1(&self.layout)?.check_native_sources_v1(
@@ -253,7 +266,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .validate_v1(&self.layout, MainTraceColumnKindV1::Aux)?;
         if self.public.consensus_context_digest == [0_u8; 32]
             || self.trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
-            || self.terminal_claims != self.log19.terminal_claims_v1()
             || self.log19.post_base != self.binding.main_post_base()
             || self.transcript.state() != self.composition_transcript_state
             || self.trace_groups.iter().any(|group| {
@@ -338,34 +350,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         Ok(providers)
     }
-    fn composition_material_v1<R: TryRngCore>(
-        &self,
-        rng: &mut R,
-    ) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
-        let providers = self.prover_constraint_providers_v1()?;
-        main_composition_material_from_polynomials_v1(
-            &self.layout,
-            &self.base_polynomials,
-            &self.aux_polynomials,
-            &MainTraceReplaySourcesV1::Bound {
-                log19: &self.log19,
-                projection: &self.projection,
-                io: &self.io,
-            },
-            &providers,
-            &self.alphas,
-            &self.link_alphas,
-            &self.key_plan,
-            &self.key_alphas,
-            &self.sha_union_plan,
-            &self.sha_union_alphas,
-            main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
-                &self.layout,
-                self.assembly.allocated_payload_bytes_v1(),
-            )?,
-            rng,
-        )
-    }
 }
 /// Commit all six canonical MAIN base groups in one ordered row tree and yield the sole outer
 /// credential assembly hook.
@@ -375,6 +359,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
 /// root and supplies the resulting opaque 272-challenge X5B1 binding.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
+    proof_instance: ZkX509ProofInstanceV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
     assembly: &'a ZkX509MainTraceAssemblyV1,
     public: ZkX509CredentialPublicBindingV1,
@@ -423,13 +408,22 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         ],
     )?;
     let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
+        proof_instance,
         &layout,
         public.consensus_context_digest,
         assembly.verifier_profile,
     )?;
-    let mut transcript =
-        new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
-    absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
+    let mut transcript = new_main_transcript_v1(
+        proof_instance,
+        &public.consensus_context_digest,
+        assembly.verifier_profile,
+    )?;
+    absorb_aggregate_layout_v1(
+        proof_instance,
+        &mut transcript,
+        MAIN_LAYOUT_DOMAIN_V1,
+        &layout,
+    )?;
     {
         let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
         buffer_plan.check_native_sources_v1(
@@ -451,6 +445,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     #[cfg(test)]
     let commit_timer = PhaseTimerV1::start_v1(PhaseV1::BaseSampleAndCommit);
     let (base_polynomials, commitment) = MainTracePolynomialSetV1::sample_and_commit_joined_v1(
+        proof_instance,
         &layout,
         MainTraceColumnKindV1::Base,
         assembly.allocated_payload_bytes_v1(),
@@ -470,8 +465,12 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         MainTraceColumnKindV1::Base,
         &commitment,
     )];
-    aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
-        .map_err(map_aggregate_error_v1)?;
+    aggregate::absorb_base_roots_v1(
+        &mut transcript,
+        main_domains_v1(proof_instance),
+        &trace_groups,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let pre_aux = session.finish_pre_aux_v1()?;
     let base_transcript_state = transcript.state();
     let phase = ZkX509MainAwaitingCredentialBindingV1 {
@@ -502,6 +501,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         binding: ZkX509CredentialPreAuxBindingV1,
         rng: &mut R,
     ) -> Result<ZkX509MainCompositionPhaseV1<'a>, ZkX509StarkErrorV1> {
+        let proof_instance = self.pre_aux.proof_instance_v1();
         main_bounded_transform::check_completion_v1(
             fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
         )?;
@@ -551,6 +551,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         #[cfg(test)]
         let commit_timer = PhaseTimerV1::start_v1(PhaseV1::AuxSampleAndCommit);
         let (aux_polynomials, commitment) = MainTracePolynomialSetV1::sample_and_commit_joined_v1(
+            proof_instance,
             &layout,
             MainTraceColumnKindV1::Aux,
             assembly.allocated_payload_bytes_v1(),
@@ -564,10 +565,12 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         #[cfg(test)]
         commit_timer.complete_v1();
         trace_groups[0].aux_root = commitment.commitment.root;
-        aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
-            .map_err(map_aggregate_error_v1)?;
-        let terminal_claims = log19.terminal_claims_v1();
-        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, terminal_claims)?;
+        aggregate::absorb_aux_roots_v1(
+            &mut transcript,
+            main_domains_v1(proof_instance),
+            &trace_groups,
+        )
+        .map_err(map_aggregate_error_v1)?;
         let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
         let link_alphas = main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)?
             .derive_alphas_v1(&mut transcript)?;
@@ -591,7 +594,6 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             trace_groups,
             base_polynomials,
             aux_polynomials,
-            terminal_claims,
             link_alphas,
             key_plan,
             key_alphas,
@@ -608,134 +610,37 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
-    /// Consume the X5B1-bound phase and construct the canonical X5M1 proof.
-    ///
-    /// Every trace opening and DEEP value uses the original explicit masks
-    /// and immutable bound native sources committed by the two earlier phases.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn finish_v1_with_rng<R: TryRngCore>(
+    /// Complete the same original FRI and query path after the selected
+    /// transcript has bound every local and supplemental opening.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn finish_original_openings_v1(
         mut self,
-        rng: &mut R,
+        composition_material: RetainedCompositionMaterialV1,
+        composition_roots: Vec<PrivacyOuterDigestV1>,
+        fri_masks: Vec<aggregate::AggregateFriMaskOracleMaterialV1>,
+        fri_mask_roots: Vec<PrivacyOuterDigestV1>,
+        deep: aggregate::AggregateDeepProofV1,
+        deep_point: E,
+        key_openings: [E; main_key_joins::OPENINGS_V1],
+        key_mixes: Vec<E>,
+        mixes: Vec<Vec<FriMixV1>>,
+        ca: Option<main_joint::MainCaDeepContributionV1<'_>>,
+        #[cfg(test)] deep_timer: PhaseTimerV1,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
-        self.validate_v1()?;
-        #[cfg(test)]
-        let composition_timer = PhaseTimerV1::start_v1(PhaseV1::Composition);
-        let composition_material = self.composition_material_v1(rng)?;
+        let proof_instance = self.binding.proof_instance_v1();
         let sources = MainTraceReplaySourcesV1::Bound {
             log19: &self.log19,
             projection: &self.projection,
             io: &self.io,
         };
-        let compositions = &composition_material.evaluations;
         let shared_layout = self.layout.as_shared()?;
-        let mut composition_roots = Vec::new();
-        composition_roots
-            .try_reserve_exact(SECURITY_LANES)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for (lane, composition) in compositions.iter().enumerate() {
-            composition_roots.push(
-                aggregate::streaming_composition_commitment_v1(
-                    AGGREGATE_DOMAINS_V1,
-                    lane,
-                    composition,
-                    &[],
-                )
-                .map_err(map_aggregate_error_v1)?
-                .root,
-            );
-        }
-        aggregate::absorb_composition_roots_v1(
-            &mut self.transcript,
-            AGGREGATE_PARAMETERS_V1,
-            AGGREGATE_DOMAINS_V1,
-            &composition_roots,
-        )
-        .map_err(map_aggregate_error_v1)?;
-        #[cfg(test)]
-        composition_timer.complete_v1();
-        #[cfg(test)]
-        let deep_timer = PhaseTimerV1::start_v1(PhaseV1::DeepAndFri);
-        let fri_masks = aggregate::build_fri_mask_oracles_v1(
-            AGGREGATE_PARAMETERS_V1,
-            AGGREGATE_DOMAINS_V1,
-            &shared_layout,
-            rng,
-        )
-        .map_err(map_aggregate_error_v1)?;
-        let fri_mask_roots = fri_masks
-            .iter()
-            .map(|mask| mask.tree.root())
-            .collect::<Vec<_>>();
-        aggregate::absorb_fri_mask_roots_v1(
-            &mut self.transcript,
-            AGGREGATE_PARAMETERS_V1,
-            AGGREGATE_DOMAINS_V1,
-            &fri_mask_roots,
-        )
-        .map_err(map_aggregate_error_v1)?;
-        let deep_point = self
-            .key_plan
-            .derive_point_v1(&mut self.transcript, &shared_layout)?;
+        let compositions = &composition_material.evaluations;
+        let (canonical_deep_traces, canonical_deep_compositions) =
+            canonical_deep_values_v1(&deep, &self.layout)?;
         let key_policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
             &self.layout,
             self.assembly.allocated_payload_bytes_v1(),
         )?;
-        let key_openings = self.key_plan.open_v1(
-            &self.layout,
-            &self.base_polynomials,
-            &sources,
-            deep_point,
-            key_policy,
-        )?;
-        let mut deep_trace_groups = Vec::new();
-        deep_trace_groups
-            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-            let (base_current, base_next) = self.base_polynomials.deep_group_v1(
-                &self.layout,
-                MainTraceColumnKindV1::Base,
-                group_index,
-                deep_point,
-                &sources,
-            )?;
-            let (aux_current, aux_next) = self.aux_polynomials.deep_group_v1(
-                &self.layout,
-                MainTraceColumnKindV1::Aux,
-                group_index,
-                deep_point,
-                &sources,
-            )?;
-            deep_trace_groups.push(aggregate::AggregateDeepTraceGroupOpeningV1 {
-                base_current: fp4_values_to_wire_v1(base_current),
-                base_next: fp4_values_to_wire_v1(base_next),
-                aux_current: fp4_values_to_wire_v1(aux_current),
-                aux_next: fp4_values_to_wire_v1(aux_next),
-            });
-        }
-        let deep_composition_values = evaluate_retained_composition_coefficients_at_deep_v1(
-            &composition_material.coefficient_chunks,
-            deep_point,
-        )?;
-        let deep = aggregate::AggregateDeepProofV1 {
-            trace_groups: deep_trace_groups,
-            composition_values: deep_composition_values
-                .into_iter()
-                .map(fp4_values_to_wire_v1)
-                .collect(),
-        };
-        aggregate::absorb_deep_openings_v1(
-            &mut self.transcript,
-            &deep,
-            AGGREGATE_PARAMETERS_V1,
-            &shared_layout,
-        )
-        .map_err(map_aggregate_error_v1)?;
-        let (canonical_deep_traces, canonical_deep_compositions) =
-            canonical_deep_values_v1(&deep, &self.layout)?;
-        main_key_joins::MainKeyJoinPlanV1::absorb_openings_v1(&key_openings, &mut self.transcript)?;
-        let key_mixes = main_key_joins::MainKeyJoinPlanV1::derive_mixes_v1(&mut self.transcript)?;
-        let mixes = derive_fri_mixes_v1(&mut self.transcript, &self.layout)?;
         let mut fri_bases = main_fri_retention::MainRetainedFriInputsV1::new_v1(
             main_fri_bases_from_polynomials_v1(
                 &self.layout,
@@ -751,6 +656,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 &key_openings,
                 &key_mixes,
                 key_policy,
+                ca,
             )?,
             self.layout.common_lde_size(),
         )?;
@@ -778,7 +684,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             fri_materials.push(
                 aggregate::build_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
-                    AGGREGATE_DOMAINS_V1,
+                    main_domains_v1(proof_instance),
                     &shared_layout,
                     lane,
                     core::mem::take(&mut base_values.0),
@@ -791,13 +697,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         // once queries are fixed instead of replaying every private trace column.
         let grinding_state = self.transcript.state();
         let grinding_nonce = grind_nonce_v1(
-            ZK_X509_DIGEST_CONTEXT_V1,
+            proof_instance.main_context_v1(),
             &grinding_state,
             ZK_X509_GRINDING_BITS_V1,
         )
         .map_err(map_transparent_error_v1)?;
         absorb_grinding_nonce_v1(&mut self.transcript, grinding_nonce)?;
-        let query_indices = query_indices_v1(&self.transcript, &self.layout)?;
+        let query_indices = query_indices_v1(proof_instance, &self.transcript, &self.layout)?;
         #[cfg(test)]
         deep_timer.complete_v1();
         #[cfg(test)]
@@ -866,7 +772,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         for (lane, composition) in compositions.iter().enumerate() {
             let commitment = aggregate::streaming_composition_commitment_v1(
-                AGGREGATE_DOMAINS_V1,
+                main_domains_v1(proof_instance),
                 lane,
                 composition,
                 &composition_opening_indices,
@@ -897,7 +803,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             fri_openings.push(
                 aggregate::open_streaming_fri_lane_v1(
                     AGGREGATE_PARAMETERS_V1,
-                    AGGREGATE_DOMAINS_V1,
+                    main_domains_v1(proof_instance),
                     &shared_layout,
                     lane,
                     core::mem::take(&mut base_values.0),
@@ -998,7 +904,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             deep,
         };
         let aggregate_bytes = encode_zk_x509_segmented_stark_proof_v1(&proof, &self.layout)?;
-        encode_zk_x509_main_proof_envelope_v1(self.terminal_claims, &key_openings, &aggregate_bytes)
+        encode_zk_x509_main_proof_envelope_v1(&key_openings, &aggregate_bytes)
     }
 }
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
@@ -1532,6 +1438,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     sha_union_centers: &[[F; 4]; 4],
     sha_union_alphas: &[E],
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
+    joint_buffers: Option<&main_ca_resources::MainCaJointBufferPlanV1>,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
     #[cfg(test)]
     let registration_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistration);
@@ -1577,8 +1484,11 @@ fn main_registration_composition_coefficient_chunks_v1(
         core::mem::take(&mut fixed.columns),
     )?
     .with_transform_policy_v1(transform_policy)?;
-    let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)?
-        .quotient_cache_plan_v1(layout, registration)?;
+    let cache_plan = match joint_buffers {
+        Some(plan) => plan.quotient_cache_plan_v1(layout, registration)?,
+        None => main_resources::MainProverBufferPlanV1::new_v1(layout)?
+            .quotient_cache_plan_v1(layout, registration)?,
+    };
     #[cfg(test)]
     let cache_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionTraceCache);
     let cache = main_quotient_cache::MainQuotientReplayCacheV1::from_replay_v1(
@@ -1911,8 +1821,9 @@ fn evaluate_main_composition_columns_v1(
     Ok(evaluations.into_vec())
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
+fn main_composition_material_with_ca_v1<R: TryRngCore>(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
@@ -1925,8 +1836,15 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
     sha_union_plan: &main_sha_union::MainShaUnionPlanV1,
     sha_union_alphas: &[E],
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
+    ca: Option<main_joint::MainCaCompositionContributionV1<'_>>,
     rng: &mut R,
-) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
+) -> Result<
+    (
+        RetainedCompositionMaterialV1,
+        Option<main_ca_links::MainCaOriginalAuxiliaryV1>,
+    ),
+    ZkX509StarkErrorV1,
+> {
     layout.validate_exact_full_profile_registration_v1()?;
     base_polynomials.validate_v1(layout, MainTraceColumnKindV1::Base)?;
     aux_polynomials.validate_v1(layout, MainTraceColumnKindV1::Aux)?;
@@ -2010,6 +1928,7 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
                     sha_union_centers,
                     sha_union_alphas,
                     bounded_transform,
+                    ca.as_ref().map(|ca| ca.buffers),
                 )?,
                 zeroize_extension_lanes_v1,
             );
@@ -2061,6 +1980,39 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
         bounded_transform,
         &mut coefficient_chunks,
     )?;
+    let ca_originals = if let Some(ca) = ca {
+        ca.buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::Registration,
+            ca.original,
+            None,
+        )?;
+        // All registration-local caches and fixed rows are now out of scope.
+        let retained = ca.plan.retain_original_auxiliary_v1(
+            layout,
+            aux_polynomials,
+            sources,
+            ca.original,
+            bounded_transform,
+        )?;
+        ca.buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            ca.original,
+            Some(&retained),
+        )?;
+        ca.plan.accumulate_v1(
+            layout,
+            aux_polynomials,
+            sources,
+            ca.original,
+            &retained,
+            ca.alphas,
+            bounded_transform,
+            &mut coefficient_chunks,
+        )?;
+        Some(retained)
+    } else {
+        None
+    };
     let geometry = super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
         &shared_layout,
         AGGREGATE_PARAMETERS_V1,
@@ -2073,10 +2025,13 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
     }
     let evaluations =
         evaluate_main_composition_coefficient_chunks_v1(&coefficient_chunks, &shared_layout)?;
-    Ok(RetainedCompositionMaterialV1 {
-        evaluations,
-        coefficient_chunks: coefficient_chunks.into_vec(),
-    })
+    Ok((
+        RetainedCompositionMaterialV1 {
+            evaluations,
+            coefficient_chunks: coefficient_chunks.into_vec(),
+        },
+        ca_originals,
+    ))
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2094,6 +2049,7 @@ fn main_fri_bases_from_polynomials_v1(
     key_openings: &[E; main_key_joins::OPENINGS_V1],
     key_mixes: &[E],
     key_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    ca: Option<main_joint::MainCaDeepContributionV1<'_>>,
 ) -> Result<Vec<Vec<E>>, ZkX509StarkErrorV1> {
     layout.validate_exact_full_profile_registration_v1()?;
     base_polynomials.validate_v1(layout, MainTraceColumnKindV1::Base)?;
@@ -2245,6 +2201,19 @@ fn main_fri_bases_from_polynomials_v1(
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
             .0,
     )?;
+    if let Some(ca) = ca {
+        ca.plan.accumulate_deep_v1(
+            ca.original,
+            deep_point,
+            ca.values,
+            ca.mixes,
+            key_policy,
+            &mut accumulators
+                .get_mut(0)
+                .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                .0,
+        )?;
+    }
     let common_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
     let mut evaluated = ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
@@ -3262,7 +3231,6 @@ struct RfcMainFp4AirEvaluatorV1 {
 struct RfcMainFp4AirContextV1 {
     der: ZkX509DerStarkChallengesV1,
     rfc: ZkX509Rfc5280StarkChallengesV1,
-    terminals: ZkX509Rfc5280StarkTerminalClaimsV1,
 }
 impl RfcMainFp4AirEvaluatorV1 {
     fn evaluate_residues_v1(
@@ -3271,7 +3239,7 @@ impl RfcMainFp4AirEvaluatorV1 {
         fixed: &[E],
         context: RfcMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
-        let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
+        let residues = evaluate_zk_x509_rfc5280_local_residues_v1(
             opening
                 .base_current
                 .try_into()
@@ -3293,7 +3261,6 @@ impl RfcMainFp4AirEvaluatorV1 {
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
             context.der,
             context.rfc,
-            context.terminals,
         )
         .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
         if residues.len() != self.registration.segment.constraint_count {
@@ -3412,32 +3379,30 @@ struct ShaMainFp4AirEvaluatorV1 {
     registration: RegisteredSegmentLayoutV1,
 }
 /// Public SHA-family context bound before constraint mixing.
-struct ShaMainFp4AirContextV1<'a> {
+struct ShaMainFp4AirContextV1 {
     word: ZkX509ShaWordStarkChallengesV1,
     call: ZkX509ShaCallBusChallengesV1,
     rfc: ZkX509Rfc5280StarkChallengesV1,
     segment: u8,
-    ca_calls: &'a [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 }
 impl ShaMainFp4AirEvaluatorV1 {
     fn evaluate_residues_v1(
         self,
         current: &ZkX509ShaBatchRowV1<E>,
         next: &ZkX509ShaBatchRowV1<E>,
-        context: ShaMainFp4AirContextV1<'_>,
+        context: ShaMainFp4AirContextV1,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
         if self.registration.segment.instance != u16::from(context.segment) {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let residues =
-            super::super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_over_field_v1(
+            super::super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_local_residues_over_field_v1(
                 current,
                 next,
                 context.word,
                 context.call,
                 context.rfc,
                 context.segment,
-                context.ca_calls,
             )
             .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
         if residues.len() != self.registration.segment.constraint_count {
@@ -3659,6 +3624,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1
     }
 }
 fn main_pre_aux_from_decoded_proof_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public: ZkX509CredentialPublicBindingV1,
     verifier_profile: ZkX509MainVerifierProfileV1,
     layout: &AggregateProofLayoutV1,
@@ -3672,6 +3638,7 @@ fn main_pre_aux_from_decoded_proof_v1(
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
+        proof_instance,
         layout,
         public.consensus_context_digest,
         verifier_profile,
@@ -3685,6 +3652,7 @@ fn main_pre_aux_from_decoded_proof_v1(
 /// pre-auxiliary token. The returned value contains no proof-selected
 /// challenge and can only be consumed by the joint MAIN-plus-CA transcript.
 pub(crate) fn zk_x509_main_pre_aux_from_proof_v1(
+    proof_instance: ZkX509ProofInstanceV1,
     public: ZkX509CredentialPublicBindingV1,
     proof_bytes: &[u8],
 ) -> Result<ZkX509CredentialMainPreAuxV1, ZkX509StarkErrorV1> {
@@ -3692,278 +3660,8 @@ pub(crate) fn zk_x509_main_pre_aux_from_proof_v1(
     let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
     let envelope = decode_zk_x509_main_proof_envelope_v1(proof_bytes)?;
     let proof = decode_zk_x509_segmented_stark_proof_v1(envelope.aggregate_proof, &layout)?;
-    main_pre_aux_from_decoded_proof_v1(public, verifier_profile, &layout, &proof)
+    main_pre_aux_from_decoded_proof_v1(proof_instance, public, verifier_profile, &layout, &proof)
 }
-/// Verify the complete six-group, 49-registration canonical MAIN aggregate.
-///
-/// Verifier-owned fixed polynomials are evaluated at the DEEP points for the complete
-/// constraint check. The proof supplies authenticated trace/composition/FRI openings and
-/// terminal claims; it cannot select a provider, registration, schedule, fixed row,
-/// or shared X5B1 challenge.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    rfc_statement: &ZkX509Rfc5280StatementV1,
-    public: ZkX509CredentialPublicBindingV1,
-    credential_binding: ZkX509CredentialPreAuxBindingV1,
-    proof_bytes: &[u8],
-) -> Result<ZkX509MainCaBindingV1, ZkX509StarkErrorV1> {
-    let verifier_profile = construct_zk_x509_main_verifier_profile_v1().inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-profile",
-            _error,
-        );
-    })?;
-    let layout = AggregateProofLayoutV1::for_full_profile_v1().inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-layout",
-            _error,
-        );
-    })?;
-    let envelope = decode_zk_x509_main_proof_envelope_v1(proof_bytes).inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-envelope-decode",
-            _error,
-        );
-    })?;
-    let proof = decode_zk_x509_segmented_stark_proof_v1(envelope.aggregate_proof, &layout)
-        .inspect_err(|_error| {
-            #[cfg(test)]
-            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                "main-segmented-decode",
-                _error,
-            );
-        })?;
-    let main_pre_aux =
-        main_pre_aux_from_decoded_proof_v1(public, verifier_profile, &layout, &proof).inspect_err(
-            |_error| {
-                #[cfg(test)]
-                super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                    "main-pre-aux",
-                    _error,
-                );
-            },
-        )?;
-    if !credential_binding.matches_main_pre_aux_v1(main_pre_aux) {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-pre-aux-binding",
-            &ZkX509StarkErrorV1::TranscriptMismatch,
-        );
-        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-    }
-    let mut transcript =
-        new_main_transcript_v1(&public.consensus_context_digest, verifier_profile)?;
-    absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
-    aggregate::absorb_base_roots_v1(
-        &mut transcript,
-        AGGREGATE_DOMAINS_V1,
-        &proof.aggregate.trace_groups,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, credential_binding)
-        .map_err(map_credential_pre_aux_error_v1)?;
-    aggregate::absorb_aux_roots_v1(
-        &mut transcript,
-        AGGREGATE_DOMAINS_V1,
-        &proof.aggregate.trace_groups,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    absorb_zk_x509_main_terminal_claims_v1(&mut transcript, envelope.claims)?;
-    let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
-    let link_alphas = main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)?
-        .derive_alphas_v1(&mut transcript)?;
-    let key_plan = main_key_joins::MainKeyJoinPlanV1::new_v1(
-        &layout,
-        statement,
-        ZkX509Rfc5280StarkShapeV1::from_statement(rfc_statement)
-            .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?,
-    )?;
-    let key_alphas = key_plan.derive_alphas_v1(&mut transcript)?;
-    let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
-    let sha_union_alphas = sha_union_plan.derive_alphas_v1(&mut transcript)?;
-    aggregate::absorb_composition_roots_v1(
-        &mut transcript,
-        AGGREGATE_PARAMETERS_V1,
-        AGGREGATE_DOMAINS_V1,
-        &proof.aggregate.composition_roots,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    aggregate::absorb_fri_mask_roots_v1(
-        &mut transcript,
-        AGGREGATE_PARAMETERS_V1,
-        AGGREGATE_DOMAINS_V1,
-        &proof.aggregate.fri_mask_roots,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let shared_layout = layout.as_shared()?;
-    let deep_point = key_plan.derive_point_v1(&mut transcript, &shared_layout)?;
-    aggregate::absorb_deep_openings_v1(
-        &mut transcript,
-        &proof.deep,
-        AGGREGATE_PARAMETERS_V1,
-        &shared_layout,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    main_key_joins::MainKeyJoinPlanV1::absorb_openings_v1(&envelope.key_openings, &mut transcript)?;
-    let key_mixes = main_key_joins::MainKeyJoinPlanV1::derive_mixes_v1(&mut transcript)?;
-    let key_supplemental =
-        key_plan.supplemental_v1(deep_point, &envelope.key_openings, &key_mixes)?;
-    let mixes = derive_fri_mixes_v1(&mut transcript, &layout)?;
-    let deep_mixes = aggregate_deep_lane_mixes_v1(&mixes, &layout)?;
-    let (fri_betas, terminal_fields) = aggregate::verify_fri_commitments_v1(
-        &proof.aggregate,
-        AGGREGATE_PARAMETERS_V1,
-        AGGREGATE_DOMAINS_V1,
-        &shared_layout,
-        &mut transcript,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-fri-commitments",
-            _error,
-        );
-    })
-    .map_err(map_aggregate_error_v1)?;
-    let grinding_state = transcript.state();
-    verify_grinding_nonce_v1(
-        ZK_X509_DIGEST_CONTEXT_V1,
-        &grinding_state,
-        ZK_X509_GRINDING_BITS_V1,
-        proof.aggregate.grinding_nonce,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-grinding",
-            _error,
-        );
-    })
-    .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-    absorb_grinding_nonce_v1(&mut transcript, proof.aggregate.grinding_nonce)?;
-    let expected_indices = query_indices_v1(&transcript, &layout)?;
-    aggregate::verify_all_merkle_openings_v1(
-        &proof.aggregate,
-        AGGREGATE_PARAMETERS_V1,
-        AGGREGATE_DOMAINS_V1,
-        &shared_layout,
-        &expected_indices,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-merkle-openings",
-            _error,
-        );
-    })
-    .map_err(map_aggregate_error_v1)?;
-    let post_base = credential_binding.main_post_base();
-    let p256_fixed = P256MainVerifierFixedSourceV1::new_v1()?;
-    let log5 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &p256_fixed, post_base)
-        .inspect_err(|_error| {
-            #[cfg(test)]
-            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                "main-p256-context",
-                _error,
-            );
-        })?;
-    let projection =
-        MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)
-            .inspect_err(|_error| {
-                #[cfg(test)]
-                super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                    "main-projection-context",
-                    _error,
-                );
-            })?;
-    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)
-        .inspect_err(|_error| {
-            #[cfg(test)]
-            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                "main-io-context",
-                _error,
-            );
-        })?;
-    let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        rfc_statement,
-        post_base,
-        envelope.claims,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-log19-context",
-            _error,
-        );
-    })?;
-    log19
-        .prepare_complete_oods_fixed_v1()
-        .inspect_err(|_error| {
-            #[cfg(test)]
-            super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-                "main-oods-fixed-schedule",
-                _error,
-            );
-        })?;
-    main_oods::verify_main_deep_constraints_v1(
-        &layout,
-        &proof.deep,
-        deep_point,
-        &alphas,
-        &link_alphas,
-        &key_plan,
-        &key_alphas,
-        &envelope.key_openings,
-        &sha_union_plan,
-        &sha_union_alphas,
-        &log5,
-        &projection,
-        &io,
-        &log19,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-complete-oods",
-            _error,
-        );
-    })?;
-    aggregate::verify_opened_query_relations_after_complete_oods_v1(
-        &proof.aggregate,
-        &proof.deep,
-        deep_point,
-        &deep_mixes,
-        AGGREGATE_PARAMETERS_V1,
-        &shared_layout,
-        &expected_indices,
-        &fri_betas,
-        &terminal_fields,
-        &key_supplemental,
-    )
-    .inspect_err(|_error| {
-        #[cfg(test)]
-        super::super::engine::prover_diagnostic::record_public_verifier_error_v1(
-            "main-opened-query-relations",
-            _error,
-        );
-    })
-    .map_err(map_aggregate_error_v1)?;
-    Ok(ZkX509MainCaBindingV1 {
-        public,
-        sha_terminals: envelope.claims.sha.credential_call_terminals_v1(),
-        root_spki_consumer_products: envelope
-            .claims
-            .rfc5280
-            .governed_trust_anchor_products_v1()
-            .consumer_products,
-    })
-}
-
 #[cfg(test)]
 #[path = "main_fp4_air_tests.rs"]
 mod fp4_air_tests;

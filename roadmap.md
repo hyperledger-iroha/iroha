@@ -14,9 +14,10 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
    certification, Kura publication and restart; finish DS-local State and AMX.
 3. Qualify Sumeragi and authenticated Linux artifacts, complete the authorized
    fresh Taira cutover, then prove readiness, paid writes, restart and DPN/contracts.
-4. Validate the committed merge and follow-up fixture/runtime repairs through
-   fresh workspace, genuine fixture and native SDK artifacts on one
-   source candidate. Complete X509 verifier byte-source joins, terminal-claim privacy and its time failure;
+4. Resolve the seven distinct failures in the completed integrated Core selection
+   and validate the reviewed fixture/runtime cohort through fresh workspace,
+   genuine fixture and native SDK artifacts on one source candidate. Qualify the
+   joint X509 relation and transcript privacy, and resolve its time/address-space failures;
    produce current q77 maximum proofs without widening resource limits.
 
 The [first-release goals](specs/first_release_completion_goals.md),
@@ -107,7 +108,7 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; anchored execution/private invocation/AXT; identical gas/traps/state/proofs, bounded caches and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS/timed-OVN/side-channel review; Musubi State-reader prerequisites. |
 | C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; preserve current maximum ordinary/AXT component proof passes while completing finalized-source admission, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
-| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; complete X509 verifier byte-source joins, repair terminal-claim privacy and complete its maximum proof within unchanged byte/RSS and 300-second limits; unsupported paths stay disabled. |
+| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Complete authorization/usage circuits and account lifecycle/undo; keys/fixtures, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |

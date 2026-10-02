@@ -245,6 +245,16 @@ confidential parameters share one global metadata input after authored instructi
 In-genesis parameter
 changes cannot enlarge that carrier's pre-frozen capacity.
 
+Final inventory construction now retains the original ordinary and mandatory
+quota journal identities with their frozen policies, exact six-dimensional usage
+and last applied transaction generations. Capture, extraction and commit require
+that same inventory allocation and both original journals. Discarded speculative
+children and empty commits preserve the seal; a nonempty applied journal changes
+it even when a later replacement restores all public counts. Reconstructing an
+equal journal does not restore custody, and an observed mismatch remains latched.
+The receipt shares existing allocation owners without adding backing storage;
+it does not complete original inventory or serialization-scratch accounting.
+
 TODO: complete current-source Core execution and genesis qualification, then bind
 these journals to atomic D7 publication. The combined implementation is applied;
 its actual Core tests remain pending. Truncation or omission of an applied source

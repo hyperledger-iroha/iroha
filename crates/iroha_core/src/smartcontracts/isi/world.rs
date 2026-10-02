@@ -13679,9 +13679,9 @@ pub mod isi {
             iroha_primitives::json::Json::from(norito::json::native::Value::Object(policy_map));
         let key: Name = "zk.policy".parse().unwrap();
         {
-            let asset_definition = state_transaction
+            let mut asset_definition = state_transaction
                 .world
-                .asset_definition_mut(asset_def_id)
+                .asset_definition_metadata_mut(asset_def_id)
                 .map_err(Error::from)?;
             asset_definition
                 .metadata_mut()
@@ -13771,9 +13771,9 @@ pub mod isi {
                     );
             }
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(asset_def_id)
+                    .asset_definition_metadata_mut(asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(candidate_policy);
             }
@@ -14111,9 +14111,9 @@ pub mod isi {
                 pending_transition: current_policy.pending_transition,
             };
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy_struct);
             }
@@ -14197,9 +14197,9 @@ pub mod isi {
             };
             policy.pending_transition = Some(transition);
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }
@@ -14238,9 +14238,9 @@ pub mod isi {
                 .untrack_confidential_policy_transition(&asset_def_id, pending.effective_height());
             policy.pending_transition = None;
             {
-                let asset_definition = state_transaction
+                let mut asset_definition = state_transaction
                     .world
-                    .asset_definition_mut(&asset_def_id)
+                    .asset_definition_metadata_mut(&asset_def_id)
                     .map_err(Error::from)?;
                 asset_definition.set_confidential_policy(policy);
             }

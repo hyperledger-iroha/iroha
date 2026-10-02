@@ -145,7 +145,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             'source "$CARGO_GRAPH_OWNER"',
             '"$PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256"',
             'Privacy production builds require an explicit external canonical graph snapshot',
-            '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
+            '--manifest-path "$ROOT_DIR/Cargo.toml"',
         ):
             self.assertIn(marker, source)
         # This name is a release-corridor sentinel for the local-integration
@@ -636,7 +636,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"1.93.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
-            'RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
+            'cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"',
+            'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"',
             "MOBILE_SDK_APPLE_ARTIFACT_DIR",
             "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
             "MOBILE_SDK_SWIFT_SCRATCH_DIR",

@@ -1,6 +1,6 @@
 # ZK first-release completion goals
 
-Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-01. Overall status: **Active**.
+Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-02. Overall status: **Active**.
 
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
@@ -16,7 +16,7 @@ the actual artifacts. Implementation tests alone do not establish cryptographic
 qualification; physical-device and signing claims require their actual runs.
 
 The [September 30 continuation](../docs/history/2026-09-30/zk-completion-continuation.md)
-records the native/SDK provenance, current validation and pending work.
+retains earlier native/SDK provenance and validation boundaries.
 The six unfinished outcomes remain ZK03 through ZK08; no running build, source
 review or partial test selection closes one of them.
 
@@ -46,53 +46,45 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current merged base is `c09adfff` on `optimizations`. That merge changed 504
-source paths and committed conflict markers in 63 files. Reviewed merge repairs
-and the diagnosed fixture corrections are now applied. The repaired merge passes
-normal privacy builds, all three authentic pins and 1,061 selected controls.
-The model test build exposes two opaque-credential assertion compilation errors;
-their test-only correction is applied and awaits native execution. The subsequent
-stock-Cargo JavaScript workflow repair and X509 retained-query optimization require
-a fresh integrated build. No pre-merge result qualifies this source.
-The workspace and
-network results recorded against `051df111`, including the Kagami JSON fixture
-correction, are historical evidence for that source. That normal build passed
-workspace all-targets checking,
-Core/Kagami, Torii/bridge, CLI/daemon and both network-test targets. Genuine
-finalized-execution capture, Kagami production, the public SDK bridge, schemas,
-query/native fixture exports and executable examples pass. All 1,145 selected
-Core controls, eight additional optimized AXT controls and both four-validator
-component scenarios pass. The original
-247-control mapping retains 246 exact names; the retired fixture control is
-replaced by three genuine current producer/consumer controls. All 251 later
-selected names are covered.
+The current base is `d05dc9c1` on `optimizations`. The last complete privacy
+candidate is source17, recorded at
+`dist/zk-remediation/2026-09-30/epoch19-integrated-source17/source.json`
+(SHA-256 `cf8c2dd49d1b315e5040b7f4db0e8daf039ac00607ba01fbef5ecd1e303739b5`).
+Stock Rust 1.93.1 production and normal optimized test builds pass on macOS and
+Linux. All three authentic profile/IO/projection pins pass, as do all 1,128
+ordinary privacy controls. Linux also passes its required full-domain CPU parity
+control; the separate macOS focused selection passes 35 controls including CPU
+and required Metal parity. The CRL cleanup census and owned-archive fixture
+repairs are validated on that candidate.
 
-On historical source `051df111`, ordinary controls passed 1,312 FASTPQ,
-1,026 IVM-library, 84 RAM-LFE, 295 BFV, seven memory-request and 16 offline
-controls. On the recorded merged candidate, normal production and optimized
-privacy test builds, all three authentic profile/IO/projection pins and all
-1,017 selected ordinary controls pass. Full RFC key-read replay and required
-four-domain Metal coefficient parity also pass. Its maximum X509 proof and a
-fresh verifier pass cryptographic verification and byte/RSS limits, but fail the
-unchanged proving-time and literal virtual-address-space limits described below.
+Its complete Linux maximum proof, self-check, fresh verifier, wrong-genesis and
+tampering checks pass. Proof size and enforced address space meet their limits.
+Proving takes 2,275.987086 seconds against 300 seconds. The two RSS observations
+are below 12 GiB but disagree by 659,456 bytes, causing the existing observer's
+consistency gate to fail. Resource qualification remains failed.
 
-Before that merge, the corrected normal Core/Kagami/SDK build, genuine canonical
-fixture producers and consumers pass. The private SHA/RFC bridge passes normal
-production and optimized test compilation, all three authentic profile/IO/projection
-pins and all 1,061 selected privacy controls with no failures or skips. All 674
-ordinary bridge controls and two native top-up generations pass. Ten Kotlin fixture
-modes run twice with identical outputs. Their next consumer run refuses source
-drift before starting Gradle.
+The source17 native Core/MV/concread/IVM run executes 1,242 controls: 1,240 pass
+and two paid-alias fixtures fail. Both genuine IVM producers yield paired identical
+captures; all four original AIR consumers pass. The paid-alias fixture repair,
+retained quota-ledger custody, required X509 proof-instance nonce and genuine
+Kagemusha TSV correction are now applied as 50 reviewed files. Native validation
+of the new combined candidate is pending. Source20 passes stock verifier-only,
+evidence and optimized test builds and all four genuine profile/proof/pre-aux
+diagnostics. Its complete 1,187-control selection records 1,183 passes and four
+X509 fixture failures. The exact historical descriptor restoration and two
+independently regenerated scoped DER values are now applied; original failures
+remain failures. All 648 macOS CPU cost/parity records pass at one, four and
+twenty workers, with pruned transforms faster than the full-transform reference.
+Fresh Linux comparison and maximum-proof resource qualification remain required.
 
-The Core run executes 1,114 of its 1,180 planned controls: 1,084 pass and 30 fail.
-The last group overlaps the merge; 66 planned executions remain unrun. The failures
-identify missing SNS leases, a signed-parent time expectation, missing genesis
-consensus-key permission and a redundant bootstrap commit. Two separate native
-IVM capture diagnostics expose heap-allocation and retired compiler-syntax fixture
-errors. Reviewed fixture corrections require fresh execution. The release-evidence
-Python suite passes all 130 tests without fixture or import substitutions on its
-recorded source. Earlier failures remain retained. No component result closes any
-of the six goals.
+Source17 managed SDK results are 1,214 JVM passes and 394 failures, 25 tools
+passes, 284 Android passes and one enrollment-fixture failure, and 40 wallet
+passes. The tools distribution and all 57 typed workflow/example checks pass.
+These results neither supply missing native/generator prerequisites nor qualify
+the revised source. The quiet Vega timing attempt refuses the busy host before
+running measurements. Genuine fixture production, full integrated controls,
+workspace checks, current packages and four-validator tests remain required.
+No historical result or partial component review closes ZK03 through ZK08.
 
 ### ZK01 — secret arithmetic
 
@@ -139,7 +131,13 @@ independent review verifies its public roots, primes and exact division. Its
 3,031,040-byte owned allocation bound applies only to that component. Native
 policy/key custody, complete refresh, secure parameters and the full
 program relation remain open; the component is not a qualified encryption
-construction.
+construction. The proposed full-ring N=131072/QP2725 refresh point fails its
+ordinary-LWE quantum screen at about 122.165 bits against the 128-bit target. A
+smaller mixed-width QP2589 candidate satisfies the conditional arithmetic bounds,
+but its estimator screen stops at a nonfinite BDD result after one completed
+attack. A diagnostic traces this to NaN beta-CDF factors at valid interior inputs;
+a numerically validated screen remains required. Neither candidate has
+secure-construction or refresh qualification.
 
 The held native canonical-input/digit successor passes 19 component tests,
 including nine new controls. It owns both complete canonical ciphertext components,
@@ -164,13 +162,24 @@ remain open. All 15 private lifecycle/history/access controls pass in the
 normal optimized native build. This component binds original private
 dispatcher, Owner and Initialization ports and retains canonical inactive packets;
 the added private descriptor/copyback and partial-dispatch relations pass their
-26 selected controls before the merge. The two genuine native capture producers
-still require fixture repairs and successful producer/consumer execution.
+26 selected controls before the merge. Both genuine native capture producers pass twice on source17 with identical
+bytes, and all four original AIR consumers pass on those captures. These remain
+component equations, not a complete private invocation proof.
 Governed runtime availability now
 has a distinct local deferral path, and publication checks the authenticated
 registry and immutable cache without transferring local key ownership into
 consensus state. Full instruction/region semantics, masking integration and the
 original finalized State joins remain open.
+
+The private dispatcher now constrains the original owner depth to the native
+0..=1,024 range, with exact push/pop transitions and root depth zero. The native
+limit has one shared owner; the reviewed change preserves its value. The private AIR depth controls and full-depth native LIFO/slot-reuse control
+pass on source17 with default stacks.
+The private dispatcher also has original-port scalar arithmetic, bitwise and
+signed/unsigned/equality comparison equations. They preserve private fetches,
+matched tags, register aliases and r0 semantics; eleven new controls and the
+existing shared-bank consumers await native execution on the combined source.
+These components do not enable IVM proof admission.
 
 ### ZK04 — FASTPQ
 
@@ -208,68 +217,63 @@ concrete Keccak security, full zero-knowledge, device/side-channel behavior or
 finalized authority. Finalized-source network behavior, broader workload shapes
 and current hardware coverage remain open.
 
+The applied ordered-source census charges one row for every original input,
+including empty and rejected entries, and binds the original canonical frame,
+context and execution usage. The source17 Core selection passes its ordered-source controls. The newly applied
+retained quota-ledger identities/generations and sticky publication checks still
+need native validation. These are source-custody components; complete finalized-source
+admission remains unavailable.
+
 ### ZK05 — ZK-X509
 
-MAIN retains all 49 registrations and the intended certificate, CRL, disclosure
-and ownership coverage, but the complete credential relation is not yet proved.
-Source review identifies missing verifier equations between P256/projection byte
-declarations and the shared byte-I/O trace. The selected P256 tuple now has
-80 fixed pair-to-limb events binding its bytes to actual initial arithmetic
-writers and the digest-reduction input. The repair preserves existing widths and
-degree bounds. The closed fixed-schedule compiler now accounts for the selected-input
-reads and its native controls pass. RFC output metadata has six verifier-fixed
-field equalities, and focused authenticated DER key-output read controls pass.
-The integrated candidate adds 12 key-source join blocks and five SHA/P256 digest
-join blocks, covering 687 scalar equations. Digest joins use the original
-unreduced P256 digest bytes, including inactive fixed slots. All 31 additional
-extension-field openings are transcript-bound before mixing. All 14 new join
-controls and the supplemental real-FRI binding control pass natively. All three genuinely regenerated profile/IO/projection pins pass natively; complete
-proof validation and other certificate/RFC/SHA/IO joins remain incomplete.
+The current relation retains all 49 MAIN registrations, compact CA, the full
+certificate/CRL/disclosure/ownership shape, key/digest byte joins and the original
+masked trace owners. The joint protocol removes all 320 remaining public terminal
+values through original-polynomial equations. Both auxiliary roots precede active
+composition challenges; both composition and FRI-mask roots precede the common
+DEEP point. All joint openings precede local mixing. The
+[joint relation contract](zk_x509_joint_private_relation.md) records the exact
+schedule, geometry and still-conditional algebraic ledger.
 
-The private terminal and RFC repairs remove 424 public scalars through 192 MAIN
-endpoint equations and 36 normalized producer/consumer equalities. That recorded
-candidate passes all 1,017 selected ordinary controls and produces a verified
-9,415,198-byte maximum proof. The separate verifier accepts the exact retained
-artifact; wrong-genesis and tampered-proof controls pass. Proof SHA-256:
-`967e5a8640347e7fcfcca4793a8fcb8c7ff51296f724df1243b5f5798269a021`.
+The source17 Linux CPU maximum proof is 9,412,912 bytes, under the unchanged
+9,437,184-byte cap. Its SHA-256 is
+`8170e2b6ae2bd4c0f504c67943b077d66d4944c61ca573a150265269ab8883ce`.
+Native production/self-check, separate fresh verification, wrong-genesis rejection
+and tampered-proof rejection pass. Both actual proof and verifier children run
+under the unchanged hard and soft 32 GiB address-space limit; sampled producer
+virtual size reaches 9,950,617,600 bytes. This is a sampled lower bound on peak,
+not a substituted adjusted memory figure.
 
-Proving takes 2,368.354388 seconds against the unchanged 300-second limit. Peak
-producer RSS is 10,059,268,096 bytes, below 12 GiB. One process observation records
-509,631,414,272 bytes of virtual address space, exceeding the literal 32 GiB
-ceiling. That observation is a lower bound on peak virtual size, not a measured
-peak; system/driver reservations are not subtracted. Overall maximum qualification
-fails. Retained proof, fresh verification and raw resource evidence are under
-`dist/zk-remediation/2026-09-30/epoch14-x509-maximum1` and
-`epoch14-x509-maximum-address-observation1`. Composition takes 899.45 seconds and
-query openings 502.41 seconds. Concurrent lightweight work means this is not a
-controlled speed comparison with historical runs.
+Maximum resource qualification fails. Proving takes 2,275.987086 seconds against
+300 seconds. Composition takes 671.01 seconds, DEEP/FRI 291.24 seconds and query
+openings 841.22 seconds, including 639.87 seconds in selected query transforms.
+The corresponding initial joined transform takes 124.63 seconds. These stages
+and nested counters must not be added twice, and timings from the older macOS
+Metal run are not a same-hardware comparison. The producer observes 20 Rayon
+workers; no complete worker allocation bound is claimed.
 
-The new integrated SHA/RFC bridge removes 112 further public scalars: 32 unused
-SHA totals and 80 SHA/RFC endpoint values. Sixteen native-constant private RFC
-columns and 20 quartic endpoint equations use original masked columns and
-existing authenticated openings. The bridge adds no public endpoint values or
-opening points. Independent source/algebra and ownership reviews pass within
-their stated component scope. Normal native builds and authentic regenerated pins
-pass; all five exposed X509 fixture/shape failures are corrected and pass in the
-1,061-control pre-merge privacy run. The merged candidate and new maximum proof
-require fresh native validation.
+Terminal wait4 reports 8,431,575,040 bytes peak RSS, while live procfs RSS/HWM
+reaches 8,432,234,496 bytes. Both are below 12 GiB, but the 659,456-byte discrepancy
+fails the observer's consistency gate; the original failed result is retained.
+The proof, receipt, fresh replay and observations are in
+`dist/zk-remediation/2026-09-30/epoch19-linux-source17-maximum`.
 
-The new source retains 285 RFC base / 280 auxiliary / 102 fixed columns, with
-1,654 local degree-four constraints. Six composition chunks keep 137 independent
-Fp4 mask coefficients and unchanged FRI caps. The source-derived complete bound
-is 9,413,406 bytes, below the unchanged 9,437,184-byte cap. There remain 212 MAIN
-and 108 accumulator public scalars, so full terminal privacy is unfinished.
-Missing byte-source joins, complete transcript hiding and measured time/address
-limits remain activation blockers. Local algebra or proof acceptance does not
-qualify the complete credential relation.
+Retained-query replay reuses original masks and authenticated Merkle cuts while
+checking original roots and allocation capacities. The selected-coordinate
+transform is correct in the current native controls and complete proof, but its
+CPU performance needs repair. The new required 32-byte X509 instance nonce binds
+dynamic MAIN/CA/joint hash contexts and consumes a separate checked RNG prefix.
+Fixed schedule metadata stays unchanged. Its derived maximum is 9,412,944 bytes;
+this is not a native maximum result. Authentic profile/proof/pre-aux values are
+regenerated and independently checked, and the four primary diagnostics pass.
+The expanded run exposed four additional fixture failures; their scoped DER and
+historical-profile repairs await native rerun. CPU/accelerator parity and a new
+maximum proof remain required.
 
-The retained-query optimization keeps clearing level-four Merkle cuts from the
-original base and auxiliary commitments. Query replay preserves the original
-masked polynomials, full transforms and field checks, while hashing selected
-subtrees and checking both their original roots and the complete committed root.
-Both retained allocations are charged to every affected phase and quotient cache
-under the unchanged arithmetic envelope. Source review is complete; native parity,
-complete proof verification and actual time/memory measurements remain pending.
+Full semantic, soundness, zero-knowledge, transcript and side-channel qualification
+remain open. Conditional classical-ROM/masking derivations do not establish
+adaptive shared-transcript simulation, quantum hiding, complete relation
+correspondence or resource compliance. Soundness/resource activation pins stay zero.
 
 ### ZK06 — cryptographic qualification
 
@@ -278,9 +282,20 @@ recorded against exact protocol artifacts. Their scope is explicit: component
 arithmetic, conditional soundness/hiding bounds and authentic native verification
 do not establish complete soundness, zero-knowledge, transcript security,
 side-channel resistance or release qualification. RAM-LFE construction and full
-IVM semantics remain absent; X509 has missing byte-source joins, terminal-claim
-privacy and time/address-space blockers.
-Physical hardware and authenticated final release artifacts require actual runs.
+IVM semantics remain absent. X509 now has a verified joint maximum proof, but
+complete relation/transcript/hiding review, time compliance and RSS observer
+reconciliation remain open. The revised nonce candidate requires fresh evidence.
+
+An independent bounded review accepts the source15 X509 classical-ROM argument
+recorded in `epoch18-zk-dag-root3` and `epoch18-zk-dag-review-sdk3` under
+`dist/zk-remediation/2026-09-30`. Its bound is below 2^-161 for at most 2^64
+classical oracle queries, conditional on the reviewed algebraic/masking
+prerequisites, a fixed statement/authority/geometry, one atomic proof, ideal
+random oracles and independent random bytes. It does not establish adaptive or
+multiple-proof security, qROM security, concrete hash/entropy guarantees,
+side-channel resistance or failure-channel privacy. Subsequent source changes
+require a fresh applicability review. Physical hardware and authenticated final
+release artifacts require actual runs.
 
 ### ZK07 — developer workflow
 
@@ -306,7 +321,10 @@ source before starting Gradle. Current merged native, Kotlin, Swift and device
 qualification remains open.
 
 Historical evidence covers all five Apple slices and ABI-25 package/resource checks.
-The merged Swift fixture correction is present; the full Swift host suite and
+The current Apple builder uses stock pinned Cargo and the original authenticated
+root lock; it rejects compiler/configuration overrides and retires the temporary
+compiler wrapper. Its source and workflow owner controls pass. The merged Swift
+fixture correction is present; the full Swift host suite and
 same-source Apple package rerun remain pending. The historical
 JavaScript suite records 3,634
 passes and 15 failures in bundle accounting, manifest fields, scope and artifact
@@ -368,7 +386,8 @@ unadapted release-evidence Python suite passes 130 tests on its recorded source.
 2. Preserve the clean FASTPQ maximum ordinary/AXT production and replay evidence;
    qualify finalized-source network and hardware behavior without changing proof
    or resource limits. Rerun affected proofs after any protocol/source changes.
-3. Complete X509 verifier byte-source joins, repair terminal-claim privacy and measured time/address-space failures, with
+3. Complete X509 relation/transcript/hiding review, repair measured CPU time and
+   reconcile RSS observation, with
    native parity, independent review and another complete maximum proof under
    unchanged coverage, byte, memory and time limits.
 4. Complete IVM G3's native execution relation and finalized authority. Validate

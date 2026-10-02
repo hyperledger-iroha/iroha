@@ -59,6 +59,14 @@ internal object KagemushaSelectionFrameV1 {
     private const val AFTER = 444
 
     fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+        requireSubject(frame, allowEnrollment = false)
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
+            frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
+            frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
+        ) { "Core S differs from the selected lane or exact-next indices" }
+    }
+
+    private fun requireSubject(frame: ByteArray, allowEnrollment: Boolean): Int {
         require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
         require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
             "Core S has the wrong V1 signing domain"
@@ -79,28 +87,25 @@ internal object KagemushaSelectionFrameV1 {
             frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
         ) { "Core S has a zero policy or hardware generation" }
         val operation = frame[OPERATION].toInt() and 0xff
-        require(operation in 1..5) { "Core S has an invalid monetary operation" }
+        require(operation in (if (allowEnrollment) 0..5 else 1..5)) {
+            "Core S has an invalid operation"
+        }
         val outgoing = operation == 2 || operation == 4
         require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
             frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
         ) { "Core S has the wrong outgoing commitment shape" }
-        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
-            frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
-            frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
-        ) { "Core S differs from the selected lane or exact-next indices" }
+        return operation
     }
 
-    fun requireAppAttest(frame: ByteArray, previous: UInt) {
-        require(previous != UInt.MAX_VALUE && frame.size == FRAME_BYTES) {
-            "App Attest Core S counter or width is invalid"
+    /** Logical transition indices are independent of the Apple assertion counter. */
+    fun requireAppAttest(frame: ByteArray) {
+        val operation = requireSubject(frame, allowEnrollment = true)
+        val before = BigInteger(1, frame.copyOfRange(BEFORE, BEFORE + 16).reversedArray())
+        val after = BigInteger(1, frame.copyOfRange(AFTER, AFTER + 16).reversedArray())
+        require(if (operation == 0) before == BigInteger.ZERO && after == BigInteger.ZERO
+            else before + BigInteger.ONE == after) {
+            "App Attest Core S has invalid logical transition indices"
         }
-        fun index(value: UInt): ByteArray = ByteArray(16).also { bytes ->
-            for (offset in 0 until 4) {
-                bytes[offset] = (value.toLong() ushr (offset * 8)).toByte()
-            }
-        }
-        requireExact(frame, frame.copyOfRange(LANE, LANE + 32),
-            index(previous), index(previous + 1u))
     }
 }
 
