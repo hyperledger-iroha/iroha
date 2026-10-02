@@ -205,24 +205,22 @@ require a positive gas bound in the intent.
 The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
 rejected. Sponsor rejection never falls back to the authority.
 
-For a live aggregate Hijiri adjustment, use the separate native-Norito route:
+## Retail fee assessments and multisig proposals for Java callers
 
-```java
-ValidationFeeHijiriQuoteRequestV1 request =
-    new ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCount);
-ValidationFeeHijiriQuoteV1 quote =
-    transport.postValidationFeeHijiriQuote(request, canonicalAuth).join();
-```
+Use the canonical Kotlin-owned `org.hyperledger.iroha.sdk.client.MultisigProposeRequest`
+and `org.hyperledger.iroha.sdk.client.HttpClientTransport` from `core-jvm` or
+`client-android`. Java calls the public constructor and `proposeMultisig(request)`
+directly. The request retains defensive instruction snapshots and the bounded
+`JsonValue` assessment in `validationFeeAssessment`. Native Core owns assessment
+validation and the exact signed nested marker. The transport requires the configured
+trusted network and checks the complete unsigned proposal before returning signing
+material. The public request also exposes `canonicalToriiJsonBytes()` and
+`verifyToriiResponse(responseBytes, networkId)` for Java consumers.
 
-This operation requires `libconnect_norito_bridge` ABI 25 and an HTTPS Torii
-base URL. It signs the exact bounded Norito request with `Cache-Control: no-store`,
-requires a private, non-stored, uncompressed `application/x-norito` response,
-and exposes the typed projection only after native canonical decode,
-arithmetic/hash validation, and exact request binding. `canonicalAuth` may be
-the quoted account or a direct signatory of that multisig account; Torii checks
-the live relationship. The returned assurance explicitly describes an
-authenticated live evaluation, not an independently witness-verified proof;
-admission-bound policy and Hijiri hashes detect a quote that became stale.
+The duplicate Java quote classes, quote endpoint methods, proposal DTO, and
+proposal-specific Norito format are retired. See the [canonical SDK instructions](../../kotlin/README.md)
+and [retirement inventory](../../specs/jvm_consolidation_inventory.md). Current
+policy, enrollment, hardware and proof admission remain required.
 
 ## Atomic mixed executable batches
 

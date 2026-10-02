@@ -2263,3 +2263,7 @@ mod tests {
         assert_eq!(position.get(), 3);
     }
 }
+
+#[cfg(test)]
+#[path = "ordinary_recursive_key_planner_tests.rs"]
+mod ordinary_recursive_key_planner_tests;

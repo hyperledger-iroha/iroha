@@ -1779,7 +1779,7 @@ mod tests {
             assert!(
                 matches!(
                     error,
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+                    crate::state::ExecutionOutputAttemptError::Deferred(_)
                 ),
                 "{error}"
             );

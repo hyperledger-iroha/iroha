@@ -33,6 +33,7 @@ class InstructionBoxMacroSourceTest(unittest.TestCase):
             offline_calls,
             {
                 "crate::isi::kagemusha_v1::TopUpKagemushaV1",
+                "crate::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1",
                 "crate::isi::kagemusha_v1::RedeemKagemushaV1",
             },
         )

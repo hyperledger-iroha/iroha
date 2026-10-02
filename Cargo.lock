@@ -1802,6 +1802,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_model_base",
+ "iroha_fs",
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
@@ -5077,6 +5078,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_model_base",
  "iroha_panic_hook",
+ "iroha_fs",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -5094,6 +5096,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "url",
  "zeroize",
 ]
 

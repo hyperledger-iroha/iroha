@@ -1227,6 +1227,30 @@ impl KagemushaAuthenticatedOrdinaryIncomingApprovalSelectionV1<'_> {
     }
     /// The actual W2 Receive selection lends only its same Main-retained historical source
     /// and RequestCapture. Fresh W2 PI/FI is independently required by this approval owner.
+    /// Copy only the complete immutable received assertion from this same retained selected
+    /// SourceInbox entry. Native/source ownership and current effects cannot be reconstructed
+    /// from these bytes; the borrowed source and original request remain separately required.
+    pub(crate) fn received_assertion_transport_original(
+        &self,
+    ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+        self.recheck_selected_originals_and_current_custody()?;
+        let SourceLocator::Receive { request_id } = self
+            .owner
+            .pending_incoming
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?
+            .intent
+            .source
+        else {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        };
+        let custody = self.owner.received_source_custody(request_id)?;
+        let original = custody.received_assertion_original()?.to_vec();
+        custody.recheck_source_custody()?;
+        self.recheck_selected_originals_and_current_custody()?;
+        Ok(original)
+    }
+
     pub(crate) fn with_received_source_and_request(
         &self,
         visitor: &mut dyn for<'loan, 'owner> FnMut(
@@ -1443,6 +1467,18 @@ mod approval_clock_tests {
                 raw
             );
         }
+    }
+}
+
+impl KagemushaNativeOrdinaryCashOwnerV1 {
+    // Retained selected counter data only, rechecked against the same actual platform owner.
+    pub(super) fn incoming_preparation_platform_counter_floor(
+        &self,
+    ) -> Result<Option<u32>, KagemushaStateErrorV1> {
+        self.incoming_preparation_platform_state()?;
+        let floor = self.pending_incoming_approval()?.selected.counter_floor;
+        self.incoming_preparation_platform_state()?;
+        Ok(floor)
     }
 }
 

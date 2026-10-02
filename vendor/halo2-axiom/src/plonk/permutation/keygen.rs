@@ -18,6 +18,48 @@ use crate::multicore::{IndexedParallelIterator, ParallelIterator};
 #[cfg(feature = "thread-safe-region")]
 use std::collections::{BTreeSet, HashMap};
 
+// Profile the existing synthesized directed mapping before field-polynomial expansion.
+// This is an internal assembly inventory, not validation of an untrusted key frame.
+fn structured_permutation_dimensions(columns: usize, rows: usize) -> Option<u64> {
+    let columns = u64::from(u32::try_from(columns).ok()?);
+    let rows = u64::from(u32::try_from(rows).ok()?);
+    if !rows.is_power_of_two() || rows.checked_mul(columns)? > u64::from(u32::MAX) {
+        return None;
+    }
+    Some(columns)
+}
+
+fn structured_permutation_bytes_for_mapping(
+    columns: usize,
+    rows: usize,
+    identity: bool,
+    mut target: impl FnMut(usize, usize) -> (usize, usize),
+) -> Option<u64> {
+    let column_count = structured_permutation_dimensions(columns, rows)?;
+    if identity {
+        // One mode byte per column; no mapping or field buffers are materialized.
+        return Some(column_count);
+    }
+    let rows_u64 = u64::try_from(rows).ok()?;
+    let mut bytes = 0_u64;
+    for column in 0..columns {
+        let mut exceptions = 0_u64;
+        for row in 0..rows {
+            let destination = target(column, row);
+            if destination.0 >= columns || destination.1 >= rows {
+                return None;
+            }
+            if destination != (column, row) {
+                exceptions += 1;
+            }
+        }
+        let encoding = super::super::structured_key::permutation_column_codec::
+            canonical_permutation_column_encoding(rows_u64, exceptions).ok()?;
+        bytes = bytes.checked_add(1)?.checked_add(encoding.payload_bytes)?;
+    }
+    Some(bytes)
+}
+
 #[cfg(not(feature = "thread-safe-region"))]
 /// Struct that accumulates all the necessary data in order to construct the permutation argument.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,6 +249,17 @@ impl Assembly {
             MappingState::Identity => (column, row),
             MappingState::Explicit { mapping, .. } => decode_cell_id(mapping[cell], self.col_len),
         }
+    }
+
+    /// Exact canonical serialized permutation bytes, including each column's mode byte.
+    /// Returns `None` when the structured codec's domain or cell bound cannot represent it.
+    pub(crate) fn structured_permutation_bytes(&mut self) -> Option<u64> {
+        structured_permutation_bytes_for_mapping(
+            self.columns.len(),
+            self.col_len,
+            matches!(&self.mapping, MappingState::Identity),
+            |column, row| self.mapping_at_idx(column, row),
+        )
     }
 
     /// Returns columns that participate in the permutation argument.
@@ -416,6 +469,19 @@ impl Assembly {
     ) -> ProvingKey<C> {
         self.build_ordered_mapping();
         build_pk(params, domain, p, |i, j| self.mapping_at_idx(i, j))
+    }
+
+    /// Exact canonical serialized permutation bytes, including each column's mode byte.
+    /// Uses the same ordered directed mapping as key construction without changing its cycles.
+    pub(crate) fn structured_permutation_bytes(&mut self) -> Option<u64> {
+        structured_permutation_dimensions(self.num_cols, self.col_len)?;
+        self.build_ordered_mapping();
+        structured_permutation_bytes_for_mapping(
+            self.num_cols,
+            self.col_len,
+            self.aux.is_empty(),
+            |column, row| self.mapping_at_idx(column, row),
+        )
     }
 
     /// Returns columns that participate in the permutation argument.
@@ -840,5 +906,85 @@ mod tests {
             Err(Error::BoundsFailure)
         ));
         assert_eq!(actual, before);
+    }
+}
+
+#[cfg(test)]
+mod structured_resource_tests {
+    use super::*;
+
+    #[test]
+    fn identity_profile_checks_dimensions_without_visiting_cells() {
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(4, 256, true, |_, _| {
+                panic!("identity has no explicit mapping")
+            }),
+            Some(4)
+        );
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(0, 256, true, |_, _| {
+                panic!("empty permutation has no cells")
+            }),
+            Some(0)
+        );
+        for rows in [0, 3, 255] {
+            assert_eq!(structured_permutation_dimensions(4, rows), None);
+        }
+        assert_eq!(structured_permutation_dimensions(2, 1_usize << 31), None);
+        assert_eq!(structured_permutation_dimensions(1, 1_usize << 31), Some(1));
+    }
+
+    #[test]
+    fn exact_mapping_profile_counts_all_canonical_modes_without_reorienting_cycles() {
+        // n256: E2 is sparse(20), E16 is bitmap(96), E256 is dense(1024), E0 is identity(0).
+        let target = |column: usize, row: usize| match column {
+            0 if row < 2 => (column, 1 - row),
+            1 if row < 16 => (column, (row + 1) % 16),
+            2 => (column, (row + 1) % 256),
+            _ => (column, row),
+        };
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(4, 256, false, target),
+            Some(1144)
+        );
+        assert_eq!(target(0, 0), (0, 1));
+        assert_eq!(target(1, 15), (1, 0));
+        assert_eq!(target(2, 255), (2, 0));
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(1, 256, false, |_, row| (0, row)),
+            Some(1)
+        );
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(1, 256, false, |_, _| (1, 0)),
+            None
+        );
+        assert_eq!(
+            structured_permutation_bytes_for_mapping(1, 256, false, |_, _| (0, 256)),
+            None
+        );
+    }
+
+    #[test]
+    fn synthesized_assembly_profile_preserves_every_copy_target() {
+        let mut argument = Argument::new();
+        let left = Column::new(0, Any::advice());
+        let right = Column::new(1, Any::advice());
+        argument.add_column(left);
+        argument.add_column(right);
+        let mut assembly = Assembly::new(256, &argument);
+        assert_eq!(assembly.structured_permutation_bytes(), Some(2));
+        assembly.copy(left, 1, right, 7).expect("valid copy");
+        assert_eq!(assembly.structured_permutation_bytes(), Some(26));
+        for column in 0..2 {
+            for row in 0..256 {
+                let expected = match (column, row) {
+                    (0, 1) => (1, 7),
+                    (1, 7) => (0, 1),
+                    cell => cell,
+                };
+                assert_eq!(assembly.mapping_at_idx(column, row), expected);
+            }
+        }
+        assert_eq!(assembly.structured_permutation_bytes(), Some(26));
     }
 }

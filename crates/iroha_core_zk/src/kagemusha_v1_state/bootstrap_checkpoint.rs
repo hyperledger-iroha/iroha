@@ -1,7 +1,9 @@
 //! Initial recovery material is created only by the opaque, verified bootstrap owner.
 
 use super::*;
-use std::{fs::File, os::unix::fs::MetadataExt as _, path::Path};
+use iroha_fs::{OwnerDirectory, PrivateDirectory, PublishMode};
+use rand_core_06::{OsRng, RngCore as _};
+use std::path::Path;
 
 const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
     private_journal::PrivateJournalFormat {
@@ -99,25 +101,20 @@ where
         let final_name = bundle_directory
             .file_name()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        let parent = private_journal::open_directory(parent_path).map_err(material_error)?;
-        private_journal::validate_directory(&parent.metadata().map_err(material_error)?, false)
+        if !bundle_directory.is_absolute() {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        #[cfg(unix)]
+        if parent_path.canonicalize().map_err(material_error)? != parent_path {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let parent = OwnerDirectory::open(parent_path).map_err(material_error)?;
+        let mut nonce = [0u8; 16];
+        OsRng.try_fill_bytes(&mut nonce).map_err(material_error)?;
+        let staging_directory = parent
+            .create_private_child(format!(".offline-bootstrap-{}", hex::encode(nonce)))
             .map_err(material_error)?;
-        let staging = tempfile::Builder::new()
-            // Private from creation; the process umask cannot grant group/world access.
-            .prefix(".offline-bootstrap-")
-            .permissions(
-                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
-            )
-            .tempdir_in(parent_path)
-            .map_err(material_error)?
-            .keep();
-        let staging_directory =
-            private_journal::open_directory(&staging).map_err(material_error)?;
-        private_journal::validate_directory(
-            &staging_directory.metadata().map_err(material_error)?,
-            true,
-        )
-        .map_err(material_error)?;
+        let staging = staging_directory.path().to_path_buf();
         let coordinator = KagemushaCoordinatorOperationStoreV1::create_new(
             &staging.join("operations"),
             self.state.lane.clone(),
@@ -154,28 +151,24 @@ where
                 coordinator_live_capacity_bytes,
             )?)
             .map_err(material_error)?;
-        staging_directory.sync_all().map_err(material_error)?;
-        parent.sync_all().map_err(material_error)?;
+        staging_directory.sync().map_err(material_error)?;
+        parent.sync().map_err(material_error)?;
         require_same_directory(&parent, parent_path)?;
         // Paths held by each PrivateJournal change at rename. Close and reopen the exact final
         // names, comparing complete prefix identities before any hardware publication can occur.
         drop(coordinator);
         drop(responses);
         drop(manifest);
-        publish_bundle_noreplace(
-            &parent,
-            staging
-                .file_name()
-                .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?,
-            final_name,
-        )?;
+        staging_directory
+            .rename_to_sibling(final_name, PublishMode::CreateNew)
+            .map_err(material_error)?;
         #[cfg(test)]
         if initialization_failure == Some(BootstrapJournalFailure::AfterRename) {
             return Err(KagemushaStateErrorV1::RecoveryMaterial(
                 "injected bundle publication interruption".into(),
             ));
         }
-        parent.sync_all().map_err(material_error)?;
+        parent.sync().map_err(material_error)?;
         require_same_directory(&parent, parent_path)?;
         let coordinator = KagemushaCoordinatorOperationStoreV1::open_existing(
             &bundle_directory.join("operations"),
@@ -223,14 +216,17 @@ where
         let parent_path = bundle_directory
             .parent()
             .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
-        let parent = private_journal::open_directory(parent_path).map_err(material_error)?;
-        private_journal::validate_directory(&parent.metadata().map_err(material_error)?, false)
-            .map_err(material_error)?;
-        let bundle = private_journal::open_directory(bundle_directory).map_err(material_error)?;
-        private_journal::validate_directory(&bundle.metadata().map_err(material_error)?, true)
-            .map_err(material_error)?;
-        bundle.sync_all().map_err(material_error)?;
-        parent.sync_all().map_err(material_error)?;
+        if !bundle_directory.is_absolute() {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        #[cfg(unix)]
+        if parent_path.canonicalize().map_err(material_error)? != parent_path {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let parent = OwnerDirectory::open(parent_path).map_err(material_error)?;
+        let bundle = PrivateDirectory::open(bundle_directory).map_err(material_error)?;
+        bundle.sync().map_err(material_error)?;
+        parent.sync().map_err(material_error)?;
         let coordinator = KagemushaCoordinatorOperationStoreV1::open_existing(
             &bundle_directory.join("operations"),
             self.state.lane.clone(),
@@ -245,7 +241,14 @@ where
         )
         .map_err(material_error)?;
         require_same_directory(&parent, parent_path)?;
-        require_same_directory(&bundle, bundle_directory)?;
+        bundle.revalidate().map_err(material_error)?;
+        let current_bundle = PrivateDirectory::open(bundle_directory).map_err(material_error)?;
+        if bundle.path() != bundle_directory
+            || bundle.identity().map_err(material_error)?
+                != current_bundle.identity().map_err(material_error)?
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
         let (machine, candidate) =
             self.into_candidate(&coordinator, &responses, checkpoint_operation_id)?;
         let manifest = open_bootstrap_manifest(
@@ -475,51 +478,19 @@ fn material_error(error: impl core::fmt::Display) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::RecoveryMaterial(error.to_string())
 }
 
-fn require_same_directory(directory: &File, path: &Path) -> Result<(), KagemushaStateErrorV1> {
-    let current = private_journal::open_directory(path).map_err(material_error)?;
-    let expected = directory.metadata().map_err(material_error)?;
-    let actual = current.metadata().map_err(material_error)?;
-    if (expected.dev(), expected.ino()) != (actual.dev(), actual.ino()) {
+fn require_same_directory(
+    directory: &OwnerDirectory,
+    path: &Path,
+) -> Result<(), KagemushaStateErrorV1> {
+    directory.revalidate().map_err(material_error)?;
+    let current = OwnerDirectory::open(path).map_err(material_error)?;
+    if directory.path() != path
+        || directory.identity().map_err(material_error)?
+            != current.identity().map_err(material_error)?
+    {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
     Ok(())
-}
-
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-))]
-fn publish_bundle_noreplace(
-    parent: &File,
-    staging: &std::ffi::OsStr,
-    final_name: &std::ffi::OsStr,
-) -> Result<(), KagemushaStateErrorV1> {
-    rustix::fs::renameat_with(
-        parent,
-        staging,
-        parent,
-        final_name,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(material_error)
-}
-
-#[cfg(not(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-)))]
-fn publish_bundle_noreplace(
-    _: &File,
-    _: &std::ffi::OsStr,
-    _: &std::ffi::OsStr,
-) -> Result<(), KagemushaStateErrorV1> {
-    Err(KagemushaStateErrorV1::RecoveryMaterial(
-        "atomic no-replace bootstrap publication is unavailable".into(),
-    ))
 }
 
 #[cfg(test)]

@@ -126,6 +126,32 @@ final class KagemushaOrdinaryRuntimeStartupV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.openCalls, 1)
   }
 
+  func testClockRenewalRunsBeforeExpiredSelectionAndKeepsOriginalIdentity() throws {
+    let endpoint = Endpoint()
+    let session = try open(endpoint)
+    endpoint.failInvoke = true
+    try session.refreshOriginalAccountClock()
+    XCTAssertEqual(endpoint.incomingCalls, 1)
+    try session.requireCurrent()
+    XCTAssertEqual(endpoint.fields, Endpoint.originalFields)
+    XCTAssertEqual(endpoint.closeCalls, 0)
+  }
+
+  func testRenewalCannotSubstituteOriginalSelectionOrReviveClosedSession() throws {
+    for index in 0...2 {
+      let endpoint = Endpoint()
+      let session = try open(endpoint)
+      endpoint.fields[index] = index == 0
+        ? Data([9] + [UInt8](repeating: 0, count: 7)) : Data("changed-after-renewal".utf8)
+      XCTAssertThrowsError(try session.refreshOriginalAccountClock())
+      XCTAssertEqual(endpoint.incomingCalls, 1)
+      XCTAssertEqual(endpoint.closeCalls, 1)
+      endpoint.fields = Endpoint.originalFields
+      XCTAssertThrowsError(try session.refreshOriginalAccountClock())
+      XCTAssertEqual(endpoint.incomingCalls, 1)
+    }
+  }
+
   private func open(_ endpoint: Endpoint) throws -> KagemushaOrdinaryNativeAccountSessionV1 {
     try KagemushaOrdinaryRuntimeStartupV1.openInitialAccount(storagePath: "/durable/store",
       openCoordinator: { path in
@@ -142,6 +168,7 @@ final class KagemushaOrdinaryRuntimeStartupV1Tests: XCTestCase {
     var fields = Endpoint.originalFields
     var installCalls = 0, openCalls = 0, invokeCalls = 0, closeCalls = 0
     var failInstall = false, failInvoke = false, failClose = false, changeSecondRead = false
+    var incomingCalls = 0
     var requests: [[Data]] = [], methods: [UInt8] = []
     func contract() throws -> [UInt32] { [2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21] }
     func install(storagePath: Data) throws {
@@ -164,6 +191,15 @@ final class KagemushaOrdinaryRuntimeStartupV1Tests: XCTestCase {
       if changeSecondRead && invokeCalls == 2 { response[2] = Data("changed-member".utf8) }
       return try KagemushaCoreCoordinatorFrameV1.encodeResponse(.preparedOrdinaryAppIdentity,
         requestFrame: request, fields: response)
+    }
+    func invokeIntegrity(phase: UInt8, handle: UInt64, original: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func invokeIncoming(request: Data) throws -> Data {
+      incomingCalls += 1
+      XCTAssertEqual(request, try KagemushaOrdinaryIncomingFrameV1.encodeRequest(
+        .refreshAccountClock, handle: 7, originals: []))
+      failInvoke = false
+      return try KagemushaOrdinaryIncomingFrameV1.encodeResponse(.refreshAccountClock,
+        handle: 7, fields: [])
     }
     func close(handle: UInt64) throws {
       closeCalls += 1

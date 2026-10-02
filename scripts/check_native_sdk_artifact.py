@@ -112,6 +112,10 @@ APPROVED_KAGEMUSHA_C_EXPORTS = (
     "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_ordinary_runtime_startup_v1",
     "connect_norito_kagemusha_ordinary_current_control_v1",
+    "connect_norito_kagemusha_ordinary_outgoing_v1",
+    "connect_norito_kagemusha_ordinary_incoming_v1",
+    "connect_norito_kagemusha_ordinary_integrity_refresh_v1",
+    "connect_norito_kagemusha_ordinary_mint_funding_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -179,6 +183,16 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeBindApplicationV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeRetireOriginalV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeExistingAndroidAccountV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeConsumeExistingAndroidAccountV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeStartupV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeCurrentControlV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeOutgoingV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIncomingV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeIntegrityRefreshV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaOrdinaryRuntimeJniV1_nativeMintFundingV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
@@ -209,19 +223,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
-        # Durable journal-backed testnet admission has no Windows C declaration
-        # or Rust export. Keep the cross-platform C# inventory exact per host.
-        *(
-            symbol for symbol in APPROVED_KAGEMUSHA_C_EXPORTS
-            if os.name != "nt"
-            or symbol not in {
-                "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
-                "connect_norito_kagemusha_testnet_value_admit_v1",
-                "connect_norito_kagemusha_testnet_value_credit_v1",
-                "connect_norito_kagemusha_testnet_native_startup_contract_v1",
-                "connect_norito_kagemusha_testnet_native_startup_activate_v1",
-            }
-        ),
+        *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_retail_fee_intent_hash_v1",
         "connect_norito_retail_fee_assessment_marker_v1",
         "connect_norito_retail_fee_assessment_decode_v1",

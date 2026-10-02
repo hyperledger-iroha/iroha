@@ -624,6 +624,10 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         self.wal.check_owned().map_err(storage)
     }
 
+    pub(crate) fn recheck_owned_refresh_prefix(&self) -> Result<(), KagemushaStateErrorV1> {
+        self.wal.check_owned().map_err(storage)?;
+        self.wal.recovery_prefix().map_err(storage).map(|_| ())
+    }
     pub(crate) fn retained_enrollment(
         &self,
     ) -> &Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1> {

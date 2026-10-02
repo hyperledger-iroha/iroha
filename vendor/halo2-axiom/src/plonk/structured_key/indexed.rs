@@ -10,7 +10,9 @@ use super::*;
 /// no constructor from caller-supplied offsets and no clone or mutable VK accessor.
 ///
 /// Indexing avoids mask, fixed and permutation field banks. Original VK/domain/selector metadata,
-/// the complete permutation validation bitmap, and caller-owned bytes still require accounting.
+/// per-column records and bitmap prefix-rank Vec capacities, the complete permutation
+/// validation bitmap, one temporary n/8 column bitmap during scan, and caller-owned bytes
+/// still require accounting. Only records/ranks survive scanning; these are not an RSS bound.
 pub struct IndexedStructuredProvingKeyV1<C: SerdeCurveAffine> {
     vk: VerifyingKey<C>,
     metadata: StructuredMetadata,
@@ -71,6 +73,43 @@ where
     /// Return the exact original structured frame length in bytes.
     pub fn frame_bytes(&self) -> u64 {
         self.metadata.frame_bytes
+    }
+
+    /// Charge the metadata header and actual record/rank Vec capacities, excluding VK/domain.
+    ///
+    /// This is a capacity payload count, not allocator overhead, scan scratch or process RSS.
+    pub(crate) fn index_metadata_payload_bytes(&self) -> io::Result<usize> {
+        let bytes = std::mem::size_of::<StructuredMetadata>()
+            .checked_add(
+                self.metadata
+                    .fixed
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<FixedRecord>())
+                    .ok_or_else(|| invalid("indexed fixed metadata capacity overflow"))?,
+            )
+            .and_then(|n| {
+                n.checked_add(
+                    self.metadata
+                        .permutations
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<PermutationRecord>())?,
+                )
+            })
+            .ok_or_else(|| invalid("indexed metadata capacity overflow"))?;
+        self.metadata
+            .permutations
+            .iter()
+            .try_fold(bytes, |bytes, record| {
+                bytes
+                    .checked_add(
+                        record
+                            .ranks
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<u32>())
+                            .ok_or_else(|| invalid("indexed bitmap rank capacity overflow"))?,
+                    )
+                    .ok_or_else(|| invalid("indexed metadata capacity overflow"))
+            })
     }
 
     pub(super) fn metadata(&self) -> &StructuredMetadata {

@@ -25,9 +25,12 @@ use halo2_proofs::{
 };
 
 pub(super) const ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1: usize = 44;
+// The complete fixed incoming/issuer/platform graph queues245 compression blocks at k16.
+// Ten lanes preserve every relation while keeping each physical lane inside that domain.
+pub(super) const ORDINARY_GUARD_SHA_LANES_V1: usize = 10;
 const UNUSABLE: usize = 9;
-// First-release full incoming purpose1 body graph. Old graph keys are incompatible.
-const MODE: u64 = 0x4f_41_47_02;
+// Concrete first-release full incoming body and ten-lane SHA graph identity.
+const MODE: u64 = 0x4f_41_47_03;
 
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaOrdinaryGuardCircuitParamsV1 {
@@ -48,7 +51,7 @@ impl Default for KagemushaOrdinaryGuardCircuitParamsV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct OrdinaryGuardConfig<F: KagemushaPoseidonFieldV1> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
+    sha: PastaSha256ConfigV1<ORDINARY_GUARD_SHA_LANES_V1>,
     provider: ProviderPolicyRootConfigV1,
     issuer: OrdinaryIssuerConfigV1,
     mode: Column<Advice>,
@@ -74,7 +77,7 @@ impl<F: KagemushaPoseidonFieldV1> OrdinaryGuardConfig<F> {
         });
         Self {
             base,
-            sha: PastaSha256ConfigV1::configure(meta),
+            sha: PastaSha256ConfigV1::<ORDINARY_GUARD_SHA_LANES_V1>::configure(meta),
             provider: ProviderPolicyRootConfigV1::configure(meta, params.provider_policy_root),
             issuer: OrdinaryIssuerConfigV1::configure(meta, &params.issuer_table),
             mode,

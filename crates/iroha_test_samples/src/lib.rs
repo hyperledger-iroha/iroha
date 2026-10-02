@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
 use iroha_data_model::prelude::{AccountId, IvmBytecode};
 use iroha_model_base::domain::DomainId;
 #[cfg(all(test, feature = "rand"))]
-use std::sync::Mutex;
+use std::cell::RefCell;
 #[cfg(feature = "rand")]
 use std::sync::Once;
 #[cfg(feature = "rand")]
@@ -62,10 +62,8 @@ static CALIBRATION_LOG_ONCE: Once = Once::new();
 fn calibration_base_seed() -> Option<String> {
     #[cfg(all(test, feature = "rand"))]
     {
-        let override_value = calibration_seed_override()
-            .lock()
-            .expect("calibration seed override lock")
-            .clone();
+        let override_value = CALIBRATION_SEED_OVERRIDE
+            .with(|state| state.borrow().as_ref().map(|state| state.base_seed.clone()));
         if override_value.is_some() {
             return override_value;
         }
@@ -74,6 +72,18 @@ fn calibration_base_seed() -> Option<String> {
 }
 #[cfg(feature = "rand")]
 fn next_calibration_seed(base_seed: &str, domain: &str) -> Vec<u8> {
+    #[cfg(test)]
+    let fixture_ordinal = CALIBRATION_SEED_OVERRIDE.with(|state| {
+        state.borrow_mut().as_mut().map(|state| {
+            let ordinal = state.next_ordinal;
+            state.next_ordinal = state.next_ordinal.wrapping_add(1);
+            ordinal
+        })
+    });
+    #[cfg(test)]
+    let ordinal =
+        fixture_ordinal.unwrap_or_else(|| CALIBRATION_COUNTER.fetch_add(1, Ordering::Relaxed));
+    #[cfg(not(test))]
     let ordinal = CALIBRATION_COUNTER.fetch_add(1, Ordering::Relaxed);
     let material = format!("{base_seed}:{domain}:{ordinal}");
     let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
@@ -86,27 +96,50 @@ fn log_active_seed_once(base_seed: &str) {
     });
 }
 #[cfg(all(test, feature = "rand"))]
-fn calibration_seed_override() -> &'static Mutex<Option<String>> {
-    static OVERRIDE: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-    &OVERRIDE
+struct CalibrationSeedState {
+    base_seed: String,
+    next_ordinal: u64,
 }
 #[cfg(all(test, feature = "rand"))]
-fn set_calibration_seed_override(seed: Option<&str>) {
-    let mut guard = calibration_seed_override()
-        .lock()
-        .expect("calibration seed override lock");
-    *guard = seed.map(std::string::ToString::to_string);
+thread_local! {
+    // Each synchronous sample test owns its seed and ordinal on its test thread.
+    static CALIBRATION_SEED_OVERRIDE: RefCell<Option<CalibrationSeedState>> = const { RefCell::new(None) };
+}
+#[cfg(all(test, feature = "rand"))]
+struct CalibrationSeedFixture {
+    previous: Option<CalibrationSeedState>,
+    // A scoped override must be restored on the thread that installed it.
+    thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+#[cfg(all(test, feature = "rand"))]
+impl CalibrationSeedFixture {
+    fn new(base_seed: &str) -> Self {
+        let previous = CALIBRATION_SEED_OVERRIDE.with(|state| {
+            state.replace(Some(CalibrationSeedState {
+                base_seed: base_seed.to_owned(),
+                next_ordinal: 0,
+            }))
+        });
+        Self {
+            previous,
+            thread: std::marker::PhantomData,
+        }
+    }
+}
+#[cfg(all(test, feature = "rand"))]
+impl Drop for CalibrationSeedFixture {
+    fn drop(&mut self) {
+        let _ = CALIBRATION_SEED_OVERRIDE.with(|state| state.replace(self.previous.take()));
+    }
 }
 #[cfg(all(test, feature = "rand"))]
 mod calibration_tests {
     use super::*;
     use iroha_data_model::prelude::AccountId;
-    use std::sync::atomic::Ordering;
     #[test]
     fn gen_account_in_uses_seed_when_present() {
         let seed_value = "test-seed";
-        set_calibration_seed_override(Some(seed_value));
-        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
+        let _fixture = CalibrationSeedFixture::new(seed_value);
         let (account, key_pair) = super::gen_account_in("wonderland");
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
@@ -115,14 +148,11 @@ mod calibration_tests {
         let expected_account = AccountId::new(expected_key.public_key().clone());
         assert_eq!(account, expected_account);
         assert_eq!(key_pair.public_key(), expected_key.public_key());
-        set_calibration_seed_override(None);
-        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
     }
     #[test]
     fn try_gen_account_in_uses_checked_seed_derivation() {
         let seed_value = "checked-test-seed";
-        set_calibration_seed_override(Some(seed_value));
-        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
+        let _fixture = CalibrationSeedFixture::new(seed_value);
         let (account, key_pair) =
             super::try_gen_account_in("wonderland").expect("checked sample account");
         let material = format!("{seed_value}:wonderland:0");
@@ -138,8 +168,53 @@ mod calibration_tests {
             Algorithm::default()
         );
         assert_eq!(key_pair.public_key(), expected_key.public_key());
-        set_calibration_seed_override(None);
-        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
+    }
+    #[test]
+    fn calibration_seed_fixtures_are_parallel_and_restore_nested_sequences() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers = ["parallel-seed-one", "parallel-seed-two"].map(|seed| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let _fixture = CalibrationSeedFixture::new(seed);
+                barrier.wait();
+                for ordinal in 0..2 {
+                    if ordinal == 1 {
+                        let unwound = std::panic::catch_unwind(|| {
+                            let _nested = CalibrationSeedFixture::new("unwinding-seed");
+                            let (account, key_pair) = try_gen_account_in("wonderland")
+                                .expect("unwinding calibration account");
+                            assert_derived_account(account, key_pair, "unwinding-seed", 0);
+                            panic!("nested calibration fixture unwind");
+                        });
+                        let payload = unwound.expect_err("nested fixture must unwind");
+                        assert_eq!(
+                            payload.downcast_ref::<&str>(),
+                            Some(&"nested calibration fixture unwind")
+                        );
+                        let _nested = CalibrationSeedFixture::new("nested-seed");
+                        let (account, key_pair) =
+                            try_gen_account_in("wonderland").expect("nested calibration account");
+                        assert_derived_account(account, key_pair, "nested-seed", 0);
+                    }
+                    let (account, key_pair) =
+                        try_gen_account_in("wonderland").expect("parallel calibration account");
+                    assert_derived_account(account, key_pair, seed, ordinal);
+                }
+                drop(_fixture);
+                assert!(CALIBRATION_SEED_OVERRIDE.with(|state| state.borrow().is_none()));
+            })
+        });
+        for worker in workers {
+            worker.join().expect("parallel seed fixture assertions");
+        }
+    }
+    fn assert_derived_account(account: AccountId, key_pair: KeyPair, seed: &str, ordinal: u64) {
+        let hash_bytes: [u8; Hash::LENGTH] =
+            Hash::new(format!("{seed}:wonderland:{ordinal}")).into();
+        let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
+            .expect("fixed calibration seed must derive");
+        assert_eq!(account, AccountId::new(expected_key.public_key().clone()));
+        assert_eq!(key_pair.public_key(), expected_key.public_key());
     }
     #[test]
     fn toml_profile_key_parses() {

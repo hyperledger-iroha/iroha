@@ -82,6 +82,7 @@ mod tests {
         ] {
             let mut b = BaseCircuitBuilder::<F>::new(false)
                 .use_k(10)
+                .use_lookup_bits(9)
                 .use_instance_columns(1);
             let range = b.range_chip();
             let ctx = b.main(0);

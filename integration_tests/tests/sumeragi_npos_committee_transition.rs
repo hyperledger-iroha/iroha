@@ -52,8 +52,8 @@ use iroha_core::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
         verify_validator_committee_provisioning_evidence_v1,
     },
-    zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1,
 };
+use iroha_core_zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1;
 use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::LaneId};
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, DisposableBeaconProviderBinding, DisposableGenesisDkgOutput,

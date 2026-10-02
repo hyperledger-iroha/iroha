@@ -60,6 +60,7 @@ zk-tests = ["test-utils"]
 kagemusha-real-proof-harness = []
 
 [dependencies]
+iroha_fs = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -95,6 +96,7 @@ rand = { workspace = true }
 rand_core_06 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 
 [target.'cfg(unix)'.dependencies]

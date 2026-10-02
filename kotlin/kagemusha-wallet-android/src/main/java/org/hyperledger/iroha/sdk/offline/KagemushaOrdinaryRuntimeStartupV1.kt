@@ -26,6 +26,14 @@ object KagemushaOrdinaryRuntimeStartupV1 {
         }
     }
 
+    /** Native invokes the fixed final loan method on the measured manifest Application. Only
+     * that method can obtain the checked activation's existing encrypted signatory. No managed
+     * storage callback, key bytes, account selector or recovery flag enters this public method.
+     */
+    @JvmStatic fun admitExistingAndroidAccount(application: android.app.Application) {
+        System.loadLibrary("connect_norito_bridge")
+        requireExistingAndroidAccountReceipt(KagemushaOrdinaryRuntimeJniV1.existingAndroidAccount(application))
+    }
     @JvmStatic
     fun selectInitialAccount(): Unit =
         KagemushaCoreCoordinatorBridgeV1.selectInitialOrdinaryAccount(KagemushaOrdinaryRuntimeJniV1)
@@ -51,4 +59,20 @@ internal class KagemushaOrdinaryApplicationBindingGateV1<A : Any> {
         original = application
         complete = true
     }
+}
+
+/** Pure framing after the measured product loan completed. A receipt is correlation data only. */
+internal fun requireExistingAndroidAccountReceipt(reply: Array<ByteArray>?) {
+    val fields = checkNotNull(reply) { "Actual existing Native account intake is unavailable" }
+    require(fields.size == 3 && fields[0].contentEquals(byteArrayOf(1, 0)))
+    fun account(raw: ByteArray): String {
+        require(raw.isNotEmpty() && raw.size <= 512)
+        val value = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(java.nio.ByteBuffer.wrap(raw)).toString()
+        require(value == value.trim() && value.none { it.isWhitespace() || it.isISOControl() })
+        return value
+    }
+    require(account(fields[1]) != account(fields[2])) { "Actual S and W must be distinct" }
 }

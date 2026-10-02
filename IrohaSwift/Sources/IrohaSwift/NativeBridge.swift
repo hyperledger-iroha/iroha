@@ -2282,6 +2282,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.canonicalJSONBlake3Fn = staticHandle
             .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
             .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
+        guard let accountParse = staticHandle.flatMap({ dlsym($0, "connect_norito_account_address_parse") }),
+              let accountRender = staticHandle.flatMap({ dlsym($0, "connect_norito_account_address_render") }) else {
+            self.loadedBridgeAbiVersion = nil
+            NSLog("[NoritoNativeBridge] missing canonical account address exports")
+            return
+        }
+        self.accountAddressParseFn = unsafeBitCast(accountParse, to: AccountAddressParseFn.self)
+        self.accountAddressRenderFn = unsafeBitCast(accountRender, to: AccountAddressRenderFn.self)
         self.publicKeyFromPrivateFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_public_key_from_private") }
             .map { unsafeBitCast($0, to: PublicKeyFromPrivateFn.self) }

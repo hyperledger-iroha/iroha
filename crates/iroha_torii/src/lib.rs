@@ -77,6 +77,7 @@ mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod ordinary_mint_finalized;
 mod ordinary_mint_issuer_purpose;
 mod ordinary_wallet_current;
 #[cfg(feature = "app_api")]
@@ -10239,7 +10240,8 @@ fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Op
             .max(
                 KagemushaCommandBodyPolicy::redeem(transaction_max_content_len)
                     .maximum_working_set_bytes()?,
-            ),
+            )
+            .max(ordinary_mint_finalized::maximum_working_set_bytes()?),
     )
 }
 fn encode_kagemusha_readiness_representation(
@@ -38851,6 +38853,7 @@ impl Torii {
             AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
             ORDINARY_WALLET_CURRENT => limited_canonical_signature_post(ordinary_wallet_current::handler, iroha_torii_shared::ordinary_wallet_current::ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1);
             ORDINARY_MINT_ISSUER_PURPOSE => limited_canonical_signature_post(ordinary_mint_issuer_purpose::handler, iroha_torii_shared::ordinary_mint_issuer_purpose::ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1);
+            ORDINARY_MINT_FINALIZED => limited_canonical_signature_post(ordinary_mint_finalized::handler, iroha_torii_shared::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1);
         );
     }
     /// App-facing typed and protocol-native endpoints.

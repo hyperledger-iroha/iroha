@@ -14,8 +14,11 @@ import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppApprovalV1
 
 /** Internal framing checks do not produce a native prepared capability or monetary authority. */
 internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, val bodyBytes: Int, val fields: Int, val signedPurpose: Int = 1) {
+    ORDINARY_MINT_PRE_DEBIT_APPROVAL("iroha:kagemusha:v1:ordinary-mint-pre-debit-approval\u0000", 210, 6),
+    ORDINARY_INTEGRITY_REFRESH_POSSESSION("iroha:kagemusha:v1:play-integrity-refresh-possession\u0000", 0, 0),
     FIRST_DEVICE_HARDWARE_POSSESSION("iroha:kagemusha:v1:hardware-evidence-possession\u0000", 308, 7),
     OPERATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
+    ORDINARY_INCOMING_TERMINAL_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     ORDINARY_BOOTSTRAP_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     ORDINARY_CASH_TERMINAL_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     IDENTITY_ENROLLMENT_POSSESSION("iroha:kagemusha:v1:app-enrollment-possession\u0000", 371, 11),
@@ -24,6 +27,22 @@ internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, va
 }
 
 internal fun requireAppPlatformSigningMessageV1(original: ByteArray, purpose: KagemushaAndroidAppSignaturePurposeV1) {
+    if(purpose == KagemushaAndroidAppSignaturePurposeV1.ORDINARY_MINT_PRE_DEBIT_APPROVAL) {
+        org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryMintApprovalProjectionV1.requireOriginal(original);return
+    }
+    if(purpose == KagemushaAndroidAppSignaturePurposeV1.ORDINARY_INTEGRITY_REFRESH_POSSESSION) {
+        val outer=purpose.domain.toByteArray(Charsets.US_ASCII)
+        val inner="iroha:kagemusha:v1:play-integrity-refresh-challenge\u0000".toByteArray(Charsets.US_ASCII)
+        val width=inner.size+8+450
+        require(original.size==outer.size+8+width && original.copyOfRange(0,outer.size).contentEquals(outer))
+        require(ByteBuffer.wrap(original,outer.size,8).order(ByteOrder.LITTLE_ENDIAN).long==width.toLong())
+        val body=outer.size+8
+        require(original.copyOfRange(body,body+inner.size).contentEquals(inner) &&
+            ByteBuffer.wrap(original,body+inner.size,8).order(ByteOrder.LITTLE_ENDIAN).long==450L)
+        val raw=original.copyOfRange(body+inner.size+8,original.size)+ByteArray(64)
+        val shape=org.hyperledger.iroha.sdk.offline.KagemushaPlayIntegrityRefreshPreparationV1.parseOriginal(raw)
+        require(shape.possessionSigningBytes().contentEquals(original));return
+    }
     val domain = purpose.domain.toByteArray(Charsets.US_ASCII)
     require(original.size == domain.size + 8 + purpose.bodyBytes &&
         original.copyOfRange(0, domain.size).contentEquals(domain)) { "Native app signing purpose or message length differs" }

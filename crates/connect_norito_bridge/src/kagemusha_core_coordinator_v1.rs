@@ -20,9 +20,7 @@ mod exclusive_backend;
 mod native_core_work;
 mod native_installation;
 mod ordinary_android_installed_context;
-#[cfg(unix)]
 mod ordinary_app_identity;
-#[cfg(unix)]
 mod ordinary_native_startup;
 pub use native_core_work::{
     KagemushaNativeCompletedOutboxReleaseLocatorV1, KagemushaNativeCorePublicationDestinationV1,
@@ -34,22 +32,24 @@ pub use native_core_work::{
     register_kagemusha_native_incoming_evidence_source_v1,
     register_kagemusha_native_redemption_finality_source_v1,
 };
-#[cfg(unix)]
 pub use ordinary_app_identity::{
     KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaOrdinaryAppIdentityInstallErrorV1,
     KagemushaOrdinaryEnrollmentDispositionV1, KagemushaOrdinaryNativeCurrentControlRequestV1,
     KagemushaOrdinaryNativeCurrentControlResponseV1, KagemushaOrdinaryNativeIncomingRequestV1,
-    KagemushaOrdinaryNativeIncomingResponseV1, bootstrap_kagemusha_native_ordinary_app_identity_v1,
+    KagemushaOrdinaryNativeIncomingResponseV1, KagemushaOrdinaryNativeIntegrityRefreshRequestV1,
+    KagemushaOrdinaryNativeIntegrityRefreshResponseV1, KagemushaOrdinaryNativeMintFundingRequestV1,
+    KagemushaOrdinaryNativeMintFundingResponseV1, KagemushaOrdinaryNativeOutgoingRequestV1,
+    KagemushaOrdinaryNativeOutgoingResponseV1, KagemushaOrdinaryOutgoingErrorV1,
+    bootstrap_kagemusha_native_ordinary_app_identity_v1,
     install_kagemusha_native_ordinary_source_v1,
     invoke_kagemusha_native_ordinary_current_control_v1,
     invoke_kagemusha_native_ordinary_incoming_v1,
-    KagemushaOrdinaryNativeOutgoingRequestV1, KagemushaOrdinaryNativeOutgoingResponseV1,
-    KagemushaOrdinaryOutgoingErrorV1, invoke_kagemusha_native_ordinary_outgoing_v1,
+    invoke_kagemusha_native_ordinary_integrity_refresh_v1,
+    invoke_kagemusha_native_ordinary_mint_funding_v1, invoke_kagemusha_native_ordinary_outgoing_v1,
     publish_kagemusha_native_ordinary_initial_state_v1,
     recover_kagemusha_native_ordinary_current_publication_v1,
     register_kagemusha_native_ordinary_app_identity_source_v1,
 };
-#[cfg(unix)]
 pub use ordinary_native_startup::{
     KagemushaNativeOrdinaryRuntimeStartupV1, KagemushaOrdinaryNativeStartupRequestV1,
     KagemushaOrdinaryNativeStartupResponseV1, invoke_kagemusha_native_ordinary_runtime_startup_v1,
@@ -1319,18 +1319,68 @@ pub fn kagemusha_core_coordinator_validate_storage_path_v1(
     }
     let path =
         core::str::from_utf8(path).map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
-    if !path.starts_with('/')
-        || path.len() == 1
-        || path
+    let unix = path.starts_with('/')
+        && path.len() > 1
+        && !path
             .bytes()
             .any(|byte| byte < 0x20 || byte == 0x7f || byte == b'\\')
-        || path[1..]
+        && path[1..]
             .split('/')
-            .any(|component| component.is_empty() || component == "." || component == "..")
-    {
+            .all(|component| !component.is_empty() && component != "." && component != "..");
+    if !unix && !windows_drive_storage_path(path) {
         return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
     }
     Ok(path)
+}
+
+// A strict lexical DATA check; the retained native filesystem owner supplies all authority.
+// UNC, device namespaces, relative drives, ADS and ambiguous Windows aliases are refused.
+fn windows_drive_storage_path(path: &str) -> bool {
+    let drive = path.strip_prefix(r"\\?\").unwrap_or(path);
+    let bytes = drive.as_bytes();
+    if bytes.len() < 4 || !bytes[0].is_ascii_alphabetic() || bytes[1..3] != *b":\\" {
+        return false;
+    }
+    drive[3..].split('\\').all(|component| {
+        !component.is_empty()
+            && component != "."
+            && component != ".."
+            && !component.ends_with('.')
+            && !component.ends_with(' ')
+            && !component
+                .bytes()
+                .any(|byte| byte < 0x20 || byte == 0x7f || b"/:<>\"|?*".contains(&byte))
+            && !matches!(
+                component
+                    .split('.')
+                    .next()
+                    .unwrap()
+                    .to_ascii_uppercase()
+                    .as_str(),
+                "CON"
+                    | "PRN"
+                    | "AUX"
+                    | "NUL"
+                    | "COM1"
+                    | "COM2"
+                    | "COM3"
+                    | "COM4"
+                    | "COM5"
+                    | "COM6"
+                    | "COM7"
+                    | "COM8"
+                    | "COM9"
+                    | "LPT1"
+                    | "LPT2"
+                    | "LPT3"
+                    | "LPT4"
+                    | "LPT5"
+                    | "LPT6"
+                    | "LPT7"
+                    | "LPT8"
+                    | "LPT9"
+            )
+    })
 }
 
 #[cfg(test)]
@@ -3302,6 +3352,40 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn storage_path_validation_accepts_exact_windows_drives_and_refuses_aliases() {
+        for path in [
+            r"C:\durable\ordinary",
+            r"\\?\C:\durable\ordinary",
+            r"D:\durable\🔒",
+        ] {
+            assert_eq!(
+                kagemusha_core_coordinator_validate_storage_path_v1(path.as_bytes()),
+                Ok(path)
+            );
+        }
+        for path in [
+            r"C:ordinary",
+            r"C:\",
+            r"\\server\share\ordinary",
+            r"\\.\C:\ordinary",
+            r"C:\durable\",
+            r"C:\durable\\ordinary",
+            r"C:\durable\..\ordinary",
+            r"C:\durable\.\ordinary",
+            r"C:\durable/ordinary",
+            r"C:\durable\ordinary:stream",
+            r"C:\durable\ordinary.",
+            r"C:\durable\ordinary ",
+            r"C:\durable\NUL.bin",
+        ] {
+            assert!(
+                kagemusha_core_coordinator_validate_storage_path_v1(path.as_bytes()).is_err(),
+                "{path}"
+            );
+        }
     }
 
     #[test]

@@ -28,23 +28,37 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.incoming_platform_fields(false)
     }
 
+    /// Authenticate and retain the actual sender original against this Main's captured request,
+    /// immutable receipt, full signed clocks, Wrapper and one-use request-key custody before W2.
+    /// # Errors
+    /// Refuses unknown request, mismatched receiver/source, forged proof or stale current FI.
+    pub fn prepare_received_incoming_platform(
+        &mut self,
+        request_id: DigestV1,
+        outgoing_original: &[u8],
+        assertion_original: &[u8],
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        self.retain_received_source(request_id, outgoing_original, assertion_original)?;
+        self.reserve_incoming_receive(request_id)?;
+        self.prepare_incoming_receive_approval()?;
+        self.incoming_platform_fields(false)
+    }
+
     /// Produce actual Guard, source folds and State, then fsync the full pre-Reserve row.
     /// A retained row is independently reverified and reused without regenerating proof/nonce.
     /// # Errors
     /// Rejects unavailable qualified proof artifacts, changed source/custody or insufficient quota.
-    pub fn prove_retained_incoming_mint_reservation<R: KagemushaArtifactByteResolverV1 + Clone>(
+    pub fn prove_retained_incoming_reservation<R: KagemushaArtifactByteResolverV1 + Clone>(
         &mut self,
         profile: KagemushaRecursiveVerifierProfileV1,
         resolver: R,
     ) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingApproval)?;
         if self.incoming_reservation_candidate.is_some() {
             return Ok(Sha256::digest(self.incoming_reservation_proof_original()?).into());
         }
         let selection = self.captured_incoming_approval()?;
-        if selection.transition_statement()?.kind != KagemushaTransitionKindV1::MintFold {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
-        }
+        require_incoming_fold(selection.transition_statement()?.kind)?;
         let prover = KagemushaProductionProverV1::load_ordinary_incoming(
             &selection,
             profile.clone(),
@@ -107,6 +121,36 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         self.incoming_platform_state(terminal)?;
         Ok(fields)
     }
+    /// Read the independently retained App Attest counter floor for this exact selected W.
+    /// Android returns no counter. This is public correlation data, never a signing grant.
+    /// # Errors
+    /// Refuses a different operation/purpose, stale owner or inconsistent platform counter.
+    pub fn incoming_platform_counter_original(
+        &self,
+        terminal: bool,
+        operation: DigestV1,
+    ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+        let (challenge, _, _, _) = self.incoming_platform_state(terminal)?;
+        if operation == [0; 32] || challenge.operation_id != operation {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let floor = if terminal {
+            self.incoming_terminal_platform_counter_floor()?
+        } else {
+            self.incoming_preparation_platform_counter_floor()?
+        };
+        let platform = self
+            .publication
+            .cash_financial()
+            .enrollment()
+            .app_credential()
+            .subject()
+            .platform_class;
+        let fields = platform_counter_originals(platform, floor)?;
+        self.incoming_platform_state(terminal)?;
+        Ok(fields)
+    }
+
     /// Fsync actual one-use platform fence before authorizing exactly one OS call.
     /// # Errors
     /// An uncertain fence never authorizes another call; exact retained evidence is recovered.
@@ -244,24 +288,22 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Full generated cap/checkpoint/service original is fsynced before Commit account dispatch.
     /// # Errors
     /// Rejects unavailable qualified keys, changed clocks/FI/source/reservation or insufficient quota.
-    pub fn prove_retained_incoming_mint_commit<R: KagemushaArtifactByteResolverV1>(
+    pub fn prove_retained_incoming_commit<R: KagemushaArtifactByteResolverV1>(
         &mut self,
         profile: KagemushaRecursiveVerifierProfileV1,
         resolver: R,
     ) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingTerminal)?;
         if let Some(digest) = self.retained_incoming_commit_digest()? {
             return Ok(digest);
         }
         let selection = self.captured_incoming_terminal()?;
-        if selection
-            .preparation_selection()?
-            .transition_statement()?
-            .kind
-            != KagemushaTransitionKindV1::MintFold
-        {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
-        }
+        require_incoming_fold(
+            selection
+                .preparation_selection()?
+                .transition_statement()?
+                .kind,
+        )?;
         let prover = KagemushaProductionProverV1::load_ordinary_incoming_terminal(
             &selection, profile, resolver,
         )
@@ -286,7 +328,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Return exact retained Commit request and full portable proof for the protected transport.
     /// # Errors
     /// Refuses absent/changed proof custody or failure of genuine Native request retention.
-    pub fn incoming_mint_commit_transport_originals(
+    pub fn incoming_commit_transport_originals(
         &mut self,
     ) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
         self.retained_incoming_commit_transport_originals()
@@ -294,7 +336,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Apply only authentic durable globally acknowledged Commit; post-State fsync Ack stays separate.
     /// # Errors
     /// Refuses unknown/substituted global result, failed suffix durability or source retirement.
-    pub fn advance_incoming_mint_commit(
+    pub fn advance_incoming_commit(
         &mut self,
         request_original_sha256: DigestV1,
     ) -> Result<(), KagemushaStateErrorV1> {
@@ -303,10 +345,89 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Retry only the real post-State fsync Ack; no balance/key mutation is repeated.
     /// # Errors
     /// Refuses absent StateAdvance or unavailable authentic current FI/full signed clock.
-    pub fn acknowledge_incoming_mint_state_advance(
+    pub fn acknowledge_incoming_commit_state_advance(
         &mut self,
         request_original_sha256: DigestV1,
     ) -> Result<(), KagemushaStateErrorV1> {
         self.acknowledge_incoming_state_advance(request_original_sha256)
+    }
+}
+
+// This pure branch check admits no source. Actual W2/Guard/State dispatch verifies the held
+// source discriminant and complete originals independently for each accepted transition.
+pub(super) fn require_incoming_fold(
+    kind: KagemushaTransitionKindV1,
+) -> Result<(), KagemushaStateErrorV1> {
+    if matches!(
+        kind,
+        KagemushaTransitionKindV1::MintFold | KagemushaTransitionKindV1::ReceiveFold
+    ) {
+        Ok(())
+    } else {
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    }
+}
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    #[test]
+    fn incoming_driver_accepts_only_real_incoming_transition_classes() {
+        assert!(require_incoming_fold(KagemushaTransitionKindV1::MintFold).is_ok());
+        assert!(require_incoming_fold(KagemushaTransitionKindV1::ReceiveFold).is_ok());
+        for kind in [
+            KagemushaTransitionKindV1::SendSplit,
+            KagemushaTransitionKindV1::RedeemSplit,
+            KagemushaTransitionKindV1::Rotate,
+        ] {
+            assert!(require_incoming_fold(kind).is_err());
+        }
+    }
+}
+
+// Platform counter observations are separate from the full u128 monetary logical index.
+fn platform_counter_originals(
+    platform: KagemushaHardwarePlatformClassV1,
+    floor: Option<u32>,
+) -> Result<Vec<Vec<u8>>, KagemushaStateErrorV1> {
+    match (platform, floor) {
+        (KagemushaHardwarePlatformClassV1::AndroidKeyMint, None) => Ok(vec![vec![5], vec![]]),
+        (KagemushaHardwarePlatformClassV1::AppleAppAttest, Some(counter)) => {
+            Ok(vec![vec![4], counter.to_le_bytes().to_vec()])
+        }
+        _ => Err(KagemushaStateErrorV1::InvalidHardwareProfile),
+    }
+}
+#[cfg(test)]
+mod platform_counter_tests {
+    use super::*;
+    #[test]
+    fn only_apple_has_its_actual_independent_counter_floor() {
+        assert_eq!(
+            platform_counter_originals(KagemushaHardwarePlatformClassV1::AndroidKeyMint, None)
+                .unwrap(),
+            vec![vec![5], vec![]]
+        );
+        for value in [0, 1, u32::MAX] {
+            assert_eq!(
+                platform_counter_originals(
+                    KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                    Some(value)
+                )
+                .unwrap(),
+                vec![vec![4], value.to_le_bytes().to_vec()]
+            );
+        }
+        assert!(
+            platform_counter_originals(KagemushaHardwarePlatformClassV1::AppleAppAttest, None)
+                .is_err()
+        );
+        assert!(
+            platform_counter_originals(KagemushaHardwarePlatformClassV1::AndroidKeyMint, Some(0))
+                .is_err()
+        );
+        assert!(
+            platform_counter_originals(KagemushaHardwarePlatformClassV1::AndroidOemService, None)
+                .is_err()
+        );
     }
 }

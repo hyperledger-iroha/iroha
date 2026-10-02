@@ -683,3 +683,26 @@ mod tests {
         assert!(derive_credit([13; 32], [13; 32], [15; 32], &request, &clock, &[7; 152]).is_err());
     }
 }
+
+/// Test-only known-public mathematical sources through the maintained real AEAD factory.
+/// Never constructs a Native owner, current FI/clock, replay grant or held receiver key.
+#[cfg(test)]
+pub(super) fn derive_credit_for_qualification_v1(
+    before: DigestV1,
+    after: DigestV1,
+    nullifier: DigestV1,
+    request: &KagemushaOrdinaryPaymentRequestV1,
+    clock: &KagemushaOrdinaryCashClockContextV1,
+    entropy: &[u8; 152],
+) -> Result<
+    (
+        KagemushaCreditOpeningV1,
+        Vec<u8>,
+        KagemushaOrdinaryPaymentOutputV1,
+    ),
+    KagemushaStateErrorV1,
+> {
+    let (opening, _plaintext, _sealing_entropy, encrypted, output) =
+        derive_credit(before, after, nullifier, request, clock, entropy)?;
+    Ok((opening.0, encrypted, output))
+}

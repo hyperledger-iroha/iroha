@@ -19,7 +19,7 @@ impl NativeContinuousReading {
     /// Refuses unavailable/unsupported clocks, invalid readings or a changed process identity.
     pub fn now() -> io::Result<Self> {
         let process = std::process::id();
-        let nanos = platform_nanos()?;
+        let nanos = native_continuous_clock_nanos()?;
         if process == 0 || process != std::process::id() {
             return Err(invalid());
         }
@@ -57,7 +57,10 @@ fn invalid() -> io::Error {
     unsafe_code,
     reason = "Apple exposes its suspend-inclusive clock through native Mach APIs"
 )]
-fn platform_nanos() -> io::Result<u128> {
+/// Read genuine native suspend-inclusive elapsed nanoseconds; no UTC authority.
+/// # Errors
+/// Refuses unavailable or invalid native clocks.
+pub fn native_continuous_clock_nanos() -> io::Result<u128> {
     #[repr(C)]
     struct MachTimebase {
         numer: u32,
@@ -94,7 +97,10 @@ fn platform_nanos() -> io::Result<u128> {
     unsafe_code,
     reason = "the actual suspend-inclusive Linux clock is supplied by libc"
 )]
-fn platform_nanos() -> io::Result<u128> {
+/// Read genuine native suspend-inclusive elapsed nanoseconds; no UTC authority.
+/// # Errors
+/// Refuses unavailable or invalid native clocks.
+pub fn native_continuous_clock_nanos() -> io::Result<u128> {
     let mut reading = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -112,8 +118,42 @@ fn platform_nanos() -> io::Result<u128> {
         .ok_or_else(invalid)
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "linux")))]
-fn platform_nanos() -> io::Result<u128> {
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Windows suspend-inclusive interrupt time is available through the genuine native API"
+)]
+/// Read the actual suspend-inclusive boot counter in nanoseconds. This is elapsed DATA,
+/// never UTC, a signed node interval, an installed authority or a caller-selected clock.
+/// # Errors
+/// Refuses native-unit conversion overflow. Requires the native Windows 10+ API.
+pub fn native_continuous_clock_nanos() -> io::Result<u128> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "QueryInterruptTimePrecise"]
+        fn query_interrupt_time_precise(value: *mut u64);
+    }
+    let mut ticks = 0u64;
+    // SAFETY: the Windows 10+ SDK function writes one valid u64 in 100 ns units.
+    unsafe { query_interrupt_time_precise(&raw mut ticks) };
+    windows_interrupt_ticks_to_nanos(ticks)
+}
+
+#[cfg(any(test, windows))]
+fn windows_interrupt_ticks_to_nanos(ticks: u64) -> io::Result<u128> {
+    u128::from(ticks).checked_mul(100).ok_or_else(invalid)
+}
+
+#[cfg(not(any(
+    target_vendor = "apple",
+    target_os = "android",
+    target_os = "linux",
+    windows
+)))]
+/// Read genuine native suspend-inclusive elapsed nanoseconds; no UTC authority.
+/// # Errors
+/// Refuses unavailable or invalid native clocks.
+pub fn native_continuous_clock_nanos() -> io::Result<u128> {
     Err(invalid())
 }
 
@@ -121,7 +161,12 @@ fn platform_nanos() -> io::Result<u128> {
 mod tests {
     use super::*;
 
-    #[cfg(any(target_vendor = "apple", target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "android",
+        target_os = "linux",
+        windows
+    ))]
     #[test]
     fn actual_native_elapsed_readings_retain_same_process_and_order() {
         let first = NativeContinuousReading::now().unwrap();
@@ -144,6 +189,20 @@ mod tests {
         assert_eq!(
             second.elapsed_since(&first).unwrap(),
             Duration::new(120, 731)
+        );
+    }
+
+    #[test]
+    fn windows_interrupt_units_are_exact_elapsed_data() {
+        assert_eq!(windows_interrupt_ticks_to_nanos(0).unwrap(), 0);
+        assert_eq!(windows_interrupt_ticks_to_nanos(1).unwrap(), 100);
+        assert_eq!(
+            windows_interrupt_ticks_to_nanos(10_000_001).unwrap(),
+            1_000_000_100
+        );
+        assert_eq!(
+            windows_interrupt_ticks_to_nanos(u64::MAX).unwrap(),
+            u128::from(u64::MAX) * 100
         );
     }
 

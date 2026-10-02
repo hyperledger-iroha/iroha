@@ -32,7 +32,6 @@ mod ordinary_state_prepared_binding;
 #[path = "ordinary_state_subject_binding.rs"]
 mod ordinary_state_subject_binding;
 
-#[cfg(unix)]
 #[path = "ordinary_cash_terminal_math.rs"]
 pub(super) mod ordinary_cash_terminal_math;
 
@@ -541,6 +540,19 @@ macro_rules! impl_recursive_circuit {
                     self.builder.witness_gen_only(),
                     usable_rows,
                 )
+            }
+        }
+
+        #[cfg(test)]
+        impl $circuit {
+            /// Actual assigned public columns for negative mathematical relation tests.
+            /// This exposes neither the builder nor a proof/admission capability.
+            pub(super) fn public_instances_for_testing(&self) -> Vec<Vec<$field>> {
+                self.builder
+                    .assigned_instances
+                    .iter()
+                    .map(|column| column.iter().map(|cell| *cell.value()).collect())
+                    .collect()
             }
         }
     };

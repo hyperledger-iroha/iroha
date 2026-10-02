@@ -76,6 +76,14 @@ def _lower_hex32(value: Any, context: str, *, nonzero: bool = False) -> str:
     return value
 
 
+def _upper_hex32(value: Any, context: str, *, nonzero: bool = False) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9A-F]{64}", value) is None:
+        raise TypeError(f"{context} must be exactly 32 uppercase hexadecimal bytes")
+    if nonzero and set(value) == {"0"}:
+        raise TypeError(f"{context} must be non-zero")
+    return value
+
+
 def _bytes32(value: Any, context: str, *, nonzero: bool = False) -> tuple[int, ...]:
     if not isinstance(value, list) or len(value) != 32:
         raise TypeError(f"{context} must be an exact 32-byte JSON array")
@@ -450,13 +458,13 @@ class GovernanceValidationFeePayoutBinding:
     """Exact independently governed conversion binding; never approval authority."""
 
     contract_address: str
-    code_hash: tuple[int, ...]
+    code_hash: str
     entrypoint: str
     treasury_account_id: str
     ds_asset_id: str
     xor_asset_id: str
     pool_contract_address: str
-    pool_code_hash: tuple[int, ...]
+    pool_code_hash: str
     pool_vault_account_id: str
     reward_pool_account_id: str
     reference_feed_id: str
@@ -478,7 +486,7 @@ class GovernanceValidationFeePayoutBinding:
         for field in ("contract_address", "pool_contract_address"):
             values[field] = _contract_address(record[field], f"{context}.{field}")
         for field in ("code_hash", "pool_code_hash"):
-            values[field] = _bytes32(record[field], f"{context}.{field}", nonzero=True)
+            values[field] = _upper_hex32(record[field], f"{context}.{field}", nonzero=True)
         if record["entrypoint"] != "autonomous_validation_fee_tick":
             raise TypeError(f"{context}.entrypoint must be autonomous_validation_fee_tick")
         values["entrypoint"] = record["entrypoint"]
@@ -517,7 +525,7 @@ class GovernanceValidationFeePolicy:
     schema_version: int
     network_id: str
     policy_version: int
-    previous_policy_hash: Optional[tuple[int, ...]]
+    previous_policy_hash: Optional[str]
     ds_asset_id: str
     ds_scale: int
     retail_schedule: GovernanceValidationFeeRetailSchedule
@@ -539,7 +547,7 @@ class GovernanceValidationFeePolicy:
         if mode["charging_mode"] != "RETAIL_MONTHLY_ALLOWANCE" or mode["value"] is not None:
             raise TypeError(f"{context}.charging_mode must be RETAIL_MONTHLY_ALLOWANCE with null value")
         version = _decimal_u64(record["policy_version"], f"{context}.policy_version", positive=True)
-        previous = None if record["previous_policy_hash"] is None else _bytes32(record["previous_policy_hash"], f"{context}.previous_policy_hash", nonzero=True)
+        previous = None if record["previous_policy_hash"] is None else _upper_hex32(record["previous_policy_hash"], f"{context}.previous_policy_hash", nonzero=True)
         if (version == 1) != (previous is None):
             raise TypeError(f"{context}.previous_policy_hash differs from policy_version")
         fee = _numeric(record["fee"], f"{context}.fee")

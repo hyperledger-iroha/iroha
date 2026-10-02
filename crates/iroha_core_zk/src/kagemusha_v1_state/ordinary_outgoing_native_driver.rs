@@ -99,6 +99,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         let key: DigestV1 = Sha256::digest(&request).into();
         // The service independently verifies all four complete signed samples. A projected
         // context is not their carrier and cannot recreate its historical finality originals.
+        let financial = self.publication.cash_financial();
         let clock = financial
             .retained_cash_clock_originals(reservation.preparation_clock_context())
             .map_err(material)?;

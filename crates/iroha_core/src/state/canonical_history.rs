@@ -325,7 +325,7 @@ impl<'a> CanonicalHistorySource<'a> {
             let block = self.block_with_attempt_admission(index, &mut before_read)?;
             let receipt =
                 crate::sumeragi::certified_chain::read_frame_attempt(block, source_height)
-                    .map_err(|error| error.map(|error| invalid(error.to_string())))?;
+                    .map_err(|error| error.map_rejection(|error| invalid(error.to_string())))?;
             if receipt.core_hash() != expected_core || receipt.result() != expected_result {
                 return Err(invalid(format!(
                     "native header or R differs from authenticated execution ancestry at {source_height}"

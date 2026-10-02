@@ -345,6 +345,6 @@ impl KagemushaOrdinaryIssuerPreparationAttemptV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "issuer_preparation_tests.rs"]
 mod tests;

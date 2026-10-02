@@ -230,9 +230,21 @@ internal fun revokeOrdinaryRuntimeSelectionV1(endpoint: KagemushaOrdinaryNativeS
 }
 
 /** Sole existing exact shared Native entry names. No managed clock/signing/FI verifier. */
-internal object KagemushaOrdinaryRuntimeJniV1 : KagemushaOrdinaryRuntimeCurrentControlEndpointV1, KagemushaOrdinaryNativeOutgoingEndpointV1 {
+internal object KagemushaOrdinaryRuntimeJniV1 : KagemushaOrdinaryRuntimeCurrentControlEndpointV1,
+    KagemushaOrdinaryNativeOutgoingEndpointV1, KagemushaOrdinaryNativeIncomingEndpointV1,
+    KagemushaOrdinaryNativeIntegrityRefreshEndpointV1, KagemushaOrdinaryNativeMintFundingEndpointV1 {
     fun bindApplication(application: android.app.Application): Boolean = nativeBindApplicationV1(application)
     fun retireOriginal(): Boolean = nativeRetireOriginalV1()
+    override fun mintFunding(phase:Int,coreHandle:Long,originals:Array<ByteArray>):Array<ByteArray>? =
+        nativeMintFundingV1(phase,coreHandle,originals)
+    @JvmStatic private external fun nativeMintFundingV1(phase:Int,handle:Long,originals:Array<ByteArray>):Array<ByteArray>?
+    override fun integrityRefresh(phase:Int,coreHandle:Long,original:ByteArray):Array<ByteArray>? =
+        nativeIntegrityRefreshV1(phase,coreHandle,original)
+    @JvmStatic private external fun nativeIntegrityRefreshV1(phase:Int,handle:Long,original:ByteArray):Array<ByteArray>?
+    override fun incoming(phase: Int, coreHandle: Long, originals: Array<ByteArray>): Array<ByteArray>? =
+        nativeIncomingV1(phase, coreHandle, originals)
+    @JvmStatic private external fun nativeIncomingV1(phase: Int, handle: Long, originals: Array<ByteArray>): Array<ByteArray>?
+
     override fun startup(phase: Int, readId: Long, original: ByteArray): Array<ByteArray>? =
         nativeStartupV1(phase, readId, original)
     override fun invoke(phase: Int, coreHandle: Long, signedOriginal: ByteArray, authorityOriginal: ByteArray): Array<ByteArray>? =
@@ -240,6 +252,13 @@ internal object KagemushaOrdinaryRuntimeJniV1 : KagemushaOrdinaryRuntimeCurrentC
     override fun outgoing(phase: Int, coreHandle: Long, originals: Array<ByteArray>): Array<ByteArray>? =
         nativeOutgoingV1(phase, coreHandle, originals)
     @JvmStatic private external fun nativeOutgoingV1(phase: Int, handle: Long, originals: Array<ByteArray>): Array<ByteArray>?
+    internal fun existingAndroidAccount(application: android.app.Application): Array<ByteArray>? =
+        nativeExistingAndroidAccountV1(application)
+    @JvmStatic private external fun nativeExistingAndroidAccountV1(application: android.app.Application): Array<ByteArray>?
+    internal fun consumeExistingAndroidAccount(original: KagemushaOrdinaryExistingAccountIntakeV1,
+        signatory: String, seed: ByteArray): Boolean = nativeConsumeExistingAndroidAccountV1(original, signatory, seed)
+    @JvmStatic private external fun nativeConsumeExistingAndroidAccountV1(original: KagemushaOrdinaryExistingAccountIntakeV1,
+        signatory: String, seed: ByteArray): Boolean
     @JvmStatic private external fun nativeStartupV1(phase: Int, id: Long, original: ByteArray): Array<ByteArray>?
     @JvmStatic private external fun nativeCurrentControlV1(phase: Int, handle: Long, signed: ByteArray, authority: ByteArray): Array<ByteArray>?
     @JvmStatic private external fun nativeBindApplicationV1(application: android.app.Application): Boolean

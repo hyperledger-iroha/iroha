@@ -56,6 +56,7 @@ pub struct KagemushaOrdinaryAppPossessionAttemptV1 {
     receipt: Option<Vec<u8>>,
     consumed_at_ms: Option<u64>,
     final_credential: Option<KagemushaVerifiedOrdinaryAppCredentialV1>,
+    final_published_at_ms: Option<u64>,
     selected_clock: Option<Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>>,
 }
 impl KagemushaOrdinaryAppPossessionAttemptV1 {
@@ -154,6 +155,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             receipt: None,
             consumed_at_ms: None,
             final_credential: None,
+            final_published_at_ms: None,
             selected_clock: None,
         };
         this.append(Record::Prepared {
@@ -174,6 +176,14 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
         root: &Path,
         pending: &KagemushaPendingAppIdentityV1,
         now: u64,
+    ) -> Result<Self> {
+        Self::open_reference_mode(root, pending, now, false)
+    }
+    fn open_reference_mode(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+        completed_only: bool,
     ) -> Result<Self> {
         pending.recheck_retained_originals_at_trusted_time(now)?;
         let challenge = pending.retained_possession_challenge(now)?;
@@ -201,6 +211,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
             receipt: None,
             consumed_at_ms: None,
             final_credential: None,
+            final_published_at_ms: None,
             selected_clock: None,
         };
         for record in rows {
@@ -240,18 +251,114 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
                     }
                     this.final_credential =
                         Some(this.verify_final(pending, &original, published_at_ms)?);
+                    this.final_published_at_ms = Some(published_at_ms);
                     this.stage = 5;
                 }
                 Record::Cancelled if this.stage == 0 => this.stage = 4,
                 _ => return Err(Custody),
             }
         }
-        if this.stage == 3 {
+        if completed_only {
+            this.recheck_completed_history_at_reference(pending, now)?;
+        } else if this.stage == 3 {
             this.recheck_consumed_at_reference(pending, now)?;
         } else {
             this.recheck_at_reference(pending, now)?;
         }
         Ok(this)
+    }
+    // Used only by the completed Financial recovery owner; never lends current E/C admission.
+    pub(super) fn open_completed_history(
+        root: &Path,
+        pending: &KagemushaPendingAppIdentityV1,
+        selected: Arc<KagemushaOrdinaryPreparationSelectedOriginalsV1>,
+    ) -> Result<Self> {
+        selected.require_prepared_original_scope(pending.preparation())?;
+        let mut this = Self::open_reference_mode(
+            root,
+            pending,
+            selected.trusted_time_interval()?.lower_ms(),
+            true,
+        )?;
+        this.selected_clock = Some(selected);
+        this.recheck_completed_history(pending)?;
+        Ok(this)
+    }
+    pub(super) fn recheck_completed_history(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+    ) -> Result<()> {
+        self.interval(self.final_published_at_ms.ok_or(Custody)?)?
+            .check_both(|now| self.recheck_completed_history_at_reference(pending, now))
+    }
+    fn recheck_completed_history_at_reference(
+        &self,
+        pending: &KagemushaPendingAppIdentityV1,
+        now: u64,
+    ) -> Result<()> {
+        if self.stage != 5 {
+            return Err(Custody);
+        }
+        self.recheck_consumed_at_reference(pending, now)?;
+        let published = self.final_published_at_ms.ok_or(Custody)?;
+        if published < self.consumed_at_ms.ok_or(Custody)? || published > now {
+            return Err(Custody);
+        }
+        let held = self.final_credential.as_ref().ok_or(Custody)?;
+        let verified = self.verify_final(pending, held.original(), published)?;
+        if verified.digest() != held.digest() {
+            return Err(Custody);
+        }
+        let consumed = self.verify(pending, self.consumed_at_ms.ok_or(Custody)?)?;
+        let expected = [
+            Record::Prepared {
+                ticket: self.ticket,
+                pending_scope: self.pending_scope,
+                challenge: self.challenge,
+            },
+            Record::Invoked,
+            Record::Original(self.raw_original.clone().ok_or(Custody)?),
+            Record::Consumed {
+                checked_at_ms: self.consumed_at_ms.ok_or(Custody)?,
+                counter: consumed.app_attest_counter(),
+                receipt: self.receipt.clone().ok_or(Custody)?,
+            },
+            Record::FinalCredential {
+                original: held.original().to_vec(),
+                published_at_ms: published,
+            },
+        ]
+        .iter()
+        .map(encode)
+        .collect::<Result<Vec<_>>>()?;
+        let mut count = 0;
+        self.journal
+            .scan_complete(|_, raw| {
+                if expected.get(count).map(Vec::as_slice) != Some(raw) {
+                    return Err(super::super::PrivateJournalError::Corrupt);
+                }
+                count += 1;
+                Ok(())
+            })
+            .map_err(|_| Custody)?;
+        if count != expected.len() {
+            return Err(Custody);
+        }
+        Ok(())
+    }
+    pub(super) fn completed_identity<'a>(
+        &'a self,
+        pending: &KagemushaPendingAppIdentityV1,
+    ) -> Result<&'a KagemushaVerifiedOrdinaryAppCredentialV1> {
+        self.recheck_completed_history(pending)?;
+        self.final_credential.as_ref().ok_or(Custody)
+    }
+    pub(super) fn completed_platform_original<'a>(
+        &'a self,
+        pending: &KagemushaPendingAppIdentityV1,
+    ) -> Result<&'a [u8]> {
+        self.recheck_completed_history(pending)?;
+        self.raw_original.as_deref().ok_or(Custody)
     }
     /// Native ticket only; it grants no scope without the still-held native pending owner.
     pub const fn ticket(&self) -> u64 {
@@ -560,6 +667,7 @@ impl KagemushaOrdinaryAppPossessionAttemptV1 {
                 published_at_ms: now,
             })?;
             self.final_credential = Some(checked);
+            self.final_published_at_ms = Some(now);
             self.stage = 5;
         }
         self.recheck(pending, now)?;
@@ -1153,6 +1261,42 @@ mod tests {
         assert!(a.final_identity(&p, 9000).is_err());
         assert!(a.recovery_fields(&p, 9000).is_err());
         assert!(a.accept_final_credential(&p, &original, 9000).is_err());
+    }
+    #[test]
+    fn completed_history_refuses_incomplete_possession_and_does_not_lend_expired_live_c() {
+        let p = pending();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
+        let (mut held, raw, _, consumed_at) = consumed(&root, &p);
+        assert!(
+            held.recheck_completed_history_at_reference(&p, consumed_at)
+                .is_err()
+        );
+        let original = final_original(&p, &raw, consumed_at.max(400));
+        held.accept_final_credential(&p, &original, 2100).unwrap();
+        assert!(held.recheck_at_reference(&p, 9000).is_err());
+        held.recheck_completed_history_at_reference(&p, 9000)
+            .unwrap();
+        drop(held);
+        assert!(
+            KagemushaOrdinaryAppPossessionAttemptV1::open_at_reference(&root, &p, 9000).is_err()
+        );
+        let held =
+            KagemushaOrdinaryAppPossessionAttemptV1::open_reference_mode(&root, &p, 9000, true)
+                .unwrap();
+        held.recheck_completed_history_at_reference(&p, 9000)
+            .unwrap();
+        assert!(held.final_identity(&p, 9000).is_err());
+        assert!(
+            held.recheck_completed_history_at_reference(&p, 2099)
+                .is_err()
+        );
+        std::fs::rename(root.join(FORMAT.filename), root.join("displaced")).unwrap();
+        std::fs::copy(root.join("displaced"), root.join(FORMAT.filename)).unwrap();
+        assert!(
+            held.recheck_completed_history_at_reference(&p, 9000)
+                .is_err()
+        );
     }
     #[test]
     fn final_identity_refuses_signed_evidence_counter_level_and_time_substitutions() {

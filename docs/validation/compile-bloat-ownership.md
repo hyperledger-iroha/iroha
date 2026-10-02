@@ -17,10 +17,13 @@ use their actual owners directly.
 Core's execution-pool getter remains `pub(crate)`. Its unit regression checks
 that cloned handles preserve the original pool and reservations. External lane
 fixtures use the Sumeragi test-chain accessor; no additional State testing API
-is retained. Normal Core uses a crate-local ZK owner alias. One explicitly
-non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
-`integration_tests/tests/sumeragi_npos_committee_transition.rs` consumer. Its
-source TODO records the remaining direct-owner migration.
+is retained. Core uses a crate-local ZK owner alias for every feature selection.
+The committee-test owner migrated its protected import directly to
+`iroha_core_zk`, and Core's temporary public test adapter is removed. The new
+development-only fee-evidence test imports `kotodama_lang::compiler::Compiler`
+directly; fresh focused compilation and runtime validation remain in progress.
+The focused build currently stops in Core ZK's new mint-funding module on an
+incorrect signed-clock type path; the repair chat owns that source correction.
 
 Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
 moved compiler/model and all six Norito grouped harnesses. Twelve
@@ -30,7 +33,7 @@ source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. Current target-inventory validation admits 105 declared binaries and 23
+graphs. Current target-inventory validation admits 106 declared binaries and 23
 defaults, including the installed-context developer tool. Certificate, attestation,
 preparation and SDK inventory assembly tools require
 explicit `dev-tools`. Shipping native custody does not enable the SDK assembler. Recorded
@@ -71,9 +74,11 @@ fields matches the current source pin. The retained artifact has 475 source,
 literal, manifest and build-control inputs, including 417 actual dep-info inputs,
 unchanged across the build and selected runtime intervals. Current descriptors
 include 192 endpoint, 17 key/digest, 20 SHA-union and 108 CA-link alpha phases and
-the 39-relation RFC inventory. Genuine IO, Projection and CA proof checks, the
-optimized constructor, full ordinary suite, upstream strict lint and merged-source
-qualification remain open. Maximum-proof external time/RSS evidence and enforced
+the 39-relation RFC inventory. Genuine IO, Projection and CA component proof checks
+pass once each in a sequential run at the closed merged revision, with the original
+475 inputs unchanged through all runtime endpoints. The CA check binds a synthetic
+paired MAIN record. The optimized constructor, full ordinary suite, upstream strict
+lint and merged-source qualification remain open. Maximum-proof external time/RSS evidence and enforced
 address-space limits remain separate cryptographic release gates.
 Eight focused parameter tests pass with the scoped inline-policy annotation,
 resolving the observed enum-size compilation frontier in that harness.
@@ -81,8 +86,9 @@ Concurrent policy edits limit current-source qualification. Both executable
 metadata builds compile with matching package/features, but the freshness check
 fails with concurrent source changes and library rebuilds. The last recorded workspace
 check reaches Core test compile errors; the separate repair chat owns those fixes.
-The separate repair chat also owns concurrent merge completion and the remaining
-protocol integration repairs; final validation requires a stable merged source interval. Workspace validation,
+The separate repair chat completed the signed merge and retains the remaining
+protocol integration repairs. Broader Core/SDK sources continue to change, so final
+validation requires a stable current source interval. Workspace validation,
 metadata freshness qualification and observational warm timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.

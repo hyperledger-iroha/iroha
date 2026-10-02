@@ -278,7 +278,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
         &mut self,
         generated: GeneratedOrdinaryIncomingCommitOriginalsV1,
     ) -> Result<DigestV1, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingTerminal)?;
         let selection = self.captured_incoming_terminal()?;
         let originals = IncomingPreparedCommitOriginals {
             reserve_request_original_sha256: selection
@@ -319,7 +319,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             originals,
             generated,
         });
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingTerminal)?;
         Ok(digest)
     }
 
@@ -1248,7 +1248,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     pub(super) fn retained_incoming_commit_digest(
         &self,
     ) -> Result<Option<DigestV1>, KagemushaStateErrorV1> {
-        self.require_current_financial_control()?;
+        self.recheck_proving_history(ProvingHistoryOperation::IncomingTerminal)?;
         self.prepared_incoming_commit
             .as_ref()
             .map(|prepared| {
@@ -1284,7 +1284,7 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// recovered without another account invocation or a new request nonce.
     /// # Errors
     /// Rejects uncertainty, absent generated custody, stale FI or ambiguous acknowledgements.
-    pub fn sign_incoming_mint_commit_transport(
+    pub fn sign_incoming_commit_transport(
         &mut self,
         sign: impl FnOnce(
             &KagemushaAuthenticatedOrdinaryLineageAccountSigningV1<'_>,

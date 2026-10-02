@@ -32,7 +32,10 @@ pub(crate) use cash_owner::{
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 pub use cash_owner::{
-    KagemushaNativeOrdinaryCashOwnerV1, KagemushaNativeOrdinaryPreparedCashApprovalV1,
+    KagemushaAuthenticatedOrdinaryMintAccountSigningV1,
+    KagemushaAuthenticatedOrdinaryMintFundingTransportV1,
+    KagemushaAuthenticatedOrdinaryMintTransactionSigningV1, KagemushaNativeOrdinaryCashOwnerV1,
+    KagemushaNativeOrdinaryPreparedCashApprovalV1,
 };
 
 #[path = "authenticated_ordinary_logical_journal.rs"]
@@ -752,3 +755,8 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+pub(crate) use cash_owner::{
+    OrdinarySendPreviewForQualificationV1, ordinary_send_preview_for_qualification_v1,
+};

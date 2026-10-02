@@ -9,7 +9,8 @@ use crate::kagemusha_v1_recursion::KagemushaVerifiedOrdinaryReceivedCashOutputV1
 use crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryReceivedLineageCommitAssertionV1;
 use iroha_data_model::kagemusha::{
     KagemushaCreditOpeningV1, KagemushaEncryptedCreditEnvelopeV1, KagemushaOrdinaryPaymentOutputV1,
-    kagemusha_ciphertext_digest_v1, kagemusha_peer_credit_opening_commitment_v1,
+    KagemushaRetailEnrollmentIssuerPolicyV1, kagemusha_ciphertext_digest_v1,
+    kagemusha_peer_credit_opening_commitment_v1,
 };
 
 /// Borrow of the same Main-owned, fsynced receiver request; no decoder or raw key creates it.
@@ -42,6 +43,22 @@ pub(super) fn from_main_historical(
 }
 
 impl<'owner> KagemushaHistoricalOrdinaryReceiverRequestCustodyV1<'owner> {
+    /// Same actual installed receiver FI policy, borrowed only through this retained original
+    /// request and financial custody. It supplies no current authorization or offered policy.
+    pub(crate) fn issuer_policy(
+        &self,
+    ) -> Result<&KagemushaRetailEnrollmentIssuerPolicyV1, KagemushaStateErrorV1> {
+        self.recheck_historical_custody()?;
+        let policy = self
+            .owner
+            .publication
+            .cash_financial()
+            .retained_proof_issuer_policy()
+            .map_err(material)?;
+        self.recheck_historical_custody()?;
+        Ok(policy)
+    }
+
     fn retained(&self) -> Result<&super::super::RetainedReceiverRequest, KagemushaStateErrorV1> {
         self.owner
             .retained_receiver_requests

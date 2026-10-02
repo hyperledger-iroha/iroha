@@ -141,10 +141,10 @@ def _providers() -> list[str]:
 def _payout_binding() -> dict[str, object]:
     providers = _providers()
     return {
-        "contract_address": CONTRACT_ADDRESS, "code_hash": [17] * 32,
+        "contract_address": CONTRACT_ADDRESS, "code_hash": "11" * 32,
         "entrypoint": "autonomous_validation_fee_tick", "treasury_account_id": CANONICAL_OWNER,
         "ds_asset_id": _TESTDATA_SBD_ASSET_ID, "xor_asset_id": _TESTDATA_XOR_ASSET_ID,
-        "pool_contract_address": CONTRACT_ADDRESS, "pool_code_hash": [19] * 32,
+        "pool_contract_address": CONTRACT_ADDRESS, "pool_code_hash": "13" * 32,
         "pool_vault_account_id": providers[0], "reward_pool_account_id": providers[1],
         "reference_feed_id": ["xor-per-sbd"], "reference_feed_config_version": 1,
         "reference_provider_accounts": providers,
@@ -888,6 +888,9 @@ def test_current_fee_policy_rejects_malformed_tariff_activation_or_custody(path:
 
 
 @pytest.mark.parametrize("field,value", [
+    ("code_hash", [17] * 32), ("pool_code_hash", [19] * 32),
+    ("code_hash", "ab" * 32), ("pool_code_hash", "CD" * 31),
+    ("code_hash", "00" * 32), ("pool_code_hash", " CD" * 32),
     ("reference_feed_id", "xor-per-sbd"), ("reference_feed_config_version", 0),
     ("max_sbd_per_attempt_minor", 0), ("max_sbd_per_day_minor", 1),
     ("min_interval_ms", 0), ("max_source_age_ms", 0), ("max_slippage_bps", 10000),

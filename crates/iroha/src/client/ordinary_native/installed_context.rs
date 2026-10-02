@@ -251,37 +251,27 @@ fn open_selected_public(path: &Path, sha: [u8; 32], maximum: usize) -> Result<He
 }
 fn open_unselected_bounded_public(path: &Path, maximum: usize) -> Result<HeldFile> {
     require_path(path)?;
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32)
-        .open(path)?;
-    let before = file.metadata()?;
+    let file = RetainedFile::open_regular(path)?;
+    let before = file.snapshot()?;
+    let length = file.file().metadata()?.len();
     ensure!(
-        before.is_file()
-            && before.len() > 0
-            && before.len() <= u64::try_from(maximum)?
-            && before.nlink() == 1
-            && before.mode() & 0o022 == 0,
+        length > 0 && length <= u64::try_from(maximum)?,
         "ordinary context bounded public original custody rejected"
     );
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(
-        &mut std::io::Read::take(&mut file, u64::try_from(maximum)? + 1),
-        &mut bytes,
-    )?;
+    let mut bytes = vec![0u8; usize::try_from(length)?];
+    iroha_fs::read_exact_at(file.file(), &mut bytes, 0)?;
     ensure!(
-        u64::try_from(bytes.len())? == before.len()
-            && Identity::of(&before) == Identity::of(&file.metadata()?),
+        u64::try_from(bytes.len())? == length && before == file.snapshot()?,
         "ordinary context read custody changed"
     );
     let held = HeldFile::open_exact(
         path.to_owned(),
         Sha256::digest(&bytes).into(),
-        before.len(),
+        length,
         u64::try_from(maximum)?,
     )?;
     ensure!(
-        Identity::of(&before) == held.identity,
+        before == held.identity,
         "ordinary context original replaced before intake"
     );
     Ok(held)
@@ -301,11 +291,20 @@ mod tests {
         assert_eq!(held.bytes(16).unwrap(), b"public");
         let replacement = root.join("replacement");
         std::fs::write(&replacement, b"public").unwrap();
-        std::fs::rename(&replacement, &path).unwrap();
-        assert!(held.bytes(16).is_err());
-        let link = root.join("symlink");
-        std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(open_unselected_bounded_public(&link, 16).is_err());
+        match std::fs::rename(&replacement, &path) {
+            Ok(()) => assert!(held.bytes(16).is_err()),
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert!(replacement.exists());
+                assert_eq!(held.bytes(16).unwrap(), b"public");
+            }
+        }
+        #[cfg(unix)]
+        {
+            let link = root.join("symlink");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(open_unselected_bounded_public(&link, 16).is_err());
+        }
     }
     #[test]
     fn ordinary_context_public_original_bounds_recovery_before_read() {
@@ -315,9 +314,19 @@ mod tests {
         std::fs::write(&path, b"123456789").unwrap();
         assert!(open_unselected_bounded_public(&path, 8).is_err());
         let original = open_unselected_bounded_public(&path, 16).unwrap();
-        std::fs::write(&path, b"1234").unwrap();
-        assert!(original.bytes(16).is_err());
-        // Reopening the exact truncated file cannot silently substitute the old original.
-        assert!(open_selected_public(&path, Sha256::digest(b"123456789").into(), 16).is_err());
+        match std::fs::write(&path, b"1234") {
+            Ok(()) => {
+                assert!(original.bytes(16).is_err());
+                // Reopening the exact truncated file cannot silently substitute the old original.
+                assert!(
+                    open_selected_public(&path, Sha256::digest(b"123456789").into(), 16).is_err()
+                );
+            }
+            Err(error) => {
+                // Genuine Windows non-write-sharing custody prevents this mutation.
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(original.bytes(16).unwrap(), b"123456789");
+            }
+        }
     }
 }

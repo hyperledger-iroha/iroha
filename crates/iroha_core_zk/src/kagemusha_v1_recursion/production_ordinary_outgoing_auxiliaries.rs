@@ -16,6 +16,7 @@ use super::*;
 use crate::kagemusha_v1_recursion::{
     KagemushaAuthenticatedOrdinaryPreparationGuardV1,
     KagemushaMintFinalityHelperVerificationRequestV1,
+    KagemushaPreparedIntentCommitmentsV1,
     ordinary_guard_verifier::{OrdinaryGuardProofWireV1, public_column},
     ordinary_state_reserved::kagemusha_ordinary_state_outer_protocol_positions_v1,
 };
@@ -614,7 +615,8 @@ impl KagemushaRetainedOrdinaryOutgoingAuxiliariesV1 {
             || selection
                 .outbox_reservation_original()
                 .map_err(|e| e.to_string())?
-                .canonical_commitment()?
+                .canonical_commitment()
+                .map_err(|e| e.to_string())?
                 != self.reservation_digest
             || guard.original() != self.guard_original
             || selection

@@ -502,7 +502,6 @@ pub fn provision_and_install_kagemusha_native_enrollment_v1(path: &str) -> Resul
         .map_err(|_| Error::Rejected)?;
     // Ordinary app identity is an independent signed/native account ceremony. It neither
     // needs nor grants a non-forking financial provider. Selection is installed once in Rust.
-    #[cfg(unix)]
     {
         // A registered runtime has the actual installed inventory/clock/AccountClient. Its
         // initial current read must precede managed coordinator open. The finish path installs
@@ -513,23 +512,11 @@ pub fn provision_and_install_kagemusha_native_enrollment_v1(path: &str) -> Resul
             super::ordinary_native_startup::acquire_registered_runtime_before_install(path)?;
         }
     }
-    #[cfg(unix)]
     let ordinary_registered = super::ordinary_app_identity::has_registered_source();
-    #[cfg(not(unix))]
-    let ordinary_registered = false;
     install_with_native_target_source_policy(
         cfg!(target_os = "android"),
         ordinary_registered,
-        || {
-            #[cfg(unix)]
-            {
-                super::ordinary_app_identity::provision_and_install(path)
-            }
-            #[cfg(not(unix))]
-            {
-                Err(Error::Unavailable)
-            }
-        },
+        || super::ordinary_app_identity::provision_and_install(path),
         || {
             let source = PROVISIONER.get().ok_or(Error::Unavailable)?.clone();
             INSTALLATION

@@ -165,15 +165,21 @@ with defaults, `privacy-release-evidence` and
 The current debug-profile Privacy libtest build and all 22 selected controls
 pass. Its registry contains 2,479 tests, including 61 ignored cases; independent
 framing of all 29 native profile fields matches the current source pin. Genuine
-IO, Projection and CA proof checks, the optimized constructor and maximum proof
-with external time/RSS evidence, the full ordinary suite, upstream strict lint
-and merged-source qualification remain open. The non-test real-proof frontend
+IO, Projection and CA component proof checks pass once each sequentially at the
+closed merged revision, with all 475 retained inputs unchanged through the runtime
+endpoints. The CA check binds a synthetic paired MAIN record. The optimized
+constructor, full ordinary suite, upstream strict lint and merged-source qualification
+remain open. Maximum-proof external time/RSS evidence and enforced address-space
+limits remain separate cryptographic release gates. The non-test real-proof frontend
 remains under qualification. SDK Native custody and genuine production proving
 are mandatory even with SDK defaults disabled; assembly tools remain explicit
 `dev-tools` targets, and FASTPQ uses the existing STARK feature. Current exact
 CoreZK/Halo2 SDK and downstream owner boundaries and feature hygiene pass.
 Current source budgets pass with the updated developer-tool manifest fingerprint;
 current native frontend and proof qualification remain open.
+The focused development fee-evidence target build stops in Core ZK's new
+mint-funding module on an incorrect signed-clock type path. Its tests have not
+executed; the repair chat owns the current source correction.
 
 Ordinary recursive credential generation is blocked by the Eq circuit requiring
 8,584 advice columns against the 1,024-column limit. The complete-circuit
