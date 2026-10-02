@@ -4812,6 +4812,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",
+ "iroha_petal",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",
@@ -5647,6 +5648,15 @@ name = "iroha_panic_hook"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "tokio",
+]
+
+[[package]]
+name = "iroha_petal"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "flate2",
+ "hex",
+ "norito",
 ]
 
 [[package]]

@@ -72,8 +72,8 @@ Notes:
 - The workspace targets `std`; IVM is the sole Iroha VM. Wasm, WASI, and no-std implementations, SDK adapters, build targets, and release artifacts are prohibited.
 - Heavier local UI/media helpers are explicit features in default builds:
   `cargo run -p mochi-ui --features gui` for the egui desktop shell and
-  `cargo run -p iroha_cli --features offline-visual-codecs -- ...` for Petal
-  visual-codec commands. The SoraFS browser/SDK local QUIC proxy is available
+  `cargo run -p iroha_cli --features offline-visual-codecs -- offline petal
+  encode --format gif ...` for Petal Stream animated GIF output. The SoraFS browser/SDK local QUIC proxy is available
   with `cargo build -p sorafs_orchestrator --features local-quic-proxy`.
 
 ### AArch64 Linux cross builds

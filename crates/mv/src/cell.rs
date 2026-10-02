@@ -21,6 +21,9 @@ mod frozen_read;
 #[path = "cell/original_read.rs"]
 mod original_read;
 pub use original_read::{CommittedCellReadError, CommittedCellView};
+#[path = "cell/copy_read.rs"]
+mod copy_read;
+pub use copy_read::CommittedCellCopy;
 #[path = "cell/successor.rs"]
 mod successor;
 pub use successor::{CellPublicationSuccessor, CellPublicationSuccessorError};

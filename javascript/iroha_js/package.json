@@ -139,6 +139,11 @@
       "types": "./game.d.ts",
       "browser": "./dist/game.js",
       "import": "./dist/game.js"
+    },
+    "./petal": {
+      "browser": "./dist/petal.js",
+      "import": "./dist/petal.js",
+      "types": "./petal.d.ts"
     }
   },
   "typesVersions": {
@@ -223,6 +228,9 @@
       ],
       "game": [
         "./game.d.ts"
+      ],
+      "petal": [
+        "./petal.d.ts"
       ]
     }
   },
@@ -308,7 +316,8 @@
     "classed-race.d.ts",
     "game.d.ts",
     "game-resources.d.ts",
-    "nft.d.ts"
+    "nft.d.ts",
+    "petal.d.ts"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

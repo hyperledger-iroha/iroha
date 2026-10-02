@@ -15,7 +15,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_model_base::domain::DomainId;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use std::{num::NonZeroU64, time::Duration};
 
 fn fixture() -> (State, AssetId, AssetId) {
@@ -25,6 +25,13 @@ fn fixture() -> (State, AssetId, AssetId) {
 }
 
 fn fixture_with_asset_definition(definition: AssetDefinitionId) -> (State, AssetId, AssetId) {
+    fixture_with_bob_balance(definition, None)
+}
+
+fn fixture_with_bob_balance(
+    definition: AssetDefinitionId,
+    bob_balance: Option<Quantity>,
+) -> (State, AssetId, AssetId) {
     let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -61,6 +68,19 @@ fn fixture_with_asset_definition(definition: AssetDefinitionId) -> (State, Asset
         Mint::asset_quantity(10_u32, alice.clone())
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
+        if let Some(amount) = bob_balance {
+            if amount.is_zero() {
+                // Setup-only persisted zero: the producer under test is signed below.
+                transaction.world.assets.insert(
+                    bob.clone(),
+                    iroha_data_model::asset::AssetValue::new(amount),
+                );
+            } else {
+                Mint::asset_quantity(amount, bob.clone())
+                    .execute(&ALICE_ID, &mut transaction)
+                    .unwrap();
+            }
+        }
         transaction.apply();
         setup.commit_world_overlay_for_testing().unwrap();
     }
@@ -2523,4 +2543,254 @@ fn original_quantity_census_interrupted_preparation_latch_cannot_reseal_or_recov
             Err(QuantityCaptureIssue::InterruptedScope)
         );
     });
+}
+
+fn account_removal_fixture(amount: Option<Quantity>) -> (State, AssetId, AssetId) {
+    let domain = DomainId::try_new("quantity-capture", "universal").unwrap();
+    let definition = AssetDefinitionId::derive_from_components(domain, "units".parse().unwrap());
+    fixture_with_bob_balance(definition, amount)
+}
+
+fn bob_account_removal_source(state: &State, repeat: bool) -> (SignedBlock, Hash) {
+    let mut transaction = TransactionBuilder::new(
+        state.network_id,
+        BOB_ID.clone(),
+        FeePaymentIntent::authority(vec![], None),
+    );
+    transaction.set_creation_time(
+        quantity_successor_header(state).creation_time() - Duration::from_millis(1),
+    );
+    let mut body = vec![InstructionBox::from(Unregister::account(BOB_ID.clone()))];
+    if repeat {
+        body.push(Unregister::account(BOB_ID.clone()).into());
+    }
+    let transaction = transaction
+        .with_instructions(body)
+        .sign(BOB_KEYPAIR.private_key());
+    let call =
+        Hash::from(TransactionEntrypoint::External(transaction.clone()).execution_call_hash());
+    let header = quantity_successor_header(state);
+    let context = quantity_execution_context(state, &transaction, &header);
+    let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(vec![context])));
+    builder.push_transaction(transaction);
+    (
+        builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),
+        call,
+    )
+}
+
+#[test]
+fn signed_account_removal_captures_original_supply_first_burn_and_exact_source_census() {
+    for amount in [0_u32, 3] {
+        let (state, alice, bob) = account_removal_fixture(Some(Quantity::from(amount)));
+        let (mut source, call) = bob_account_removal_source(&state, false);
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        block.execute_ordinary_output_plan(&source, None).unwrap();
+        let rows = block.retained_execution_outputs_for_test().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].result().is_ok(),
+            "original signed account removal: {:?}",
+            rows[0].result()
+        );
+        assert!(block.world.accounts.get(&BOB_ID).is_none());
+        assert!(block.world.assets.get(&bob).is_none());
+        assert_eq!(
+            block.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert_eq!(
+            block
+                .world
+                .asset_definition(alice.definition())
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(10_u32)
+        );
+        block.observe_quantity_block_journals();
+        assert_eq!(block.fastpq_quantity_candidate.issue, None);
+        let entry = &block.fastpq_quantity_candidate.entries[&call];
+        assert_eq!(entry.effects.len(), 1);
+        let FastpqExecutionEffectKindV1::Burn(burn) = &entry.effects[0].kind else {
+            panic!("original removal must retain one complete burn");
+        };
+        assert_eq!(burn.balance.account, *BOB_ID);
+        assert_eq!(burn.balance_before, Quantity::from(amount));
+        assert_eq!(burn.amount, Quantity::from(amount));
+        assert_eq!(burn.balance_after, Quantity::zero());
+        assert_eq!(burn.supply_before, Quantity::from(10 + amount));
+        assert_eq!(burn.supply_after, Quantity::from(10_u32));
+        // Exercise the production constructor with facts from the actual signed
+        // source and the same original execution pool. Ordering only swaps
+        // retained ports/lifecycles: it obtains no further allocation credit.
+        let pool = block.pipeline_ivm_prepared_cache.execution_budget().clone();
+        let baseline = pool.reserved_bytes();
+        let mut plan = QuantityWritePlan::from_effects(&entry.effects, 2, &pool).unwrap();
+        assert_eq!(plan.lifecycles().len(), 2);
+        assert_eq!(plan.lifecycles()[0], plan.lifecycles()[1]);
+        assert_eq!(plan.lifecycles()[0].0, *bob.definition());
+        assert_eq!(plan.lifecycles()[0].1, burn.balance.asset.incarnation);
+        let reserved = pool.reserved_bytes();
+        let peak = pool.peak_reserved_bytes();
+        assert!(reserved > baseline);
+        plan.order_supply_before_complete_removal(&bob, &Quantity::from(amount))
+            .unwrap();
+        assert_eq!(pool.reserved_bytes(), reserved);
+        assert_eq!(pool.peak_reserved_bytes(), peak);
+        assert_eq!(plan.lifecycles().len(), 2);
+        assert_eq!(plan.lifecycles()[0], plan.lifecycles()[1]);
+        plan.consume_supply(
+            bob.definition(),
+            &Quantity::from(10 + amount),
+            &Quantity::from(10_u32),
+        )
+        .unwrap()
+        .applied();
+        plan.consume_balance(&bob, &Quantity::from(amount), &Quantity::zero())
+            .unwrap()
+            .applied();
+        assert_eq!(plan.finish(), Ok(()));
+        assert_eq!(pool.reserved_bytes(), baseline);
+        assert_exact_applied_measurement(&block.fastpq_quantity_candidate);
+        block
+            .seal_execution_outputs(&mut source, |state, _, routes| {
+                assert_eq!(routes.len(), 1);
+                Ok::<_, String>(crate::state::output_capacity::ExecutionOutputSealMetadata {
+                    committed_fragment_count: u64::try_from(state.committed_fragment_count())
+                        .unwrap(),
+                })
+            })
+            .unwrap();
+        block.observe_quantity_block_journals();
+        assert_eq!(block.fastpq_quantity_candidate.issue, None);
+        let super::source_census::QuantitySourceCensusState::Sealed(census) =
+            &block.fastpq_quantity_candidate.source_census
+        else {
+            panic!("original source census required");
+        };
+        assert_eq!(census.entries().len(), 1);
+        let row = &census.entries()[0];
+        assert_eq!(row.context.entry.entry_hash, call);
+        assert_eq!(row.effect_count, 1);
+        let wire = block.fastpq_quantity_candidate.entries[&call].wire();
+        let bytes = norito::encode_canonical(wire).unwrap();
+        assert_eq!(row.effects_digest, Hash::new(&bytes));
+        assert_eq!(row.frame_bytes, u64::try_from(bytes.len()).unwrap());
+        // Domain/definition lifecycle and other owner coverage are still incomplete.
+        assert_eq!(
+            block.fastpq_quantity_candidate.require_complete(),
+            Err(QuantityCaptureIssue::IncompleteCoverage)
+        );
+    }
+}
+
+#[test]
+fn signed_account_removal_rolls_back_balance_supply_account_and_capture_on_later_failure() {
+    let (state, alice, bob) = account_removal_fixture(Some(Quantity::from(3_u32)));
+    let (source, _) = bob_account_removal_source(&state, true);
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
+    let fragments = block.committed_fragment_count();
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block.execute_ordinary_output_plan(&source, None).unwrap();
+    let rows = block.retained_execution_outputs_for_test().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].result().is_err());
+    assert!(block.world.accounts.get(&BOB_ID).is_some());
+    assert_eq!(
+        block.world.assets.get(&bob).unwrap().as_ref(),
+        &Quantity::from(3_u32)
+    );
+    assert_eq!(
+        block
+            .world
+            .asset_definition(alice.definition())
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(13_u32)
+    );
+    assert_eq!(block.committed_fragment_count(), fragments);
+    block.observe_quantity_block_journals();
+    assert_eq!(block.fastpq_quantity_candidate.issue, None);
+    assert!(block.fastpq_quantity_candidate.entries.is_empty());
+    assert_eq!(
+        block.fastpq_quantity_candidate.usage,
+        QuantityCandidateUsage::default()
+    );
+}
+
+#[test]
+fn direct_account_removal_preserves_business_result_without_original_quantity_source() {
+    let (state, alice, bob) = account_removal_fixture(Some(Quantity::from(3_u32)));
+    let mut block = state.block(quantity_successor_header(&state));
+    let mut transaction = block.transaction_for_callback_testing();
+    Unregister::account(BOB_ID.clone())
+        .execute(&BOB_ID, &mut transaction)
+        .unwrap();
+    assert!(transaction.world.accounts.get(&BOB_ID).is_none());
+    assert!(transaction.world.assets.get(&bob).is_none());
+    assert_eq!(
+        transaction
+            .world
+            .asset_definition(alice.definition())
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(10_u32)
+    );
+    assert!(
+        transaction
+            .pending_fastpq_quantity_candidate
+            .issue
+            .is_some()
+    );
+    assert!(
+        transaction
+            .pending_fastpq_quantity_candidate
+            .entries
+            .is_empty()
+    );
+    transaction.apply();
+    block.observe_quantity_block_journals();
+    assert!(block.fastpq_quantity_candidate.require_complete().is_err());
+}
+
+#[test]
+fn account_removal_without_balance_does_not_invent_a_zero_burn() {
+    let (state, _, _) = account_removal_fixture(None);
+    let (source, _) = bob_account_removal_source(&state, false);
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block.execute_ordinary_output_plan(&source, None).unwrap();
+    assert!(
+        block.retained_execution_outputs_for_test().unwrap()[0]
+            .result()
+            .is_ok()
+    );
+    assert!(block.world.accounts.get(&BOB_ID).is_none());
+    block.observe_quantity_block_journals();
+    assert_eq!(block.fastpq_quantity_candidate.issue, None);
+    assert!(block.fastpq_quantity_candidate.entries.is_empty());
+    assert_eq!(
+        block.fastpq_quantity_candidate.usage,
+        QuantityCandidateUsage::default()
+    );
 }

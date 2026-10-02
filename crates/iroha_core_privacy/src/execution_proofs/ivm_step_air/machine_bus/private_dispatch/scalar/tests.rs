@@ -50,7 +50,7 @@ impl ScalarFixture {
         carries(
             &mut fixture.row[CARRIES..CARRIES + 4],
             record.before.gas_remaining,
-            1 + u64::from(is_rotate(instruction)),
+            record.opcode_gas.expect("native scalar opcode tariff"),
             true,
         );
         carries(
@@ -100,18 +100,29 @@ impl ScalarFixture {
         let left = left_register(instruction);
         let right = right_register(instruction);
         let destination = wide::rd(instruction);
+        let taken = !is_conditional_move(instruction) || record.before.registers[left] != 0;
+        if is_conditional_move(instruction) && !taken {
+            assert_eq!(
+                record.before.registers[destination],
+                record.after.registers[destination]
+            );
+            assert_eq!(
+                record.before.tags[destination],
+                record.after.tags[destination]
+            );
+        }
         for (slot, register, enabled, write) in [
             (SCALAR_LEFT, left, true, false),
             (
                 SCALAR_RIGHT,
                 right,
-                right_immediate(instruction).is_none(),
+                right_immediate(instruction).is_none() && taken,
                 false,
             ),
             (
                 SCALAR_DESTINATION,
                 destination,
-                has_destination(instruction),
+                has_destination(instruction) && taken,
                 true,
             ),
         ] {
@@ -138,11 +149,26 @@ impl ScalarFixture {
             }
         }
         let left = record.before.registers[left];
-        let right = right_immediate(instruction).unwrap_or(record.before.registers[right]);
+        let right = right_immediate(instruction).unwrap_or(if taken {
+            record.before.registers[right]
+        } else {
+            0
+        });
+        let (left, right) = if wide::opcode(instruction) == wide::arithmetic::NEG {
+            (0, left)
+        } else {
+            (left, right)
+        };
         fixture.row[SCALAR..SCALAR + ALU].copy_from_slice(&word::witness(left, right));
+        fill_product(&mut fixture, left, right);
+        fill_count(
+            &mut fixture,
+            left,
+            wide::opcode(instruction) == wide::arithmetic::CLZ,
+        );
         fixture.row[SCALAR + ALU..SCALAR + COMPARE].copy_from_slice(&alu::witness(
             if is_alu(instruction) {
-                wide::opcode(instruction)
+                alu_opcode(instruction)
             } else {
                 wide::arithmetic::ADD
             },
@@ -159,7 +185,7 @@ impl ScalarFixture {
                 wide::control::BGEU,
             ][index]
         });
-        fixture.row[SCALAR + COMPARE..SCALAR + SHIFT]
+        fixture.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS]
             .copy_from_slice(&branch::bank_witness(predicate, left, right));
         fixture.row[SCALAR + SHIFT..super::super::WIDTH].copy_from_slice(&shift::bank_witness(
             if shift_kind(instruction).is_some() {
@@ -175,6 +201,62 @@ impl ScalarFixture {
     fn accepts(&self, program: &Program) -> bool {
         self.0.accepts(program)
     }
+}
+
+// Fill the shared exact-product workspace, including unused-operation rows.
+fn fill_product(fixture: &mut Fixture, left: u64, right: u64) {
+    fill_count(fixture, left, false);
+    let digits = multiply::product_digits(left, right);
+    fixture.row[SCALAR + PRODUCT_DIGITS..SCALAR + MULTIPLY].copy_from_slice(&digits);
+    fixture.row[SCALAR + MULTIPLY..SCALAR + COUNT]
+        .copy_from_slice(&multiply::witness(left, right, &digits, true));
+}
+
+fn fill_count(fixture: &mut Fixture, left: u64, leading: bool) {
+    let population = F(u64::from(left.count_ones()));
+    fixture.row[SCALAR + MOVE_ZERO] = F(u64::from(left == 0));
+    fixture.row[SCALAR + MOVE_INVERSE] = population.inv().unwrap_or(F::ZERO);
+    let sources = word::witness(left, 0);
+    fixture.row[SCALAR + COUNT..SCALAR + MOVE]
+        .copy_from_slice(&bit_count::witness(&sources[..64], leading));
+}
+
+// Authenticated Unit calls reserve their one-word result table before the first
+// diagnostic instruction. This is invocation setup, not an opcode debit.
+fn root_result_table_gas() -> u64 {
+    let callable = crate::ivm_test_support::unit_callable(0);
+    assert!(callable.argument_words.is_empty());
+    u64::try_from(callable.result_words.len() * ivm::call::CALL_WORD_BYTES_V1).unwrap()
+}
+
+fn root_setup_gas() -> u64 {
+    let callable = crate::ivm_test_support::unit_callable(0);
+    assert!(callable.argument_words.is_empty());
+    assert_eq!(callable.frame_bytes, 0);
+    // Native call_gas::frame charges one bitmap byte per result slot here.
+    root_result_table_gas() + u64::try_from(callable.result_words.len()).unwrap()
+}
+
+fn assert_root_preflight_out_of_gas(
+    program: &Program,
+    recorder: &DiagnosticStepRecorder,
+    gas: u64,
+) {
+    assert!(gas < root_setup_gas());
+    assert!(recorder.records().is_empty());
+    let end = recorder.end().expect("native root invocation trap");
+    assert_eq!(end.outcome, Err(ivm::error::VmTrapKind::OutOfGas));
+    assert_eq!(end.state.pc, u64::from(program.first_pc));
+    let remaining = if gas < root_result_table_gas() {
+        gas
+    } else {
+        // Result allocation completed, but frame bitmap admission did not.
+        gas - root_result_table_gas()
+    };
+    assert_eq!(end.state.gas_remaining, remaining);
+    assert_eq!(end.state.cycles, 0);
+    assert!(!end.state.halted);
+    assert_eq!(end.padding_cycles, 0);
 }
 
 fn native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFixture) {
@@ -197,11 +279,8 @@ fn native(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFi
         .first()
         .expect("actual native scalar attempt");
     assert_eq!(record.instruction, Some(instruction));
-    if is_rotate(instruction) {
-        assert_eq!(record.opcode_gas, Some(2));
-    } else {
-        assert_eq!(record.opcode_gas, Some(1));
-    }
+    assert_eq!(record.opcode_gas, ivm::gas::cost_of(instruction));
+    assert_eq!(record.before.gas_remaining, 100 - root_setup_gas());
     let fixture = ScalarFixture::from_record(&program, record);
     assert!(fixture.accepts(&program));
     (program, fixture)
@@ -250,6 +329,39 @@ fn native_private_and_public_scalar_register_immediate_and_aliases_match() {
 }
 
 #[test]
+fn native_private_comparison_tariffs_bind_two_gas_and_reject_coherent_other_debits() {
+    for opcode in [
+        wide::arithmetic::SLT,
+        wide::arithmetic::SLTU,
+        wide::arithmetic::SEQ,
+        wide::arithmetic::SNE,
+    ] {
+        let (program, fixture) = native(
+            enc::encode_rr(opcode, 4, 2, 3),
+            &[(2, u64::MAX, true), (3, 1, true)],
+        );
+        let before = packet::half(&fixture.0.packets.fields[GAS_DEBIT], BEFORE, 0);
+        let after = packet::half(&fixture.0.packets.fields[GAS_DEBIT], AFTER, 0);
+        assert_eq!(before - after, 2);
+        for wrong_cost in [0, 1, 3] {
+            let mut forged = fixture.clone();
+            let wrong_after = before - wrong_cost;
+            bits(&mut forged.0.row[WORDS + 128..WORDS + 192], wrong_after);
+            carries(
+                &mut forged.0.row[CARRIES..CARRIES + 4],
+                before,
+                wrong_cost,
+                true,
+            );
+            for limb in 0..4 {
+                forged.0.packets.fields[GAS_DEBIT][AFTER + limb] = constant_limb(wrong_after, limb);
+            }
+            assert!(!forged.accepts(&program));
+        }
+    }
+}
+
+#[test]
 fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row() {
     for opcode in [
         wide::arithmetic::ADD,
@@ -261,6 +373,12 @@ fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row()
         wide::arithmetic::SLTU,
         wide::arithmetic::SEQ,
         wide::arithmetic::SNE,
+        wide::arithmetic::MIN,
+        wide::arithmetic::MAX,
+        wide::arithmetic::MUL,
+        wide::arithmetic::MULHU,
+        wide::arithmetic::MULHSU,
+        wide::arithmetic::MULH,
     ] {
         for rd in [0, 4] {
             let instruction = enc::encode_rr(opcode, rd, 2, 3);
@@ -279,7 +397,12 @@ fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row()
             let record = &recorder.records()[0];
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
             assert_eq!(record.after.registers, record.before.registers);
-            assert_eq!(record.after.gas_remaining + 1, record.before.gas_remaining);
+            let cost = ivm::gas::cost_of(instruction).unwrap();
+            assert_eq!(record.opcode_gas, Some(cost));
+            assert_eq!(
+                record.after.gas_remaining + cost,
+                record.before.gas_remaining
+            );
             let (program, mut forged) = native(instruction, &[(2, 11, false), (3, 23, false)]);
             forged.0.packets.fields[SCALAR_LEFT][BEFORE_TAG] = F::ONE;
             forged.0.packets.fields[SCALAR_LEFT][AFTER_TAG] = F::ONE;
@@ -294,6 +417,14 @@ fn native_mismatched_tags_trap_and_cannot_form_a_successful_private_scalar_row()
 #[test]
 fn every_scalar_original_field_and_workspace_mutation_rejects_except_prior_destination() {
     for instruction in [
+        enc::encode_rr(wide::arithmetic::MUL, 4, 2, 3),
+        enc::encode_rr(wide::arithmetic::MULHU, 2, 2, 3),
+        enc::encode_rr(wide::arithmetic::MULHSU, 3, 2, 3),
+        enc::encode_rr(wide::arithmetic::MULH, 0, 2, 3),
+        enc::encode_rr(wide::arithmetic::NEG, 2, 2, 255),
+        enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
+        enc::encode_rr(wide::arithmetic::MIN, 4, 2, 3),
+        enc::encode_rr(wide::arithmetic::MAX, 0, 2, 3),
         enc::encode_rr(wide::arithmetic::ADD, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::SLT, 4, 2, 3),
         enc::encode_rr(wide::arithmetic::SLTU, 2, 2, 3),
@@ -361,6 +492,19 @@ fn composed_private_scalar_polynomials_have_degree_four() {
     use crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1;
     let artifact = contract(
         &[
+            enc::encode_rr(wide::arithmetic::CMOV, 4, 2, 3),
+            enc::encode_ri(wide::arithmetic::CMOVI, 4, 2, -1),
+            enc::encode_rr(wide::arithmetic::NOT, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::NEG, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::POPCNT, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::CLZ, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::CTZ, 4, 2, 255),
+            enc::encode_rr(wide::arithmetic::MUL, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::MULHU, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::MULHSU, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::MULH, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::MIN, 4, 2, 3),
+            enc::encode_rr(wide::arithmetic::MAX, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::XOR, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::SLT, 4, 2, 3),
             enc::encode_rr(wide::arithmetic::SLTU, 4, 2, 3),
@@ -449,6 +593,20 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
                 event.after = bytes(value);
                 if !event.write {
                     event.before = event.after;
+                    let key = (event.space, event.vm, event.generation, event.index);
+                    let before = event.before;
+                    // Aliased source/destination ports address the same original
+                    // register. Keep this alternative history locally coherent:
+                    // every read sees the replacement value, and a later write
+                    // reads that value before producing its unchanged result.
+                    for alias in events.iter_mut().flatten() {
+                        if (alias.space, alias.vm, alias.generation, alias.index) == key {
+                            alias.before = before;
+                            if !alias.write {
+                                alias.after = before;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -524,7 +682,10 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
                 producer,
                 &challenges,
             );
-            assert!(residues.iter().all(|value| *value == F::ZERO));
+            assert!(
+                residues.iter().all(|value| *value == F::ZERO),
+                "candidate history must be valid at row {i} for substitution {substitution:?}"
+            );
             residues.clear();
         }
         let windows = core::array::from_fn(|index| {
@@ -546,6 +707,12 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         wide::arithmetic::SLTU,
         wide::arithmetic::SEQ,
         wide::arithmetic::SNE,
+        wide::arithmetic::MIN,
+        wide::arithmetic::MAX,
+        wide::arithmetic::MUL,
+        wide::arithmetic::MULHU,
+        wide::arithmetic::MULHSU,
+        wide::arithmetic::MULH,
     ] {
         let (_, fixture) = native(
             enc::encode_rr(opcode, 4, 2, 3),
@@ -574,7 +741,12 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
             assert!(!accepts(&fixture, Some((slot, true))));
         }
     }
-    for opcode in [wide::arithmetic::ROTL_IMM, wide::arithmetic::ROTR_IMM] {
+    for opcode in [
+        wide::arithmetic::ROTL_IMM,
+        wide::arithmetic::ROTR_IMM,
+        wide::arithmetic::NOT,
+        wide::arithmetic::NEG,
+    ] {
         let (_, fixture) = native(
             enc::encode_ri(opcode, 4, 2, -1),
             &[(2, u64::MAX, true), (255, 17, false)],
@@ -588,6 +760,21 @@ fn every_original_scalar_port_joins_all_private_history_stages() {
         for slot in [SCALAR_LEFT, SCALAR_DESTINATION] {
             assert!(!accepts(&fixture, Some((slot, false))));
             assert!(!accepts(&fixture, Some((slot, true))));
+        }
+    }
+    // Shared source keys and complete source/destination aliasing require the
+    // alternative history to propagate a replacement through every read.
+    for opcode in [wide::arithmetic::ADD, wide::arithmetic::SLL] {
+        for (destination, left, right) in [(4, 2, 2), (2, 2, 2), (2, 2, 3), (3, 2, 3)] {
+            let (_, fixture) = native(
+                enc::encode_rr(opcode, destination, left, right),
+                &[(2, 17, true), (3, 23, true), (4, 19, false)],
+            );
+            assert!(accepts(&fixture, None));
+            for slot in [SCALAR_LEFT, SCALAR_RIGHT, SCALAR_DESTINATION] {
+                assert!(!accepts(&fixture, Some((slot, false))));
+                assert!(!accepts(&fixture, Some((slot, true))));
+            }
         }
     }
     let body = shifts::mixed_body();
@@ -739,11 +926,8 @@ fn comparison_fetch_sign_predicate_result_and_modular_alias_forgery_reject() {
     );
     // A complete, internally coherent comparison workspace for equal reduced
     // words still cannot replace the original canonical register operands.
-    reduced.0.row[SCALAR + COMPARE..SCALAR + SHIFT].copy_from_slice(&branch::bank_witness(
-        wide::control::BEQ,
-        0,
-        0,
-    ));
+    reduced.0.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS]
+        .copy_from_slice(&branch::bank_witness(wide::control::BEQ, 0, 0));
     reduced.0.packets.fields[SCALAR_DESTINATION][AFTER] = F::ONE;
     assert!(!reduced.accepts(&program));
 }
@@ -757,7 +941,7 @@ fn comparison_workspace_remains_canonical_on_alu_and_padding_rows() {
     let padding = ScalarFixture(Fixture::padding());
     assert!(padding.accepts(&program));
     for original in [fixture, padding] {
-        for column in SCALAR + COMPARE..SCALAR + SHIFT {
+        for column in SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS {
             let mut changed = original.clone();
             changed.0.row[column] = changed.0.row[column].add(F::ONE);
             assert!(
@@ -769,4 +953,10 @@ fn comparison_workspace_remains_canonical_on_alu_and_padding_rows() {
 }
 
 mod branches;
+mod multiplication;
 mod shifts;
+mod unary_select;
+
+mod bit_counts;
+
+mod conditional_moves;

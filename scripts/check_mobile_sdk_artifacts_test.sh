@@ -70,6 +70,8 @@ expected_symbols=(
   connect_norito_kagemusha_core_coordinator_open_v1
   connect_norito_kagemusha_core_coordinator_invoke_v1
   connect_norito_kagemusha_core_coordinator_close_v1
+  connect_norito_kagemusha_ordinary_runtime_startup_v1
+  connect_norito_kagemusha_ordinary_current_control_v1
   connect_norito_kagemusha_testnet_state_proof_observe_v1
   connect_norito_kagemusha_testnet_finalized_mint_observe_v1
   connect_norito_kagemusha_testnet_value_admit_v1
@@ -83,8 +85,8 @@ expected_symbols=(
   connect_norito_kagemusha_reserve_finality_verify_v1
   connect_norito_kagemusha_top_up_signed_request_validate_v1
 )
-[[ "${#expected_symbols[@]}" == "36" ]] \
-  || fail "artifact checker test must pin exactly 36 KAGEMUSHA exports"
+[[ "${#expected_symbols[@]}" == "38" ]] \
+  || fail "artifact checker test must pin exactly 38 KAGEMUSHA exports"
 
 for symbol in "${expected_symbols[@]}"; do
   [[ "$(grep -Fc -- "$symbol" "$CHECK_SCRIPT")" == "1" ]] \

@@ -7,18 +7,19 @@
 //! These are data and equations, never a decoder-to-Native funding or State effect capability.
 use super::{
     KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1, KAGEMUSHA_ASSET_SCALE_MAX_V1,
-    KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-    KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
-    KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KagemushaAppAttestReleaseMeasurementV1,
-    KagemushaAppOperationApprovalEvidenceV1, KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1,
-    KagemushaEncryptedCreditAadV1, KagemushaEncryptedCreditEnvelopeV1,
-    KagemushaEncryptedCreditPurposeV1, KagemushaHardwarePlatformClassV1,
-    KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1, KagemushaOperationKindV1,
-    KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryFinancialHeadV1,
-    KagemushaOrdinaryFinancialLineageV1, KagemushaVerifiedOrdinaryAppCredentialV1,
-    kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
-    kagemusha_mint_credit_opening_commitment_v1, kagemusha_ordinary_app_account_binding_v1,
-    kagemusha_ordinary_financial_epoch_id_v1, kagemusha_recipient_credential_commitment_v1,
+    KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1,
+    KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_ORDINARY_APPLE_ASSERTION_MAX_BYTES_V1,
+    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
+    KagemushaAppAttestReleaseMeasurementV1, KagemushaAppOperationApprovalEvidenceV1,
+    KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1, KagemushaEncryptedCreditAadV1,
+    KagemushaEncryptedCreditEnvelopeV1, KagemushaEncryptedCreditPurposeV1,
+    KagemushaHardwarePlatformClassV1, KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1,
+    KagemushaOperationKindV1, KagemushaOrdinaryCashClockContextV1,
+    KagemushaOrdinaryFinancialHeadV1, KagemushaOrdinaryFinancialLineageV1,
+    KagemushaVerifiedOrdinaryAppCredentialV1, kagemusha_ciphertext_digest_v1,
+    kagemusha_liability_pool_id_v1, kagemusha_mint_credit_opening_commitment_v1,
+    kagemusha_ordinary_app_account_binding_v1, kagemusha_ordinary_financial_epoch_id_v1,
+    kagemusha_recipient_credential_commitment_v1,
 };
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
@@ -308,7 +309,7 @@ pub struct KagemushaOrdinaryMintAuthorizationStatementV1 {
     pub issuance_commitment: [u8; 32],
     /// Derived output credit ID fixed before encryption and proof.
     pub credit_id: [u8; 32],
-    /// Sole digest of the complete384-byte actual encrypted credit original.
+    /// Sole digest of the complete canonical encrypted credit original.
     pub ciphertext_digest: [u8; 32],
 }
 impl KagemushaOrdinaryMintAuthorizationStatementV1 {
@@ -352,7 +353,9 @@ impl KagemushaOrdinaryMintAuthorizationStatementV1 {
             self.context.recipient_one_time_key,
         )
         .map_err(|e| e.to_string())?;
-        if raw.len() != 384 || kagemusha_ciphertext_digest_v1(raw) != self.ciphertext_digest {
+        if raw.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+            || kagemusha_ciphertext_digest_v1(raw) != self.ciphertext_digest
+        {
             return Err("ordinary mint ciphertext original differs".into());
         }
         Ok(())
@@ -729,7 +732,7 @@ pub struct KagemushaOrdinaryTopUpRequestV1 {
     pub version: u16,
     /// Complete dedicated ordinary authorization, not OEM credential/key-handle data.
     pub authorization: KagemushaOrdinaryMintAuthorizationV1,
-    /// Complete384-byte actual AEAD original, fixed before app approval/proof.
+    /// Complete canonical AEAD original, fixed before app approval/proof.
     pub encrypted_credit: Vec<u8>,
 }
 impl KagemushaOrdinaryTopUpRequestV1 {
@@ -938,7 +941,7 @@ mod tests {
         let raw = envelope
             .canonical_bytes_against_recipient_key(context.recipient_one_time_key)
             .unwrap();
-        assert_eq!(raw.len(), 384);
+        assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
         let s = KagemushaOrdinaryMintAuthorizationStatementV1 {
             version: 1,
             issuance_commitment: context.issuance_commitment().unwrap(),
@@ -995,6 +998,50 @@ mod tests {
             approval,
             proof,
         }
+    }
+    #[test]
+    fn ordinary_mint_ciphertext_join_requires_exact_canonical_bytes_and_digest() {
+        let (_, context, _) = make_context(false);
+        let (statement, raw) = make_statement(context);
+        assert_eq!(raw.len(), KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1);
+        assert!(raw.len() < super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1);
+        statement.validate_encrypted_credit(&raw).unwrap();
+        assert!(
+            statement
+                .validate_encrypted_credit(&raw[..raw.len() - 1])
+                .is_err()
+        );
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        assert!(statement.validate_encrypted_credit(&trailing).is_err());
+        let mut padded = raw.clone();
+        padded.resize(super::super::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0);
+        assert!(statement.validate_encrypted_credit(&padded).is_err());
+
+        // A same-length, shape-valid envelope still must retain its exact digest.
+        let mut envelope =
+            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+                &raw,
+                statement.context.recipient_one_time_key,
+            )
+            .unwrap();
+        *envelope.ciphertext_and_tag.last_mut().unwrap() ^= 1;
+        let changed = envelope
+            .canonical_bytes_against_recipient_key(statement.context.recipient_one_time_key)
+            .unwrap();
+        assert_eq!(changed.len(), raw.len());
+        assert_eq!(
+            statement.validate_encrypted_credit(&changed).unwrap_err(),
+            "ordinary mint ciphertext original differs"
+        );
+        let mut changed_statement = statement;
+        changed_statement.ciphertext_digest[0] ^= 1;
+        assert_eq!(
+            changed_statement
+                .validate_encrypted_credit(&raw)
+                .unwrap_err(),
+            "ordinary mint ciphertext original differs"
+        );
     }
     #[test]
     fn ordinary_mint_identifiers_are_acyclic_and_full_context_is_bound() {
@@ -1180,7 +1227,7 @@ mod tests {
         trailing.push(0);
         assert!(KagemushaOrdinaryTopUpRequestV1::decode_canonical_exact(&trailing).is_err());
         let mut changed = request;
-        changed.encrypted_credit[383] ^= 1;
+        *changed.encrypted_credit.last_mut().unwrap() ^= 1;
         assert!(changed.canonical_bytes().is_err());
     }
     #[test]

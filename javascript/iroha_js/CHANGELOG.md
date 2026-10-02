@@ -4,6 +4,24 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added the browser-safe `@iroha/iroha-js/petal` entry point: a pure
+  JavaScript port of the `iroha_petal` Petal Stream optical transport (encoder
+  bit-exact with the shared fixtures, decoder step by step). It
+  provides the stream encoder and assembler (beacons, fountain atoms, CRC-32C
+  verification, bounded pre-beacon buffering), the three Reed-Solomon lane
+  codecs, the camera-frame decoder (`decodePetalFrame`, `decodePetalFrameAt`),
+  `PetalScanSession` with idle and absolute timeouts, the software renderer and
+  a vector draw list, plus `PetalStreamPlayer` (Canvas 2D) and
+  `PetalCameraScanner` (`MediaStream`/video to luma) browser glue that touches
+  no DOM globals at import time. The tile lanes are read against the finder
+  light and dark levels first, and any lane that does not decode is re-read with
+  a per-tile normalised read, so over-exposure, veiling light and shadows no
+  longer cost lane `K`. The shared `fixtures/petal` stream vectors and golden
+  camera captures (nine, including over-exposed, veiled and shadowed frames) are
+  part of the unit suite; the `PetalCameraScanner` documentation lists the
+  camera setup the decoder is calibrated for (about 1280×720, exposure
+  compensation of about -1 EV).
+
 - `getPipelinePreflight()` parses exactly the served `GET /v1/pipeline/preflight`
   body, checked against the Rust-generated `fixtures/torii/pipeline_preflight.json`:
   `sumeragi` carries only the positive `block_cadence_ms`, every object rejects

@@ -731,6 +731,7 @@ int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
 // existing storage path. No keys, roots, policies or authority claims are accepted.
 // Exact successful same-path retries recheck original custody; no native
 // provisioner returns UNAVAILABLE and rejected/uncertain installation fails closed.
+#if !defined(_WIN32)
 /* Distinct ordinary Native account startup lifecycle. The Native-installed root/account
  * producer is mandatory. phase/id/raw carry no authority, root or timestamp construction.
  * Phase 6 (nonzero retained read ID, empty raw) fetches/authenticates all four current
@@ -750,6 +751,7 @@ int32_t connect_norito_kagemusha_ordinary_current_control_v1(
     const uint8_t *signed_ptr, size_t signed_len,
     const uint8_t *authority_ptr, size_t authority_len,
     uint8_t **output_ptr, size_t *output_len);
+#endif
 
 int32_t connect_norito_kagemusha_core_coordinator_install_v1(
     const uint8_t* storage_path_utf8, size_t storage_path_length);

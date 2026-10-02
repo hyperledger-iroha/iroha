@@ -3,14 +3,15 @@
 use super::*;
 use crate::kagemusha_v1_state::{BootstrapStatementV1, TransitionProofStatementV1};
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1, KAGEMUSHA_ORDINARY_APP_ENROLLMENT_MAX_BYTES_V1,
-    KagemushaOperationKindV1, KagemushaOrdinaryCashClockContextV1,
-    KagemushaOrdinaryFinancialLineageV1, KagemushaOrdinaryLineageAnchorV1,
-    KagemushaOrdinaryLineageReservationV1, KagemushaOrdinaryPaymentOutputV1,
-    KagemushaOrdinaryPaymentRequestV1, KagemushaOrdinaryRedemptionOutputV1,
-    KagemushaOutboxReservationV1, kagemusha_asset_identity_digest_v1,
-    kagemusha_ciphertext_digest_v1, kagemusha_ordinary_app_account_binding_v1,
-    kagemusha_ordinary_payment_body_digest_v1, kagemusha_ordinary_transition_nullifier_v1,
+    KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1, KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1,
+    KAGEMUSHA_ORDINARY_APP_ENROLLMENT_MAX_BYTES_V1, KagemushaOperationKindV1,
+    KagemushaOrdinaryCashClockContextV1, KagemushaOrdinaryFinancialLineageV1,
+    KagemushaOrdinaryLineageAnchorV1, KagemushaOrdinaryLineageReservationV1,
+    KagemushaOrdinaryPaymentOutputV1, KagemushaOrdinaryPaymentRequestV1,
+    KagemushaOrdinaryRedemptionOutputV1, KagemushaOutboxReservationV1,
+    kagemusha_asset_identity_digest_v1, kagemusha_ciphertext_digest_v1,
+    kagemusha_ordinary_app_account_binding_v1, kagemusha_ordinary_payment_body_digest_v1,
+    kagemusha_ordinary_transition_nullifier_v1,
 };
 #[path = "ordinary_lineage_commit_admission.rs"]
 mod commit_admission;
@@ -48,7 +49,7 @@ pub enum KagemushaOrdinaryLineageOutgoingOriginalsV1 {
         request: Box<KagemushaOrdinaryPaymentRequestV1>,
         /// Actual pre-candidate output.
         output: KagemushaOrdinaryPaymentOutputV1,
-        /// Complete maintained384-byte ciphertext envelope.
+        /// Complete canonical ciphertext envelope.
         encrypted_credit: Vec<u8>,
         /// Original preparation interval; signed observations are authenticated by the service owner.
         preparation_clock: KagemushaOrdinaryCashClockContextV1,
@@ -77,7 +78,7 @@ impl KagemushaOrdinaryLineageOutgoingOriginalsV1 {
                 request.canonical_bytes()?;
                 output.canonical_bytes()?;
                 output.validate_against_clock(preparation_clock)?;
-                if encrypted_credit.len() != 384 {
+                if encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1 {
                     return reject();
                 }
             }
@@ -652,3 +653,7 @@ pub(crate) fn require_ordinary_incoming_predecessor_v1(
     append_history(&mut ep, &before.proof.ep_history)?;
     verify_state_histories(&material, &before.proof, &eq, &ep)
 }
+
+#[cfg(test)]
+#[path = "ordinary_lineage_bundle_admission_tests.rs"]
+mod tests;

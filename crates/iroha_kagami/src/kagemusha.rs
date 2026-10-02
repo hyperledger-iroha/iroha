@@ -61,14 +61,15 @@ const AUTHENTICATED_RELEASE_REPORT_SCHEMA_V1: &str =
     "iroha.kagemusha.v1.authenticated-release-report";
 const AUTHENTICATED_EXPERIMENTAL_RELEASE_REPORT_SCHEMA_V1: &str =
     "iroha.kagemusha.v1.authenticated-experimental-release-report";
-const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
+const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 6] = [
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 95] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 97] = [
     "connect_norito_confidential_prover_revision_v1",
     "connect_norito_confidential_prover_create_v1",
     "connect_norito_confidential_prover_close_v1",
@@ -116,6 +117,8 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 95] = [
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -2777,6 +2780,47 @@ mod tests {
         });
         let bytes = python_canonical_json_bytes(&value, false).expect("canonical manifest");
         assert!(validate_native_artifact_manifest_v1(&bytes).is_err());
+    }
+
+    #[test]
+    fn native_manifest_requires_complete_privacy_inventory() {
+        let make_manifest = |privacy_exports: Vec<&str>| {
+            let value = norito::json!({
+                "artifact_sha256": ("11".repeat(32)),
+                "artifact_size": 4_u64,
+                "bridge_abi_version": 25_u64,
+                "privacy_c_exports": privacy_exports,
+                "privacy_c_exports_inspected": true,
+                "required_symbols": (REQUIRED_C_JNI_SYMBOLS_V1.to_vec()),
+                "schema": NATIVE_ARTIFACT_SCHEMA_V1,
+                "sdk": "c-jni",
+                "source_commit": ("22".repeat(20)),
+                "source_tree_clean": true,
+                "target": "aarch64-apple-darwin",
+                "workspace_source_manifest_sha256": ("33".repeat(32)),
+            });
+            python_canonical_json_bytes(&value, false).expect("canonical manifest")
+        };
+        assert!(
+            validate_native_artifact_manifest_v1(&make_manifest(
+                REQUIRED_PRIVACY_C_EXPORTS_V1.to_vec()
+            ))
+            .is_ok()
+        );
+        for missing in REQUIRED_PRIVACY_C_EXPORTS_V1 {
+            let incomplete = REQUIRED_PRIVACY_C_EXPORTS_V1
+                .iter()
+                .copied()
+                .filter(|symbol| *symbol != missing)
+                .collect();
+            assert!(validate_native_artifact_manifest_v1(&make_manifest(incomplete)).is_err());
+        }
+        let mut extra = REQUIRED_PRIVACY_C_EXPORTS_V1.to_vec();
+        extra.push("iroha_privacy_unapproved_v1");
+        assert!(validate_native_artifact_manifest_v1(&make_manifest(extra)).is_err());
+        let mut reordered = REQUIRED_PRIVACY_C_EXPORTS_V1.to_vec();
+        reordered.reverse();
+        assert!(validate_native_artifact_manifest_v1(&make_manifest(reordered)).is_err());
     }
 
     #[cfg(unix)]

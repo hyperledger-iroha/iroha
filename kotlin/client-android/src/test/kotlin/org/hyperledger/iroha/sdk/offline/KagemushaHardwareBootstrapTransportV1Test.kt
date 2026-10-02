@@ -3,14 +3,14 @@ package org.hyperledger.iroha.sdk.offline
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.util.Base64
-import org.junit.Assert.*
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** Synthetic byte originals exercise data-only framing; they are never issuer/owner authority. */
 class KagemushaHardwareBootstrapTransportV1Test {
     private val codec=KagemushaHardwareBootstrapHttpCodecV1
-    private fun fails(block:()->Unit) { try { block();fail("accepted invalid original") } catch(_:IllegalArgumentException){}
+    private fun fails(block:()->Unit) { try { block();fail<Unit>("accepted invalid original") } catch(_:IllegalArgumentException){}
         catch(_:IllegalStateException){} }
     private fun carrier(stage:KagemushaHardwareBootstrapHttpOriginalV1.Stage, guard:()->Unit={}):KagemushaHardwareBootstrapHttpOriginalV1 =
         KagemushaHardwareBootstrapHttpOriginalV1(stage,"https://synthetic.example",byteArrayOf(1),guard,ByteArray(32){it.toByte()})

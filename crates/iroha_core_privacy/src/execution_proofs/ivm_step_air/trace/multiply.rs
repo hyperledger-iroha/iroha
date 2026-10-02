@@ -14,22 +14,22 @@ use super::super::{
     word::{self, Sources},
 };
 
-pub(super) const PRODUCT: usize = 0;
-pub(super) const CARRY: usize = PRODUCT + 8;
-pub(super) const CARRY_DIGITS: usize = CARRY + 7;
-pub(super) const SIGNED_UNSIGNED: usize = CARRY_DIGITS + 7 * 9;
-pub(super) const SIGNED_SIGNED: usize = SIGNED_UNSIGNED + 40;
-pub(super) const WIDTH: usize = SIGNED_SIGNED + 40;
-pub(super) const CONSTRAINTS: usize = 253;
-pub(super) const CORRECTION_DIGITS: usize = 4;
-pub(super) const BORROWS: usize = CORRECTION_DIGITS + 32;
+pub(in super::super) const PRODUCT: usize = 0;
+pub(in super::super) const CARRY: usize = PRODUCT + 8;
+pub(in super::super) const CARRY_DIGITS: usize = CARRY + 7;
+pub(in super::super) const SIGNED_UNSIGNED: usize = CARRY_DIGITS + 7 * 9;
+pub(in super::super) const SIGNED_SIGNED: usize = SIGNED_UNSIGNED + 40;
+pub(in super::super) const WIDTH: usize = SIGNED_SIGNED + 40;
+pub(in super::super) const CONSTRAINTS: usize = 253;
+pub(in super::super) const CORRECTION_DIGITS: usize = 4;
+pub(in super::super) const BORROWS: usize = CORRECTION_DIGITS + 32;
 
-pub(super) fn product_digits(left: u64, right: u64) -> [F; 64] {
+pub(in super::super) fn product_digits(left: u64, right: u64) -> [F; 64] {
     let product = u128::from(left) * u128::from(right);
     std::array::from_fn(|index| F(((product >> (2 * index)) & 3) as u64))
 }
 
-pub(super) fn correction_witness(input: u64, subtract: u64) -> [F; 40] {
+pub(in super::super) fn correction_witness(input: u64, subtract: u64) -> [F; 40] {
     let mut row = [F::ZERO; 40];
     let result = input.wrapping_sub(subtract);
     let mut borrow = 0;
@@ -44,7 +44,7 @@ pub(super) fn correction_witness(input: u64, subtract: u64) -> [F; 40] {
     row
 }
 
-pub(super) fn witness(left: u64, right: u64, digits: &[F], active: bool) -> [F; WIDTH] {
+pub(in super::super) fn witness(left: u64, right: u64, digits: &[F], active: bool) -> [F; WIDTH] {
     let mut bank = [F::ZERO; WIDTH];
     for limb in 0..8 {
         bank[PRODUCT + limb] = word::pack(&digits[8 * limb..8 * (limb + 1)], 2);
@@ -122,16 +122,16 @@ fn correction_residues(
 
 /// Code-derived modes and verifier-owned terminal selection. Success is the
 /// selected division/square mode minus its fixed trap flag, never a witness bit.
-pub(super) struct Selection {
-    pub(super) multiply: F,
-    pub(super) division: F,
-    pub(super) square: F,
-    pub(super) signed: F,
-    pub(super) success: F,
-    pub(super) quotient: [F; 4],
+pub(in super::super) struct Selection {
+    pub(in super::super) multiply: F,
+    pub(in super::super) division: F,
+    pub(in super::super) square: F,
+    pub(in super::super) signed: F,
+    pub(in super::super) success: F,
+    pub(in super::super) quotient: [F; 4],
 }
 
-pub(super) fn append_residues(
+pub(in super::super) fn append_residues(
     out: &mut Vec<F>,
     bank: &[F],
     digits: &[F],
@@ -225,7 +225,7 @@ pub(super) fn append_residues(
 }
 
 /// MUL, MULHU, MULHSU and MULH respectively; the caller derives this from fetch.
-pub(super) fn result_half(bank: &[F], kind: usize, half: usize) -> F {
+pub(in super::super) fn result_half(bank: &[F], kind: usize, half: usize) -> F {
     let offset = [PRODUCT, PRODUCT + 4, SIGNED_UNSIGNED, SIGNED_SIGNED][kind] + 2 * half;
     bank[offset].add(bank[offset + 1].mul(F(1 << 16)))
 }

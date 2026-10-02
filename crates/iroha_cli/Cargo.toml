@@ -50,6 +50,7 @@ iroha_storage_client = { workspace = true }
 iroha_sccp = { workspace = true }
 iroha_sccp_rpc = { workspace = true }
 iroha_sccp_wallet = { workspace = true }
+iroha_petal = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
 kotodama_lang = { workspace = true }

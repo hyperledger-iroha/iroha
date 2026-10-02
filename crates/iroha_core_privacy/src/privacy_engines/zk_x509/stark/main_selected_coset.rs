@@ -2,7 +2,9 @@
 //!
 //! At each radix-two DIF split the even outputs transform `a[j]+a[j+n/2]`,
 //! and the odd outputs transform `(a[j]-a[j+n/2])*root^j`, at root squared.
-//! Only public selected indices select branches. Traversal is bit-reversed;
+//! Only public selected indices and coefficient lengths select work. A public
+//! zero suffix stays zero in both DIF children outside the inherited prefix.
+//! Traversal is bit-reversed;
 //! final gathers restore the caller's strictly increasing global-row order.
 
 use super::*;
@@ -23,6 +25,36 @@ pub(super) fn evaluate_v1(
 }
 
 fn evaluate_with_v1(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+    selected: &[usize],
+    after_scale: impl FnOnce(&[F]),
+) -> Result<Column, AggregateStarkErrorV1> {
+    evaluate_scheduled_with_v1::<true>(coefficients, native_log, common_log, selected, after_scale)
+}
+
+// Only tests instantiate INNER_PARALLEL=false. Public zero-suffix pruning
+// preserves input validation, allocation extents and erasure owners.
+fn evaluate_scheduled_with_v1<const INNER_PARALLEL: bool>(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+    selected: &[usize],
+    after_scale: impl FnOnce(&[F]),
+) -> Result<Column, AggregateStarkErrorV1> {
+    evaluate_prefix_scheduled_with_v1::<INNER_PARALLEL, true>(
+        coefficients,
+        native_log,
+        common_log,
+        selected,
+        after_scale,
+    )
+}
+
+// PRUNE_ZERO_SUFFIX=false is an unchanged dense-DIF cost oracle used only by
+// tests. Both choices retain the full scratch and all original coefficients.
+fn evaluate_prefix_scheduled_with_v1<const INNER_PARALLEL: bool, const PRUNE_ZERO_SUFFIX: bool>(
     coefficients: &[F],
     native_log: u8,
     common_log: u8,
@@ -79,7 +111,12 @@ fn evaluate_with_v1(
         power = power.mul(shift);
     }
     after_scale(&scratch);
-    prune_v1(&mut scratch, 0, &output, root);
+    let prefix = if PRUNE_ZERO_SUFFIX {
+        coefficients.len()
+    } else {
+        rows
+    };
+    prune_v1::<INNER_PARALLEL>(&mut scratch, 0, &output, root, prefix);
     for (destination, &row) in output.iter_mut().zip(selected) {
         *destination = scratch[reversed(row)];
     }
@@ -87,7 +124,14 @@ fn evaluate_with_v1(
 }
 
 /// Infallible public-geometry recursion over disjoint slices of the same scratch.
-fn prune_v1(values: &mut [F], offset: usize, destinations: &[F], root: F) {
+fn prune_v1<const INNER_PARALLEL: bool>(
+    values: &mut [F],
+    offset: usize,
+    destinations: &[F],
+    root: F,
+    nonzero_prefix_bound: usize,
+) {
+    debug_assert!(nonzero_prefix_bound > 0 && nonzero_prefix_bound <= values.len());
     if destinations.is_empty() || values.len() == 1 {
         return;
     }
@@ -97,6 +141,11 @@ fn prune_v1(values: &mut [F], offset: usize, destinations: &[F], root: F) {
     let even_needed = !even_destinations.is_empty();
     let odd_needed = !odd_destinations.is_empty();
     let (even, odd) = values.split_at_mut(half);
+    // The caller initialized every cell after this public prefix to zero.
+    // At j >= min(prefix, half), both input cells are zero, so either child
+    // remains zero there. No coefficient value is inspected to select work.
+    // The bound includes the complete masking tail, even across native_rows.
+    let pairs = nonzero_prefix_bound.min(half);
     let apply = |first: usize, even: &mut [F], odd: &mut [F]| {
         let mut twiddle = if odd_needed {
             root.pow(first as u128)
@@ -116,26 +165,37 @@ fn prune_v1(values: &mut [F], offset: usize, destinations: &[F], root: F) {
             }
         }
     };
-    if half * 2 >= PARALLEL_VALUES_V1 && rayon::current_num_threads() > 1 {
-        even.par_chunks_mut(PAIRS_PER_TASK_V1)
-            .zip(odd.par_chunks_mut(PAIRS_PER_TASK_V1))
-            .enumerate()
-            .for_each(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd));
+    if pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
+        if INNER_PARALLEL {
+            even[..pairs]
+                .par_chunks_mut(PAIRS_PER_TASK_V1)
+                .zip(odd[..pairs].par_chunks_mut(PAIRS_PER_TASK_V1))
+                .enumerate()
+                .for_each(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd));
+        } else {
+            // Preserve every original public window and root.pow(first). This
+            // isolates scheduling without silently removing arithmetic work.
+            even[..pairs]
+                .chunks_mut(PAIRS_PER_TASK_V1)
+                .zip(odd[..pairs].chunks_mut(PAIRS_PER_TASK_V1))
+                .enumerate()
+                .for_each(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd));
+        }
     } else {
-        apply(0, even, odd);
+        apply(0, &mut even[..pairs], &mut odd[..pairs]);
     }
     let child_root = root.mul(root);
-    if even_needed && odd_needed && half * 2 >= PARALLEL_VALUES_V1 {
+    if INNER_PARALLEL && even_needed && odd_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
         rayon::join(
-            || prune_v1(even, offset, even_destinations, child_root),
-            || prune_v1(odd, offset + half, odd_destinations, child_root),
+            || prune_v1::<INNER_PARALLEL>(even, offset, even_destinations, child_root, pairs),
+            || prune_v1::<INNER_PARALLEL>(odd, offset + half, odd_destinations, child_root, pairs),
         );
     } else {
         if even_needed {
-            prune_v1(even, offset, even_destinations, child_root);
+            prune_v1::<INNER_PARALLEL>(even, offset, even_destinations, child_root, pairs);
         }
         if odd_needed {
-            prune_v1(odd, offset + half, odd_destinations, child_root);
+            prune_v1::<INNER_PARALLEL>(odd, offset + half, odd_destinations, child_root, pairs);
         }
     }
 }

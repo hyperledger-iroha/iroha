@@ -647,7 +647,12 @@ pub(super) fn constrain_ordinary_mint_canonical_originals_v1<F: KagemushaPoseido
     ]);
     let credit_proof_payload =
         struct_payload_v1(ctx, range, &credit_proof_g, &credit_proof_fields)?;
-    let cipher = raw(ctx, range, &credit.encrypted_credit, 384)?;
+    let cipher = raw(
+        ctx,
+        range,
+        &credit.encrypted_credit,
+        KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1,
+    )?;
     let cipher_sha = framed_hash_v1(
         ctx,
         range,

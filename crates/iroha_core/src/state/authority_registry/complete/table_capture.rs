@@ -1,14 +1,14 @@
 //! Exact catalog linking declared canonical tables to actual State readers.
 //!
-//! The catalog contains 214 table outputs in 213 capture groups. Its incomplete coverage
-//! refuses a full-table capture; it cannot authorize a finalized State root.
+//! The catalog contains 217 table outputs in 216 capture groups. Complete table
+//! coverage still refuses unresolved State schemas and cannot authorize finality.
 //! Even complete coverage will need one State publication cut, derived-index
 //! checks, durable Kura node custody, predecessor binding and recovery before
 //! any captured nodes may become an execution anchor.
 //! TODO: implement every declared table reader and consume the retained nodes
 //! through the State/Kura publication capsule after those checks are complete.
-//! TODO: the next Musubi availability/resolver/directory values need their
-//! validated semantic projections; State transaction membership already retains one writer-owned pair and frontier;
+//! Musubi availability/resolver/directory readers share one validated borrowed
+//! source. State transaction membership retains one writer-owned pair and frontier;
 //! its specialized node store still needs durable publication integration. Neither gate may be
 //! skipped by supplying empty rows.
 
@@ -16,6 +16,9 @@ use super::{
     Canonical, CanonicalTableLeafSet, CanonicalTablePairedSnapshot, CompleteInventoryError, Field,
     LeafError, LeafLimits, Role, STATE_FIELDS, capture_account_alias_table_once,
     capture_accounts_table_once, capture_domains_table_once, require_complete_inventory, visit,
+};
+use crate::state::deserialize::musubi_source_work::{
+    self, SourceValidationError, SourceWorkLimits, observation::MusubiSemanticTable,
 };
 use crate::state::{State, is_stable_state_view_generation};
 use mv::storage::StorageReadOnly;
@@ -1061,13 +1064,13 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         id: "world.musubi_archive_locations",
         capture: capture_musubi_archive_locations_once,
     },
-    // The three intervening semantic tables remain deliberately absent until
-    // their exact borrowed-cut validation owns admitted scratch. Their existing
-    // validators allocate provider records and package accumulators internally.
+    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Availability),
+    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Resolver),
     TableMaterializer::Single {
         id: "world.musubi_resolver_index_checkpoints",
         capture: capture_musubi_resolver_index_checkpoints_once,
     },
+    TableMaterializer::MusubiSemantic(MusubiSemanticTable::Directory),
     TableMaterializer::Single {
         id: "world.musubi_aliases",
         capture: capture_musubi_aliases_once,
@@ -1514,7 +1517,7 @@ use aggregate::{
 
 /// Production-facing fail-closed entrypoint for the actual State inventory.
 ///
-/// It currently returns `MissingMaterializer` for the first uncovered table.
+/// It currently returns the first `RequiredSchema` after exhaustive table admission.
 /// It cannot return a finalized root, disclose rows or authorize IVM/AXT use.
 #[cfg_attr(
     not(test),
@@ -1535,6 +1538,7 @@ mod tests {
     use super::*;
     fn policy(tables: LeafLimits) -> TableCaptureLimits {
         TableCaptureLimits {
+            musubi: crate::state::authority_registry::complete::table_capture::musubi_test_limits(),
             tables,
             membership: MembershipWorkLimits {
                 max_row_visits: 64,
@@ -1646,7 +1650,9 @@ mod tests {
             capture_actual_state_tables_once(&state(), policy(limits()))
                 .err()
                 .expect("incomplete actual catalog"),
-            TableCaptureError::MissingMaterializer("world.musubi_archive_availability")
+            TableCaptureError::Inventory(CompleteInventoryError::RequiredSchema(
+                "state.kagemusha_v1_runtime_verifier"
+            ))
         );
     }
 
@@ -1757,7 +1763,10 @@ mod tests {
             "world.musubi_pin_outbox_high_waters",
             "world.musubi_provider_bundle_attestations",
             "world.musubi_archive_locations",
+            "world.musubi_archive_availability",
+            "world.musubi_resolver_index",
             "world.musubi_resolver_index_checkpoints",
+            "world.musubi_public_directory",
             "world.musubi_aliases",
             "world.musubi_alias_history",
             "world.musubi_governance_decisions",
@@ -1878,7 +1887,7 @@ mod tests {
         );
         // Every listed Single has one table; the one indivisible transaction
         // membership owner retains both current and rollback tables together.
-        assert_eq!(expected.len(), 214);
+        assert_eq!(expected.len(), 217);
         assert_eq!(
             TABLE_MATERIALIZERS
                 .iter()
@@ -1906,13 +1915,21 @@ mod tests {
                 );
             }
         });
+        assert!(
+            missing.is_empty(),
+            "actual table readers must be exhaustive: {missing:?}"
+        );
         assert_eq!(
-            missing,
-            [
-                "world.musubi_archive_availability",
-                "world.musubi_resolver_index",
-                "world.musubi_public_directory",
-            ]
+            require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS),
+            Ok(217)
+        );
+        assert_eq!(TABLE_MATERIALIZERS.len(), 216);
+        assert_eq!(
+            TABLE_MATERIALIZERS
+                .iter()
+                .filter(|owner| matches!(owner, TableMaterializer::MusubiSemantic(_)))
+                .count(),
+            3
         );
         for owner in TABLE_MATERIALIZERS {
             let TableMaterializer::Single { id, capture } = owner else {
@@ -2692,3 +2709,25 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+fn musubi_test_limits() -> SourceWorkLimits {
+    SourceWorkLimits {
+        geometry: iroha_data_model::musubi::source_work::SourceGeometryLimits {
+            elements: 1_000_000,
+            variable_bytes: 1_000_000,
+        },
+        table_pass_rows: 1_000_000,
+        lookup_index_entries: 1_000_000,
+        model_operations: 1_000_000,
+        signature_checks: 1_000_000,
+    }
+}
+
+#[cfg(test)]
+#[path = "table_capture/musubi_semantic_tests.rs"]
+mod musubi_semantic_tests;
+
+use crate::state::deserialize::musubi_source_read::{
+    MusubiSourceAcquisitionError, StateMusubiSourceCut,
+};

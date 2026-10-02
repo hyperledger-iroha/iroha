@@ -693,3 +693,348 @@ fn selected_cpu_horner_pruned_full_cost_uses_public_geometry() {
         }
     }
 }
+
+#[test]
+fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
+    for (native, common, mask_length) in [(2, 7, 81), (5, 15, 1816), (8, 16, 1816)] {
+        let values = (0..1usize << native)
+            .map(|row| F((17 * row + 3) as u64))
+            .collect::<Vec<_>>();
+        let mask = (0..mask_length)
+            .map(|degree| F((29 * degree + 7) as u64))
+            .collect::<Vec<_>>();
+        let coefficients = Column::from_vec_v1(
+            masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+        );
+        let rows = 1usize << common;
+        for workers in [1, 4, 20] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            for selected in [
+                vec![0],
+                vec![rows - 1],
+                (0..rows).step_by(113).collect(),
+                (0..rows).collect(),
+            ] {
+                let original = pool
+                    .install(|| evaluate_v1(&coefficients, native, common, &selected))
+                    .unwrap();
+                let coarse = pool
+                    .install(|| {
+                        evaluate_scheduled_with_v1::<false>(
+                            &coefficients,
+                            native,
+                            common,
+                            &selected,
+                            |_| {},
+                        )
+                    })
+                    .unwrap();
+                let full =
+                    full_compact_reference_v1(&coefficients, native, common, &selected, |_| {})
+                        .unwrap();
+                assert_eq!(&*coarse, &*original);
+                assert_eq!(&*coarse, &*full);
+            }
+        }
+    }
+    let coefficients = vec![F(11); 21];
+    for selected in [vec![], vec![64], vec![2, 1], vec![1, 1]] {
+        let (result, erased) = inspection::observe_v1(|| {
+            evaluate_scheduled_with_v1::<false>(&coefficients, 4, 6, &selected, |_| {
+                panic!("invalid geometry before private writes")
+            })
+        });
+        assert!(result.is_err());
+        assert!(erased.is_empty());
+    }
+    for (coefficients, native, common, selected) in [
+        (vec![], 4, 6, vec![0]),
+        (vec![F::ONE; 65], 4, 6, vec![0]),
+        (vec![F::ONE], 6, 6, vec![0]),
+        (vec![F::ONE], 4, 33, vec![0]),
+        (vec![F(GOLDILOCKS_MODULUS_V1)], 4, 6, vec![0]),
+    ] {
+        let (result, erased) = inspection::observe_v1(|| {
+            evaluate_scheduled_with_v1::<false>(&coefficients, native, common, &selected, |_| {
+                panic!("invalid input before private writes")
+            })
+        });
+        assert!(result.is_err());
+        assert!(erased.is_empty());
+    }
+    for unwind in [false, true] {
+        let (result, erased) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(|| {
+                evaluate_scheduled_with_v1::<false>(&coefficients, 4, 6, &[0, 7, 63], |scratch| {
+                    assert!(scratch.iter().any(|value| *value != F::ZERO));
+                    if unwind {
+                        panic!("coarse selected transform after-scale unwind");
+                    }
+                })
+            })
+        });
+        if unwind {
+            assert!(result.is_err());
+            assert_eq!(erased.iter().map(|row| row.cells).sum::<usize>(), 67);
+        } else {
+            assert_eq!(result.unwrap().unwrap().len(), 3);
+            assert_eq!(erased.iter().map(|row| row.cells).sum::<usize>(), 64);
+        }
+        assert!(erased.iter().any(|row| row.nonzero_before > 0));
+        assert!(erased.iter().all(|row| row.nonzero_after == 0));
+    }
+}
+
+#[test]
+#[ignore = "isolated original inner scheduler common22 cost; no production policy change"]
+fn selected_cpu_current_inner_scheduling_cost_keeps_full_public_work() {
+    selected_cpu_inner_scheduling_cost_v1::<true>();
+}
+
+#[test]
+#[ignore = "isolated sequential inner scheduler common22 cost; no production policy change"]
+fn selected_cpu_coarse_inner_scheduling_cost_keeps_full_public_work() {
+    selected_cpu_inner_scheduling_cost_v1::<false>();
+}
+
+fn selected_cpu_inner_scheduling_cost_v1<const INNER_PARALLEL: bool>() {
+    use std::time::Instant;
+    let common = 22;
+    let rows = 1usize << common;
+    let workers = rayon::current_num_threads();
+    let policy = if INNER_PARALLEL { "current" } else { "coarse" };
+    println!(
+        "x509_selected_schedule_header common_log={common} workers={workers} rounds=3 inner_policy={policy} production_policy_changed=false"
+    );
+    let cases = [
+        ("singleton", vec![rows - 1]),
+        (
+            "spread_cut16",
+            (0..136)
+                .flat_map(|query| {
+                    let block = (query * 1729 + 17) % (rows / 16);
+                    block * 16..block * 16 + 16
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        ),
+        ("clustered_cut16", (rows - 136 * 16..rows).collect()),
+    ];
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let domains = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.native_trace_log2)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(domains, [5, 8, 15, 16, 18, 19].into_iter().collect());
+    for native in domains {
+        for width in [1, aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..1816)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (name, selected) in &cases {
+                assert_eq!(selected.len(), if *name == "singleton" { 1 } else { 2176 });
+                let expected = columns
+                    .iter()
+                    .map(|column| {
+                        full_compact_reference_v1(column, native, common, selected, |_| {}).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let path_field_bytes = width * (rows + selected.len()) * core::mem::size_of::<F>();
+                let comparison_field_bytes = width * selected.len() * core::mem::size_of::<F>();
+                for round in 0..3 {
+                    let started = Instant::now();
+                    let actual = columns
+                        .par_iter()
+                        .map(|column| {
+                            evaluate_scheduled_with_v1::<INNER_PARALLEL>(
+                                column,
+                                native,
+                                common,
+                                selected,
+                                |_| {},
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap();
+                    let transform_gather_and_scratch_clear = started.elapsed();
+                    assert_eq!(actual.len(), width);
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        assert_eq!(actual.len(), selected.len());
+                        assert_eq!(&**actual, &**expected);
+                    }
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let compact_clear = clear_started.elapsed();
+                    println!(
+                        "x509_selected_schedule native_log={native} common_log={common} width={width} selection={name} selected_rows={} round={round} inner_policy={policy} transform_gather_scratch_clear_ns={} compact_clear_ns={} path_field_bytes={path_field_bytes} comparison_field_bytes={comparison_field_bytes}",
+                        selected.len(),
+                        transform_gather_and_scratch_clear.as_nanos(),
+                        compact_clear.as_nanos()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn public_zero_suffix_bound_matches_dense_dif_and_independent_fft_at_every_split_boundary() {
+    for workers in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        for common in 2..=9 {
+            let rows = 1usize << common;
+            let half = rows / 2;
+            let lengths = [1, 2, half - 1, half, half + 1, rows - 1, rows]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            for length in lengths {
+                let mut coefficients = (0..length)
+                    .map(|index| F((index * 137 + 19) as u64))
+                    .collect::<Vec<_>>();
+                // Interior zero values do not shorten the public bound; the
+                // nonzero last coefficient must survive every recursive split.
+                for index in (0..length.saturating_sub(1)).step_by(3) {
+                    coefficients[index] = F::ZERO;
+                }
+                let full = Column::from_vec_v1(
+                    masked_trace_coefficients_on_coset_v1(&coefficients, 1, common).unwrap(),
+                );
+                for selected in [vec![0, half, rows - 1], (0..rows).collect()] {
+                    let bounded = pool
+                        .install(|| evaluate_v1(&coefficients, 1, common, &selected))
+                        .unwrap();
+                    let dense = pool
+                        .install(|| {
+                            evaluate_prefix_scheduled_with_v1::<true, false>(
+                                &coefficients,
+                                1,
+                                common,
+                                &selected,
+                                |_| {},
+                            )
+                        })
+                        .unwrap();
+                    assert_eq!(bounded.len(), selected.len());
+                    assert_eq!(dense.len(), selected.len());
+                    for ((&row, &actual), &original) in
+                        selected.iter().zip(bounded.iter()).zip(dense.iter())
+                    {
+                        assert_eq!(actual, original);
+                        assert_eq!(actual, full[row]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "same-input common22 selected dense/prefix DIF cost at all native domains; no release qualification"]
+fn registered_public_zero_suffix_cost_keeps_all_masks_and_selected_coordinates() {
+    use std::time::Instant;
+
+    let common = 22;
+    let rows = 1usize << common;
+    let selected = (0..136)
+        .flat_map(|query| {
+            let block = (query * 1_729 + 17) % (rows / 16);
+            block * 16..block * 16 + 16
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2176);
+    let native_domains = AggregateProofLayoutV1::for_full_profile_v1()
+        .unwrap()
+        .trace_groups
+        .iter()
+        .map(|group| group.native_trace_log2)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(native_domains, [5, 8, 15, 16, 18, 19].into_iter().collect());
+    let workers = 20;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap();
+    for native in native_domains {
+        for width in [1, 8] {
+            let inputs = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|index| F((index * 17 + column * 43 + 13) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..1816)
+                        .map(|index| F((index * 29 + column * 71 + 7) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for round in 0..3 {
+                let modes = if round % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                };
+                let mut results = Vec::new();
+                for bounded in modes {
+                    let started = Instant::now();
+                    let output = pool
+                        .install(|| {
+                            inputs
+                                .par_iter()
+                                .map(|coefficients| {
+                                    if bounded {
+                                        evaluate_v1(coefficients, native, common, &selected)
+                                    } else {
+                                        evaluate_prefix_scheduled_with_v1::<true, false>(
+                                            coefficients,
+                                            native,
+                                            common,
+                                            &selected,
+                                            |_| {},
+                                        )
+                                    }
+                                })
+                                .collect::<Result<Vec<_>, AggregateStarkErrorV1>>()
+                        })
+                        .unwrap();
+                    println!(
+                        "selected_zero_suffix_cost native={native} common={common} width={width} workers={workers} round={round} bounded={bounded} selected={} coefficient_count={} elapsed_ns={}",
+                        selected.len(),
+                        inputs[0].len(),
+                        started.elapsed().as_nanos()
+                    );
+                    assert_eq!(output.len(), width);
+                    assert!(output.iter().all(|column| column.len() == selected.len()));
+                    results.push(output);
+                }
+                for (left, right) in results[0].iter().zip(&results[1]) {
+                    assert!(left.iter().zip(right.iter()).all(|(a, b)| a == b));
+                }
+            }
+        }
+    }
+}
+
+#[path = "main_selected_twiddle_tests.rs"]
+mod public_twiddle;

@@ -8,10 +8,12 @@
 
 use super::{
     CanonicalTablePairedSnapshot, CapturedMembershipCompanion, CompleteInventoryError, Field,
-    LeafError, LeafLimits, MembershipCaptureError, MembershipWorkLimits, State, TableMaterializer,
-    capture_membership_group_once, is_stable_state_view_generation, require_complete_inventory,
+    LeafError, LeafLimits, MembershipCaptureError, MembershipWorkLimits, SourceValidationError,
+    SourceWorkLimits, State, TableMaterializer, capture_membership_group_once,
+    is_stable_state_view_generation, musubi_source_work, require_complete_inventory,
     require_exact_table_materializers,
 };
+use super::{MusubiSourceAcquisitionError, StateMusubiSourceCut};
 use iroha_allocation::{AllocationRefusal, ChargedBuffer, ChargedBufferError};
 
 /// Why the declared State table set cannot be captured as one retained owner.
@@ -44,6 +46,12 @@ pub(super) enum TableCaptureError {
     /// The original grouped reader preserves local acquisition and row errors.
     #[error(transparent)]
     Membership(#[from] MembershipCaptureError),
+    /// Original native source acquisition preserves its exact local release owner.
+    #[error(transparent)]
+    MusubiAcquisition(#[from] MusubiSourceAcquisitionError),
+    /// Semantic source validation preserves its original work, memory or validity error.
+    #[error(transparent)]
+    Musubi(#[from] SourceValidationError),
     /// The aggregate retained row count exceeded the caller's admission.
     #[error("State canonical table capture exceeds the aggregate row bound")]
     AggregateRowLimit,
@@ -66,6 +74,8 @@ pub(super) enum TableCaptureError {
 pub(super) struct TableCaptureLimits {
     pub(super) tables: LeafLimits,
     pub(super) membership: MembershipWorkLimits,
+    /// Independent whole-source bounds, consumed once across the three semantic readers.
+    pub(super) musubi: SourceWorkLimits,
 }
 
 /// Retains actual table nodes without exposing a root or publication handle.
@@ -133,6 +143,24 @@ pub(super) fn capture_tables_once(
     let mut nodes = ChargedBuffer::new(output_count, &budget)?;
     let mut total_rows = 0_u64;
     let mut membership = None;
+    // One retained native observation serves all semantic readers, including
+    // across the intervening checkpoint table. This is diagnostic generation
+    // custody, not a finalized State publication capsule.
+    let musubi_world = if materializers
+        .iter()
+        .any(|reader| matches!(reader, TableMaterializer::MusubiSemantic(_)))
+    {
+        let Some(cut) = StateMusubiSourceCut::try_capture(state)? else {
+            return Ok(None);
+        };
+        Some(cut)
+    } else {
+        None
+    };
+    let musubi_source = musubi_world
+        .as_ref()
+        .map(|world| musubi_source_work::validate(world, &budget, limits.musubi))
+        .transpose()?;
     for materializer in materializers {
         match *materializer {
             TableMaterializer::Single { id, capture } => {
@@ -144,6 +172,25 @@ pub(super) fn capture_tables_once(
                     &mut total_rows,
                     limits.tables.max_rows,
                     id,
+                    node,
+                )?;
+            }
+            TableMaterializer::MusubiSemantic(table) => {
+                let source = musubi_source
+                    .as_ref()
+                    .expect("semantic reader acquired its native source");
+                let remaining_rows = limits
+                    .tables
+                    .max_rows
+                    .checked_sub(total_rows)
+                    .ok_or(TableCaptureError::AggregateRowLimit)?;
+                source.admit_table_rows(table, limits.tables, remaining_rows)?;
+                let node = source.capture_table(table, limits.tables)?;
+                retain_node(
+                    &mut nodes,
+                    &mut total_rows,
+                    limits.tables.max_rows,
+                    table.id(),
                     node,
                 )?;
             }
@@ -182,6 +229,11 @@ pub(super) fn capture_tables_once(
                 }
                 membership = Some(companion);
             }
+        }
+    }
+    if let Some(source) = musubi_world.as_ref() {
+        if !source.try_matches_current()? {
+            return Ok(None);
         }
     }
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {

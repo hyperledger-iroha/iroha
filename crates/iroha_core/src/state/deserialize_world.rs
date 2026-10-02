@@ -2,6 +2,9 @@
 pub(in crate::state) mod musubi_rejection;
 use musubi_rejection::{ProjectionCut, ProjectionRejection, ProjectionTable};
 
+#[path = "deserialize_world_musubi_source_read.rs"]
+pub(crate) mod musubi_source_read;
+
 #[path = "deserialize_world_musubi_live.rs"]
 mod musubi_live;
 #[path = "deserialize_world_musubi_source_work.rs"]

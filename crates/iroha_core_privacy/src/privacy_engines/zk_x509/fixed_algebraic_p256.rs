@@ -3853,21 +3853,58 @@ mod tests {
         );
         let mut reordered = schedule.children.clone();
         reordered.swap(2, 3);
-        // The execution children now have identical widths and atom counts.
-        // Reordering or replacing them is therefore a well-formed composite;
-        // its ordered digest must fail the original compiled-profile binding.
-        let reordered = ZkX509P256FixedAlgebraicScheduleV1::new_v1(reordered)
-            .expect("same-width and same-count execution children");
+        // Equal widths and atom counts do not authorize reordered or replaced
+        // children. The constructor now enforces the original ordered pin.
+        // Independently frame each candidate digest to retain the original
+        // descriptor-mismatch assertions as well as constructor rejection.
+        let candidate_digest =
+            |children: &[ZkX509FixedAlgebraicScheduleV1;
+                  ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1]| {
+                let mut widths = [0_u8; 2 * ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1];
+                let mut digests = [0_u8; 48 * ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1];
+                for (index, child) in children.iter().enumerate() {
+                    widths[index * 2..index * 2 + 2]
+                        .copy_from_slice(&child.width_v1().to_be_bytes());
+                    digests[index * 48..index * 48 + 48]
+                        .copy_from_slice(&child.descriptor_digest_v1().to_bytes());
+                }
+                privacy_outer_digest_frame_v1(
+                    ZK_X509_FIXED_DIGEST_CONTEXT_V1,
+                    P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
+                    b"p256-fixed-algebraic-composite",
+                    0,
+                    0,
+                    0,
+                    &[
+                        ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+                        &widths,
+                        &digests,
+                    ],
+                )
+                .unwrap()
+            };
         assert_eq!(
-            reordered.verify_descriptor_digest_v1(&schedule.descriptor_digest_v1()),
+            candidate_digest(&schedule.children),
+            schedule.descriptor_digest_v1()
+        );
+        let reordered_digest = candidate_digest(&reordered);
+        assert_eq!(
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(reordered),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            schedule.verify_descriptor_digest_v1(&reordered_digest),
             Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)
         );
         let mut substituted = schedule.children.clone();
         substituted[2] = substituted[3].clone();
-        let substituted = ZkX509P256FixedAlgebraicScheduleV1::new_v1(substituted)
-            .expect("same-width and same-count substituted child");
+        let substituted_digest = candidate_digest(&substituted);
         assert_eq!(
-            substituted.verify_descriptor_digest_v1(&schedule.descriptor_digest_v1()),
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(substituted),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            schedule.verify_descriptor_digest_v1(&substituted_digest),
             Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)
         );
         let mut wrong_order = schedule.children.clone();

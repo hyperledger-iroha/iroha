@@ -1238,6 +1238,8 @@ mod tests {
         drop(ExactConsumedCreditIndex::empty());
         let mut fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
+        let fi_issuer = KeyPair::from_seed(vec![64; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
         let core = SigningKey::from_bytes((&[9; 32]).into()).unwrap();
         let core_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
@@ -1249,6 +1251,7 @@ mod tests {
                 fixture.selection.owner.clone(),
                 fixture.release.clone(),
                 fixture.issuer_policy.clone(),
+                Arc::clone(&fixture.ordinary_policy),
                 fixture.trust.clone(),
                 fixture.app_authority.clone(),
                 fixture.selection.preparation.challenge.hardware_profile_id,
@@ -1272,9 +1275,11 @@ mod tests {
         c.financial_authority_commitment = carrier.financial_authority_commitment;
         c.issued_at_ms = 300;
         let c = *c;
-        fixture.selection.preparation.signature =
-            EdSignature::try_new(issuer.private_key(), &c.canonical_signing_bytes().unwrap())
-                .unwrap();
+        fixture.selection.preparation.signature = EdSignature::try_new(
+            core_issuer.private_key(),
+            &c.canonical_signing_bytes().unwrap(),
+        )
+        .unwrap();
         let message = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &c,
             &fixture.selection.issuance.credential.subject.app_public_key,
@@ -1328,10 +1333,8 @@ mod tests {
             .issuance
             .credential
             .authenticate(
-                &fixture.release,
-                &fixture.trust,
-                &fixture.app_authority,
-                &c,
+                fixture.ordinary_policy.identity_policy(),
+                &fixture.checked_preparation().unwrap(),
                 &fixture.selection.issuance.credential.subject.app_public_key,
                 300,
             )
@@ -1352,7 +1355,7 @@ mod tests {
         fixture.certificate.subject.challenge_evidence_digest = possession.evidence_digest();
         fixture.certificate.subject.ordinary_app_credential_digest = app.digest();
         fixture.certificate.signature = SignatureOf::try_new(
-            issuer.private_key(),
+            fi_issuer.private_key(),
             &fixture.certificate.subject.approval_payload().unwrap(),
         )
         .unwrap();
@@ -1909,7 +1912,7 @@ mod tests {
                 .refresh_before_ms
         );
         let (challenge, raw_lease) = fixture.integrity_refresh_originals();
-        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let core_issuer = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
         let lease = Arc::new(
             raw_lease
                 .authenticate(
@@ -1918,7 +1921,7 @@ mod tests {
                     &fixture.trust,
                     &fixture.app_authority,
                     &challenge,
-                    issuer.public_key(),
+                    core_issuer.public_key(),
                     1500,
                 )
                 .unwrap(),

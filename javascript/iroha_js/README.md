@@ -292,6 +292,92 @@ version `1`, and `ready: true`. Monetary transitions still require a qualified
 non-forking hardware profile; successful transport decoding alone grants no
 monetary authority.
 
+## Petal Stream optical transport
+
+`@iroha/iroha-js/petal` is Petal Stream, the animated optical transport used to
+hand over a payload (for example a KAGEMUSHA `IPM1` peer message) from one
+screen to a camera. Each square frame shows four sakura-blossom finders, a
+`天`-shaped field of 256 tiles and three dotted rings. Tile polarity (lane `P`),
+the katakana in each tile (lane `K`) and the ring dots (lane `D`) are three
+independent Reed-Solomon codewords carrying fountain-coded 16-byte atoms, so any
+readable lane of any frame helps and lost frames only cost time.
+
+The module is a port of the `iroha_petal` Rust reference: the encoder is
+bit-exact and the decoder follows the reference step by step. It is pure
+JavaScript on typed arrays, with no Node built-ins, WebAssembly or dependencies,
+and runs in browsers, Node and React Native-like engines.
+
+```js
+import {
+  PetalCameraScanner,
+  PetalStreamEncoder,
+  PetalStreamPlayer,
+} from "@iroha/iroha-js/petal";
+
+// Sender: animate the frames on a canvas.
+const encoder = new PetalStreamEncoder(payloadBytes, /* kind */ 2);
+const player = new PetalStreamPlayer({
+  encoder,
+  context: canvas.getContext("2d"),
+  fps: 8,
+});
+player.start();
+
+// Receiver: read frames from the camera until the payload is complete.
+const stream = await navigator.mediaDevices.getUserMedia({
+  video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+});
+const scanner = new PetalCameraScanner({
+  stream,
+  onProgress: ({ progress }) => render(progress.rank, progress.sourceAtoms),
+  onComplete: ({ meta, payload }) => accept(meta.kind, payload),
+});
+await scanner.start();
+```
+
+`PetalCameraScanner` grabs frames with `requestVideoFrameCallback` (falling back
+to `requestAnimationFrame`), downsizes them to at most 1280 pixels on the long
+side, converts them to Rec. 601 luma and feeds a `PetalScanSession`, which
+applies the reference idle (30 s) and absolute (180 s) timeouts. Apps with
+their own camera pipeline can call `session.push(luma, nowMs)` directly with a
+`PetalLuma` built by `PetalLuma.fromStrided` (a camera Y plane),
+`PetalLuma.fromRgba` or `PetalLuma.fromImageData`. Lower-level pieces are
+exported as well: `decodePetalFrame`/`decodePetalFrameAt`, the software
+`renderPetalFrame` (RGBA output, ready for `ImageData`), the vector
+`petalDrawList` and `drawPetalFrame`, `PetalStreamAssembler`, the lane codecs
+(`encodeLane`, `decodeLane`, `PetalFrameCells`), `PetalReedSolomon`, the
+fountain code (`maskWords`, `encodeAtom`, `PetalFountainDecoder`) and `crc32c`.
+A reassembled payload is only delivered after its CRC-32C matches the beacon;
+it carries no authentication of its own.
+
+The decoder reads the tile lanes (`P` and `K`) against the light and dark levels
+measured at the finders first. A lane that does not decode that way is re-read
+with a normalised read that rescales every tile by its own contrast, so
+over-exposure, veiling light, glare and shadows cost little; lane `K` still needs
+a camera that resolves the glyphs, and lane `D` carries the stream alone when
+nothing else reads. The scanner does not change the camera's settings, so set the
+stream up for it (`specs/petal_stream.md` section 8, "Scanner guidance"):
+
+- Ask `getUserMedia` for about 1280×720; the default `maxSide` of 1280 already
+  matches it. Only drop to 640 when the device cannot sustain about 5 decoded
+  frames per second, because at 480p only lanes `P` and `D` read.
+- Automatic exposure over-exposes a mostly black screen. Where the browser
+  supports it, apply an exposure compensation of about -1 EV to the video track
+  once the stream is open (Chrome on Android exposes it; feature-detect with
+  `track.getCapabilities()`):
+
+```js
+const [track] = stream.getVideoTracks();
+if (track.getCapabilities?.().exposureCompensation) {
+  await track.applyConstraints({ advanced: [{ exposureCompensation: -1 }] });
+}
+```
+
+`test/petal.test.js` checks the shared fixtures in `fixtures/petal/`
+(`petal_stream_v1.json` and the golden camera captures in
+`petal_captures_v1.json`) and ports the reference unit tests; run it on its own
+with `node --test test/petal.test.js`.
+
 ## Atomic private settlement transport
 
 `@iroha/iroha-js/atomic-private-settlement` is a browser-safe, witness-free

@@ -60,7 +60,7 @@ pub enum KagemushaOrdinaryIncomingSourceSelectionV1 {
         sender_outgoing_original_sha256: [u8; 32],
         /// Sole purpose-bound original request digest, not raw SHA of a request projection.
         recipient_request_original_digest: [u8; 32],
-        /// SHA256 of the entire384-byte ciphertext selected by the retained request key.
+        /// SHA256 of the complete canonical ciphertext selected by the retained request key.
         encrypted_credit_original_sha256: [u8; 32],
     },
 }

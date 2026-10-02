@@ -41,6 +41,8 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -60,7 +62,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 36
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 38
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -74,6 +76,8 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
                 "connect_norito_kagemusha_testnet_value_credit_v1",
                 "connect_norito_kagemusha_testnet_native_startup_contract_v1",
                 "connect_norito_kagemusha_testnet_native_startup_activate_v1",
+                "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+                "connect_norito_kagemusha_ordinary_current_control_v1",
             }
         assert len(required) == len(expected)
         assert set(required) == expected
@@ -212,6 +216,19 @@ def test_kagami_consumes_the_same_native_artifact_inventory() -> None:
     assert tuple(symbols) == MODULE.REQUIRED_SYMBOLS["c-jni"]
 
 
+def test_kagami_consumes_the_same_privacy_export_inventory() -> None:
+    source = (REPO_ROOT / "crates/iroha_kagami/src/kagemusha.rs").read_text()
+    declaration = re.search(
+        r"const REQUIRED_PRIVACY_C_EXPORTS_V1: \[&str; (\d+)\] = \[(.*?)\n\];",
+        source,
+        re.DOTALL,
+    )
+    assert declaration is not None
+    symbols = re.findall(r'"([A-Za-z0-9_]+)"', declaration.group(2))
+    assert len(symbols) == int(declaration.group(1))
+    assert tuple(symbols) == MODULE.APPROVED_PRIVACY_C_EXPORTS
+
+
 def test_native_c_probe_rejects_required_kagemusha_export() -> None:
     for sdk in ("c-jni", "csharp"):
         for missing in (
@@ -222,6 +239,8 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_open_v1",
             "connect_norito_kagemusha_core_coordinator_invoke_v1",
             "connect_norito_kagemusha_core_coordinator_close_v1",
+            "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+            "connect_norito_kagemusha_ordinary_current_control_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",

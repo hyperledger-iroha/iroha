@@ -151,7 +151,7 @@ class KagemushaOrdinaryNativeGoldenV1Test {
         val path = generateSequence(Paths.get(System.getProperty("user.dir")).toAbsolutePath()) { it.parent }
             .map { it.resolve("fixtures/offline/kagemusha_ordinary_app_enrollment_v1.json") }.first { Files.isRegularFile(it) }
         val raw = Files.readAllBytes(path)
-        assertEquals("8a0ca34a460ce7ae2a1da9ffe4c41cdefbf6a314757e8b207bd489f632f37b29", hex(sha(raw)))
+        assertEquals("5268e97fa1f54f9c23208efc5ee0a39f6c6284e122bf31ff781cb54ce3b93d96", hex(sha(raw)))
         val f = objectFields(raw); assertEquals(false, f["authority"])
         assertEquals("iroha.kagemusha.ordinary-app-enrollment-public-codec-fixture.v1", f["schema"])
         @Suppress("UNCHECKED_CAST") return (f.getValue("vectors") as List<Map<String, Any?>>).also { assertEquals(2, it.size) }

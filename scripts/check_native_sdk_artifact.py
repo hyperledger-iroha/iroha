@@ -104,6 +104,8 @@ APPROVED_KAGEMUSHA_C_EXPORTS = (
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -200,8 +202,8 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
-        # Durable journal-backed testnet admission has no Windows C declaration
-        # or Rust export. Keep the cross-platform C# inventory exact per host.
+        # Durable testnet admission and ordinary Native lifecycle are Unix-only.
+        # Keep the cross-platform C# inventory exact per host.
         *(
             symbol for symbol in APPROVED_KAGEMUSHA_C_EXPORTS
             if os.name != "nt"
@@ -211,6 +213,8 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
                 "connect_norito_kagemusha_testnet_value_credit_v1",
                 "connect_norito_kagemusha_testnet_native_startup_contract_v1",
                 "connect_norito_kagemusha_testnet_native_startup_activate_v1",
+                "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+                "connect_norito_kagemusha_ordinary_current_control_v1",
             }
         ),
         "connect_norito_validation_fee_hijiri_quote_request_v1",

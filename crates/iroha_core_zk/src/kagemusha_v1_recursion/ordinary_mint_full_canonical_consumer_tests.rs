@@ -10,7 +10,8 @@ fn original_widths<F: KagemushaPoseidonFieldV1>() {
     for parity in [KagemushaPastaParityV1::Eq, KagemushaPastaParityV1::Ep] {
         let mut b = BaseCircuitBuilder::<F>::new(false)
             .use_k(10)
-            .use_instance_columns(1);
+            .use_instance_columns(1)
+            .use_lookup_bits(8);
         let range = b.range_chip();
         let ctx = b.main(0);
         let current_bytes = if parity == KagemushaPastaParityV1::Eq {
@@ -51,7 +52,8 @@ fn original_widths<F: KagemushaPoseidonFieldV1>() {
 fn full_history<F: KagemushaPoseidonFieldV1>() {
     let mut b = BaseCircuitBuilder::<F>::new(false)
         .use_k(11)
-        .use_instance_columns(1);
+        .use_instance_columns(1)
+        .use_lookup_bits(8);
     let range = b.range_chip();
     let ctx = b.main(0);
     let original = [0x71; 544];

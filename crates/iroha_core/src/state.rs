@@ -25522,7 +25522,7 @@ impl<'block> WorldTransaction<'block, '_> {
     }
 
     /// Compute the original checked aggregate replacement without writing it.
-    /// The supply owner retains this result until its balance mutation has completed.
+    /// The original supply owner retains this result until its existing total-write point.
     pub(crate) fn precheck_asset_total_amount_change(
         &self,
         definition_id: &AssetDefinitionId,
@@ -25551,7 +25551,8 @@ impl<'block> WorldTransaction<'block, '_> {
         Ok(new_total)
     }
 
-    /// Apply the original aggregate calculation after the corresponding exact balance write.
+    /// Apply the original aggregate calculation at the owner's existing total-write point.
+    /// Account removal writes supply first; ordinary mint and burn write the balance first.
     pub(crate) fn apply_prechecked_asset_total_amount_change(
         &mut self,
         definition_id: &AssetDefinitionId,

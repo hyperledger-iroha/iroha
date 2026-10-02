@@ -343,3 +343,43 @@ fn signing_hash_rejects_either_codec_pass_and_changed_lengths_without_partial_di
         assert!(!std::mem::needs_drop::<ParseError>());
     }
 }
+
+#[test]
+fn replication_order_binding_streamed_length_matches_original_canonical_wire_and_rejections() {
+    let commitment = archive_commitment_with_chunker(ChunkerProfileHandle {
+        profile_id: 1,
+        namespace: "sorafs".into(),
+        name: "sf1".into(),
+        semver: "1.0.0".into(),
+        multihash_code: 0x1f,
+    });
+    let binding = MusubiReplicationOrderArchiveBindingV1::new(
+        ReplicationOrderId::new([0x71; 32]),
+        commitment.archive_id(),
+        commitment,
+    );
+    assert_eq!(
+        canonical_frame_len(&binding).unwrap(),
+        binding.encode().len()
+    );
+    assert!(
+        binding.encode().len() <= MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1
+    );
+    binding.validate().unwrap();
+    let encoded = binding.encode();
+    let decoded = MusubiReplicationOrderArchiveBindingV1::decode(&mut encoded.as_slice()).unwrap();
+    assert_eq!(decoded, binding);
+    for mutate in 0..3 {
+        let mut bad = binding.clone();
+        match mutate {
+            0 => bad.replication_order = ReplicationOrderId::new([0; 32]),
+            1 => bad.archive_id = ArchiveId::new([0x72; 32]),
+            _ => bad.commitment.content_length = 0,
+        }
+        assert!(bad.validate().is_err(), "mutation {mutate}");
+    }
+    // Wire measurement is explicit canonical encoding even under caller decode flags.
+    let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+    assert_eq!(canonical_frame_len(&binding).unwrap(), encoded.len());
+    binding.validate().unwrap();
+}

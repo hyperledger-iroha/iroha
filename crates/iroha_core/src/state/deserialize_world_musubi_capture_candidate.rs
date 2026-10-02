@@ -1,72 +1,140 @@
-//! Test-only paired-tree connection for the actual validated Musubi source.
+//! Three exact semantic table readers on one validated native World borrow.
 //!
-//! Uses existing semantic schemas and original-pool tree owners. Registration
-//! in the complete State catalog remains closed until signature/backend,
-//! serializer/schema and nested helper-error custody is complete. No production
-//! table reader, finalized root, disclosure permit or IVM anchor is introduced.
+//! Key/value codecs use literal schemas and bounded streaming; retained key,
+//! staging, lookup and ordered-node backing keep the original allocation pool.
+//! This scoped capture provides neither complete State authority nor finality.
 
 use super::*;
 use crate::state::authority_registry::leaf::{
     CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits,
 };
 
-const TABLES: [&str; 3] = [
-    "world.musubi_archive_availability",
-    "world.musubi_resolver_index",
-    "world.musubi_public_directory",
-];
+/// Closed semantic tables whose independently authoritative fields are reviewed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::state) enum MusubiSemanticTable {
+    /// Archive anchor and independent availability revision.
+    Availability,
+    /// Independent revision of a source-checked release selection.
+    Resolver,
+    /// Independent revision of a source-checked package selection.
+    Directory,
+}
+
+impl MusubiSemanticTable {
+    /// Exact declared table identity; callers cannot supply another spelling.
+    pub(in crate::state) const fn id(self) -> &'static str {
+        match self {
+            Self::Availability => "world.musubi_archive_availability",
+            Self::Resolver => "world.musubi_resolver_index",
+            Self::Directory => "world.musubi_public_directory",
+        }
+    }
+}
 
 impl<W: MusubiObservationCut> ValidatedMusubiSource<'_, W> {
-    /// Capture only this original validated borrow under exact table/aggregate bounds.
-    /// The fixed three-owner result drops completed tables if a later table fails.
+    /// Read only the validated cut and copy the selected authority projection.
+    pub(in crate::state) fn capture_table(
+        &self,
+        table: MusubiSemanticTable,
+        limits: LeafLimits,
+    ) -> Result<CanonicalTablePairedSnapshot, LeafError> {
+        match table {
+            MusubiSemanticTable::Availability => {
+                CanonicalTableLeafSet::paired_semantic_table_from_rows(
+                    table.id(),
+                    "iroha:state:musubi-availability-authority:v1",
+                    limits,
+                    self.execution_budget(),
+                    self.world.source_musubi_archive_availability().iter(),
+                    MusubiAvailabilityAuthorityV1::from_record,
+                )
+            }
+            MusubiSemanticTable::Resolver => {
+                CanonicalTableLeafSet::paired_semantic_table_from_rows(
+                    table.id(),
+                    "iroha:state:musubi-resolver-authority:v1",
+                    limits,
+                    self.execution_budget(),
+                    self.world.source_musubi_resolver_index().iter(),
+                    MusubiResolverAuthorityV1::from_record,
+                )
+            }
+            MusubiSemanticTable::Directory => {
+                CanonicalTableLeafSet::paired_semantic_table_from_rows(
+                    table.id(),
+                    "iroha:state:musubi-directory-authority:v1",
+                    limits,
+                    self.execution_budget(),
+                    self.world.source_musubi_public_directory().iter(),
+                    MusubiDirectoryAuthorityV1::from_record,
+                )
+            }
+        }
+    }
+
+    /// Admit output rows before allocating any tree; source validation has its own policy.
+    pub(in crate::state) fn admit_table_rows(
+        &self,
+        table: MusubiSemanticTable,
+        limits: LeafLimits,
+        remaining_rows: u64,
+    ) -> Result<(), LeafError> {
+        if limits.max_tables == 0 {
+            return Err(LeafError::TableLimit);
+        }
+        let rows = match table {
+            MusubiSemanticTable::Availability => {
+                self.world.source_musubi_archive_availability().len()
+            }
+            MusubiSemanticTable::Resolver => self.world.source_musubi_resolver_index().len(),
+            MusubiSemanticTable::Directory => self.world.source_musubi_public_directory().len(),
+        };
+        let rows = u64::try_from(rows).map_err(|_| LeafError::RowLimit)?;
+        if rows > limits.max_rows || rows > remaining_rows {
+            return Err(LeafError::RowLimit);
+        }
+        Ok(())
+    }
+
+    /// Test the complete semantic group on the same retained borrow and pool.
+    #[cfg(test)]
     fn capture_tables_candidate(
         &self,
         limits: [LeafLimits; 3],
         max_total_rows: u64,
     ) -> Result<[CanonicalTablePairedSnapshot; 3], LeafError> {
-        let lengths = [
-            self.world.musubi_archive_availability().len(),
-            self.world.musubi_resolver_index().len(),
-            self.world.musubi_public_directory().len(),
+        let rows = [
+            self.world.source_musubi_archive_availability().len(),
+            self.world.source_musubi_resolver_index().len(),
+            self.world.source_musubi_public_directory().len(),
         ];
-        let mut total = 0_u64;
-        for (length, limit) in lengths.into_iter().zip(limits) {
-            let length = u64::try_from(length).map_err(|_| LeafError::RowLimit)?;
-            if limit.max_tables == 0 {
-                return Err(LeafError::TableLimit);
-            }
-            total = total.checked_add(length).ok_or(LeafError::RowLimit)?;
-            if length > limit.max_rows || total > max_total_rows {
-                return Err(LeafError::RowLimit);
-            }
+        let mut remaining = max_total_rows;
+        for ((table, limit), rows) in SEMANTIC_TABLES.into_iter().zip(limits).zip(rows) {
+            self.admit_table_rows(table, limit, remaining)?;
+            remaining = remaining
+                .checked_sub(u64::try_from(rows).map_err(|_| LeafError::RowLimit)?)
+                .ok_or(LeafError::RowLimit)?;
         }
-        let availability = CanonicalTableLeafSet::paired_semantic_table_from_rows(
-            TABLES[0],
-            "iroha:state:musubi-availability-authority:v1",
-            limits[0],
-            self.execution_budget(),
-            self.world.musubi_archive_availability().iter(),
-            MusubiAvailabilityAuthorityV1::from_record,
-        )?;
-        let resolver = CanonicalTableLeafSet::paired_semantic_table_from_rows(
-            TABLES[1],
-            "iroha:state:musubi-resolver-authority:v1",
-            limits[1],
-            self.execution_budget(),
-            self.world.musubi_resolver_index().iter(),
-            MusubiResolverAuthorityV1::from_record,
-        )?;
-        let directory = CanonicalTableLeafSet::paired_semantic_table_from_rows(
-            TABLES[2],
-            "iroha:state:musubi-directory-authority:v1",
-            limits[2],
-            self.execution_budget(),
-            self.world.musubi_public_directory().iter(),
-            MusubiDirectoryAuthorityV1::from_record,
-        )?;
-        Ok([availability, resolver, directory])
+        Ok([
+            self.capture_table(SEMANTIC_TABLES[0], limits[0])?,
+            self.capture_table(SEMANTIC_TABLES[1], limits[1])?,
+            self.capture_table(SEMANTIC_TABLES[2], limits[2])?,
+        ])
     }
 }
+
+#[cfg(test)]
+const SEMANTIC_TABLES: [MusubiSemanticTable; 3] = [
+    MusubiSemanticTable::Availability,
+    MusubiSemanticTable::Resolver,
+    MusubiSemanticTable::Directory,
+];
+#[cfg(test)]
+const TABLES: [&str; 3] = [
+    SEMANTIC_TABLES[0].id(),
+    SEMANTIC_TABLES[1].id(),
+    SEMANTIC_TABLES[2].id(),
+];
 
 #[cfg(test)]
 mod tests {

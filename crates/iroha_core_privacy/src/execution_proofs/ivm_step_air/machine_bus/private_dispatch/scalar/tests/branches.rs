@@ -173,11 +173,8 @@ fn branch_fetch_predicate_register_offset_zero_and_modular_alias_forgery_reject(
         instruction,
         &[(2, 0xffff_ffff_0000_0001, false), (3, 0, false)],
     );
-    reduced.0.row[SCALAR + COMPARE..SCALAR + SHIFT].copy_from_slice(&branch::bank_witness(
-        wide::control::BEQ,
-        0,
-        0,
-    ));
+    reduced.0.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS]
+        .copy_from_slice(&branch::bank_witness(wide::control::BEQ, 0, 0));
     for limb in 0..4 {
         reduced.0.packets.fields[PC_WRITE][AFTER + limb] =
             constant_limb(u64::from(program.first_pc) + 8, limb);
@@ -189,12 +186,13 @@ fn branch_fetch_predicate_register_offset_zero_and_modular_alias_forgery_reject(
         zero.0.packets.fields[slot][AFTER] = F::ONE;
     }
     zero.0.row[SCALAR..SCALAR + ALU].copy_from_slice(&word::witness(1, 1));
+    fill_product(&mut zero.0, 1, 1);
     zero.0.row[SCALAR + ALU..SCALAR + COMPARE].copy_from_slice(&alu::witness(
         wide::arithmetic::ADD,
         1,
         1,
     ));
-    zero.0.row[SCALAR + COMPARE..SCALAR + SHIFT].copy_from_slice(&branch::bank_witness(
+    zero.0.row[SCALAR + COMPARE..SCALAR + PRODUCT_DIGITS].copy_from_slice(&branch::bank_witness(
         wide::control::BEQ,
         1,
         1,
@@ -210,9 +208,18 @@ fn branch_fetch_predicate_register_offset_zero_and_modular_alias_forgery_reject(
 #[test]
 fn branch_gas_cycle_underflow_and_false_halt_cannot_form_successful_rows() {
     let instruction = enc::encode_branch(wide::control::BEQ, 0, 0, 0);
-    let (_, recorder, outcome) = capture(&[instruction], &[], 0, 32);
+    for gas in [0, root_result_table_gas()] {
+        let (program, recorder, outcome) = capture(&[instruction], &[], gas, 32);
+        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+        assert_root_preflight_out_of_gas(&program, &recorder, gas);
+    }
+    let (_, recorder, outcome) = capture(&[instruction], &[], root_setup_gas(), 32);
     assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+    assert_eq!(recorder.records().len(), 1);
     let trapped = &recorder.records()[0];
+    assert_eq!(trapped.instruction, Some(instruction));
+    assert_eq!(trapped.opcode_gas, Some(1));
+    assert_eq!(trapped.before.gas_remaining, 0);
     assert!(matches!(trapped.outcome, DiagnosticStepOutcome::Trapped(_)));
     assert_eq!(trapped.after, trapped.before);
     let (program, fixture) = first_branch(instruction, &[]);

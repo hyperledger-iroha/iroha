@@ -121,7 +121,7 @@ fn framed_hash<F: KagemushaPoseidonFieldV1>(
 }
 
 /// Join the true113 semantic offsets to the actual State and the same private credit openings.
-/// Both active and inactive branches emit the identical fixed384-byte cipher and32-byte opening
+/// Both active and inactive branches emit the identical canonical-width cipher and 32-byte opening
 /// graphs. Inactive buffers and the entire79-cell semantic prefix are explicitly zero.
 /// The generic cash/Bootstrap approval cannot satisfy this dedicated pre-debit Mint family.
 pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_v1<
@@ -135,9 +135,9 @@ pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_
     opening: Option<OrdinaryMintStateOpeningV1<'_>>,
 ) -> Result<(), String> {
     if column.len() != ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1
-        || opening
-            .as_ref()
-            .is_some_and(|o| o.encrypted_credit.len() != 384)
+        || opening.as_ref().is_some_and(|o| {
+            o.encrypted_credit.len() != KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+        })
     {
         return Err("ordinary Mint State full column/cipher capacity differs".into());
     }
@@ -280,7 +280,10 @@ pub(in crate::kagemusha_v1_recursion) fn constrain_ordinary_mint_state_bindings_
         credit_original,
     )?;
     bytes_if(ctx, range, &credit_digest, digest(22), enabled)?;
-    let ciphertext = opening.map_or_else(|| vec![0; 384], |o| o.encrypted_credit.to_vec());
+    let ciphertext = opening.map_or_else(
+        || vec![0; KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1],
+        |o| o.encrypted_credit.to_vec(),
+    );
     let ciphertext = assign_bytes(ctx, range, &ciphertext);
     for byte in &ciphertext {
         let selected = gate.mul(ctx, byte.quantum_cell(), inactive);

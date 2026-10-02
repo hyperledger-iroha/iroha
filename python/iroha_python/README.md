@@ -222,6 +222,14 @@ exists. `Kagemusha.top_up_instruction_wire_id` is the exact
 `iroha.kagemusha.v1.top_up` registry ID. The standard `TransactionBuilder`
 signs the exact nine-field canonical payload, including the complete top-up request.
 
+### Petal Stream optical transport
+
+KAGEMUSHA peer messages can also travel over Petal Stream, the animated
+Sakura-storm optical transport. Its stream encoder, renderer, camera decoder
+and scan session live in the separate pure-standard-library package
+[`iroha-petal`](../iroha_petal/README.md) (`python/iroha_petal`), which
+`iroha_python` does not import.
+
 
 ## Native Privacy Bridge
 

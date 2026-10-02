@@ -46,20 +46,91 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The current checkout is `optimizations` at `dab3433065`, with the resolved
-`c87c37aaa1` merge still uncommitted. Source22's privacy and Core builds were
-interrupted by that merge; their source guards failed and no planned native
-controls ran. The merge's fixture repairs passed 18 final focused Rust tests.
-The first post-merge candidate passes the stock verifier-only check, normal Core
-library build, Core/component test compilation and Kagami test compilation.
-Its evidence and privacy test builds expose a test-only DER import and an
-inaccessible CA test helper. Both are repaired, with native reruns pending.
-Genuine quantity and IVM producers each produce identical paired captures;
-the quantity consumer's stale 2 ms expectation is corrected to the authenticated
-5 ms fixture time. Its full consumer rerun and current AIR consumption remain
-required. The subsequent candidate includes seven private IVM shift/rotate
-equations and repaired mandatory-privacy Swift fixture expectations. Combined
-native and SDK validation remains pending. The last complete selected privacy candidate is source17, recorded at
+The current `optimizations` checkout includes the resolved Core/SDK merges and
+reviewed fixture, private execution and X509 repairs. Fresh normal Rust 1.93.1
+compilation emits all twelve selected Core/Kagami/IVM/storage/FASTPQ harnesses.
+The genuine host bridge passes ABI-25, loaded-image and all 103 required-symbol
+checks. Paired quantity and IVM producers return identical captures, and the
+quantity consumer passes. The full selected native census contains 3,271 ordinary
+executions; its run is incomplete. Fresh reruns pass the corrected issuer-key
+deadline, both sticky-quota regressions, all 109 FASTPQ source-inventory controls,
+seven MV publication controls and the Kagami export inventory. Six current mint
+failures expose an exact-size bug: production requires the 384-byte transport
+maximum instead of the 327-byte canonical envelope. The reviewed model repair is
+applied together with recursive-consumer corrections. The remaining 66 control
+groups finish with 2,870 passes, five failures and no skips. Three failures are
+the known CoreZk fixtures; two private-export fixtures configured a different fee
+asset from their signed genesis policy. The fresh rerun passes all 18 available CoreZk controls, both private-export
+fixtures and the model mint geometry checks. One production-prover control needs
+an explicitly enabled feature. It also exposes an ineffective clamped X25519
+entropy mutation, two missing lookup configurations and a provider-validation
+allocation from encoding solely to measure length. Reviewed repairs are applied;
+the original failed results remain retained. Both complete active/inactive mint
+binding controls pass on the retained native artifact. The complete mint relation
+then exposes a production capacity failure: 282 SHA blocks require 133,448 rows
+per Table8 lane, exceeding 65,527 usable rows at K=16. Limits remain unchanged.
+The original-State Musubi source capture and all three remaining semantic table
+readers are applied; their first compile exposed 14 missing read-trait
+implementations and one obsolete test callback. The reviewed API repair is applied
+and the five-crate native rerun is pending. Full-State capture still rejects the
+unresolved runtime-verifier schema. All nine cryptographic admission controls
+pass, including 44 actual fresh-process valid/malformed checks across all 11
+enabled algorithms with zero Rust allocation requests. This does not measure
+hidden C allocations or side-channel resistance.
+
+Fresh Linux verifier, evidence and optimized privacy builds pass. Its full X509
+namespace records 1,035 passes and one obsolete composite-constructor expectation;
+all four original full-domain oracles and all 46 private-dispatch controls pass.
+The latter include comparison gas, shifts/rotations and unary/select equations.
+A coherent-output diagnostic reproduces missing DER source provenance in seven
+RFC output roles. The five-SPKI-channel repair now passes all six native controls,
+including the genuine maximum three-certificate fixture, and eight existing key
+controls. The composite-constructor correction passes. Nine TBS/CRL/signature
+data/length bindings are applied; native tests exposed an incorrect little-endian
+assumption, and a reviewed repair restores the existing big-endian channel
+contract. All eight variable-output controls and complete source-lookup replay
+now pass. All six serial-source controls now pass. The selected disclosure source join
+passes all five native controls. Its full RFC namespace records 119 passes, four
+stale profile/descriptor/histogram failures and two ignored controls. Original
+Name OID census, uniqueness and nonempty structure repairs are now applied; their
+native controls, complete value/string policy and refreshed native profile pins
+remain open. The public zero-suffix FFT optimization passes native parity and
+all 72 relative cost comparisons; large-domain gains remain modest and do not
+establish the complete proof's five-minute target. Four private multiply variants
+now reuse the exact original arithmetic bank. Their first native run exposes two
+obsolete fixture copy extents before arithmetic assertions; the correction is
+applied and all 50 private-dispatch controls now pass. All ten original public
+multiplication controls pass, including the genuine maximum-segment proof.
+
+Unrelated working-tree changes prevent one fixed-source qualification. These
+fresh runs are artifact diagnostics with actual Cargo output and immutable native
+executables; every source-observation failure and failed native result is retained.
+They do not qualify the changing checkout or inherit historical release results.
+All ten genuine Kotlin generator modes now produce identical paired outputs.
+The authentic canonical public fixture and its Kotlin pin are refreshed, and
+all five golden consumers pass. The first managed run completes all 1,756 test
+cases without failures or skips, but Gradle fails when a shared output file
+disappears before report completion. The isolated successor's Gradle task passes
+all 1,766 cases with no failures or skips; its wrapper rejects valid repeated
+parameter display names while reconciling reports. Exact multiset reconciliation now admits the 1,766 genuine executions. The
+remaining run passes tools (25), Android managed client/wallet (409/52), actual
+host-JNI client/wallet (95/1), the tooling distribution and the real 13,741-byte
+redemption example proof. Four Android test files required a JUnit 5 import
+correction before these passes. All original failures remain retained. All 57 current typed workflow/example
+checks also pass as managed workflow coverage.
+Exact C/JNI export inventories and SDK
+source contracts pass. The latest
+Apple retry compiles three real slices and stops on a Cargo.lock change before
+publishing a package. Complete Swift packaging, host tests and physical-device
+runs remain open. Fresh daemon, CLI and three network harness builds pass, but all
+four selected four-validator scenarios fail Torii startup because the alias-index
+route's mounted authentication marker disagrees with its required-signature
+catalog and handler. The reviewed registration correction and production-mount
+regression pass all ten native alias controls. The subsequent daemon build finds
+a missing data-model type qualification in the account-removal repair; that
+one-line correction is applied. Fresh daemon/harness rebuilding and four-validator
+reruns remain required. The last
+complete selected privacy candidate is source17, recorded at
 `dist/zk-remediation/2026-09-30/epoch19-integrated-source17/source.json`
 (SHA-256 `cf8c2dd49d1b315e5040b7f4db0e8daf039ac00607ba01fbef5ecd1e303739b5`).
 Stock Rust 1.93.1 production and normal optimized test builds pass on macOS and
@@ -206,10 +277,17 @@ Branches use the same constrained predicate for the PC, require both native
 operand tags to be public and preserve the original 21-port history join.
 Prepared-contract admission checks both successors. Scalar, branch, alias/r0,
 gas/cycle, degree and shared-bank controls await native execution on the combined
-source. The same original ports now constrain all seven native shift/rotate
-operations, low-six-bit amounts, operand tags and native gas costs. Their eleven
-new controls also require native execution. These components do not enable IVM
-proof admission.
+source. The same original ports constrain all seven native shift/rotate
+operations, low-six-bit amounts, operand tags and native gas costs, plus NOT,
+NEG and signed MIN/MAX. The comparison relation charges the native two gas.
+All 50 private-dispatch controls pass in the fresh optimized Linux artifact,
+including coherent wrong-gas forgeries, seven unary/select controls and four
+private multiplication controls. POPCNT, CLZ and CTZ now reuse the original
+zero-prefix equations over canonical private source bits with native six-gas,
+one-cycle behavior; independent source/integer review passes and native tests
+are pending. The original 21 packet ports remain unchanged. Complete
+instruction/region semantics and finalized State binding remain open; these
+components do not enable IVM proof admission.
 
 ### ZK04 — FASTPQ
 
@@ -234,7 +312,12 @@ of source qualification.
 
 Two actual-Metal controls on that source also pass scalar parity: all 63 continuation
 prefix/body boundary combinations and leaf batches for all eight proof oracle
-kinds. This covers the available Metal device, not the complete hardware matrix.
+kinds. A fresh ordinary optimized build with `fastpq-gpu,simd` now passes 50
+distinct local hardware controls, including nine required-Metal controls,
+NEON state/scratch clearing on return and unwind, independent hash vectors,
+exact-root transform parity, staging and failure ownership. This covers the
+available M1 Ultra; it does not complete the hardware matrix or establish
+side-channel resistance, quiet-host performance or fixed-source qualification.
 
 Historical seeded CPU and required-Metal proofs produce identical 485,219-byte
 artifacts and pass positive/negative controls. Historical known-answer controls

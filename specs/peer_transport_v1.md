@@ -88,6 +88,12 @@ checksum. Reassembly accepts any ordering, deduplicates identical overlap,
 rejects conflicting overlap, and decodes only a complete bounded value. Frame
 count depends on the current bounded message, never payment history.
 
+Petal Stream (`specs/petal_stream.md`) is an optional animated optical carrier for the same
+bounded values. Its payload is the encoded `IPM1` message and its `kind` byte is the `IPM1`
+kind (1 request, 2 payment, 3 acknowledgement). It brings its own framing, forward error
+correction and CRC-32C check, accepts frames in any order, ignores duplicates and delivers only
+a complete payload whose checksum matches; it does not authenticate the payload.
+
 NFC, Nearby, Multipeer, and equivalent links carry the same canonical binary
 values with explicit kind and length, using the same overlap/conflict rules.
 Transport encryption never replaces the recipient-only credit envelope,

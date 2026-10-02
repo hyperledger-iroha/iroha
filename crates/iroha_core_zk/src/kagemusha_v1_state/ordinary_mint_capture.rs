@@ -1175,7 +1175,10 @@ mod tests {
         let mut entropy = [29; 56];
         entropy[32..].fill(30);
         let original = seal(&context, &opening, &entropy).unwrap();
-        assert_eq!(original.len(), 384);
+        assert_eq!(
+            original.len(),
+            iroha_data_model::kagemusha::KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1
+        );
         assert_eq!(seal(&context, &opening, &entropy).unwrap(), original);
         let envelope =
             KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
@@ -1194,9 +1197,13 @@ mod tests {
             plain.canonical_bytes().unwrap(),
             opening.canonical_bytes().unwrap()
         );
-        let mut changed = entropy;
-        changed[0] ^= 1;
-        assert_ne!(seal(&context, &opening, &changed).unwrap(), original);
+        // X25519 clamps the low three scalar bits. Change an effective scalar
+        // bit, then independently change the AEAD nonce; both must affect bytes.
+        for index in [1, 32] {
+            let mut changed = entropy;
+            changed[index] ^= 1;
+            assert_ne!(seal(&context, &opening, &changed).unwrap(), original);
+        }
     }
     #[test]
     fn mint_crypto_original_rejects_foreign_context_key_and_credit_openings() {

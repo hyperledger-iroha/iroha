@@ -417,6 +417,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     { target: "./dist/race.js", subpaths: ["./race"] },
     { target: "./dist/classedRace.js", subpaths: ["./classed-race"] },
     { target: "./dist/game.js", subpaths: ["./game"] },
+    { target: "./dist/petal.js", subpaths: ["./petal"] },
   ]);
 });
 

@@ -22,6 +22,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | IVM/Kotodama | IVM is the sole VM with ABI V1. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented and under repair. | Node failures, matched daemon/harness, provider resilience and L1/L2 promotion. |
 | KAGEMUSHA | Ordinary app-owned hardware admission, Native clock/current-wallet reads and approval custody have component implementations; the current cash/Guard production library compiles. | Current-owner financial control, complete recursive monetary proofs, funded State transitions, settlement, recovery and physical-device evidence. |
+| Petal Stream | `iroha_petal` implements the [Petal Stream](specs/petal_stream.md) animated optical transport (`天` orientation field, katakana, tile polarity and ring dots as three Reed–Solomon lanes under a rateless fountain) with decoder, renderer, camera simulator and `iroha offline petal`. A gain-free tile read keeps lanes `P` and `K` alive under over-exposure, veiling light and shadows. Swift, Kotlin/JVM, JavaScript, Python and C# ports reproduce the shared fixtures and decode the golden captures to the recorded lanes. Simulated reads complete the largest 7,552-byte payment in 8.6 s (34 s from lanes `P` and `D` alone). | All evidence is simulated: physical-camera reads on the governed Android/iOS device matrix, lane `K` at 480p or soft focus, field tuning (three-finger fallback, pose tracking) and the public guides in `iroha-docs`. |
 
 ## Immediate blockers
 
@@ -122,38 +123,59 @@ transforms take 639.87 seconds and are the largest measured performance target.
 The retained run is `dist/zk-remediation/2026-09-30/epoch19-linux-source17-maximum`.
 Activation remains unavailable.
 
-The source17 Core/MV/concread/IVM selection executes 1,242 controls: 1,240 pass and
-two paid-alias fixtures fail. Both genuine native IVM capture producers and all
-four AIR consumers pass. The paid-alias catalog-authority repair, retained source
-quota custody, required X509 proof-instance nonce and authentic Kagemusha TSV
-fixture are now applied. Stock verifier-only, evidence and optimized test builds
-pass for source20, including all four genuine profile/proof/pre-aux diagnostics.
-Its expanded selection records 1,183 passes and four X509 fixture failures. The
-historical-descriptor repair and independently regenerated scoped DER values
-are applied. The resolved merge and subsequent private scalar/branch equations,
-public X509 coefficient extents, fixed-row construction and cleanup repairs now
-require fresh combined native validation. The first post-merge verifier-only,
-normal Core, Core/component test and Kagami test builds pass. Evidence/privacy
-test builds expose two test-boundary errors; repairs are applied and await
-native reruns. Genuine quantity and IVM captures match across paired runs; the
-quantity consumer's stale timestamp assertion is repaired, with full consumption
-still pending. Seven private IVM shift/rotate equations and Swift fixture/build
-guidance corrections are included in the next combined candidate. The source22
-build attempts failed source-observation guards when the merge began; they supply
-no native test pass.
-All 648 macOS CPU cost/parity measurements pass, with the pruned transform faster
-than the full-transform reference. Linux comparison and a complete current
-maximum proof remain pending.
+Fresh normal Rust compilation now emits all twelve selected Core/Kagami/IVM/
+storage/FASTPQ test harnesses. The actual host bridge passes ABI-25, loaded-image
+and required-symbol checks; genuine quantity and IVM captures match across paired
+runs. Fresh issuer-key and quota-ownership regressions pass, including all 109
+FASTPQ source-inventory controls. The broader selection remains incomplete.
+Mint tests exposed a production mismatch between the 327-byte canonical envelope
+and the 384-byte transport maximum; the model and recursive-consumer repairs are
+applied. The remaining 66 groups execute 2,870 passes and five known fixture
+failures with no skips. The fresh rerun passes the available CoreZk controls,
+both private-export fee fixtures and mint geometry. It exposes two proof-helper
+lookup configurations, an ineffective X25519 entropy mutation and an allocating
+provider-validation length check; reviewed follow-up repairs are applied. Both
+complete active/inactive mint binding controls pass, but the full mint relation
+exceeds the unchanged production SHA row capacity at K=16. The Musubi original-State
+source and final three semantic table readers are applied; native compilation
+exposes a read-trait mismatch and test callback error, both repaired for the
+five-crate rerun. Full-State capture still rejects its unresolved verifier schema.
+All nine crypto admission controls pass, including 44 fresh-process checks across
+all 11 algorithms with no Rust allocation requests. Ongoing unrelated
+edits mean these are artifact diagnostics,
+not qualification of one fixed source candidate.
 
-Source17 managed runs pass 25 attestation-tool tests, 40 wallet tests and 57 typed
-workflow/example checks. JVM tests record 1,214 passes and 394 failures; Android
-records 284 passes and one stale enrollment-fixture failure. Genuine native and
-generator prerequisites must be rebuilt before the consumer rerun. The current
-Vega timing attempt refuses a busy host before measurement; it supplies no timing
-qualification.
+Fresh Linux privacy builds pass. All 50 private-dispatch controls and the four
+full-domain X509 oracles pass. The obsolete composite-test expectation is repaired
+and its rerun passes. The five-channel SPKI source repair passes all six native
+controls. All eight TBS/CRL/signature controls and complete source-lookup replay
+pass after the length-endianness correction. All six serial controls pass;
+all five selected-disclosure controls pass. Its full RFC namespace has 119 passes
+and four stale profile/descriptor/histogram failures. Complete Name OID census and
+uniqueness are applied but await native validation; full value/string policy
+remains open. Corrected private multiply fixtures now
+pass all four controls. The zero-suffix FFT repair passes native parity, but its measured
+large-domain gains do not establish the complete proof's time target.
+Current complete proof, resource and cryptographic qualification remain unavailable.
+
+The exact native export inventory is repaired and SDK source contracts pass.
+The latest Apple retry stops after three compiled slices because Cargo.lock
+changed; it publishes no package. Authentic Kotlin fixtures are refreshed; the
+isolated core run passes all 1,766 cases. Exact report reconciliation and the
+remaining diagnostic now pass: tooling, Android managed and actual host-JNI
+consumers, plus the real redemption example. Four Android test files needed a
+JUnit 5 import correction. Full Swift packaging and physical devices remain pending. Fifty local FASTPQ hardware controls pass, including
+required Metal and NEON cleanup; the full hardware and side-channel matrix is open.
+Vega timing requires an uncontended host and remains unqualified.
 
 Fresh canonical fixture generation, native SDK consumers, Swift/Android packages,
 workspace checks and four-validator tests still require one integrated candidate.
+Fresh network artifacts compile, but all four selected scenarios fail Torii
+startup on an alias-index authentication-marker mismatch. The correction preserves
+the existing required signature policy and passes all ten native alias-route
+controls. The next daemon build finds a missing type qualification in account
+removal; its one-line repair is applied. Fresh daemon/harness and four-validator
+reruns remain required.
 Complete cryptographic/side-channel, physical-device and signed release evidence
 remain open. The [ZK goals](specs/zk_first_release_goals.md) retain exact boundaries.
 

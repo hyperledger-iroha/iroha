@@ -13,6 +13,8 @@ RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_re
 TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs"
 TESTNET_VALUE_LEDGER_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_value_ledger_v1.rs"
 TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_native_startup_v1.rs"
+ORDINARY_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_native_startup.rs"
+ORDINARY_CURRENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1/ordinary_current_control.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
@@ -28,6 +30,12 @@ SELF_TESTS=(
   --self-test-missing-reserve-finality-rust-symbol
   --self-test-bad-reserve-finality-checkpoint-signature
   --self-test-missing-reserve-finality-request-binding
+  --self-test-missing-ordinary-startup-header-symbol
+  --self-test-missing-ordinary-startup-rust-symbol
+  --self-test-bad-ordinary-startup-signature
+  --self-test-missing-ordinary-current-header-symbol
+  --self-test-missing-ordinary-current-rust-symbol
+  --self-test-bad-ordinary-current-signature
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-close-header-symbol
   --self-test-missing-kagemusha-install-header-symbol
@@ -94,6 +102,8 @@ run_contract_check() {
   local testnet_observation_rust="$9"
   local testnet_value_ledger_rust="${10}"
   local testnet_startup_rust="${11}"
+  local ordinary_startup_rust="${12}"
+  local ordinary_current_rust="${13}"
 
   python3 - \
     "${rust_lib}" \
@@ -106,7 +116,9 @@ run_contract_check() {
     "${reserve_finality_rust}" \
     "${testnet_observation_rust}" \
     "${testnet_value_ledger_rust}" \
-    "${testnet_startup_rust}" <<'PY'
+    "${testnet_startup_rust}" \
+    "${ordinary_startup_rust}" \
+    "${ordinary_current_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -122,6 +134,8 @@ rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[9]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[10]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[11]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[12]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[13]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -152,6 +166,8 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_ordinary_runtime_startup_v1",
+    "connect_norito_kagemusha_ordinary_current_control_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
@@ -340,6 +356,7 @@ def canonical_rust_type(value: str) -> str:
         "()": "void",
         "c_char": "char",
         "c_int": "int32_t",
+        "std::ffi::c_int": "int32_t",
         "i32": "int32_t",
         "c_uchar": "uint8_t",
         "c_ulong": "unsignedlong",
@@ -677,6 +694,8 @@ make_negative_workspace() {
   cp "${TESTNET_OBSERVATION_RUST}" "${tmp}/kagemusha_testnet_observation_v1.rs"
   cp "${TESTNET_VALUE_LEDGER_RUST}" "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs"
   cp "${TESTNET_STARTUP_RUST}" "${tmp}/kagemusha_testnet_native_startup_v1.rs"
+  cp "${ORDINARY_STARTUP_RUST}" "${tmp}/ordinary_native_startup.rs"
+  cp "${ORDINARY_CURRENT_RUST}" "${tmp}/ordinary_current_control.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -699,7 +718,9 @@ expect_contract_rejection() {
       "${tmp}/kagemusha_reserve_finality_v1.rs" \
       "${tmp}/kagemusha_testnet_observation_v1.rs" \
       "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
-      "${tmp}/kagemusha_testnet_native_startup_v1.rs" 2>&1)"; then
+      "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
+      "${tmp}/ordinary_native_startup.rs" \
+      "${tmp}/ordinary_current_control.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -733,7 +754,9 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${RESERVE_FINALITY_RUST}" \
     "${TESTNET_OBSERVATION_RUST}" \
     "${TESTNET_VALUE_LEDGER_RUST}" \
-    "${TESTNET_STARTUP_RUST}" >/dev/null
+    "${TESTNET_STARTUP_RUST}" \
+    "${ORDINARY_STARTUP_RUST}" \
+    "${ORDINARY_CURRENT_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -816,6 +839,42 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
+      ;;
+    --self-test-missing-ordinary-startup-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_runtime_startup_v1' \
+        'removed_ordinary_startup_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
+      ;;
+    --self-test-missing-ordinary-startup-rust-symbol)
+      replace_once "${tmp}/ordinary_native_startup.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_runtime_startup_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_startup_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_runtime_startup_v1']"
+      ;;
+    --self-test-bad-ordinary-startup-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_runtime_startup_v1\s*\([^;]*?)uint64_t id' \
+        '\g<1>uint32_t id'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_runtime_startup_v1"
+      ;;
+    --self-test-missing-ordinary-current-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_ordinary_current_control_v1' \
+        'removed_ordinary_current_v1'
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
+      ;;
+    --self-test-missing-ordinary-current-rust-symbol)
+      replace_once "${tmp}/ordinary_current_control.rs" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_ordinary_current_control_v1' \
+        'pub unsafe extern "C" fn removed_ordinary_current_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_ordinary_current_control_v1']"
+      ;;
+    --self-test-bad-ordinary-current-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_ordinary_current_control_v1\s*\([^;]*?)uint64_t core_handle' \
+        '\g<1>uint32_t core_handle'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_ordinary_current_control_v1"
       ;;
     --self-test-missing-kagemusha-header-symbol)
       replace_once "${tmp_header}" \
@@ -1048,7 +1107,9 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "${tmp}/kagemusha_reserve_finality_v1.rs" \
         "${tmp}/kagemusha_testnet_observation_v1.rs" \
         "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
-        "${tmp}/kagemusha_testnet_native_startup_v1.rs"
+        "${tmp}/kagemusha_testnet_native_startup_v1.rs" \
+        "${tmp}/ordinary_native_startup.rs" \
+        "${tmp}/ordinary_current_control.rs"
       echo "[connect-norito-header] positive control preserved canonical umbrella: ${MODE}"
       exit 0
       ;;
@@ -1083,5 +1144,7 @@ run_contract_check \
   "${RESERVE_FINALITY_RUST}" \
   "${TESTNET_OBSERVATION_RUST}" \
   "${TESTNET_VALUE_LEDGER_RUST}" \
-  "${TESTNET_STARTUP_RUST}"
+  "${TESTNET_STARTUP_RUST}" \
+  "${ORDINARY_STARTUP_RUST}" \
+  "${ORDINARY_CURRENT_RUST}"
 compile_header

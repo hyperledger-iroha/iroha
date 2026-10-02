@@ -342,7 +342,19 @@ fn append_control_residues<'a>(
     let returning = select(&|_, w| role(w) == Some(Role::Return));
     let store = select(&|_, w| role(w) == Some(Role::Store));
     let scalar = select(&|_, w| role(w) == Some(Role::Scalar));
-    let rotating = select(&|_, w| scalar::is_rotate(w));
+    let scalar_extra_gas = select(&|_, w| {
+        scalar::is_rotate(w)
+            || matches!(
+                wide::opcode(w),
+                wide::arithmetic::SLT
+                    | wide::arithmetic::SLTU
+                    | wide::arithmetic::SEQ
+                    | wide::arithmetic::SNE
+            )
+    });
+    let multiply_extra_gas = select(&|_, w| scalar::is_multiply(w)).mul(F(2));
+    let bit_count_extra_gas = select(&|_, w| scalar::is_bit_count(w)).mul(F(5));
+    let move_extra_gas = select(&|_, w| scalar::is_conditional_move(w)).mul(F(2));
     let branching = select(&|_, w| role(w) == Some(Role::Branch));
     let mut fetched = F::ZERO;
     for i in 0..MAX_WORDS {
@@ -445,7 +457,8 @@ fn append_control_residues<'a>(
             out.push(p[port][offset + i].sub(limb(row, word, i)));
         }
         // Native base cost: two for CALL/RETURN, three for STORE64, one
-        // for scalar arithmetic and conditional branches, plus one for rotates.
+        // for scalar arithmetic and conditional branches, plus one for comparisons/rotates
+        // and two for the four multiply variants.
         // The final borrow forbids underflow.
         let borrow_in = if i == 0 {
             F::ZERO
@@ -458,7 +471,10 @@ fn append_control_residues<'a>(
                 .mul(F(2))
                 .add(store.mul(F(3)))
                 .add(scalar)
-                .add(rotating)
+                .add(scalar_extra_gas)
+                .add(multiply_extra_gas)
+                .add(bit_count_extra_gas)
+                .add(move_extra_gas)
                 .add(branching)
         } else {
             F::ZERO

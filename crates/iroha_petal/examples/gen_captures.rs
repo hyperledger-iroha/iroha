@@ -1,0 +1,355 @@
+//! Writes the cross-SDK golden camera captures to `fixtures/petal/petal_captures_v1.json`.
+//!
+//! Each capture is a degraded 8-bit luma plane (zlib + base64) of one frame of
+//! the `one-pass` stream in `petal_stream_v1.json`, together with the decode
+//! result every conforming decoder must reach.
+//!
+//! `cargo run --release -p iroha_petal --example gen_captures -- <output path>`
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
+use std::fmt::Write as _;
+use std::io::Write as _;
+
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use iroha_petal::decode::{DecodeOptions, decode};
+use iroha_petal::image::Luma;
+use iroha_petal::lanes::{Lane, encode_lane};
+use iroha_petal::render::{RenderOptions, render};
+use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
+use iroha_petal::stream::StreamEncoder;
+
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+fn mirror(image: &Luma) -> Luma {
+    let mut data = Vec::with_capacity(image.data.len());
+    for row in image.data.chunks(image.width) {
+        data.extend(row.iter().rev());
+    }
+    Luma {
+        width: image.width,
+        height: image.height,
+        data,
+    }
+}
+
+struct Case {
+    name: &'static str,
+    frame: u16,
+    config: Option<CaptureConfig>,
+    mirrored: bool,
+    /// Columns (as fractions of the width) that are dimmed to `factor` after capture.
+    shadow: Option<(f64, f64, f64)>,
+    must: &'static str,
+    note: &'static str,
+}
+
+fn main() {
+    let path = std::env::args().nth(1).expect("output path");
+    // the stream every capture displays: identical to `one-pass` in petal_stream_v1.json
+    let mut rng = iroha_petal::prng::Xorshift32::new(2);
+    let payload: Vec<u8> = (0..700).map(|_| rng.next_byte()).collect();
+    let encoder = StreamEncoder::new(&payload, 2).expect("stream");
+    let base = |w: usize, h: usize| CaptureConfig {
+        width: w,
+        height: h,
+        ..CaptureConfig::modern()
+    };
+    let cases = vec![
+        Case {
+            name: "clean-512",
+            frame: 5,
+            config: None,
+            mirrored: false,
+            shadow: None,
+            must: "PKD",
+            note: "ideal render, no camera",
+        },
+        Case {
+            name: "modern-720p-rotated",
+            frame: 6,
+            config: Some(CaptureConfig {
+                noise: 2.0,
+                rotation_deg: 37.0,
+                tilt_x_deg: 6.0,
+                tilt_y_deg: -5.0,
+                shift: (0.01, -0.02),
+                seed: 11,
+                ..base(1280, 720)
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PKD",
+            note: "sharp 720p, 37 degree rotation, mild tilt",
+        },
+        Case {
+            name: "legacy-540p-tilted",
+            frame: 9,
+            config: Some(CaptureConfig {
+                rotation_deg: 200.0,
+                seed: 12,
+                ..CaptureConfig {
+                    width: 960,
+                    height: 540,
+                    ..CaptureConfig::legacy()
+                }
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PD",
+            note: "older phone: soft, noisy, barrel distortion, glare gradient; lane K optional",
+        },
+        Case {
+            name: "soft-480p-blur1.9",
+            frame: 10,
+            config: Some(CaptureConfig {
+                width: 640,
+                height: 480,
+                blur_sigma: 1.9,
+                noise: 5.0,
+                rotation_deg: 110.0,
+                tilt_x_deg: -8.0,
+                tilt_y_deg: 10.0,
+                ambient: 0.05,
+                seed: 13,
+                ..CaptureConfig::modern()
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PD",
+            note: "out of focus 480p; lane K must not be reported unless correct",
+        },
+        Case {
+            name: "small-480p",
+            frame: 12,
+            config: Some(CaptureConfig {
+                width: 640,
+                height: 480,
+                fill: 0.75,
+                blur_sigma: 1.6,
+                noise: 5.0,
+                rotation_deg: 285.0,
+                seed: 14,
+                ..CaptureConfig::modern()
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PD",
+            note: "low-end preview resolution and soft focus; lane K must not be reported unless correct",
+        },
+        Case {
+            name: "selfie-mirrored-540p",
+            frame: 13,
+            config: Some(CaptureConfig {
+                noise: 2.0,
+                rotation_deg: 15.0,
+                tilt_x_deg: -4.0,
+                seed: 15,
+                ..base(960, 540)
+            }),
+            mirrored: true,
+            shadow: None,
+            must: "PD",
+            note: "horizontally mirrored preview (front camera)",
+        },
+        Case {
+            name: "overexposed-540p",
+            frame: 9,
+            config: Some(CaptureConfig {
+                exposure: 3.0,
+                noise: 2.0,
+                rotation_deg: 28.0,
+                tilt_x_deg: 5.0,
+                tilt_y_deg: -4.0,
+                shift: (0.01, -0.01),
+                seed: 2,
+                ..base(960, 540)
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PKD",
+            note: "auto-exposure blows the tiles out three-fold; only the normalised tile read gets P and K",
+        },
+        Case {
+            name: "veiled-720p",
+            frame: 6,
+            config: Some(CaptureConfig {
+                ambient: 0.5,
+                rotation_deg: 250.0,
+                seed: 7,
+                ..CaptureConfig::legacy()
+            }),
+            mirrored: false,
+            shadow: None,
+            must: "PKD",
+            note: "older phone in a bright room: reflections lift the black level by half the lit level",
+        },
+        Case {
+            name: "shadow-band-540p",
+            frame: 10,
+            config: Some(CaptureConfig {
+                noise: 2.0,
+                rotation_deg: 8.0,
+                seed: 16,
+                ..base(960, 540)
+            }),
+            mirrored: false,
+            shadow: Some((0.35, 0.6, 0.3)),
+            must: "PK",
+            note: "a band across the middle of the code in shadow (30 % light); finder levels cannot describe it",
+        },
+    ];
+    let mut entries = Vec::new();
+    for case in cases {
+        let cells = encoder.cells(case.frame);
+        let size = if case.config.is_none() { 512 } else { 768 };
+        let source = render(
+            &cells,
+            &RenderOptions {
+                size,
+                supersample: 3,
+                ..RenderOptions::default()
+            },
+        );
+        let mut luma = case.config.map_or_else(
+            || source.to_luma(),
+            |config| capture(&source, &fit_to_frame(&config, 4.0)),
+        );
+        if case.mirrored {
+            luma = mirror(&luma);
+        }
+        if let Some((from, to, factor)) = case.shadow {
+            let (start, end) = (
+                (luma.width as f64 * from) as usize,
+                (luma.width as f64 * to) as usize,
+            );
+            for row in luma.data.chunks_mut(luma.width) {
+                for value in &mut row[start..end] {
+                    *value = (f64::from(*value) * factor).round() as u8;
+                }
+            }
+        }
+        let decoded = decode(&luma, &DecodeOptions::default());
+        let (p_data, k_data, d_data) = encoder.lane_data(case.frame);
+        let mut flags = String::new();
+        if let Ok(frame) = &decoded {
+            for (letter, lane, data) in [
+                ('P', &frame.p, &p_data),
+                ('K', &frame.k, &k_data),
+                ('D', &frame.d, &d_data),
+            ] {
+                if let Some(result) = lane {
+                    assert_eq!(
+                        &result.data, data,
+                        "{}: lane {letter} decoded to wrong data",
+                        case.name
+                    );
+                    flags.push(letter);
+                }
+            }
+        }
+        for required in case.must.chars() {
+            assert!(
+                flags.contains(required),
+                "{}: reference decoder lost required lane {required} (got {flags:?})",
+                case.name
+            );
+        }
+        let margin = |lane: &Option<iroha_petal::decode::LaneResult>| {
+            lane.as_ref().map_or_else(
+                || "-".to_string(),
+                |r| format!("{}e{}", r.corrected, r.erasures),
+            )
+        };
+        let (p, k, d) = decoded.as_ref().map_or_else(
+            |_| ("-".into(), "-".into(), "-".into()),
+            |f| (margin(&f.p), margin(&f.k), margin(&f.d)),
+        );
+        println!(
+            "{:<24} reference decoder reads lanes {flags:?} (corrected/erased P {p} K {k} D {d})",
+            case.name
+        );
+        let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+        zlib.write_all(&luma.data).expect("compress");
+        let compressed = zlib.finish().expect("finish");
+        let (_, _, _) = (encode_lane(Lane::P, &p_data), 0, 0);
+        entries.push(format!(
+            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\",\n      \"p_data\": \"{}\", \"k_data\": \"{}\", \"d_data\": \"{}\",\n      \"luma_zlib_base64\": \"{}\"\n    }}",
+            case.name,
+            case.note,
+            case.frame,
+            luma.width,
+            luma.height,
+            case.mirrored,
+            case.must,
+            hex(&p_data),
+            hex(&k_data),
+            hex(&d_data),
+            base64(&compressed)
+        ));
+    }
+    // negative captures
+    let noise: Vec<u8> = {
+        let mut rng = iroha_petal::prng::Xorshift32::new(5);
+        (0..320 * 240).map(|_| rng.next_byte()).collect()
+    };
+    let mut negatives = Vec::new();
+    for (name, data) in [
+        ("blank-320x240", vec![0u8; 320 * 240]),
+        ("noise-320x240", noise),
+    ] {
+        assert!(
+            decode(
+                &Luma {
+                    width: 320,
+                    height: 240,
+                    data: data.clone()
+                },
+                &DecodeOptions::default()
+            )
+            .is_err()
+        );
+        let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+        zlib.write_all(&data).expect("compress");
+        negatives.push(format!(
+            "    {{\"name\": \"{name}\", \"width\": 320, \"height\": 240, \"luma_zlib_base64\": \"{}\"}}",
+            base64(&zlib.finish().expect("finish"))
+        ));
+    }
+    let out = format!(
+        "{{\n  \"fixture_version\": 1,\n  \"format\": \"petal-captures-v1\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
+        hex(&payload),
+        entries.join(",\n"),
+        negatives.join(",\n")
+    );
+    std::fs::write(&path, out).expect("write fixture");
+    println!("wrote {path}");
+}

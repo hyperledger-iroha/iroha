@@ -65,6 +65,9 @@ enum Mutation {
     CreditId,
     Amount,
     Ciphertext,
+    TruncatedCiphertext,
+    TrailingCiphertext,
+    TransportPaddedCiphertext,
     MissingOpening,
     InactiveColumn,
 }
@@ -72,7 +75,7 @@ enum Mutation {
 fn circuit<F: KagemushaPoseidonFieldV1>(
     active: bool,
     mutation: Option<Mutation>,
-) -> BindingCircuit<F> {
+) -> Result<BindingCircuit<F>, String> {
     let fixture = kagemusha_ordinary_mint_codec_fixture_v1();
     let request = &fixture.request;
     let authorization = &request.authorization;
@@ -116,7 +119,14 @@ fn circuit<F: KagemushaPoseidonFieldV1>(
         Some(Mutation::RecoveryOpening) => credit.recovery_nonce.fill(0),
         Some(Mutation::CreditId) => credit.credit_id[0] ^= 1,
         Some(Mutation::Amount) => credit.amount += 1,
-        Some(Mutation::Ciphertext) => cipher[383] ^= 1,
+        Some(Mutation::Ciphertext) => *cipher.last_mut().unwrap() ^= 1,
+        Some(Mutation::TruncatedCiphertext) => {
+            cipher.pop();
+        }
+        Some(Mutation::TrailingCiphertext) => cipher.push(0),
+        Some(Mutation::TransportPaddedCiphertext) => {
+            cipher.resize(KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, 0)
+        }
         Some(Mutation::InactiveColumn) => data[0] = F::ONE,
         _ => {}
     }
@@ -168,14 +178,13 @@ fn circuit<F: KagemushaPoseidonFieldV1>(
         },
     );
     let mut jobs = PastaSha256JobsV1::default();
-    constrain_ordinary_mint_state_bindings_v1(ctx, &range, &mut jobs, &column, &state, opening)
-        .unwrap();
+    constrain_ordinary_mint_state_bindings_v1(ctx, &range, &mut jobs, &column, &state, opening)?;
     assert_eq!(jobs.typed_claim_jobs().unwrap().len(), 3);
     builder.calculate_params(Some(UNUSABLE));
-    BindingCircuit { builder, jobs }
+    Ok(BindingCircuit { builder, jobs })
 }
 fn check<F: KagemushaPoseidonFieldV1>(active: bool, mutation: Option<Mutation>) -> bool {
-    MockProver::run(K as u32, &circuit::<F>(active, mutation), vec![])
+    MockProver::run(K as u32, &circuit::<F>(active, mutation).unwrap(), vec![])
         .unwrap()
         .verify()
         .is_ok()
@@ -217,4 +226,45 @@ fn ordinary_mint113_inactive_semantics_emit_same_opening_sha_graph_and_cannot_ca
     assert!(check::<Fq>(false, None));
     assert!(!check::<Fp>(false, Some(Mutation::InactiveColumn)));
     assert!(!check::<Fq>(false, Some(Mutation::InactiveColumn)));
+}
+
+#[test]
+fn ordinary_mint113_ciphertext_requires_canonical_width_and_equal_branch_sha_geometry() {
+    fn check_geometry<F: KagemushaPoseidonFieldV1>() {
+        let active = circuit::<F>(true, None).unwrap();
+        let inactive = circuit::<F>(false, None).unwrap();
+        let active_messages = active.jobs.canonical_messages().unwrap();
+        let inactive_messages = inactive.jobs.canonical_messages().unwrap();
+        assert_eq!(active_messages.len(), 3);
+        assert_eq!(
+            active_messages.iter().map(Vec::len).collect::<Vec<_>>(),
+            inactive_messages.iter().map(Vec::len).collect::<Vec<_>>()
+        );
+        let prefix = b"iroha:kagemusha:v1:ciphertext\0";
+        let size = KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1;
+        let cipher = &active_messages[2];
+        assert_eq!(cipher.len(), prefix.len() + 8 + size);
+        assert_eq!(&cipher[..prefix.len()], prefix);
+        assert_eq!(
+            &cipher[prefix.len()..prefix.len() + 8],
+            &(size as u64).to_le_bytes()
+        );
+        assert!(
+            inactive_messages[2][prefix.len() + 8..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        for mutation in [
+            Mutation::TruncatedCiphertext,
+            Mutation::TrailingCiphertext,
+            Mutation::TransportPaddedCiphertext,
+        ] {
+            assert_eq!(
+                circuit::<F>(true, Some(mutation)).err().as_deref(),
+                Some("ordinary Mint State full column/cipher capacity differs")
+            );
+        }
+    }
+    check_geometry::<Fp>();
+    check_geometry::<Fq>();
 }
